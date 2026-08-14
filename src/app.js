@@ -1,0 +1,53 @@
+// dsh Desktop launcher page (local, tauri://localhost).
+// Waits for the Rust shell to report the dsh web loopback URL, then navigates.
+const stateEl = document.getElementById('state');
+const logEl = document.getElementById('log');
+const retryBtn = document.getElementById('retry');
+const spinner = document.getElementById('spinner');
+
+function setState(text, failed = false) {
+  stateEl.textContent = text;
+  stateEl.style.color = failed ? '#f85149' : '';
+  spinner.hidden = failed;
+  retryBtn.hidden = !failed;
+}
+
+function appendLog(line) {
+  logEl.hidden = false;
+  logEl.textContent += line + '\n';
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+const tauri = globalThis.__TAURI__;
+
+if (tauri && tauri.event) {
+  tauri.event.listen('server-url', (ev) => {
+    const url = ev.payload;
+    if (typeof url === 'string' && /^https?:\/\//.test(url)) {
+      setState('dsh 已就绪，正在打开界面…');
+      window.location.href = url;
+    }
+  });
+
+  tauri.event.listen('server-log', (ev) => {
+    if (typeof ev.payload === 'string') appendLog(ev.payload);
+  });
+
+  tauri.event.listen('server-down', () => {
+    setState('dsh 服务已退出。', true);
+    appendLog('server exited');
+  });
+} else {
+  setState('Tauri IPC 不可用，无法启动服务。', true);
+}
+
+retryBtn.addEventListener('click', async () => {
+  setState('正在重启 dsh 服务…');
+  logEl.textContent = '';
+  logEl.hidden = true;
+  try {
+    await tauri.core.invoke('restart_server');
+  } catch (err) {
+    setState('重启失败：' + String(err), true);
+  }
+});

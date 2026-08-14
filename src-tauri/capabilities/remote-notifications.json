@@ -1,0 +1,9 @@
+{
+  "identifier": "remote-notifications",
+  "description": "The loopback dsh UI may raise OS notifications only. No file/system/network IPC is exposed.",
+  "windows": ["main"],
+  "remote": {
+    "urls": ["http://127.0.0.1/*"]
+  },
+  "permissions": ["notification:allow-notify"]
+}

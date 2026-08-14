@@ -1,0 +1,21 @@
+{
+  "name": "@dsh-desktop/client-notifications",
+  "version": "0.1.0",
+  "description": "dsh Desktop notification client plugin: OS notifications when dsh asks you something (pendingInteraction) or a session completes (completed).",
+  "license": "MIT",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-client-runtime": ">=0.1.0-rc.5"
+  }
+}

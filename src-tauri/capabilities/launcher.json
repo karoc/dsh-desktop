@@ -1,0 +1,6 @@
+{
+  "identifier": "launcher",
+  "description": "Local launcher page: core defaults (event listen, invoke) for the loading/error UI.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

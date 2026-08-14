@@ -1,0 +1,55 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "dsh Desktop",
+  "version": "0.1.0",
+  "identifier": "dev.dsh.desktop",
+  "build": {
+    "beforeBuildCommand": "node scripts/fetch-node.mjs && node scripts/sync-resources.mjs",
+    "frontendDist": "../src"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "dsh Desktop",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 900,
+        "minHeight": 600,
+        "resizable": true,
+        "center": true,
+        "url": "index.html"
+      }
+    ],
+    "security": {
+      "capabilities": ["launcher", "remote-notifications"]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
+    "resources": [
+      "resources/node/**",
+      "resources/manager/**",
+      "resources/patch/**",
+      "resources/plugin/**"
+    ],
+    "category": "DeveloperTool",
+    "shortDescription": "DeepSeek Harness desktop shell",
+    "longDescription": "A standalone Tauri shell for DeepSeek Harness (dsh): auto-updates the official dsh npm package, embeds a Node.js 24 runtime, and surfaces OS notifications for questions and completions.",
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "displayLanguageSelector": false,
+        "languages": ["SimpChinese", "English"]
+      }
+    }
+  }
+}
