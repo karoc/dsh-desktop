@@ -3,6 +3,7 @@
 const stateEl = document.getElementById('state');
 const logEl = document.getElementById('log');
 const retryBtn = document.getElementById('retry');
+const openDataBtn = document.getElementById('opendata');
 const spinner = document.getElementById('spinner');
 
 function setState(text, failed = false) {
@@ -10,6 +11,7 @@ function setState(text, failed = false) {
   stateEl.style.color = failed ? '#f85149' : '';
   spinner.hidden = failed;
   retryBtn.hidden = !failed;
+  openDataBtn.hidden = !failed;
 }
 
 function appendLog(line) {
@@ -35,7 +37,7 @@ if (tauri && tauri.event) {
 
   tauri.event.listen('server-down', () => {
     setState('dsh 服务已退出。', true);
-    appendLog('server exited');
+    appendLog('server exited — 完整日志见数据目录里的 manager.log');
   });
 } else {
   setState('Tauri IPC 不可用，无法启动服务。', true);
@@ -49,5 +51,13 @@ retryBtn.addEventListener('click', async () => {
     await tauri.core.invoke('restart_server');
   } catch (err) {
     setState('重启失败：' + String(err), true);
+  }
+});
+
+openDataBtn.addEventListener('click', async () => {
+  try {
+    await tauri.core.invoke('open_data_dir');
+  } catch (err) {
+    appendLog('打开数据目录失败：' + String(err));
   }
 });

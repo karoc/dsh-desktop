@@ -128,15 +128,21 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
         let _ = handle.emit("server-down", ());
     });
 
-    // Manager's stderr: pipe to our own stderr so failures are visible in logs.
+    // Manager's stderr: surface in the UI log AND our own stderr so that any
+    // pre-protocol failure (e.g. node script crash) is never silent.
     if let Some(err) = child.stderr.take() {
+        let handle = app.clone();
         std::thread::spawn(move || {
             for line in BufReader::new(err).lines().flatten() {
+                let _ = handle.emit("server-log", line);
                 eprintln!("[dsh-desktop manager] {line}");
             }
         });
     }
 
+    let handle = app.clone();
+    let pid = child.id();
+    let _ = handle.emit("server-log", format!("manager spawned (pid {pid})"));
     *app.state::<ServerState>().child.lock().unwrap() = Some(child);
     Ok(())
 }
@@ -228,6 +234,9 @@ pub fn run() {
                 std::thread::sleep(std::time::Duration::from_millis(400));
                 if let Err(e) = start_server(&handle) {
                     eprintln!("[dsh-desktop] start failed: {e}");
+                    // Never fail silently: surface the error and show Retry.
+                    let _ = handle.emit("server-log", format!("启动失败: {e}"));
+                    let _ = handle.emit("server-down", ());
                 }
             });
             Ok(())

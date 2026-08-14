@@ -80,6 +80,7 @@ h1 { font-size: 18px; margin: 0 0 8px; }
 
 button {
   margin-top: 14px;
+  margin-right: 6px;
   padding: 8px 20px;
   border: 1px solid var(--accent);
   border-radius: 8px;
@@ -87,4 +88,10 @@ button {
   color: #fff;
   font-size: 14px;
   cursor: pointer;
+}
+
+button.secondary {
+  background: transparent;
+  color: var(--muted);
+  border-color: var(--border);
 }

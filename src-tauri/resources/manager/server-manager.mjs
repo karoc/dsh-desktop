@@ -14,7 +14,7 @@
 //   6. on signal, kill the whole dsh tree (taskkill /T /F on Windows).
 
 import { spawn, execFile } from 'node:child_process'
-import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -49,6 +49,13 @@ function log(line) {
   const s = String(line ?? '').replace(/\s+$/g, '')
   if (!s) return
   emit({ t: 'log', line: s.length > 2000 ? s.slice(0, 2000) + '…' : s })
+  // Persistent side-channel: <runtime>/manager.log survives even if events
+  // never reach the UI, so remote debugging works after the fact.
+  try {
+    if (args.runtimeDir) {
+      appendFileSync(join(args.runtimeDir, 'manager.log'), `${new Date().toISOString()} ${s}\n`)
+    }
+  } catch { /* logging must never break the manager */ }
 }
 
 // ── node + npm resolution ──────────────────────────────────────────────────
@@ -194,6 +201,7 @@ async function launchDsh(runtimeDir, patchPath, cwd) {
 let currentChild
 
 async function main() {
+  log('dsh-desktop manager started')
   ensureRuntimeDir(args.runtimeDir)
   await updateDsh(args.runtimeDir)
   ensurePlugin(args.runtimeDir, args.resourceDir)
