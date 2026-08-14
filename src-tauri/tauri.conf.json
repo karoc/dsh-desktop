@@ -36,10 +36,10 @@
       "icons/icon.ico"
     ],
     "resources": [
-      "resources/node/**",
-      "resources/manager/**",
-      "resources/patch/**",
-      "resources/plugin/**"
+      "resources/node",
+      "resources/manager",
+      "resources/patch",
+      "resources/plugin"
     ],
     "category": "DeveloperTool",
     "shortDescription": "DeepSeek Harness desktop shell",
