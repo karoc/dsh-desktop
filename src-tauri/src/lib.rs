@@ -28,7 +28,10 @@ fn stop_child(state: &ServerState) {
         #[cfg(windows)]
         {
             let _ = Command::new("taskkill")
-                .args(["/pid", &child.id().to_string(), "/T", "/F"])
+                .arg("/pid")
+                .arg(child.id().to_string())
+                .arg("/T")
+                .arg("/F")
                 .status();
         }
         let _ = child.kill();
