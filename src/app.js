@@ -32,7 +32,13 @@ if (tauri && tauri.event) {
   });
 
   tauri.event.listen('server-log', (ev) => {
-    if (typeof ev.payload === 'string') appendLog(ev.payload);
+    if (typeof ev.payload === 'string') {
+      appendLog(ev.payload);
+      // Keep the user informed during the slow first install.
+      if (/updating @deepseek-ai|首次安装|已更新到|updated to|正在下载/.test(ev.payload)) {
+        setState('正在安装/更新 dsh（首次需几分钟）…');
+      }
+    }
   });
 
   tauri.event.listen('server-down', () => {

@@ -95,6 +95,13 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
+    // Optional npm registry override (e.g. a China mirror) via env.
+    if let Ok(registry) = std::env::var("DSH_DESKTOP_REGISTRY") {
+        if !registry.trim().is_empty() {
+            cmd.arg("--registry").arg(&registry);
+        }
+    }
+
     let mut child = cmd.spawn().map_err(|e| format!("spawn manager: {e}"))?;
 
     let stdout = child.stdout.take().expect("piped stdout");

@@ -13,7 +13,7 @@
 //        {"t":"log","line":"..."}
 //   6. on signal, kill the whole dsh tree (taskkill /T /F on Windows).
 
-import { spawn, execFile } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -62,27 +62,65 @@ function log(line) {
 const nodeDir = dirname(process.execPath)
 const npmCli = join(nodeDir, 'node_modules', 'npm', 'bin', 'npm-cli.js')
 const npmViaCli = existsSync(npmCli)
-function npm(argsList, { timeoutMs = 120_000 } = {}) {
+
+// Registry: explicit --registry > env DSH_DESKTOP_REGISTRY > official. Users
+// behind slow international links should set DSH_DESKTOP_REGISTRY (e.g. the
+// npmmirror) so the cold 500-package install doesn't look like a hang.
+const REGISTRY = args.registry ?? process.env.DSH_DESKTOP_REGISTRY ?? 'https://registry.npmjs.org/'
+
+function npm(argsList, { timeoutMs = 600_000, stream = false, quiet = true } = {}) {
   return new Promise((resolvePromise, rejectPromise) => {
     const cmd = npmViaCli ? process.execPath : 'npm'
     const cmdArgs = npmViaCli ? [npmCli, ...argsList] : argsList
-    execFile(cmd, cmdArgs, { timeout: timeoutMs, env: process.env }, (err, stdout, stderr) => {
-      if (err) {
-        err.stderr = String(stderr ?? '')
-        err.stdout = String(stdout ?? '')
-        rejectPromise(err)
-      } else {
-        resolvePromise(String(stdout ?? ''))
+    const child = spawn(cmd, cmdArgs, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env: process.env })
+    let stdout = ''
+    let stderr = ''
+    let settled = false
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      killTree(child.pid)
+      const e = new Error('npm 操作超时（可设 DSH_DESKTOP_REGISTRY 切换镜像加速）')
+      e.stderr = stderr
+      e.stdout = stdout
+      rejectPromise(e)
+    }, timeoutMs)
+    const pump = (buf, isErr) => {
+      const text = String(buf)
+      if (isErr) stderr += text
+      else stdout += text
+      if (stream) {
+        for (const line of text.split(/\r?\n/)) {
+          const t = line.replace(/^\s+|\s+$/g, '')
+          if (t && !/^npm (warn )/i.test(t)) log(t.slice(0, 500))
+        }
+      }
+    }
+    child.stdout.on('data', (b) => pump(b, false))
+    child.stderr.on('data', (b) => pump(b, true))
+    child.on('error', (e) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      rejectPromise(e)
+    })
+    child.on('exit', (code) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (code === 0) resolvePromise(stdout)
+      else {
+        const e = new Error(`npm 退出码 ${code}: ${stderr.trim().split('\n').pop() ?? ''}`)
+        e.stderr = stderr
+        e.stdout = stdout
+        rejectPromise(e)
       }
     })
   })
 }
 
 async function latestRemoteVersion() {
-  const out = await npm(
-    ['view', PACKAGE, 'dist-tags.latest', '--json', '--registry', args.registry ?? 'https://registry.npmjs.org/'],
-    { timeoutMs: 60_000 },
-  )
+  const out = await npm(['view', PACKAGE, 'dist-tags.latest', '--json', '--registry', REGISTRY], { timeoutMs: 60_000 })
   const parsed = JSON.parse(out)
   return typeof parsed === 'string' ? parsed : parsed?.latest ?? null
 }
@@ -134,8 +172,9 @@ async function updateDsh(runtimeDir) {
   if (!latest) return
   if (current === latest) return
   log(`updating ${PACKAGE} ${current ?? '(none)'} -> ${latest}`)
+  if (!current) log('首次安装/更新 dsh：视网络需 1~10 分钟，进度会实时显示')
   try {
-    await npm(['install', `${PACKAGE}@${latest}`, '--prefix', runtimeDir, '--no-audit', '--no-fund', '--registry', args.registry ?? 'https://registry.npmjs.org/'])
+    await npm(['install', `${PACKAGE}@${latest}`, '--prefix', runtimeDir, '--no-audit', '--no-fund', '--no-progress', '--registry', REGISTRY], { stream: true, timeoutMs: 600_000 })
     log(`updated to ${latest}`)
   } catch (err) {
     log(`update install failed, keeping ${current ?? 'existing'}: ${err.message}`)
