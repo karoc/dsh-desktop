@@ -30,12 +30,11 @@ jobs:
             src-tauri/target/release/bundle/nsis/*.exe
           if-no-files-found: error
 
-  # Optional: Linux AppImage/deb for convenience (unsigned). Windows is the
-  # primary target; this job keeps a handy fallback for local Linux testing.
+  # Linux AppImage/deb for convenience (unsigned). Windows is the primary
+  # target; this job produces Linux bundles so the same repo can be tested on
+  # a Linux desktop too.
   linux:
     runs-on: ubuntu-latest
-    needs: windows
-    if: ${{ false }} # enable by flipping to true when you want Linux bundles too
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

@@ -59,10 +59,34 @@ npm run bundle        # = tauri build --bundles nsis
 ```
 
 产出于 `src-tauri/target/release/bundle/nsis/*.exe`。也可以直接推 GitHub 走
-`.github/workflows/build.yml`（windows-latest）拿安装包工件。
+`.github/workflows/build.yml`（windows-latest 出 NSIS；ubuntu-latest 顺带出
+AppImage/deb，方便 Linux 桌面验证）。
 
 前置：Rust stable（MSVC）、Node 18+（本机工具链）。WebView2 一般已预装。
 `tauri build` 前会自动下载 Node 24 运行时并校验 SHA-256。
+
+## 本地验证（Linux 可跑的部分）
+
+```bash
+npm run test:plugin       # 通知插件行为测试（8 个场景，纯 Node，无浏览器）
+npm run fetch:node        # 下载并校验内置 Node 24（win/linux/darwin）
+npm run sync:resources    # 同步 manager/plugin/patch 进 src-tauri/resources
+```
+
+完整注入链路（与 Windows 运行时同构）可手动复现：
+
+```bash
+# 1) 装官方 dsh 到临时 runtime
+npm install --prefix /tmp/dshrt @deepseek-ai/dsh
+# 2) 用内置/本机 node 跑 manager（自动更新 dsh -> 注入插件 -> 拉起服务 -> 上报 URL）
+node scripts/server-manager.mjs \
+  --runtime-dir /tmp/dshrt \
+  --resource-dir src-tauri/resources \
+  --patch src-tauri/resources/patch/dsh-desktop.patch.yml \
+  --cwd "$HOME"
+# stdout 会输出 {"t":"url","url":"http://127.0.0.1:<port>"}
+# 然后 curl http://127.0.0.1:<port>/ 可见 __DSH_BOOT__ 含 desktop-notifications
+```
 
 ## 运行行为
 

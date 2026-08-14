@@ -92,8 +92,17 @@ async function main() {
     const inner = join(downloadDir, t.name.replace(/\.(tar\.xz|tar\.gz)$/, ''))
     const st = spawnSync('tar', [t.type === 'tarxz' ? '-xJf' : '-xzf', archive, '-C', downloadDir], { stdio: 'inherit' })
     if (st.status !== 0) throw new Error('tar extraction failed')
-    // Copy just what we need: the binary (+ npm for the Windows zip path).
-    cpSync(inner, outDir, { recursive: true, force: true })
+    // Normalize the POSIX layout to the same shape the Windows zip has at its
+    // root: <outDir>/node plus <outDir>/node_modules (npm). The tar tree puts
+    // the binary at bin/node and npm at lib/node_modules.
+    const bin = join(inner, 'bin', t.bin)
+    if (existsSync(bin)) {
+      cpSync(bin, join(outDir, t.bin), { force: true })
+      const npmTree = join(inner, 'lib', 'node_modules')
+      if (existsSync(npmTree)) cpSync(npmTree, join(outDir, 'node_modules'), { recursive: true, force: true })
+    } else {
+      cpSync(inner, outDir, { recursive: true, force: true })
+    }
     rmSync(inner, { recursive: true, force: true })
   }
   rmSync(archive, { force: true })
