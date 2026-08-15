@@ -39,24 +39,59 @@ fn stop_child(state: &ServerState) {
     }
 }
 
-/// Convenience: resolve `node.exe`/`node`, the manager script and friends from
-/// bundled resources. Resource layout (kept in sync with tauri.conf.json):
-/// `resources/node/<platform>/...`, `resources/manager/server-manager.mjs`,
-/// `resources/patch/dsh-desktop.patch.yml`, `resources/plugin/dsh-client-notifications`.
+/// Per-platform bundled-node path fragment inside `node/`, e.g. `win32-x64/node.exe`.
+fn node_rel_path() -> &'static str {
+    #[cfg(windows)]
+    let rel = "win32-x64/node.exe";
+    #[cfg(target_os = "macos")]
+    let rel = "darwin-x64/node";
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    let rel = "linux-x64/node";
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    let rel = "linux-arm64/node";
+    #[cfg(not(any(
+        windows,
+        target_os = "macos",
+        all(target_os = "linux", target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "aarch64")
+    )))]
+    compile_error!("unsupported target: add a resources/node/<platform> layout in lib.rs");
+    rel
+}
+
+/// Resolve the bundled resources root and node binary. Tauri's
+/// `resource_dir()` returns the EXE directory on Windows (the bundler puts
+/// everything under a `resources/` subfolder), so probe the candidate layouts
+/// and use whichever actually exists — never assume one.
 fn resource_paths(app: &AppHandle) -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
     let res = app
         .path()
         .resource_dir()
         .map_err(|e| format!("resource dir: {e}"))?;
-    #[cfg(windows)]
-    let node_exe = res.join("node/win32-x64/node.exe");
-    #[cfg(target_os = "macos")]
-    let node_exe = res.join("node/darwin-x64/node");
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    let node_exe = res.join("node/linux-x64/node");
-    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
-    let node_exe = res.join("node/linux-arm64/node");
-    Ok((res, node_exe))
+    let rel = node_rel_path();
+
+    let mut bases: Vec<std::path::PathBuf> = Vec::new();
+    bases.push(res.join("resources"));
+    bases.push(res.clone());
+    if let Ok(exe) = app.path().exe_dir() {
+        bases.push(exe.join("resources"));
+        bases.push(exe);
+    }
+
+    for base in &bases {
+        let node_exe = base.join(rel);
+        if node_exe.exists() {
+            return Ok((base.clone(), node_exe));
+        }
+    }
+    Err(format!(
+        "bundled node not found; probed: {} (run `npm run bundle` to fetch it)",
+        bases
+            .iter()
+            .map(|b| b.display().to_string())
+            .collect::<Vec<_>>()
+            .join("; ")
+    ))
 }
 
 /// Spawn the server-manager under the bundled Node and stream its events.
@@ -64,12 +99,7 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
     stop_child(&app.state::<ServerState>());
 
     let (res, node_exe) = resource_paths(app)?;
-    if !node_exe.exists() {
-        return Err(format!(
-            "bundled node not found at {} (run `npm run bundle` to fetch it)",
-            node_exe.display()
-        ));
-    }
+    let _ = app.emit("server-log", format!("resources root: {}", res.display()));
     let manager = res.join("manager/server-manager.mjs");
     let patch = res.join("patch/dsh-desktop.patch.yml");
     let data = app
