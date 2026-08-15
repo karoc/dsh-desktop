@@ -12,6 +12,7 @@
 //! 3. Tray: close hides to tray; "退出" kills the whole service tree.
 
 use std::io::{BufRead, BufReader};
+use std::net::{TcpListener, TcpStream};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use tauri::menu::{Menu, MenuItem};
@@ -65,6 +66,110 @@ fn log_line(data_dir: &std::path::Path, msg: &str) {
     {
         let _ = writeln!(f, "[{secs}] {msg}");
     }
+}
+
+/// Port of the loopback notification bridge, shared with the manager child.
+static BRIDGE_PORT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
+
+/// Raise a native toast and record it. Shared by the event listener and the
+/// HTTP bridge (the only delivery the dsh page can actually use — Tauri v2
+/// does not inject `__TAURI__` into remote pages, tauri#11934).
+fn show_toast(app: &AppHandle, title: String, body: String) {
+    let data = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+    log_line(&data, &format!("notification: {title} - {body}"));
+    eprintln!("[dsh-desktop] notification: {title} - {body}");
+    use tauri_plugin_notification::NotificationExt;
+    let mut b = app.notification().builder().title(title);
+    if !body.is_empty() {
+        b = b.body(body);
+    }
+    let _ = b.show();
+}
+
+/// Minimal loopback HTTP server (std only): the injected client page POSTs
+/// `/notify` (raise a toast) and `/alive` (loading canary). CORS-open, binds
+/// 127.0.0.1:0 only — same attack surface as dsh web itself.
+fn start_bridge(app: AppHandle) {
+    std::thread::spawn(move || {
+        let Ok(listener) = TcpListener::bind("127.0.0.1:0") else {
+            return;
+        };
+        let Ok(port) = listener.local_addr().map(|a| a.port()) else {
+            return;
+        };
+        BRIDGE_PORT.store(port, std::sync::atomic::Ordering::SeqCst);
+        eprintln!("[dsh-desktop] bridge on 127.0.0.1:{port}");
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let app = app.clone();
+            std::thread::spawn(move || handle_bridge_conn(&mut stream, &app));
+        }
+    });
+}
+
+fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
+    use std::io::{Read as _, Write as _};
+    let Ok(peer) = stream.try_clone() else { return };
+    let mut reader = BufReader::new(peer);
+    let mut request_line = String::new();
+    if reader.read_line(&mut request_line).is_err() {
+        return;
+    }
+    let mut parts = request_line.split_whitespace();
+    let method = parts.next().unwrap_or("");
+    let path = parts.next().unwrap_or("");
+    let mut content_length = 0usize;
+    let mut header = String::new();
+    loop {
+        header.clear();
+        if reader.read_line(&mut header).is_err() || header == "\r\n" || header.is_empty() {
+            break;
+        }
+        if let Some((k, v)) = header.split_once(':') {
+            if k.trim().eq_ignore_ascii_case("content-length") {
+                content_length = v.trim().parse().unwrap_or(0);
+            }
+        }
+    }
+    let mut body = vec![0u8; content_length];
+    let _ = reader.read_exact(&mut body);
+    let body = String::from_utf8_lossy(&body).into_owned();
+
+    let (status, resp_body) = match (method, path) {
+        ("OPTIONS", _) => ("204 No Content", String::new()),
+        ("POST", "/alive") => {
+            let data = app
+                .path()
+                .app_data_dir()
+                .unwrap_or_else(|_| std::path::PathBuf::from("."));
+            log_line(&data, &format!("client-ready (http): {body}"));
+            eprintln!("[dsh-desktop] client-ready (http): {body}");
+            ("200 OK", String::new())
+        }
+        ("POST", "/notify") => {
+            let (title, body2) =
+                serde_json::from_str::<serde_json::Value>(&body)
+                    .map(|v| {
+                        (
+                            v.get("title").and_then(|x| x.as_str()).unwrap_or("dsh").to_string(),
+                            v.get("body").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                        )
+                    })
+                    .unwrap_or_else(|_| ("dsh".into(), body.clone()));
+            show_toast(app, title, body2);
+            ("200 OK", String::new())
+        }
+        _ => ("404 Not Found", "not found".into()),
+    };
+    let resp = format!(
+        "HTTP/1.1 {status}\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: POST, OPTIONS\r\nAccess-Control-Allow-Headers: content-type\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{resp_body}",
+        resp_body.len()
+    );
+    let _ = stream.write_all(resp.as_bytes());
+    let _ = stream.flush();
 }
 
 /// Per-platform bundled-node path fragment, e.g. `node/win32-x64/node.exe`.
@@ -178,6 +283,10 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    let bridge_port = BRIDGE_PORT.load(std::sync::atomic::Ordering::SeqCst);
+    if bridge_port > 0 {
+        cmd.arg("--bridge-port").arg(bridge_port.to_string());
+    }
 
     // Optional npm registry override (e.g. a China mirror) via env.
     if let Ok(registry) = std::env::var("DSH_DESKTOP_REGISTRY") {
@@ -361,6 +470,9 @@ pub fn run() {
                     eprintln!("[dsh-desktop] client-ready: {}", event.payload());
                 });
             }
+
+            // ── loopback notification bridge (see start_bridge) ────────────
+            start_bridge(app.handle().clone());
 
             // ── boot the service once the launcher page can listen ────────
             let handle = app.handle().clone();

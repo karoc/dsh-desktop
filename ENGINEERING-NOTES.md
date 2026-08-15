@@ -56,6 +56,16 @@
 - 机制：`scripts/dev-sdk-linux.sh` 搭无 root 编译环境（rustup + 解包 dev 包 + pkg-config sysroot）。
   **改任何 Rust → 先本地 `cargo check`（增量 ~1 分钟）→ 再 push。** CI check 门禁保留为第二道闸。
 
+## 10. 远程页面拿不到 Tauri API——别绕，直接换传输
+
+- 坑：dsh 的 UI 是 http://127.0.0.1 远程页面；Tauri v2 不向远程页面注入 `__TAURI__`
+  （tauri#11934，多人确认，官方 localhost 插件也无效）。`notification.sendNotification`、
+  event.emit 两条路在远程页面里全是死路。
+- 机制：**回环 HTTP 桥**——Rust 起 127.0.0.1 随机端口小服务；manager 把端口烧进
+  client.js（占位符替换）；客户端 `fetch` POST `/notify`（toast）与 `/alive`（加载探针）。
+  纯标准 Web 技术，零 Tauri 依赖。
+- 教训：改 client.js 后必须 `sync-resources` 再本地验证（资源副本与源码同步是构建的前置步骤）。
+
 ## 平台专属项仍要真机验证（机制覆盖不到的部分）
 
 Windows 的 NSIS 安装行为、toast 渲染、AUMID、事件投递——Linux smoke 覆盖不到，

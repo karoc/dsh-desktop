@@ -8,11 +8,12 @@
 //   - completed turns true        -> "task done" notification.
 // Skips notifying while the window is focused and visible.
 //
-// Delivery: emits a `desktop-notification` event that the Tauri shell listens
-// for natively (most reliable: no remote IPC permission dependence). Falls
-// back to the HTML5 Notification API in a plain browser / dev (WebView2 has
-// no HTML5 Notification support, so desktop use always goes through Rust).
-// On mount it also emits `dsh-client-ready` (a diagnostic canary, no toast).
+// Delivery: plain-HTTP bridge to the Tauri shell. Tauri v2 does NOT inject
+// __TAURI__ into remote pages (tauri#11934), so no tauri event/notification
+// API is reachable from dsh's page. Instead the shell runs a tiny loopback
+// HTTP server (127.0.0.1:<port>/notify, CORS-open) and the manager bakes the
+// port into this script (replacing __DSH_BRIDGE_PORT__); on load the page
+// pings /alive as a diagnostic canary (no toast).
 window.__ModuleLoader__.load({
   id: '@dsh-desktop/client-notifications',
   factory: () => {
@@ -21,24 +22,22 @@ window.__ModuleLoader__.load({
       approval: '有一个操作正在等待你批准',
       'plan-review': '有一份计划正在等你审阅',
     }
+    // Manager replaces the literal token with the live bridge port.
+    const BRIDGE_PORT = globalThis.__DSH_BRIDGE_PORT__ || '__DSH_BRIDGE_PORT__'
+
+    function post(path, payload) {
+      if (!BRIDGE_PORT || BRIDGE_PORT.startsWith('__DSH')) return Promise.resolve()
+      return fetch(`http://127.0.0.1:${BRIDGE_PORT}${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload || {}),
+      }).catch(() => {})
+    }
 
     function titleOf(item) {
       if (item.title && String(item.title).trim()) return String(item.title).trim()
       if (item.cwd) return String(item.cwd)
       return '会话'
-    }
-
-    function emitEvent(name, payload) {
-      try {
-        const tauri = globalThis.__TAURI__
-        if (tauri && tauri.event && typeof tauri.event.emit === 'function') {
-          tauri.event.emit(name, payload).catch(() => {})
-          return true
-        }
-      } catch (err) {
-        console.warn(`[dsh-desktop] emit ${name} failed`, err)
-      }
-      return false
     }
 
     function show(title, body) {
@@ -52,15 +51,7 @@ window.__ModuleLoader__.load({
           return // user is looking at the UI; do not nag
         }
       } catch { /* keep going */ }
-      if (emitEvent('desktop-notification', { title, body })) return
-      if (typeof Notification === 'function') {
-        try {
-          // eslint-disable-next-line no-new
-          new Notification(title, { body })
-        } catch (err) {
-          console.warn('[dsh-desktop] HTML5 notification failed', err)
-        }
-      }
+      post('/notify', { title, body })
     }
 
     return {
@@ -103,9 +94,9 @@ window.__ModuleLoader__.load({
           ? list.subscribe(scan)
           : undefined
         scan() // record baseline; never notify for pre-existing state
-        // Diagnostic canary: tells the shell whether this client module loaded
-        // and whether the Tauri bridge is visible from the dsh page.
-        emitEvent('dsh-client-ready', { hasTauri: !!(globalThis.__TAURI__ && globalThis.__TAURI__.event) })
+        // Diagnostic canary: tells the shell this module loaded and the bridge
+        // is reachable (no toast, no tauri dependency).
+        post('/alive', { loaded: true })
         return () => {
           if (unsubscribe) unsubscribe()
         }

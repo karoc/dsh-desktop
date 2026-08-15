@@ -17,24 +17,24 @@ const root = dirname(fileURLToPath(import.meta.url))
 const clientJs = readFileSync(join(root, '..', 'plugins', 'dsh-client-notifications', 'client.js'), 'utf8')
 
 // ── browser-global stubs ────────────────────────────────────────────────────
-let calls = [] // collected notification attempts (desktop-notification events only)
-let allEmitted = [] // every tauri event emitted (incl. the client-ready canary)
+let calls = [] // collected /notify POSTs (url + parsed body)
+let allPosts = [] // every fetch (incl. the /alive canary)
 let focus = false
-let tauriApi = {
-  event: {
-    emit: (name, payload) => {
-      allEmitted.push([name, payload])
-      if (name === 'desktop-notification') calls.push(['tauri', name, payload])
-      return Promise.resolve()
-    },
-  },
+globalThis.__DSH_BRIDGE_PORT__ = '39999'
+globalThis.fetch = (url, opts = {}) => {
+  allPosts.push([String(url), opts])
+  if (String(url).includes('/notify')) {
+    calls.push([String(url), JSON.parse(opts.body || '{}')])
+  }
+  return Promise.resolve({ ok: true })
 }
+Object.defineProperty(globalThis, 'Notification', { configurable: true, writable: true, value: undefined })
 
 const windowStub = {
   __ModuleLoader__: { load(handoff) { windowStub.__handoff = handoff } },
 }
 globalThis.window = windowStub
-globalThis.__TAURI__ = tauriApi
+
 globalThis.document = { hasFocus: () => focus, hidden: false }
 Object.defineProperty(globalThis, 'Notification', { configurable: true, writable: true, value: undefined })
 
@@ -69,12 +69,12 @@ function introduce(id, fields = {}) {
 
 // ── scenario 1: baseline records without notifying ──────────────────────────
 calls = []
-allEmitted = []
+allPosts = []
 const dispose = plugin.apply(ctx)
 assert.equal(calls.length, 0, 'baseline scan must not notify')
 assert.ok(
-  allEmitted.some((e) => e[0] === 'dsh-client-ready' && e[1].hasTauri === true),
-  'apply() must emit the diagnostic canary with hasTauri=true',
+  allPosts.some((e) => e[0].includes('/alive')),
+  'apply() must ping the /alive canary once',
 )
 
 // ── scenario 2: session appears, then pendingInteraction -> "needs you" ─────
@@ -95,7 +95,8 @@ Object.entries(pendingLabels).forEach(([kind, body], i) => {
   introduce(id)
   mutate({ ids: [id], byId: { [id]: session(id, { pendingInteraction: kind }) } })
   assert.equal(calls.length, 1, `${kind} transition must notify once`)
-  assert.deepEqual(calls[0], ['tauri', 'desktop-notification', { title: 'dsh 需要你', body }])
+  assert.ok(calls[0][0].endsWith('/notify'), 'must POST to the bridge /notify endpoint')
+  assert.deepEqual(calls[0][1], { title: 'dsh 需要你', body })
 })
 
 // ── scenario 3: session completes -> "task done" ────────────────────────────
@@ -103,7 +104,7 @@ introduce('sess-A') // re-introduce (previous scenarios replaced the whole list)
 calls = []
 mutate({ ids: ['sess-A'], byId: { 'sess-A': session('sess-A', { pendingInteraction: undefined, completed: true, title: '写周报' }) } })
 assert.equal(calls.length, 1, 'completion transition must notify once')
-assert.deepEqual(calls[0], ['tauri', 'desktop-notification', { title: 'dsh 任务完成', body: '「写周报」已完成' }])
+assert.deepEqual(calls[0][1], { title: 'dsh 任务完成', body: '「写周报」已完成' })
 
 // ── scenario 4: no duplicate while state stays put ──────────────────────────
 calls = []
@@ -127,31 +128,32 @@ dispose()
 mutate({ ids: ['sess-C'], byId: { 'sess-C': session('sess-C', { completed: true }) } })
 assert.equal(calls.length, 0, 'after dispose no notifications')
 
-// ── scenario 7: HTML5 Notification fallback (browser dev, no Tauri) ─────────
+// ── scenario 7: bridge port absent (unbaked placeholder) -> silent skip ─────
+// BRIDGE_PORT is captured when factory() runs, so load a fresh module instance
+// with the global removed (mirrors an unbaked production copy).
 calls = []
-class FakeNotification {
-  constructor(title, opts) { calls.push(['html5', { title, ...opts }]) }
-}
-globalThis.__TAURI__ = undefined
-globalThis.Notification = FakeNotification
-const dispose2 = plugin.apply(ctx)
+delete globalThis.__DSH_BRIDGE_PORT__
+// eslint-disable-next-line no-eval
+eval(clientJs)
+const dispose2 = windowStub.__handoff.factory().apply(ctx)
 introduce('sess-D')
 mutate({ ids: ['sess-D'], byId: { 'sess-D': session('sess-D', { pendingInteraction: 'approval' }) } })
-assert.equal(calls.length, 1, 'HTML5 fallback must fire')
-assert.equal(calls[0][1].title, 'dsh 需要你')
+assert.equal(calls.length, 0, 'no bridge port -> transition posts nothing (no crash)')
 dispose2()
 
-// ── scenario 8: Tauri restored, completion after transition ─────────────────
-globalThis.__TAURI__ = tauriApi
+// ── scenario 8: bridge port restored, completion after transition ───────────
+globalThis.__DSH_BRIDGE_PORT__ = '39999'
+// eslint-disable-next-line no-eval
+eval(clientJs)
 calls = []
-allEmitted = []
-const dispose3 = plugin.apply(ctx)
-assert.ok(allEmitted.some((e) => e[0] === 'dsh-client-ready'), 'canary re-emitted on remount')
+allPosts = []
+const dispose3 = windowStub.__handoff.factory().apply(ctx)
+assert.ok(allPosts.some((e) => e[0].includes('/alive')), 'canary re-posted on remount')
 introduce('sess-E')
 mutate({ ids: ['sess-E'], byId: { 'sess-E': session('sess-E', { running: true }) } })
 mutate({ ids: ['sess-E'], byId: { 'sess-E': session('sess-E', { running: false, completed: true, title: '部署' }) } })
-assert.equal(calls.length, 1, 'tauri path works after remount')
-assert.deepEqual(calls[0], ['tauri', 'desktop-notification', { title: 'dsh 任务完成', body: '「部署」已完成' }])
+assert.equal(calls.length, 1, 'bridge path works after remount')
+assert.deepEqual(calls[0][1], { title: 'dsh 任务完成', body: '「部署」已完成' })
 dispose3()
 
 console.log('PASS — notification plugin behavioral test (8 scenarios)')

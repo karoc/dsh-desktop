@@ -23,7 +23,7 @@ const PLUGIN_PACKAGE = '@dsh-desktop/client-notifications'
 
 // ── args ───────────────────────────────────────────────────────────────────
 function parseArgs(argv) {
-  const out = { runtimeDir: null, resourceDir: null, patch: null, cwd: null, home: null, registry: undefined }
+  const out = { runtimeDir: null, resourceDir: null, patch: null, cwd: null, home: null, registry: undefined, bridgePort: null }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     const val = () => argv[++i]
@@ -33,9 +33,10 @@ function parseArgs(argv) {
     else if (a === '--cwd') out.cwd = val()
     else if (a === '--home') out.home = val()
     else if (a === '--registry') out.registry = val()
+    else if (a === '--bridge-port') out.bridgePort = val()
   }
   if (!out.runtimeDir || !out.resourceDir || !out.patch) {
-    throw new Error('usage: server-manager.mjs --runtime-dir <dir> --resource-dir <dir> --patch <file> [--cwd <dir>] [--home <dir>] [--registry <url>]')
+    throw new Error('usage: server-manager.mjs --runtime-dir <dir> --resource-dir <dir> --patch <file> [--cwd <dir>] [--home <dir>] [--registry <url>] [--bridge-port <port>]')
   }
   return out
 }
@@ -204,6 +205,20 @@ function ensurePlugin(runtimeDir, resourceDir) {
     mkdirSync(dirname(dest), { recursive: true })
     cpSync(src, dest, { recursive: true })
     log(updating ? `updated client plugin ${PLUGIN_PACKAGE}` : `installed client plugin ${PLUGIN_PACKAGE}`)
+  }
+  // Bake the live bridge port into the served client.js (idempotent: skips
+  // the write when the port is unchanged, so sameTree stays stable).
+  bakeBridgePort(dest)
+}
+
+function bakeBridgePort(dest) {
+  if (!args.bridgePort) return
+  const p = join(dest, 'client.js')
+  const raw = readFileSync(p, 'utf8')
+  const next = raw.split('__DSH_BRIDGE_PORT__').join(String(args.bridgePort))
+  if (next !== raw) {
+    writeFileSync(p, next)
+    log(`bridge port baked: ${args.bridgePort}`)
   }
 }
 
