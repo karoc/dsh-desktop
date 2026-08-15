@@ -76,6 +76,11 @@ static LAST_SESSION: Mutex<Option<String>> = Mutex::new(None);
 /// Session id waiting to be revealed in the UI (set on app activation, cleared
 /// once the client page reads it via /pending-open).
 static PENDING_OPEN: Mutex<Option<String>> = Mutex::new(None);
+/// Session id to reveal when the window next REGAINS FOCUS. Windows toast
+/// clicks do not relaunch the exe (no single-instance callback) — they merely
+/// activate/restore the window, so the focus event is the only observable
+/// signal of "user clicked the toast and came back".
+static FOCUS_OPEN: Mutex<Option<String>> = Mutex::new(None);
 
 /// Raise a native toast and record it. Shared by the event listener and the
 /// HTTP bridge (the only delivery the dsh page can actually use — Tauri v2
@@ -159,11 +164,15 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
         ("OPTIONS", _) => ("204 No Content", String::new()),
         ("GET", "/pending-open") => {
             let sid = PENDING_OPEN.lock().unwrap().take();
-            let data = app
-                .path()
-                .app_data_dir()
-                .unwrap_or_else(|_| std::path::PathBuf::from("."));
-            log_line(&data, &format!("pending-open: {sid:?}"));
+            // Log only real handoffs — the 1.2s poll would otherwise flood the
+            // session log with thousands of "None" lines.
+            if sid.is_some() {
+                let data = app
+                    .path()
+                    .app_data_dir()
+                    .unwrap_or_else(|_| std::path::PathBuf::from("."));
+                log_line(&data, &format!("pending-open: {sid:?}"));
+            }
             let body = match &sid {
                 Some(s) => format!("{{\"sessionId\":{}}}", serde_json::to_string(s).unwrap_or_else(|_| "\"\"".into())),
                 None => "{\"sessionId\":null}".into(),
@@ -214,6 +223,11 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
                     .unwrap_or_else(|_| ("dsh".into(), body.clone(), None));
             if let Some(s) = &sid {
                 *LAST_SESSION.lock().unwrap() = Some(s.clone());
+                // A notify only happens while the window is unfocused (the
+                // client suppresses focused toasts) — so the next focus event
+                // is almost certainly the user clicking this toast. Stage the
+                // session to open on that focus.
+                *FOCUS_OPEN.lock().unwrap() = Some(s.clone());
                 let data = app
                     .path()
                     .app_data_dir()
@@ -460,6 +474,7 @@ pub fn run() {
             eprintln!("[dsh-desktop] activated: pending-open={last:?}");
             *PENDING_OPEN.lock().unwrap() = last;
             if let Some(w) = app.get_webview_window("main") {
+                let _ = w.set_skip_taskbar(false);
                 let _ = w.show();
                 let _ = w.unminimize();
                 let _ = w.set_focus();
@@ -500,7 +515,9 @@ pub fn run() {
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => {
                         if let Some(w) = app.get_webview_window("main") {
+                            let _ = w.set_skip_taskbar(false);
                             let _ = w.show();
+                            let _ = w.unminimize();
                             let _ = w.set_focus();
                         }
                     }
@@ -517,14 +534,33 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            // ── close hides to tray; only the menu "退出" really quits ────
+            // ── close minimizes to tray (restorable by OS toast activation —
+            // SW_RESTORE cannot bring back a hide()n window); only the menu
+            // "退出" really quits. On regaining focus, hand the staged
+            // notification session to the page (the focus edge is the only
+            // observable trace of a toast click on Windows). ────────────────
             if let Some(w) = app.get_webview_window("main") {
                 let handle = app.handle().clone();
-                w.on_window_event(move |event| {
-                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                w.on_window_event(move |event| match event {
+                    tauri::WindowEvent::CloseRequested { api, .. } => {
                         api.prevent_close();
-                        let _ = handle.get_webview_window("main").map(|w| w.hide());
+                        let _ = handle.get_webview_window("main").map(|w| {
+                            let _ = w.set_skip_taskbar(true);
+                            let _ = w.minimize();
+                        });
                     }
+                    tauri::WindowEvent::Focused(true) => {
+                        if let Some(sid) = FOCUS_OPEN.lock().unwrap().take() {
+                            *PENDING_OPEN.lock().unwrap() = Some(sid.clone());
+                            let data = handle
+                                .path()
+                                .app_data_dir()
+                                .unwrap_or_else(|_| std::path::PathBuf::from("."));
+                            log_line(&data, &format!("focus-open: {sid}"));
+                            eprintln!("[dsh-desktop] focus-open: {sid}");
+                        }
+                    }
+                    _ => {}
                 });
             }
 
