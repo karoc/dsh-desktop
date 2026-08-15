@@ -92,16 +92,61 @@ fn show_toast(app: &AppHandle, title: String, body: String) {
         .unwrap_or_else(|_| std::path::PathBuf::from("."));
     log_line(&data, &format!("notification: {title} - {body}"));
     eprintln!("[dsh-desktop] notification: {title} - {body}");
-    use tauri_plugin_notification::NotificationExt;
-    let mut b = app.notification().builder().title(title);
+
+    // Show via notify-rust DIRECTLY so we keep the NotificationHandle and can
+    // listen for the in-process COM activation callback (tauri-winrt-
+    // notification). tauri-plugin-notification's show() drops the handle, and
+    // Windows toast clicks never relaunch/activate through the shell for this
+    // app — the in-process activator is the ONLY reliable "toast clicked"
+    // signal. On click: bring the window back and hand the last notified
+    // session to the page via /pending-open.
+    let clicked = |app: &AppHandle| {
+        let last = LAST_SESSION.lock().unwrap().clone();
+        *PENDING_OPEN.lock().unwrap() = last.clone();
+        let data = app
+            .path()
+            .app_data_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from("."));
+        log_line(&data, &format!("toast-clicked pending-open={last:?}"));
+        eprintln!("[dsh-desktop] toast-clicked pending-open={last:?}");
+        if let Some(w) = app.get_webview_window("main") {
+            let _ = w.set_skip_taskbar(false);
+            let _ = w.show();
+            let _ = w.unminimize();
+            let _ = w.set_focus();
+        }
+    };
+
+    let mut n = notify_rust::Notification::new();
+    n.summary(&title);
+    #[cfg(target_os = "windows")]
+    n.app_id("dev.dsh.desktop");
     if !body.is_empty() {
-        b = b.body(body);
+        n.body(&body);
     }
-    match b.show() {
-        Ok(_) => {}
+    match n.show() {
+        Ok(handle) => {
+            let app = app.clone();
+            std::thread::spawn(move || {
+                handle.wait_for_action(|_action| clicked(&app));
+            });
+        }
         Err(e) => {
-            log_line(&data, &format!("toast failed: {e}"));
-            eprintln!("[dsh-desktop] toast failed: {e}");
+            // Fallback: tauri-plugin-notification (no click signal, but the
+            // toast still appears).
+            log_line(&data, &format!("notify-rust failed, plugin fallback: {e}"));
+            use tauri_plugin_notification::NotificationExt;
+            let mut b = app.notification().builder().title(title);
+            if !body.is_empty() {
+                b = b.body(body);
+            }
+            match b.show() {
+                Ok(_) => {}
+                Err(e2) => {
+                    log_line(&data, &format!("toast failed: {e2}"));
+                    eprintln!("[dsh-desktop] toast failed: {e2}");
+                }
+            }
         }
     }
 }
