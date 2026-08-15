@@ -48,7 +48,9 @@
       "nsis": {
         "installMode": "currentUser",
         "displayLanguageSelector": false,
-        "languages": ["SimpChinese", "English"]
+        "languages": ["SimpChinese", "English"],
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico"
       }
     }
   }
