@@ -36,11 +36,16 @@ window.__ModuleLoader__.load({
 
     function titleOf(item) {
       if (item.title && String(item.title).trim()) return String(item.title).trim()
+      if (item.displayTitle && String(item.displayTitle).trim()) return String(item.displayTitle).trim()
       if (item.cwd) return String(item.cwd)
       return '会话'
     }
 
-    function show(title, body) {
+    function idOf(item) {
+      return item.sessionId || item.id || undefined
+    }
+
+    function show(title, body, item) {
       try {
         if (
           typeof document !== 'undefined' &&
@@ -51,7 +56,40 @@ window.__ModuleLoader__.load({
           return // user is looking at the UI; do not nag
         }
       } catch { /* keep going */ }
-      post('/notify', { title, body })
+      const payload = { title, body }
+      const sid = idOf(item)
+      if (sid) payload.sessionId = sid
+      post('/notify', payload)
+    }
+
+    // The desktop shell remembers the last notifying session; when the user
+    // activates the app (toast click), it exposes that session via
+    // /pending-open and we open it here — the only side that can drive dsh.
+    let polling = false
+    function pollPendingOpen(ctx) {
+      if (polling) return
+      if (!BRIDGE_PORT || BRIDGE_PORT.startsWith('__DSH')) return
+      polling = true
+      const tick = async () => {
+        try {
+          const res = await fetch(`http://127.0.0.1:${BRIDGE_PORT}/pending-open`)
+          const data = await res.json()
+          if (data && data.sessionId) {
+            const sid = String(data.sessionId)
+            try {
+              if (ctx.sessions && typeof ctx.sessions.open === 'function') {
+                ctx.sessions.open(sid)
+              } else if (ctx.sessions && ctx.sessions.list && typeof ctx.sessions.list.update === 'function') {
+                ctx.sessions.list.update((draft) => { draft.current = sid })
+              }
+            } catch (err) {
+              console.warn('[dsh-desktop] open session failed', sid, err)
+            }
+          }
+        } catch { /* bridge briefly unavailable; ignore */ }
+        setTimeout(tick, 1200)
+      }
+      setTimeout(tick, 1200)
     }
 
     return {
@@ -77,10 +115,10 @@ window.__ModuleLoader__.load({
             const completed = item.completed === true
             if (before) {
               if (!before.pending && pending) {
-                show('dsh 需要你', PENDING_LABELS[pending] ?? '有一条交互在等你')
+                show('dsh 需要你', PENDING_LABELS[pending] ?? '有一条交互在等你', item)
               }
               if (!before.completed && completed) {
-                show('dsh 任务完成', `「${titleOf(item)}」已完成`)
+                show('dsh 任务完成', `「${titleOf(item)}」已完成`, item)
               }
             }
             seen.set(id, { pending: pending ?? undefined, completed })
@@ -97,6 +135,7 @@ window.__ModuleLoader__.load({
         // Diagnostic canary: tells the shell this module loaded and the bridge
         // is reachable (no toast, no tauri dependency).
         post('/alive', { loaded: true })
+        pollPendingOpen(ctx)
         return () => {
           if (unsubscribe) unsubscribe()
         }

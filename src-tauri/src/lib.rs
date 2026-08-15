@@ -71,6 +71,12 @@ fn log_line(data_dir: &std::path::Path, msg: &str) {
 /// Port of the loopback notification bridge, shared with the manager child.
 static BRIDGE_PORT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
 
+/// Session id of the most recent notification — a toast click re-opens it.
+static LAST_SESSION: Mutex<Option<String>> = Mutex::new(None);
+/// Session id waiting to be revealed in the UI (set on app activation, cleared
+/// once the client page reads it via /pending-open).
+static PENDING_OPEN: Mutex<Option<String>> = Mutex::new(None);
+
 /// Raise a native toast and record it. Shared by the event listener and the
 /// HTTP bridge (the only delivery the dsh page can actually use — Tauri v2
 /// does not inject `__TAURI__` into remote pages, tauri#11934).
@@ -140,6 +146,19 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
 
     let (status, resp_body) = match (method, path) {
         ("OPTIONS", _) => ("204 No Content", String::new()),
+        ("GET", "/pending-open") => {
+            let sid = PENDING_OPEN.lock().unwrap().take();
+            let data = app
+                .path()
+                .app_data_dir()
+                .unwrap_or_else(|_| std::path::PathBuf::from("."));
+            log_line(&data, &format!("pending-open: {sid:?}"));
+            let body = match &sid {
+                Some(s) => format!("{{\"sessionId\":{}}}", serde_json::to_string(s).unwrap_or_else(|_| "\"\"".into())),
+                None => "{\"sessionId\":null}".into(),
+            };
+            ("200 OK", body)
+        }
         ("POST", "/alive") => {
             let data = app
                 .path()
@@ -150,15 +169,19 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
             ("200 OK", String::new())
         }
         ("POST", "/notify") => {
-            let (title, body2) =
+            let (title, body2, sid) =
                 serde_json::from_str::<serde_json::Value>(&body)
                     .map(|v| {
                         (
                             v.get("title").and_then(|x| x.as_str()).unwrap_or("dsh").to_string(),
                             v.get("body").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                            v.get("sessionId").and_then(|x| x.as_str()).map(|s| s.to_string()),
                         )
                     })
-                    .unwrap_or_else(|_| ("dsh".into(), body.clone()));
+                    .unwrap_or_else(|_| ("dsh".into(), body.clone(), None));
+            if let Some(s) = sid {
+                *LAST_SESSION.lock().unwrap() = Some(s);
+            }
             show_toast(app, title, body2);
             ("200 OK", String::new())
         }
@@ -386,10 +409,29 @@ fn quit_app(app: AppHandle, state: State<'_, ServerState>) -> Result<(), String>
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            // Toast click / external activation: remember the session to
+            // reopen, then bring the existing window forward. Never spawn a
+            // second manager behind the same runtime.
+            let last = LAST_SESSION.lock().unwrap().clone();
+            *PENDING_OPEN.lock().unwrap() = last;
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.show();
+                let _ = w.unminimize();
+                let _ = w.set_focus();
+            }
+        }))
         .manage(ServerState {
             child: Mutex::new(None),
         })
         .setup(|app| {
+            // ── window icon (taskbar): force the bundled icon explicitly — the
+            // tray already uses it; this guards against OS icon-cache staleness.
+            if let Some(w) = app.get_webview_window("main") {
+                if let Some(icon) = app.default_window_icon() {
+                    let _ = w.set_icon(icon.clone());
+                }
+            }
             // ── tray menu ────────────────────────────────────────────────
             let show = MenuItem::with_id(app, "show", "显示窗口", true, None::<&str>)?;
             let restart = MenuItem::with_id(app, "restart", "重启服务", true, None::<&str>)?;

@@ -66,6 +66,14 @@
   纯标准 Web 技术，零 Tauri 依赖。
 - 教训：改 client.js 后必须 `sync-resources` 再本地验证（资源副本与源码同步是构建的前置步骤）。
 
+## 11. 通知点击 → 聚焦 + 定位会话
+
+- tauri-plugin-notification 没有 Windows 点击回调（仅 Android action）。
+- 机制：`tauri-plugin-single-instance` 捕获外部激活（toast 点击/重启动）→ 聚焦已有窗口 +
+  把"最近通知的 sessionId"放进桥接 `/pending-open`；页面轮询该端点 →
+  `ctx.sessions.open(id)`（dsh-client-runtime SessionRuntime 的公开方法）定位会话。
+- 会话列表项没有"最新内容"字段：toast 正文用 title → displayTitle → cwd 兜底。
+
 ## 平台专属项仍要真机验证（机制覆盖不到的部分）
 
 Windows 的 NSIS 安装行为、toast 渲染、AUMID、事件投递——Linux smoke 覆盖不到，

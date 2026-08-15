@@ -96,7 +96,7 @@ Object.entries(pendingLabels).forEach(([kind, body], i) => {
   mutate({ ids: [id], byId: { [id]: session(id, { pendingInteraction: kind }) } })
   assert.equal(calls.length, 1, `${kind} transition must notify once`)
   assert.ok(calls[0][0].endsWith('/notify'), 'must POST to the bridge /notify endpoint')
-  assert.deepEqual(calls[0][1], { title: 'dsh 需要你', body })
+  assert.deepEqual(calls[0][1], { title: 'dsh 需要你', body, sessionId: id })
 })
 
 // ── scenario 3: session completes -> "task done" ────────────────────────────
@@ -104,7 +104,7 @@ introduce('sess-A') // re-introduce (previous scenarios replaced the whole list)
 calls = []
 mutate({ ids: ['sess-A'], byId: { 'sess-A': session('sess-A', { pendingInteraction: undefined, completed: true, title: '写周报' }) } })
 assert.equal(calls.length, 1, 'completion transition must notify once')
-assert.deepEqual(calls[0][1], { title: 'dsh 任务完成', body: '「写周报」已完成' })
+assert.deepEqual(calls[0][1], { title: 'dsh 任务完成', body: '「写周报」已完成', sessionId: 'sess-A' })
 
 // ── scenario 4: no duplicate while state stays put ──────────────────────────
 calls = []
@@ -153,7 +153,7 @@ introduce('sess-E')
 mutate({ ids: ['sess-E'], byId: { 'sess-E': session('sess-E', { running: true }) } })
 mutate({ ids: ['sess-E'], byId: { 'sess-E': session('sess-E', { running: false, completed: true, title: '部署' }) } })
 assert.equal(calls.length, 1, 'bridge path works after remount')
-assert.deepEqual(calls[0][1], { title: 'dsh 任务完成', body: '「部署」已完成' })
+assert.deepEqual(calls[0][1], { title: 'dsh 任务完成', body: '「部署」已完成', sessionId: 'sess-E' })
 dispose3()
 
 console.log('PASS — notification plugin behavioral test (8 scenarios)')
