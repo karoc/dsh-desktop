@@ -28,14 +28,9 @@ html, body {
   padding: 24px;
 }
 
-.card {
-  width: min(420px, 84vw);
-  padding: 32px 28px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--card);
+/* 顶部信息区：无框，直接浮在深色背景上 */
+.hero {
   text-align: center;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
 }
 
 .logo {
