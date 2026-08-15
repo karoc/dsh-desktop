@@ -534,20 +534,17 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            // ── close minimizes to tray (restorable by OS toast activation —
-            // SW_RESTORE cannot bring back a hide()n window); only the menu
-            // "退出" really quits. On regaining focus, hand the staged
-            // notification session to the page (the focus edge is the only
-            // observable trace of a toast click on Windows). ────────────────
+            // ── close minimizes to tray (restorable by OS toast activation — SW_RESTORE
+// cannot bring back a hide()n window, and skip_taskbar windows may be excluded
+// from shell activation entirely); only the menu "退出" really quits. On
+// regaining focus, hand the staged notification session to the page (the
+// focus edge is the only observable trace of a toast click on Windows). ──────
             if let Some(w) = app.get_webview_window("main") {
                 let handle = app.handle().clone();
                 w.on_window_event(move |event| match event {
                     tauri::WindowEvent::CloseRequested { api, .. } => {
                         api.prevent_close();
-                        let _ = handle.get_webview_window("main").map(|w| {
-                            let _ = w.set_skip_taskbar(true);
-                            let _ = w.minimize();
-                        });
+                        let _ = handle.get_webview_window("main").map(|w| w.minimize());
                     }
                     tauri::WindowEvent::Focused(true) => {
                         if let Some(sid) = FOCUS_OPEN.lock().unwrap().take() {
