@@ -199,7 +199,7 @@ jobs:
           fi
 
           # clean shutdown
-          pkill -f "dsh Desktop" || true
+          pkill -f dsh-desktop || true
           pkill -f "server-manager" || true
           sleep 2
           echo "SMOKE PASS"

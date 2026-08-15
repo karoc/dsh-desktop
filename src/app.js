@@ -1,4 +1,4 @@
-// dsh Desktop launcher page (local, tauri://localhost).
+// DSH Desktop launcher page (local, tauri://localhost).
 // Waits for the Rust shell to report the dsh web loopback URL, then navigates.
 const stateEl = document.getElementById('state');
 const creditsEl = document.getElementById('credits');

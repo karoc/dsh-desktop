@@ -1,4 +1,4 @@
-//! dsh Desktop — Tauri 2 shell for DeepSeek Harness.
+//! DSH Desktop — Tauri 2 shell for DeepSeek Harness.
 //!
 //! Responsibilities (everything dsh-version-specific lives in the JS
 //! `server-manager`; Rust only owns the window/shell lifecycle):
@@ -298,7 +298,7 @@ fn resource_paths(app: &AppHandle) -> Result<(std::path::PathBuf, std::path::Pat
         }
     }
     Err(format!(
-        "bundled node not found; probed: {} — 资源缺失，请重新安装 dsh Desktop",
+        "bundled node not found; probed: {} — 资源缺失，请重新安装 DSH Desktop",
         bases
             .iter()
             .map(|b| b.display().to_string())
@@ -495,7 +495,7 @@ pub fn run() {
 
             let _tray = tauri::tray::TrayIconBuilder::with_id("dsh-tray")
                 .icon(app.default_window_icon().expect("app icon").clone())
-                .tooltip("dsh Desktop")
+                .tooltip("DSH Desktop")
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => {
@@ -589,5 +589,5 @@ pub fn run() {
             quit_app
         ])
         .run(tauri::generate_context!())
-        .expect("error while running dsh Desktop");
+        .expect("error while running DSH Desktop");
 }

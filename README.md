@@ -1,4 +1,4 @@
-# dsh Desktop
+# DSH Desktop
 
 把 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）打包成可独立运行的 Windows 桌面 App。
 
@@ -157,7 +157,7 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-发布完成后在 GitHub Releases 页下载 `dsh Desktop_<版本>_x64-setup.exe`，无需本地构建。
+发布完成后在 GitHub Releases 页下载 `DSH Desktop_<版本>_x64-setup.exe`，无需本地构建。
 （注：installer/exe 未做代码签名，SmartScreen 可能提示"未知发布者"。）
 
 ## License

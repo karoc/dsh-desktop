@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// dsh Desktop — server manager.
+// DSH Desktop — server manager.
 //
 // Runs under the bundled Node 24 (process.execPath). Owns everything
 // dsh-version-specific:
