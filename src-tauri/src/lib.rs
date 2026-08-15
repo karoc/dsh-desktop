@@ -39,16 +39,16 @@ fn stop_child(state: &ServerState) {
     }
 }
 
-/// Per-platform bundled-node path fragment inside `node/`, e.g. `win32-x64/node.exe`.
+/// Per-platform bundled-node path fragment, e.g. `node/win32-x64/node.exe`.
 fn node_rel_path() -> &'static str {
     #[cfg(windows)]
-    let rel = "win32-x64/node.exe";
+    let rel = "node/win32-x64/node.exe";
     #[cfg(target_os = "macos")]
-    let rel = "darwin-x64/node";
+    let rel = "node/darwin-x64/node";
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    let rel = "linux-x64/node";
+    let rel = "node/linux-x64/node";
     #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
-    let rel = "linux-arm64/node";
+    let rel = "node/linux-arm64/node";
     #[cfg(not(any(
         windows,
         target_os = "macos",
@@ -87,7 +87,7 @@ fn resource_paths(app: &AppHandle) -> Result<(std::path::PathBuf, std::path::Pat
         }
     }
     Err(format!(
-        "bundled node not found; probed: {} (run `npm run bundle` to fetch it)",
+        "bundled node not found; probed: {} — 资源缺失，请重新安装 dsh Desktop",
         bases
             .iter()
             .map(|b| b.display().to_string())
