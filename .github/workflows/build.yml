@@ -89,6 +89,11 @@ jobs:
     permissions:
       contents: write
     steps:
+      # gh release create --generate-notes needs git history (tag diffs),
+      # so this job must checkout before publishing.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
           name: dsh-desktop-windows
