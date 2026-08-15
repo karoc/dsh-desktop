@@ -27,7 +27,9 @@ fn stop_child(state: &ServerState) {
     if let Some(mut child) = state.child.lock().unwrap().take() {
         #[cfg(windows)]
         {
-            let _ = Command::new("taskkill")
+            let mut kill = Command::new("taskkill");
+            no_console_window(&mut kill);
+            let _ = kill
                 .arg("/pid")
                 .arg(child.id().to_string())
                 .arg("/T")
@@ -37,6 +39,15 @@ fn stop_child(state: &ServerState) {
         let _ = child.kill();
         let _ = child.wait();
     }
+}
+
+/// Windows only: spawn console programs without flashing a cmd window
+/// (CREATE_NO_WINDOW). The bundled node.exe (and its npm/dsh children, which
+/// already run with windowsHide) must never pop a console on the user's desk.
+#[cfg(windows)]
+fn no_console_window(cmd: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
 }
 
 /// Per-platform bundled-node path fragment, e.g. `node/win32-x64/node.exe`.
@@ -136,6 +147,8 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
     );
 
     let mut cmd = Command::new(&node_exe);
+    #[cfg(windows)]
+    no_console_window(&mut cmd);
     cmd.arg(&manager)
         .arg("--runtime-dir")
         .arg(data.join("runtime"))
