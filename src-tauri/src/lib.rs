@@ -171,7 +171,7 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
         let handle = app.clone();
         std::thread::spawn(move || {
             for line in BufReader::new(err).lines().flatten() {
-                let _ = handle.emit("server-log", line);
+                let _ = handle.emit("server-log", line.clone());
                 eprintln!("[dsh-desktop manager] {line}");
             }
         });
