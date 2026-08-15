@@ -3,6 +3,12 @@ on:
   push:
   workflow_dispatch:
 
+# A re-cut re-pushes the same tag; cancel any run still racing on the same ref
+# so release creation/asset upload never collide.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # Fast gate: compile the Rust crate in ~4-8 min (cached). Everything else
   # depends on it so compile errors never burn a full 20-min bundle round-trip.
