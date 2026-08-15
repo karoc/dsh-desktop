@@ -74,6 +74,20 @@
   `ctx.sessions.open(id)`（dsh-client-runtime SessionRuntime 的公开方法）定位会话。
 - 会话列表项没有"最新内容"字段：toast 正文用 title → displayTitle → cwd 兜底。
 
+## 13. 日志留痕指南（排查入口）
+
+数据目录：`%APPDATA%\dev.dsh.desktop\`（Windows）/ `~/.config/dev.dsh.desktop`（Linux）。
+
+| 文件 | 内容 | 排查谁 |
+|---|---|---|
+| `dsh-desktop-session.log` | Rust/shell 侧：bridge 端口、`client-ready (http)`（客户端活着+桥通）、`notification: 标题 - 正文`、`notification session=<id>`、`toast failed`、`pending-open`（点击后待打开）、`activated:`（single-instance 激活）、`client/log <tag> [session=<id>] <detail>`（客户端判定决策） | 通知链路 |
+| `runtime/manager.log` | manager：dsh 安装/升级、dsh URL、插件 `installed/updated client plugin`、`bridge port baked` | 启动/插件版本 |
+| dsh 自身 stderr | manager 透传 | dsh 内部 |
+
+**客户端 `client/log` 的 tag**：`notify-pending`（需要你触发）、`notify-complete`（running 沿/completed 标志）、`notify-complete-fallback`（快任务兜底）、`suppressed`（聚焦抑制）、`open`/`open-error`（点弹窗定位会话）、`shape`（快照结构异常——防静默死亡）。
+
+**排查套路**：没弹 → 看 session.log 有无 `client-ready (http)`（无=客户端没跑/桥断）→ 有则看对应 `notify-*`（无=客户端没检测到沿变，快照/订阅问题）→ 有再看看 `toast failed`（系统通知层）。
+
 ## 平台专属项仍要真机验证（机制覆盖不到的部分）
 
 Windows 的 NSIS 安装行为、toast 渲染、AUMID、事件投递——Linux smoke 覆盖不到，

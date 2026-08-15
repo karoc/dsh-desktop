@@ -34,6 +34,22 @@ window.__ModuleLoader__.load({
       }).catch(() => {})
     }
 
+    // Decision trail: every judgment the plugin makes is posted to the shell's
+    // session log (via the bridge /log sink) so a bad outcome is traceable to
+    // the exact snapshot state. No-op when the bridge is unavailable.
+    function logEvent(tag, item, detail) {
+      const payload = { tag }
+      if (item) {
+        const sid = idOf(item)
+        if (sid) payload.sessionId = sid
+        if (item.pendingInteraction) payload.pending = item.pendingInteraction
+        if (item.running === true) payload.running = true
+        if (item.completed === true) payload.completed = true
+      }
+      if (detail) payload.detail = detail
+      post('/log', payload)
+    }
+
     function titleOf(item) {
       if (item.title && String(item.title).trim()) return String(item.title).trim()
       if (item.displayTitle && String(item.displayTitle).trim()) return String(item.displayTitle).trim()
@@ -53,6 +69,7 @@ window.__ModuleLoader__.load({
           document.hasFocus() &&
           !document.hidden
         ) {
+          logEvent('suppressed', item, 'window focused')
           return // user is looking at the UI; do not nag
         }
       } catch { /* keep going */ }
@@ -84,11 +101,14 @@ window.__ModuleLoader__.load({
             try {
               if (ctx.sessions && typeof ctx.sessions.open === 'function') {
                 ctx.sessions.open(sid)
+                post('/log', { tag: 'open', sessionId: sid, detail: 'ctx.sessions.open' })
               } else if (ctx.sessions && ctx.sessions.list && typeof ctx.sessions.list.update === 'function') {
                 ctx.sessions.list.update((draft) => { draft.current = sid })
+                post('/log', { tag: 'open', sessionId: sid, detail: 'store.current' })
               }
             } catch (err) {
               console.warn('[dsh-desktop] open session failed', sid, err)
+              post('/log', { tag: 'open-error', sessionId: sid, detail: String(err && err.message || err) })
             }
           }
         } catch { /* bridge briefly unavailable; ignore */ }
@@ -150,6 +170,7 @@ window.__ModuleLoader__.load({
             const completed = item.completed === true
             if (before) {
               if (!before.pending && pending) {
+                logEvent('notify-pending', item, PENDING_LABELS[pending] ?? pending)
                 show('dsh 需要你', PENDING_LABELS[pending] ?? '有一条交互在等你', item)
               }
               if (before.running && !running) {
@@ -159,6 +180,7 @@ window.__ModuleLoader__.load({
                 // finish (or a rare external/browser stop; `completed` only
                 // records "ended while unselected", never stop-vs-finish).
                 // Wording is therefore always 已完成.
+                logEvent('notify-complete', item, completed ? 'completed-flag' : 'running-edge')
                 show('dsh 任务完成', `「${titleOf(item)}」已完成`, item)
                 seen.set(id, { pending: pending ?? undefined, running, completed, ended: true })
                 continue
@@ -167,6 +189,7 @@ window.__ModuleLoader__.load({
               // snapshot coalesced true→false between ticks). `completed`
               // appearing false→true on an un-ended episode is the evidence.
               if (!before.ended && !before.running && !before.completed && completed && !running) {
+                logEvent('notify-complete-fallback', item, 'completed transition')
                 show('dsh 任务完成', `「${titleOf(item)}」已完成`, item)
                 seen.set(id, { pending: pending ?? undefined, running, completed, ended: true })
                 continue

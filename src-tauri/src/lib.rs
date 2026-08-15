@@ -92,7 +92,13 @@ fn show_toast(app: &AppHandle, title: String, body: String) {
     if !body.is_empty() {
         b = b.body(body);
     }
-    let _ = b.show();
+    match b.show() {
+        Ok(_) => {}
+        Err(e) => {
+            log_line(&data, &format!("toast failed: {e}"));
+            eprintln!("[dsh-desktop] toast failed: {e}");
+        }
+    }
 }
 
 /// Minimal loopback HTTP server (std only): the injected client page POSTs
@@ -108,6 +114,11 @@ fn start_bridge(app: AppHandle) {
         };
         BRIDGE_PORT.store(port, std::sync::atomic::Ordering::SeqCst);
         eprintln!("[dsh-desktop] bridge on 127.0.0.1:{port}");
+        let data = app
+            .path()
+            .app_data_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from("."));
+        log_line(&data, &format!("bridge on 127.0.0.1:{port}"));
         for stream in listener.incoming() {
             let Ok(mut stream) = stream else { continue };
             let app = app.clone();
@@ -168,6 +179,28 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
             eprintln!("[dsh-desktop] client-ready (http): {body}");
             ("200 OK", String::new())
         }
+        ("POST", "/log") => {
+            let data = app
+                .path()
+                .app_data_dir()
+                .unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let (tag, sid, detail) = serde_json::from_str::<serde_json::Value>(&body)
+                .map(|v| {
+                    (
+                        v.get("tag").and_then(|x| x.as_str()).unwrap_or("?").to_string(),
+                        v.get("sessionId").and_then(|x| x.as_str()).map(|s| s.to_string()),
+                        v.get("detail").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                    )
+                })
+                .unwrap_or_else(|_| ("?".into(), None, body.clone()));
+            let line = match sid {
+                Some(s) if !s.is_empty() => format!("client/log {tag} [session={s}] {detail}"),
+                _ => format!("client/log {tag} {detail}"),
+            };
+            log_line(&data, &line);
+            eprintln!("[dsh-desktop] {line}");
+            ("200 OK", String::new())
+        }
         ("POST", "/notify") => {
             let (title, body2, sid) =
                 serde_json::from_str::<serde_json::Value>(&body)
@@ -179,8 +212,13 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
                         )
                     })
                     .unwrap_or_else(|_| ("dsh".into(), body.clone(), None));
-            if let Some(s) = sid {
-                *LAST_SESSION.lock().unwrap() = Some(s);
+            if let Some(s) = &sid {
+                *LAST_SESSION.lock().unwrap() = Some(s.clone());
+                let data = app
+                    .path()
+                    .app_data_dir()
+                    .unwrap_or_else(|_| std::path::PathBuf::from("."));
+                log_line(&data, &format!("notification session={s}"));
             }
             show_toast(app, title, body2);
             ("200 OK", String::new())
@@ -414,6 +452,12 @@ pub fn run() {
             // reopen, then bring the existing window forward. Never spawn a
             // second manager behind the same runtime.
             let last = LAST_SESSION.lock().unwrap().clone();
+            let data = app
+                .path()
+                .app_data_dir()
+                .unwrap_or_else(|_| std::path::PathBuf::from("."));
+            log_line(&data, &format!("activated: pending-open={last:?}"));
+            eprintln!("[dsh-desktop] activated: pending-open={last:?}");
             *PENDING_OPEN.lock().unwrap() = last;
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.show();
