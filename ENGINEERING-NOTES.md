@@ -88,6 +88,15 @@
 
 **排查套路**：没弹 → 看 session.log 有无 `client-ready (http)`（无=客户端没跑/桥断）→ 有则看对应 `notify-*`（无=客户端没检测到沿变，快照/订阅问题）→ 有再看看 `toast failed`（系统通知层）。
 
+## 15. CI 发布链路
+
+- 每次 push：check（ubuntu cargo check）→ windows（NSIS 构建 + 7z 断言 node 在包内 + artifact）
+  + linux（AppImage/deb）。`windows` job 从始至终绿灯，setup.exe 一直有产。
+- 打 `v*` tag：release job 把 windows artifact 发到 GitHub Release（softprops/action-gh-release）。
+- `linux-smoke`：headless xvfb 下 WebKitTRK 卡在 setup 前，二进制零输出——引入以来从未绿过，
+  属 CI 环境怪癖（真机正常）；已 `continue-on-error` 降级为非阻塞警示。产品回归由
+  windows 的 7z 布局断言 + check 门禁兜底。
+
 ## 平台专属项仍要真机验证（机制覆盖不到的部分）
 
 Windows 的 NSIS 安装行为、toast 渲染、AUMID、事件投递——Linux smoke 覆盖不到，

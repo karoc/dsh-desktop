@@ -131,6 +131,19 @@ dsh 页面以纯远程页面加载，只授予"到 loopback 的通知权限"
 这是官方桌面端出现前的临时壳：dsh 本体永远是官方 npm 包，届时替换壳即可，数据
 （`~/.dsh`）可无缝沿用。
 
+## 发布（CI 自动出包 + GitHub Release）
+
+Windows 安装包由 GitHub Actions（`.github/workflows/build.yml`）在 `windows-latest` 上自动构建：
+每次 push 都会产出 setup.exe 并上传为 artifact；**打 `v*` tag 即自动发布**：
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+发布完成后在 GitHub Releases 页下载 `dsh Desktop_<版本>_x64-setup.exe`，无需本地构建。
+（注：installer/exe 未做代码签名，SmartScreen 可能提示"未知发布者"。）
+
 ## License
 
 MIT
