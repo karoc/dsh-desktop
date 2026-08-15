@@ -85,6 +85,25 @@ static FOCUS_OPEN: Mutex<Option<String>> = Mutex::new(None);
 /// Raise a native toast and record it. Shared by the event listener and the
 /// HTTP bridge (the only delivery the dsh page can actually use — Tauri v2
 /// does not inject `__TAURI__` into remote pages, tauri#11934).
+/// Bring the main window to the user regardless of its current state:
+/// hidden (tray) -> show; minimized -> unminimize; behind/置后 -> set_focus;
+/// in front -> no-op. Windows restricts foreground-stealing from background
+/// threads, so the topmost-toggle trick forces the OS to raise the window.
+fn activate_window(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.set_skip_taskbar(false);
+        let _ = w.show(); // no-op when already visible; reveals hidden windows
+        if let Ok(true) = w.is_minimized() {
+            let _ = w.unminimize();
+        }
+        let _ = w.set_focus();
+        // Force foreground despite Windows' SetForegroundWindow restrictions:
+        // briefly becoming topmost raises the window, then revert.
+        let _ = w.set_always_on_top(true);
+        let _ = w.set_always_on_top(false);
+    }
+}
+
 fn show_toast(app: &AppHandle, title: String, body: String) {
     let data = app
         .path()
@@ -98,8 +117,8 @@ fn show_toast(app: &AppHandle, title: String, body: String) {
     // notification). tauri-plugin-notification's show() drops the handle, and
     // Windows toast clicks never relaunch/activate through the shell for this
     // app — the in-process activator is the ONLY reliable "toast clicked"
-    // signal. On click: bring the window back and hand the last notified
-    // session to the page via /pending-open.
+    // signal. On click: bring the window back (any state) and hand the last
+    // notified session to the page via /pending-open.
     let clicked = |app: &AppHandle| {
         let last = LAST_SESSION.lock().unwrap().clone();
         *PENDING_OPEN.lock().unwrap() = last.clone();
@@ -109,12 +128,7 @@ fn show_toast(app: &AppHandle, title: String, body: String) {
             .unwrap_or_else(|_| std::path::PathBuf::from("."));
         log_line(&data, &format!("toast-clicked pending-open={last:?}"));
         eprintln!("[dsh-desktop] toast-clicked pending-open={last:?}");
-        if let Some(w) = app.get_webview_window("main") {
-            let _ = w.set_skip_taskbar(false);
-            let _ = w.show();
-            let _ = w.unminimize();
-            let _ = w.set_focus();
-        }
+        activate_window(app);
     };
 
     let mut n = notify_rust::Notification::new();
@@ -128,7 +142,15 @@ fn show_toast(app: &AppHandle, title: String, body: String) {
         Ok(handle) => {
             let app = app.clone();
             std::thread::spawn(move || {
-                handle.wait_for_action(|_action| clicked(&app));
+                // wait_for_response 保留点击/消失的区分：Default/Action=点击（激活），
+                // Closed=自动消失（忽略）——wait_for_action 会把无按钮 toast 的点击
+                // 也折叠成 "__closed"。
+                let app2 = app.clone();
+                let _ = handle.wait_for_response(move |resp: &notify_rust::NotificationResponse| match resp {
+                    notify_rust::NotificationResponse::Default
+                    | notify_rust::NotificationResponse::Action(_) => clicked(&app2),
+                    _ => {}
+                });
             });
         }
         Err(e) => {
@@ -518,12 +540,7 @@ pub fn run() {
             log_line(&data, &format!("activated: pending-open={last:?}"));
             eprintln!("[dsh-desktop] activated: pending-open={last:?}");
             *PENDING_OPEN.lock().unwrap() = last;
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.set_skip_taskbar(false);
-                let _ = w.show();
-                let _ = w.unminimize();
-                let _ = w.set_focus();
-            }
+            activate_window(app);
         }))
         .manage(ServerState {
             child: Mutex::new(None),
@@ -559,12 +576,7 @@ pub fn run() {
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => {
-                        if let Some(w) = app.get_webview_window("main") {
-                            let _ = w.set_skip_taskbar(false);
-                            let _ = w.show();
-                            let _ = w.unminimize();
-                            let _ = w.set_focus();
-                        }
+                        activate_window(app);
                     }
                     "restart" => {
                         let _ = restart_server(app.clone(), app.state::<ServerState>());
@@ -579,17 +591,19 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            // ── close minimizes to tray (restorable by OS toast activation — SW_RESTORE
-// cannot bring back a hide()n window, and skip_taskbar windows may be excluded
-// from shell activation entirely); only the menu "退出" really quits. On
-// regaining focus, hand the staged notification session to the page (the
-// focus edge is the only observable trace of a toast click on Windows). ──────
+            // ── 关窗=隐藏到托盘（真正的托盘语义）；只有菜单"退出"才真正退出。
+// 点击 toast 由 notify-rust 进程内激活回调驱动 activate_window()，对
+// 隐藏/最小化/置后/置前任意状态都能恢复并置前。窗口重新获得焦点时，
+// 把暂存的"通知会话"交给页面打开（托盘/任务栏手动回来也适用）。──────
             if let Some(w) = app.get_webview_window("main") {
                 let handle = app.handle().clone();
                 w.on_window_event(move |event| match event {
                     tauri::WindowEvent::CloseRequested { api, .. } => {
+                        // 托盘语义：关窗=隐藏（不真关、不进任务栏）。
+                        // 点击 toast 时由进程内激活回调 show() 恢复，不再依赖
+                        // 系统 SW_RESTORE（它对隐藏窗口无效）。
                         api.prevent_close();
-                        let _ = handle.get_webview_window("main").map(|w| w.minimize());
+                        let _ = handle.get_webview_window("main").map(|w| w.hide());
                     }
                     tauri::WindowEvent::Focused(true) => {
                         if let Some(sid) = FOCUS_OPEN.lock().unwrap().take() {
