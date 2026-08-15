@@ -424,6 +424,16 @@ pub fn run() {
         .manage(ServerState {
             child: Mutex::new(None),
         })
+        // Belt-and-suspenders for the taskbar icon: re-apply the bundled icon
+        // on every page load (window existence/creation timing is not relied
+        // on; see WindowConfig having no icon field in Tauri v2).
+        .on_page_load(|webview, _payload| {
+            if let Some(w) = webview.app_handle().get_webview_window("main") {
+                if let Some(icon) = w.app_handle().default_window_icon() {
+                    let _ = w.set_icon(icon.clone());
+                }
+            }
+        })
         .setup(|app| {
             // ── window icon (taskbar): force the bundled icon explicitly — the
             // tray already uses it; this guards against OS icon-cache staleness.
