@@ -147,24 +147,29 @@ jobs:
           setInterval(() => {}, 1000)
           EOF
 
-          DSH_DESKTOP_NO_UPDATE=1 timeout 30 xvfb-run -a "$BIN" >smoke.log 2>&1 &
+          # WebKitGTK under headless xvfb needs DMABUF disabled or the webview
+          # init stalls before setup() runs (no Rust logs, process alive).
+          DSH_DESKTOP_NO_UPDATE=1 \
+          WEBKIT_DISABLE_DMABUF_RENDERER=1 \
+          WEBKIT_DISABLE_COMPOSITING_MODE=1 \
+          timeout 35 xvfb-run -a "$BIN" >smoke.log 2>&1 &
           APP_PID=$!
-          sleep 14
+          sleep 18
 
           echo "== resources root line =="
           ROOT=$(grep -oE "resources root: .*" smoke.log | head -1 | sed 's/^resources root: //')
-          echo "$ROOT" || true
+          echo "ROOT=[$ROOT]" || true
           if [ -n "$ROOT" ] && test -f "$ROOT/node/linux-x64/node"; then
             echo "PASS: resources root resolves and node exists"
           else
-            echo "FAIL: resources root missing or node absent"; tail -40 smoke.log; exit 1
+            echo "FAIL: resources root missing or node absent"; echo "--- smoke.log ---"; tail -50 smoke.log; exit 1
           fi
 
           echo "== URL event =="
           if grep -q '"t":"url"\|dsh web: http://127.0.0.1:39999' smoke.log; then
             echo "PASS: URL reached the manager protocol stream"
           else
-            echo "FAIL: no URL event"; tail -40 smoke.log; exit 1
+            echo "FAIL: no URL event"; echo "--- smoke.log ---"; tail -50 smoke.log; exit 1
           fi
 
           # clean shutdown
