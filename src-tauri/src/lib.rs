@@ -334,7 +334,7 @@ pub fn run() {
             {
                 let app = app.handle().clone();
                 let data_dir = data_dir.clone();
-                app.listen("desktop-notification", move |event| {
+                app.clone().listen("desktop-notification", move |event| {
                     let payload = event.payload();
                     log_line(&data_dir, &format!("notification: {payload}"));
                     eprintln!("[dsh-desktop] notification: {payload}");

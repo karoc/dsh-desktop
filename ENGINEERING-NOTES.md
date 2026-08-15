@@ -44,6 +44,12 @@
 - 坑：我给的 PowerShell 出现过丢 `&`、默认安装目录猜错；用户还踩过没装 Rust 的本地构建。
 - 机制：命令一律单行/自定位；本地构建前置写进 README；“推荐用 CI 安装包”放第一位。
 
+## 8. 交付门禁必须真的挡住"用户侧编译失败"
+
+- 坑：CI 加了 `cargo check` 门禁，但我没等它绿就让用户 pull+bundle，E0599/Notification::new/E0505 连烧用户三轮本地编译。
+- 机制：**任何 Rust 改动 push 后，先轮询 check job 变绿，再通知用户**。check 是用户流程的硬闸门，不是装饰。
+- 写插件 API 前先查 docs.rs 签名（`NotificationExt::notification().builder()` 而非 `Notification::new`），不靠记忆。
+
 ## 平台专属项仍要真机验证（机制覆盖不到的部分）
 
 Windows 的 NSIS 安装行为、toast 渲染、AUMID、事件投递——Linux smoke 覆盖不到，
