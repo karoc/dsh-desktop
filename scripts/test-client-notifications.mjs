@@ -99,16 +99,27 @@ Object.entries(pendingLabels).forEach(([kind, body], i) => {
   assert.deepEqual(calls[0][1], { title: 'dsh 需要你', body, sessionId: id })
 })
 
-// ── scenario 3: session completes -> "task done" ────────────────────────────
+// ── scenario 3: running true→false, completed -> "task done" ────────────────
 introduce('sess-A') // re-introduce (previous scenarios replaced the whole list)
 calls = []
-mutate({ ids: ['sess-A'], byId: { 'sess-A': session('sess-A', { pendingInteraction: undefined, completed: true, title: '写周报' }) } })
-assert.equal(calls.length, 1, 'completion transition must notify once')
+mutate({ ids: ['sess-A'], byId: { 'sess-A': session('sess-A', { running: true }) } })
+assert.equal(calls.length, 0, 'starting a run must not notify')
+mutate({ ids: ['sess-A'], byId: { 'sess-A': session('sess-A', { running: false, completed: true, title: '写周报' }) } })
+assert.equal(calls.length, 1, 'running→done transition must notify once')
 assert.deepEqual(calls[0][1], { title: 'dsh 任务完成', body: '「写周报」已完成', sessionId: 'sess-A' })
+
+// ── scenario 3b: running true→false WITHOUT completed (manual stop / selected
+// session finishing) still notifies, with the "已结束" wording ───────────────
+introduce('sess-A2')
+calls = []
+mutate({ ids: ['sess-A2'], byId: { 'sess-A2': session('sess-A2', { running: true, title: '清理' }) } })
+mutate({ ids: ['sess-A2'], byId: { 'sess-A2': session('sess-A2', { running: false, completed: false, title: '清理' }) } })
+assert.equal(calls.length, 1, 'running edge fires even when completed stays false (selected session)')
+assert.deepEqual(calls[0][1], { title: 'dsh 任务结束', body: '「清理」已结束', sessionId: 'sess-A2' })
 
 // ── scenario 4: no duplicate while state stays put ──────────────────────────
 calls = []
-mutate({ ids: ['sess-A'], byId: { 'sess-A': session('sess-A', { completed: true, title: '写周报' }) } })
+mutate({ ids: ['sess-A'], byId: { 'sess-A': session('sess-A', { running: false, completed: true, title: '写周报' }) } })
 assert.equal(calls.length, 0, 'repeated snapshot must not re-notify')
 
 // ── scenario 5: window focused -> silence ───────────────────────────────────
@@ -156,4 +167,4 @@ assert.equal(calls.length, 1, 'bridge path works after remount')
 assert.deepEqual(calls[0][1], { title: 'dsh 任务完成', body: '「部署」已完成', sessionId: 'sess-E' })
 dispose3()
 
-console.log('PASS — notification plugin behavioral test (8 scenarios)')
+console.log('PASS — notification plugin behavioral test (9 scenarios)')

@@ -96,7 +96,7 @@ window.__ModuleLoader__.load({
       name: 'desktop-notifications',
       inject: ['sessions'],
       apply(ctx) {
-        const seen = new Map() // sessionId -> { pending?, completed }
+        const seen = new Map() // sessionId -> { pending?, running }
         const scan = () => {
           let snap
           try {
@@ -112,16 +112,24 @@ window.__ModuleLoader__.load({
             alive.add(id)
             const before = seen.get(id)
             const pending = item.pendingInteraction
-            const completed = item.completed === true
+            // Completion signal: dsh's `completed` only means "finished while
+            // NOT selected" (it never flips for a selected session, even when
+            // the window is minimized). The universal edge is running true→false.
+            const running = item.running === true
             if (before) {
               if (!before.pending && pending) {
                 show('dsh 需要你', PENDING_LABELS[pending] ?? '有一条交互在等你', item)
               }
-              if (!before.completed && completed) {
-                show('dsh 任务完成', `「${titleOf(item)}」已完成`, item)
+              if (before.running && !running) {
+                const done = item.completed === true
+                show(
+                  done ? 'dsh 任务完成' : 'dsh 任务结束',
+                  `「${titleOf(item)}」${done ? '已完成' : '已结束'}`,
+                  item,
+                )
               }
             }
-            seen.set(id, { pending: pending ?? undefined, completed })
+            seen.set(id, { pending: pending ?? undefined, running })
           }
           for (const id of [...seen.keys()]) {
             if (!alive.has(id)) seen.delete(id)
