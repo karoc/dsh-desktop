@@ -50,7 +50,9 @@
         "displayLanguageSelector": false,
         "languages": ["SimpChinese", "English"],
         "installerIcon": "icons/icon.ico",
-        "uninstallerIcon": "icons/icon.ico"
+        "uninstallerIcon": "icons/icon.ico",
+        "headerImage": "icons/header.bmp",
+        "sidebarImage": "icons/sidebar.bmp"
       }
     }
   }
