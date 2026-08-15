@@ -87,6 +87,16 @@ jobs:
         with:
           name: dsh-desktop-windows
           path: dist
+      # Retag support: a re-cut re-pushes the same tag (e.g. v0.1.0) — the old
+      # release (stale asset name) is still attached; delete it here with the
+      # run-scoped token (contents: write covers release delete) so the fresh
+      # release below always wins. Keeping the tag: no --cleanup-tag.
+      - name: Clean stale release for same tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete "$GITHUB_REF_NAME" --yes 2>/dev/null || true
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
