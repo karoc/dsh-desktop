@@ -59,15 +59,31 @@ fn node_rel_path() -> &'static str {
     rel
 }
 
+/// Strip the `\\?\` extended-length prefix Windows `current_exe()` adds: such
+/// paths break Node's module loader (it lstat's a bare `C:` component) and are
+/// unreliable as CreateProcess argument paths.
+fn simplify_path(p: &std::path::Path) -> std::path::PathBuf {
+    let s = p.to_string_lossy();
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        return std::path::PathBuf::from(format!(r"\\{rest}"));
+    }
+    if let Some(rest) = s.strip_prefix(r"\\?\") {
+        return std::path::PathBuf::from(rest);
+    }
+    p.to_path_buf()
+}
+
 /// Resolve the bundled resources root and node binary. Tauri's
 /// `resource_dir()` returns the EXE directory on Windows (the bundler puts
 /// everything under a `resources/` subfolder), so probe the candidate layouts
 /// and use whichever actually exists — never assume one.
 fn resource_paths(app: &AppHandle) -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
-    let res = app
-        .path()
-        .resource_dir()
-        .map_err(|e| format!("resource dir: {e}"))?;
+    let res = simplify_path(
+        &app
+            .path()
+            .resource_dir()
+            .map_err(|e| format!("resource dir: {e}"))?,
+    );
     let rel = node_rel_path();
 
     let mut bases: Vec<std::path::PathBuf> = Vec::new();
@@ -75,8 +91,9 @@ fn resource_paths(app: &AppHandle) -> Result<(std::path::PathBuf, std::path::Pat
     bases.push(res.clone());
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
+            let dir = simplify_path(dir);
             bases.push(dir.join("resources"));
-            bases.push(dir.to_path_buf());
+            bases.push(dir);
         }
     }
 
@@ -103,16 +120,20 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
     let (res, node_exe) = resource_paths(app)?;
     eprintln!("[dsh-desktop] resources root: {}", res.display());
     let _ = app.emit("server-log", format!("resources root: {}", res.display()));
-    let manager = res.join("manager/server-manager.mjs");
-    let patch = res.join("patch/dsh-desktop.patch.yml");
-    let data = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("app data dir: {e}"))?;
-    let home = app
-        .path()
-        .home_dir()
-        .map_err(|e| format!("home dir: {e}"))?;
+    let manager = simplify_path(&res.join("manager/server-manager.mjs"));
+    let patch = simplify_path(&res.join("patch/dsh-desktop.patch.yml"));
+    let data = simplify_path(
+        &app
+            .path()
+            .app_data_dir()
+            .map_err(|e| format!("app data dir: {e}"))?,
+    );
+    let home = simplify_path(
+        &app
+            .path()
+            .home_dir()
+            .map_err(|e| format!("home dir: {e}"))?,
+    );
 
     let mut cmd = Command::new(&node_exe);
     cmd.arg(&manager)
