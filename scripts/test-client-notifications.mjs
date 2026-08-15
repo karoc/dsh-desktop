@@ -17,9 +17,18 @@ const root = dirname(fileURLToPath(import.meta.url))
 const clientJs = readFileSync(join(root, '..', 'plugins', 'dsh-client-notifications', 'client.js'), 'utf8')
 
 // ── browser-global stubs ────────────────────────────────────────────────────
-let calls = [] // collected notification attempts
+let calls = [] // collected notification attempts (desktop-notification events only)
+let allEmitted = [] // every tauri event emitted (incl. the client-ready canary)
 let focus = false
-let tauriApi = { notification: { sendNotification: (opts) => { calls.push(['tauri', opts]) } } }
+let tauriApi = {
+  event: {
+    emit: (name, payload) => {
+      allEmitted.push([name, payload])
+      if (name === 'desktop-notification') calls.push(['tauri', name, payload])
+      return Promise.resolve()
+    },
+  },
+}
 
 const windowStub = {
   __ModuleLoader__: { load(handoff) { windowStub.__handoff = handoff } },
@@ -60,8 +69,13 @@ function introduce(id, fields = {}) {
 
 // ── scenario 1: baseline records without notifying ──────────────────────────
 calls = []
+allEmitted = []
 const dispose = plugin.apply(ctx)
 assert.equal(calls.length, 0, 'baseline scan must not notify')
+assert.ok(
+  allEmitted.some((e) => e[0] === 'dsh-client-ready' && e[1].hasTauri === true),
+  'apply() must emit the diagnostic canary with hasTauri=true',
+)
 
 // ── scenario 2: session appears, then pendingInteraction -> "needs you" ─────
 // One fresh session per interaction kind (a session already notified keeps
@@ -81,7 +95,7 @@ Object.entries(pendingLabels).forEach(([kind, body], i) => {
   introduce(id)
   mutate({ ids: [id], byId: { [id]: session(id, { pendingInteraction: kind }) } })
   assert.equal(calls.length, 1, `${kind} transition must notify once`)
-  assert.deepEqual(calls[0], ['tauri', { title: 'dsh 需要你', body }])
+  assert.deepEqual(calls[0], ['tauri', 'desktop-notification', { title: 'dsh 需要你', body }])
 })
 
 // ── scenario 3: session completes -> "task done" ────────────────────────────
@@ -89,7 +103,7 @@ introduce('sess-A') // re-introduce (previous scenarios replaced the whole list)
 calls = []
 mutate({ ids: ['sess-A'], byId: { 'sess-A': session('sess-A', { pendingInteraction: undefined, completed: true, title: '写周报' }) } })
 assert.equal(calls.length, 1, 'completion transition must notify once')
-assert.deepEqual(calls[0], ['tauri', { title: 'dsh 任务完成', body: '「写周报」已完成' }])
+assert.deepEqual(calls[0], ['tauri', 'desktop-notification', { title: 'dsh 任务完成', body: '「写周报」已完成' }])
 
 // ── scenario 4: no duplicate while state stays put ──────────────────────────
 calls = []
@@ -130,12 +144,14 @@ dispose2()
 // ── scenario 8: Tauri restored, completion after transition ─────────────────
 globalThis.__TAURI__ = tauriApi
 calls = []
+allEmitted = []
 const dispose3 = plugin.apply(ctx)
+assert.ok(allEmitted.some((e) => e[0] === 'dsh-client-ready'), 'canary re-emitted on remount')
 introduce('sess-E')
 mutate({ ids: ['sess-E'], byId: { 'sess-E': session('sess-E', { running: true }) } })
 mutate({ ids: ['sess-E'], byId: { 'sess-E': session('sess-E', { running: false, completed: true, title: '部署' }) } })
 assert.equal(calls.length, 1, 'tauri path works after remount')
-assert.deepEqual(calls[0], ['tauri', { title: 'dsh 任务完成', body: '「部署」已完成' }])
+assert.deepEqual(calls[0], ['tauri', 'desktop-notification', { title: 'dsh 任务完成', body: '「部署」已完成' }])
 dispose3()
 
 console.log('PASS — notification plugin behavioral test (8 scenarios)')

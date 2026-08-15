@@ -5,5 +5,10 @@
   "remote": {
     "urls": ["http://127.0.0.1/*"]
   },
-  "permissions": ["notification:allow-notify"]
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-emit",
+    "core:event:allow-unlisten",
+    "notification:allow-notify"
+  ]
 }

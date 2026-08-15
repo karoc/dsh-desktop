@@ -6,9 +6,13 @@
 //   - pendingInteraction appears  -> "dsh needs you" notification (question /
 //     approval / plan-review);
 //   - completed turns true        -> "task done" notification.
-// Skips notifying while the window is focused and visible. Delivers through
-// window.__TAURI__.notification (Tauri shell, scoped permission) with an
-// HTML5 Notification fallback (plain browser / dev).
+// Skips notifying while the window is focused and visible.
+//
+// Delivery: emits a `desktop-notification` event that the Tauri shell listens
+// for natively (most reliable: no remote IPC permission dependence). Falls
+// back to the HTML5 Notification API in a plain browser / dev (WebView2 has
+// no HTML5 Notification support, so desktop use always goes through Rust).
+// On mount it also emits `dsh-client-ready` (a diagnostic canary, no toast).
 window.__ModuleLoader__.load({
   id: '@dsh-desktop/client-notifications',
   factory: () => {
@@ -24,6 +28,19 @@ window.__ModuleLoader__.load({
       return '会话'
     }
 
+    function emitEvent(name, payload) {
+      try {
+        const tauri = globalThis.__TAURI__
+        if (tauri && tauri.event && typeof tauri.event.emit === 'function') {
+          tauri.event.emit(name, payload).catch(() => {})
+          return true
+        }
+      } catch (err) {
+        console.warn(`[dsh-desktop] emit ${name} failed`, err)
+      }
+      return false
+    }
+
     function show(title, body) {
       try {
         if (
@@ -35,15 +52,7 @@ window.__ModuleLoader__.load({
           return // user is looking at the UI; do not nag
         }
       } catch { /* keep going */ }
-      const tauri = globalThis.__TAURI__
-      if (tauri && tauri.notification && typeof tauri.notification.sendNotification === 'function') {
-        try {
-          tauri.notification.sendNotification({ title, body })
-          return
-        } catch (err) {
-          console.warn('[dsh-desktop] tauri notification failed', err)
-        }
-      }
+      if (emitEvent('desktop-notification', { title, body })) return
       if (typeof Notification === 'function') {
         try {
           // eslint-disable-next-line no-new
@@ -94,6 +103,9 @@ window.__ModuleLoader__.load({
           ? list.subscribe(scan)
           : undefined
         scan() // record baseline; never notify for pre-existing state
+        // Diagnostic canary: tells the shell whether this client module loaded
+        // and whether the Tauri bridge is visible from the dsh page.
+        emitEvent('dsh-client-ready', { hasTauri: !!(globalThis.__TAURI__ && globalThis.__TAURI__.event) })
         return () => {
           if (unsubscribe) unsubscribe()
         }

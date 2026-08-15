@@ -15,7 +15,7 @@ use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use tauri::menu::{Menu, MenuItem};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Listener, Manager, State};
 
 /// The spawned `server-manager` child (owns the dsh service tree).
 struct ServerState {
@@ -48,6 +48,23 @@ fn stop_child(state: &ServerState) {
 fn no_console_window(cmd: &mut Command) {
     use std::os::windows::process::CommandExt;
     cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+}
+
+/// Append a line to <app_data>/dsh-desktop-session.log (persistent Rust-side
+/// log; complements manager.log on the JS side). Never fails the caller.
+fn log_line(data_dir: &std::path::Path, msg: &str) {
+    use std::io::Write;
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(data_dir.join("dsh-desktop-session.log"))
+    {
+        let _ = writeln!(f, "[{secs}] {msg}");
+    }
 }
 
 /// Per-platform bundled-node path fragment, e.g. `node/win32-x64/node.exe`.
@@ -303,6 +320,44 @@ pub fn run() {
                         api.prevent_close();
                         let _ = handle.get_webview_window("main").map(|w| w.hide());
                     }
+                });
+            }
+
+            // ── notifications: receive events from the injected client and
+            // raise NATIVE toasts from Rust (no remote-IPC permission needed;
+            // WebView2 has no HTML5 Notification support). Also writes every
+            // event to <data>/dsh-desktop-session.log for diagnosis.
+            let data_dir = app
+                .path()
+                .app_data_dir()
+                .unwrap_or_else(|_| std::path::PathBuf::from("."));
+            {
+                let app = app.handle().clone();
+                let data_dir = data_dir.clone();
+                app.listen("desktop-notification", move |event| {
+                    let payload = event.payload();
+                    log_line(&data_dir, &format!("notification: {payload}"));
+                    eprintln!("[dsh-desktop] notification: {payload}");
+                    let (title, body) = serde_json::from_str::<serde_json::Value>(payload)
+                        .map(|v| {
+                            (
+                                v.get("title").and_then(|x| x.as_str()).unwrap_or("dsh").to_string(),
+                                v.get("body").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                            )
+                        })
+                        .unwrap_or_else(|_| ("dsh".into(), payload.to_string()));
+                    let mut n = tauri_plugin_notification::Notification::new(&app).title(title);
+                    if !body.is_empty() {
+                        n = n.body(body);
+                    }
+                    let _ = n.show();
+                });
+            }
+            {
+                let data_dir = data_dir.clone();
+                app.listen("dsh-client-ready", move |event| {
+                    log_line(&data_dir, &format!("client-ready: {}", event.payload()));
+                    eprintln!("[dsh-desktop] client-ready: {}", event.payload());
                 });
             }
 
