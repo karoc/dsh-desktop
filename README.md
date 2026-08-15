@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="src-tauri/icons/128x128.png" width="128" height="128" alt="DSH Desktop logo" />
+</p>
+
 # DSH Desktop
 
 把 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）打包成可独立运行的 Windows 桌面 App。
