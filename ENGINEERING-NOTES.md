@@ -50,6 +50,12 @@
 - 机制：**任何 Rust 改动 push 后，先轮询 check job 变绿，再通知用户**。check 是用户流程的硬闸门，不是装饰。
 - 写插件 API 前先查 docs.rs 签名（`NotificationExt::notification().builder()` 而非 `Notification::new`），不靠记忆。
 
+## 9. 本地有 Rust 编译回环 = 编译错不出口
+
+- 坑：曾长期"push 后等 CI check"，编译错偶尔先烧到用户本地构建。
+- 机制：`scripts/dev-sdk-linux.sh` 搭无 root 编译环境（rustup + 解包 dev 包 + pkg-config sysroot）。
+  **改任何 Rust → 先本地 `cargo check`（增量 ~1 分钟）→ 再 push。** CI check 门禁保留为第二道闸。
+
 ## 平台专属项仍要真机验证（机制覆盖不到的部分）
 
 Windows 的 NSIS 安装行为、toast 渲染、AUMID、事件投递——Linux smoke 覆盖不到，
