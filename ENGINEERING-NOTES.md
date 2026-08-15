@@ -100,3 +100,16 @@ Windows 的 NSIS 安装行为、toast 渲染、AUMID、事件投递——Linux s
   "已结束"分支永不会被本窗口的停止触发。
 - 非聚焦 running→false 的成因：自然完成（选中/未选中）、浏览器同一页面停止（dsh web
   无单客户端限制，已搜索确认）、自动中止。统一报"已完成"（罕见误标可接受）。
+
+## 14. 图标刷新机制（任务栏不换的历史坑）
+
+- 现象：托盘图标对（二进制实时读），任务栏旧。根因链：Windows 任务栏对设了
+  AppUserModelID 的应用，按 AUMID 解析开始菜单 .lnk 的图标（NSIS 模板里
+  SetLnkAppUserModelId 证实），与托盘读 exe 内嵌图标是两条路。
+- 产品内解法（零用户操作）：
+  1. 运行态：`on_page_load` 每页把窗口图标钉成 bundle 图标（12e5fe4）；
+  2. 安装态：tauri NSIS 的 `CreateShortcut` 每次安装都覆盖重建 .lnk（source 确认），
+     新 .lnk 自带新图标 → 重装新版本即刷新任务栏图标来源。
+- 升级杠杆（如仍旧，代码侧根治、不甩清单给用户）：`nsis.template` 自定义模板，
+  CreateShortcut 显式写 icon 参数（NSIS 支持 icon-file/icon-index），与缓存语义解耦。
+- 教训：凡需要用户执行多步 PowerShell 的"修复"，都是产品缺陷信号——先找代码侧解法。
