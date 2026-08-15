@@ -78,3 +78,11 @@
 
 Windows 的 NSIS 安装行为、toast 渲染、AUMID、事件投递——Linux smoke 覆盖不到，
 靠 error-visibility + manager.log + diagnose 把定位时间压到分钟级。
+## 12. "已完成/已结束"措辞审计（已核实源码）
+
+- syncCompletedNotifications（dsh-client-runtime/lib/client.js 8540-8556）：`completed` 只在
+  running true→false 且会话未选中时置真，**不区分停止/完成**——它不能当措辞依据。
+- 手动停止必须聚焦（按钮/键盘/斜杠命令都是 UI 输入）；聚焦时 toast 本就抑制 →
+  "已结束"分支永不会被本窗口的停止触发。
+- 非聚焦 running→false 的成因：自然完成（选中/未选中）、浏览器同一页面停止（dsh web
+  无单客户端限制，已搜索确认）、自动中止。统一报"已完成"（罕见误标可接受）。

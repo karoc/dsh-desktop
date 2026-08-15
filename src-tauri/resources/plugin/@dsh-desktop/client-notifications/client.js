@@ -154,12 +154,12 @@ window.__ModuleLoader__.load({
               }
               if (before.running && !running) {
                 // Primary path: observed the running→done edge directly.
-                const done = completed
-                show(
-                  done ? 'dsh 任务完成' : 'dsh 任务结束',
-                  `「${titleOf(item)}」${done ? '已完成' : '已结束'}`,
-                  item,
-                )
+                // Manual stop needs the focused window, and focused => the
+                // toasts are suppressed — so an unfocused edge is a real
+                // finish (or a rare external/browser stop; `completed` only
+                // records "ended while unselected", never stop-vs-finish).
+                // Wording is therefore always 已完成.
+                show('dsh 任务完成', `「${titleOf(item)}」已完成`, item)
                 seen.set(id, { pending: pending ?? undefined, running, completed, ended: true })
                 continue
               }
