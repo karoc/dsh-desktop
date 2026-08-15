@@ -101,6 +101,7 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
     stop_child(&app.state::<ServerState>());
 
     let (res, node_exe) = resource_paths(app)?;
+    eprintln!("[dsh-desktop] resources root: {}", res.display());
     let _ = app.emit("server-log", format!("resources root: {}", res.display()));
     let manager = res.join("manager/server-manager.mjs");
     let patch = res.join("patch/dsh-desktop.patch.yml");
@@ -145,6 +146,9 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
             if trimmed.is_empty() {
                 continue;
             }
+            // Mirror the protocol to stderr too: headless smoke tests and
+            // console debugging can observe the full chain without the webview.
+            eprintln!("[dsh-desktop manager] {trimmed}");
             // Manager protocol: JSON lines {"t":"url"|"log"|"down", ...}
             if let Ok(ev) = serde_json::from_str::<serde_json::Value>(trimmed) {
                 let t = ev.get("t").and_then(|v| v.as_str());
@@ -181,6 +185,7 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
 
     let handle = app.clone();
     let pid = child.id();
+    eprintln!("[dsh-desktop] manager spawned (pid {pid})");
     let _ = handle.emit("server-log", format!("manager spawned (pid {pid})"));
     *app.state::<ServerState>().child.lock().unwrap() = Some(child);
     Ok(())
