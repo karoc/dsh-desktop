@@ -167,4 +167,59 @@ assert.equal(calls.length, 1, 'bridge path works after remount')
 assert.deepEqual(calls[0][1], { title: 'dsh 任务完成', body: '「部署」已完成', sessionId: 'sess-E' })
 dispose3()
 
-console.log('PASS — notification plugin behavioral test (9 scenarios)')
+// ── scenarios 9-11: fresh audit instance (the first plugin was disposed in
+// scenario 6; these cases need a live scan with the bridge port set) ─────────
+// eslint-disable-next-line no-eval
+eval(clientJs)
+const pluginA = windowStub.__handoff.factory()
+const disposeA = pluginA.apply(ctx)
+
+// ── scenario 9: completed false→true fallback (running edge coalesced away) ─
+introduce('sess-F') // baseline: running false, completed false
+calls = []
+mutate({ ids: ['sess-F'], byId: { 'sess-F': session('sess-F', { running: false, completed: true, title: '快任务' }) } })
+assert.equal(calls.length, 1, 'completed-appearing fallback must notify')
+assert.deepEqual(calls[0][1], { title: 'dsh 任务完成', body: '「快任务」已完成', sessionId: 'sess-F' })
+
+// ── scenario 10: fallback must not re-fire on later identical snapshots ─────
+calls = []
+mutate({ ids: ['sess-F'], byId: { 'sess-F': session('sess-F', { running: false, completed: true, title: '快任务' }) } })
+assert.equal(calls.length, 0, 'completed fallback fires once only')
+
+// ── scenario 11: ended-then-completed must not double-toast ─────────────────
+introduce('sess-G') // baseline
+calls = []
+mutate({ ids: ['sess-G'], byId: { 'sess-G': session('sess-G', { running: true, title: '停止后' }) } })
+mutate({ ids: ['sess-G'], byId: { 'sess-G': session('sess-G', { running: false, completed: false, title: '停止后' }) } })
+assert.equal(calls.length, 1, '已结束 toasted on the running edge')
+assert.equal(calls[0][1].title, 'dsh 任务结束')
+mutate({ ids: ['sess-G'], byId: { 'sess-G': session('sess-G', { running: false, completed: true, title: '停止后' }) } })
+assert.equal(calls.length, 1, 'completed-appearing later must NOT toast again (same episode)')
+disposeA()
+
+// ── scenario 12: items-shaped snapshot (UI projection) is accepted ──────────
+let state2 = { ids: [], byId: {} }
+const setState = (next) => { state2 = next; for (const l of [...listeners2]) l() }
+const listeners2 = []
+const ctx2 = {
+  sessions: {
+    list: {
+      getSnapshot: () => state2,
+      subscribe: (fn) => { listeners2.push(fn); return () => { const i = listeners2.indexOf(fn); if (i >= 0) listeners2.splice(i, 1) } },
+      update: () => {},
+    },
+    open: () => { calls.push(['open', 'called']) },
+  },
+}
+calls = []
+// eslint-disable-next-line no-eval
+eval(clientJs)
+const dispose4 = windowStub.__handoff.factory().apply(ctx2)
+setState({ items: [ { sessionId: 'sess-H', id: 'sess-H', title: 'UI投影', running: true, completed: false } ] })
+setState({ items: [ { sessionId: 'sess-H', id: 'sess-H', title: 'UI投影', running: false, completed: true } ] })
+assert.equal(calls.length, 1, 'items-shaped snapshot must notify too')
+assert.equal(calls[0][1].sessionId, 'sess-H')
+dispose4()
+
+console.log('PASS — notification plugin behavioral test (12 scenarios)')
+process.exit(0)

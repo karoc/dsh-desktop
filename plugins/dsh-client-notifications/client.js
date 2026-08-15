@@ -70,6 +70,11 @@ window.__ModuleLoader__.load({
       if (polling) return
       if (!BRIDGE_PORT || BRIDGE_PORT.startsWith('__DSH')) return
       polling = true
+      const sched = () => {
+        const h = setTimeout(tick, 1200)
+        // Browser: no-op. Node (behavioral tests): don't pin the loop open.
+        if (h && typeof h.unref === 'function') h.unref()
+      }
       const tick = async () => {
         try {
           const res = await fetch(`http://127.0.0.1:${BRIDGE_PORT}/pending-open`)
@@ -87,16 +92,41 @@ window.__ModuleLoader__.load({
             }
           }
         } catch { /* bridge briefly unavailable; ignore */ }
-        setTimeout(tick, 1200)
+        sched()
       }
-      setTimeout(tick, 1200)
+      sched()
     }
 
     return {
       name: 'desktop-notifications',
       inject: ['sessions'],
       apply(ctx) {
-        const seen = new Map() // sessionId -> { pending?, running }
+        const seen = new Map() // sessionId -> { pending?, running, completed, ended }
+        // Defensive: the sessions store's canonical shape is { ids, byId }
+        // (dsh-client-runtime/service.d.ts); accept the UI-projection shape
+        // { items } too so a future shape change can never silently kill us.
+        // Worst case we surface diagnosis via the /alive canary instead of
+        // going quiet.
+        const reportShape = (msg) => { try { post('/alive', { loaded: true, shape: msg }) } catch { /* ignore */ } }
+        let shapeReported = false
+        const shapeOf = (snap) => {
+          if (snap && Array.isArray(snap.ids) && snap.byId && typeof snap.byId === 'object') {
+            return { ids: snap.ids, byId: snap.byId }
+          }
+          if (snap && Array.isArray(snap.items)) {
+            const ids = []
+            const byId = {}
+            for (const i of snap.items) {
+              const k = i.sessionId || i.id
+              if (!k) continue
+              ids.push(k)
+              byId[k] = i
+            }
+            return { ids, byId }
+          }
+          if (!shapeReported) { shapeReported = true; reportShape('unrecognized') }
+          return null
+        }
         const scan = () => {
           let snap
           try {
@@ -104,10 +134,11 @@ window.__ModuleLoader__.load({
               ? ctx.sessions.list.getSnapshot()
               : null
           } catch { return }
-          if (!snap || !Array.isArray(snap.ids) || !snap.byId) return
+          const shaped = shapeOf(snap)
+          if (!shaped) return
           const alive = new Set()
-          for (const id of snap.ids) {
-            const item = snap.byId[id]
+          for (const id of shaped.ids) {
+            const item = shaped.byId[id]
             if (!item) continue
             alive.add(id)
             const before = seen.get(id)
@@ -116,20 +147,33 @@ window.__ModuleLoader__.load({
             // NOT selected" (it never flips for a selected session, even when
             // the window is minimized). The universal edge is running true→false.
             const running = item.running === true
+            const completed = item.completed === true
             if (before) {
               if (!before.pending && pending) {
                 show('dsh 需要你', PENDING_LABELS[pending] ?? '有一条交互在等你', item)
               }
               if (before.running && !running) {
-                const done = item.completed === true
+                // Primary path: observed the running→done edge directly.
+                const done = completed
                 show(
                   done ? 'dsh 任务完成' : 'dsh 任务结束',
                   `「${titleOf(item)}」${done ? '已完成' : '已结束'}`,
                   item,
                 )
+                seen.set(id, { pending: pending ?? undefined, running, completed, ended: true })
+                continue
+              }
+              // Fallback: the running edge was missed (very fast task, or a
+              // snapshot coalesced true→false between ticks). `completed`
+              // appearing false→true on an un-ended episode is the evidence.
+              if (!before.ended && !before.running && !before.completed && completed && !running) {
+                show('dsh 任务完成', `「${titleOf(item)}」已完成`, item)
+                seen.set(id, { pending: pending ?? undefined, running, completed, ended: true })
+                continue
               }
             }
-            seen.set(id, { pending: pending ?? undefined, running })
+            // A fresh run arms a new episode (and dsh clears `completed` on it).
+            seen.set(id, { pending: pending ?? undefined, running, completed, ended: running ? false : (before ? before.ended : false) })
           }
           for (const id of [...seen.keys()]) {
             if (!alive.has(id)) seen.delete(id)
