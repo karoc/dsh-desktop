@@ -346,11 +346,12 @@ pub fn run() {
                             )
                         })
                         .unwrap_or_else(|_| ("dsh".into(), payload.to_string()));
-                    let mut n = tauri_plugin_notification::Notification::new(&app).title(title);
+                    use tauri_plugin_notification::NotificationExt;
+                    let mut b = app.notification().builder().title(title);
                     if !body.is_empty() {
-                        n = n.body(body);
+                        b = b.body(body);
                     }
-                    let _ = n.show();
+                    let _ = b.show();
                 });
             }
             {
