@@ -215,7 +215,10 @@ function bakeBridgePort(dest) {
   if (!args.bridgePort) return
   const p = join(dest, 'client.js')
   const raw = readFileSync(p, 'utf8')
-  const next = raw.split('__DSH_BRIDGE_PORT__').join(String(args.bridgePort))
+  // Replace ONLY the quoted literal `'__DSH_BRIDGE_PORT__'` — the unquoted
+  // `globalThis.__DSH_BRIDGE_PORT__` read path must survive (replacing it
+  // produced `globalThis.12345`, a SyntaxError that killed plugin loading).
+  const next = raw.split("'__DSH_BRIDGE_PORT__'").join(`'${args.bridgePort}'`)
   if (next !== raw) {
     writeFileSync(p, next)
     log(`bridge port baked: ${args.bridgePort}`)
