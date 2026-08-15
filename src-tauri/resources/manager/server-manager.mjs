@@ -173,12 +173,24 @@ async function updateDsh(runtimeDir) {
   if (current === latest) return
   log(`updating ${PACKAGE} ${current ?? '(none)'} -> ${latest}`)
   if (!current) log('首次安装/更新 dsh：视网络需 1~10 分钟，进度会实时显示')
-  try {
-    await npm(['install', `${PACKAGE}@${latest}`, '--prefix', runtimeDir, '--no-audit', '--no-fund', '--no-progress', '--registry', REGISTRY], { stream: true, timeoutMs: 600_000 })
-    log(`updated to ${latest}`)
-  } catch (err) {
-    log(`update install failed, keeping ${current ?? 'existing'}: ${err.message}`)
+  // Registry fallback chain: mirrors can lag on freshly-published deps, so
+  // retry with the other default if the primary install fails.
+  const fallback = REGISTRY === 'https://registry.npmjs.org/'
+    ? 'https://registry.npmmirror.com'
+    : 'https://registry.npmjs.org/'
+  let lastErr = null
+  for (const reg of [REGISTRY, fallback]) {
+    try {
+      await npm(['install', `${PACKAGE}@${latest}`, '--prefix', runtimeDir, '--no-audit', '--no-fund', '--no-progress', '--registry', reg], { stream: true, timeoutMs: 600_000 })
+      log(`updated to ${latest}`)
+      lastErr = null
+      break
+    } catch (err) {
+      lastErr = err
+      log(`registry ${reg} 安装失败：${err.message}`)
+    }
   }
+  if (lastErr) log(`update install failed on all registries, keeping ${current ?? 'existing'}`)
 }
 
 function ensurePlugin(runtimeDir, resourceDir) {
