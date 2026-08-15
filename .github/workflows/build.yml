@@ -102,10 +102,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          REL_ID=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/${GITHUB_REF_NAME}" --jq .id 2>/dev/null || true)
-          if [ -n "${REL_ID}" ]; then
-            echo "deleting stale release id=${REL_ID} for ${GITHUB_REF_NAME}"
-            gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/${REL_ID}"
+          # Guard on gh release view (exit 1 = no release): never parse a 404
+          # response body as an id. If a stale release/draft for this tag
+          # exists (re-cut), delete it loudly; otherwise proceed straight on.
+          if gh release view "${GITHUB_REF_NAME}" --json id >/dev/null 2>&1; then
+            echo "deleting stale release for ${GITHUB_REF_NAME}"
+            gh release delete "${GITHUB_REF_NAME}" --yes
           fi
           gh release create "${GITHUB_REF_NAME}" dist/*.exe \
             --generate-notes --title "${GITHUB_REF_NAME}"
