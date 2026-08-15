@@ -1,7 +1,7 @@
 // dsh Desktop launcher page (local, tauri://localhost).
 // Waits for the Rust shell to report the dsh web loopback URL, then navigates.
 const stateEl = document.getElementById('state');
-const logEl = document.getElementById('log');
+const creditsEl = document.getElementById('credits');
 const retryBtn = document.getElementById('retry');
 const openDataBtn = document.getElementById('opendata');
 const spinner = document.getElementById('spinner');
@@ -14,10 +14,26 @@ function setState(text, failed = false) {
   openDataBtn.hidden = !failed;
 }
 
+// ── 无框片尾字幕式日志 ──────────────────────────────────
+// .credits-viewport 高度固定 5 行 + 顶部淡出蒙版；新行从底部
+// 淡入，旧行随内容向上滚动，超过视口后在顶部淡出并被裁剪。
+// 因此屏幕同时最多显示最新的 5 行。为控制内存，仅当行数超过
+// TRIM_AFTER 时才移除早已被完全裁剪的顶部旧行。
+const TRIM_AFTER = 12;
+
 function appendLog(line) {
-  logEl.hidden = false;
-  logEl.textContent += line + '\n';
-  logEl.scrollTop = logEl.scrollHeight;
+  const el = document.createElement('div');
+  el.className = 'credit-line';
+  el.textContent = line;
+  el.title = line; // 长路径被 ellipsis 截断，悬停看全文
+  creditsEl.appendChild(el);
+  // 下一帧再加 entered，让 opacity:0 的起始状态先被渲染，淡入才可见
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => el.classList.add('entered'));
+  });
+  while (creditsEl.children.length > TRIM_AFTER) {
+    creditsEl.firstElementChild.remove();
+  }
 }
 
 const tauri = globalThis.__TAURI__;
@@ -51,8 +67,7 @@ if (tauri && tauri.event) {
 
 retryBtn.addEventListener('click', async () => {
   setState('正在重启 dsh 服务…');
-  logEl.textContent = '';
-  logEl.hidden = true;
+  creditsEl.textContent = '';
   try {
     await tauri.core.invoke('restart_server');
   } catch (err) {

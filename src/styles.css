@@ -21,8 +21,11 @@ html, body {
 .shell {
   height: 100%;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 30px;
+  padding: 24px;
 }
 
 .card {
@@ -68,19 +71,51 @@ h1 { font-size: 18px; margin: 0 0 8px; }
 
 @keyframes spin { to { transform: rotate(360deg); } }
 
-.log {
-  margin: 14px 0 0;
-  padding: 10px;
-  max-height: 180px;
-  overflow: auto;
-  text-align: left;
-  font-size: 12px;
-  line-height: 1.5;
+/* ── 无框片尾字幕式滚动日志 ───────────────────────────────
+   无边框 / 无背景 / 无滚动条：日志浮在深色背景上，新行从底部
+   淡入，旧行向上滚动并在顶部淡出。视口高度固定为 5 行。 */
+.credits-viewport {
+  position: relative;
+  width: min(760px, 90vw);
+  height: calc(5 * 26px);
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, rgba(0, 0, 0, 0.55) 16%, #000 42%);
+  mask-image: linear-gradient(to bottom, transparent 0%, rgba(0, 0, 0, 0.55) 16%, #000 42%);
+}
+
+.credits {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  text-align: center;
+  font-size: 13px;
+  line-height: 26px;
   color: var(--muted);
-  background: #010409;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  white-space: pre-wrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.credit-line {
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 0.6s ease, transform 0.6s ease;
+}
+
+.credit-line.entered {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .credit-line {
+    transition: none;
+    opacity: 1;
+    transform: none;
+  }
 }
 
 button {
