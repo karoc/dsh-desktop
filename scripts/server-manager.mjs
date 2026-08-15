@@ -195,12 +195,46 @@ async function updateDsh(runtimeDir) {
 
 function ensurePlugin(runtimeDir, resourceDir) {
   const dest = join(runtimeDir, 'node_modules', PLUGIN_PACKAGE)
-  if (existsSync(dest)) return
   const src = resolve(resourceDir, 'plugin', PLUGIN_PACKAGE)
   if (!existsSync(src)) throw new Error(`plugin resource missing: ${src}`)
-  mkdirSync(dirname(dest), { recursive: true })
-  cpSync(src, dest, { recursive: true })
-  log(`installed client plugin ${PLUGIN_PACKAGE}`)
+  // Copy (and upgrade) whenever source differs: an old runtime copy must not
+  // pin the app to outdated client code forever.
+  const updating = existsSync(dest) && !sameTree(src, dest)
+  if (!existsSync(dest) || updating) {
+    mkdirSync(dirname(dest), { recursive: true })
+    cpSync(src, dest, { recursive: true })
+    log(updating ? `updated client plugin ${PLUGIN_PACKAGE}` : `installed client plugin ${PLUGIN_PACKAGE}`)
+  }
+}
+
+// Cheap tree comparison: sizes + mtimes of every file. Good enough to detect a
+// resource bundle that changed; avoids copying 500 identical files per launch.
+function sameTree(a, b) {
+  const fa = readdirRecursive(a)
+  const fb = readdirRecursive(b)
+  if (fa.length !== fb.length) return false
+  for (const rel of fa.keys()) {
+    if (!fb.has(rel)) return false
+    const sa = statSync(join(a, rel))
+    const sb = statSync(join(b, rel))
+    if (sa.size !== sb.size || sa.mtimeMs !== sb.mtimeMs) return false
+  }
+  return true
+}
+
+function readdirRecursive(dir) {
+  const out = new Map()
+  if (!existsSync(dir)) return out
+  const walk = (base) => {
+    for (const name of readdirSync(base)) {
+      const p = join(base, name)
+      const rel = relative(dir, p)
+      if (statSync(p).isDirectory()) walk(p)
+      else out.set(rel, true)
+    }
+  }
+  walk(dir)
+  return out
 }
 
 // ── dsh process ────────────────────────────────────────────────────────────
