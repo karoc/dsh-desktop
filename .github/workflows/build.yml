@@ -94,12 +94,14 @@ jobs:
       - run: npm run bundle -- --bundles appimage deb
 
       # Layout assertion (mirror of the Windows one, cheaper): resources must
-      # be inside the AppImage at the path the Rust probe resolves.
+      # be inside the AppImage at the path the Rust probe resolves. AppImage
+      # packs the app under usr/lib/<productName>/, so probe that location.
       - name: Assert AppImage contains node runtime
         run: |
           chmod +x src-tauri/target/release/bundle/appimage/*.AppImage
           ./src-tauri/target/release/bundle/appimage/*.AppImage --appimage-extract >/dev/null
-          test -f squashfs-root/resources/node/linux-x64/node && echo "PASS: node runtime present in AppImage" || { echo "FAIL: resources/node missing in AppImage"; exit 1; }
+          NODE=$(find squashfs-root -path "*resources/node/linux-x64/node" | head -1)
+          test -n "$NODE" && test -f "$NODE" && echo "PASS: node runtime present in AppImage ($NODE)" || { echo "FAIL: resources/node missing in AppImage"; exit 1; }
 
       - uses: actions/upload-artifact@v4
         with:
