@@ -14,8 +14,8 @@
 //   6. on signal, kill the whole dsh tree (taskkill /T /F on Windows).
 
 import { spawn } from 'node:child_process'
-import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync, appendFileSync } from 'node:fs'
+import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const PACKAGE = '@deepseek-ai/dsh'
@@ -207,17 +207,16 @@ function ensurePlugin(runtimeDir, resourceDir) {
   }
 }
 
-// Cheap tree comparison: sizes + mtimes of every file. Good enough to detect a
-// resource bundle that changed; avoids copying 500 identical files per launch.
+// Cheap tree comparison: same file set, byte-identical contents. (Plugin is a
+// few small files, so content compare is fine; mtimes are NOT usable because
+// cpSync stamps dest with the copy time.)
 function sameTree(a, b) {
   const fa = readdirRecursive(a)
   const fb = readdirRecursive(b)
   if (fa.length !== fb.length) return false
   for (const rel of fa.keys()) {
     if (!fb.has(rel)) return false
-    const sa = statSync(join(a, rel))
-    const sb = statSync(join(b, rel))
-    if (sa.size !== sb.size || sa.mtimeMs !== sb.mtimeMs) return false
+    if (!readFileSync(join(a, rel)).equals(readFileSync(join(b, rel)))) return false
   }
   return true
 }
