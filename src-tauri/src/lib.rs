@@ -73,9 +73,11 @@ fn resource_paths(app: &AppHandle) -> Result<(std::path::PathBuf, std::path::Pat
     let mut bases: Vec<std::path::PathBuf> = Vec::new();
     bases.push(res.join("resources"));
     bases.push(res.clone());
-    if let Ok(exe) = app.path().exe_dir() {
-        bases.push(exe.join("resources"));
-        bases.push(exe);
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            bases.push(dir.join("resources"));
+            bases.push(dir.to_path_buf());
+        }
     }
 
     for base in &bases {
