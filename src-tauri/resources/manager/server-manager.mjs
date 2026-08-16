@@ -604,7 +604,16 @@ async function updateDshAndRestart() {
   const task = (async () => {
     try {
       const updated = await installDshUpdate()
-      if (updated) log('dsh updated — restarting service')
+      if (updated) {
+        // `npm install @deepseek-ai/dsh --prefix <runtime>` reifies the runtime
+        // tree and prunes the copied-only packages (@dsh-desktop/* plugins and
+        // preinstalled bundles) not listed in runtime/package.json — restore
+        // them before dsh restarts so the injected plugins still load.
+        ensurePlugin(args.runtimeDir, args.resourceDir)
+        ensurePreinstalled(args.runtimeDir, args.resourceDir)
+        shellManifest = readShellManifest(args.runtimeDir)
+        log('dsh updated — restarting service')
+      }
     } catch (err) {
       log(`update failed: ${err.message}`)
       emitUpdateStatus(false)
@@ -688,22 +697,37 @@ async function ensurePnpm(runtimeDir) {
     return
   }
   log('installing bundled pnpm (plugin management)…')
+  // CRITICAL: never `npm install --prefix <runtime>` — npm reifies the whole
+  // runtime tree and PRUNES packages not listed in runtime/package.json
+  // dependencies, deleting the copied-only plugins (@dsh-desktop/*) and
+  // preinstalled bundles. Install into a temp prefix and copy the package in.
+  const tmp = mkdtempSync(join(tmpdir(), 'dsh-pnpm-'))
   const fallback = REGISTRY === 'https://registry.npmjs.org/'
     ? 'https://registry.npmmirror.com'
     : 'https://registry.npmjs.org/'
   let lastErr = null
-  for (const reg of [REGISTRY, fallback]) {
-    try {
-      await npm(['install', 'pnpm', '--prefix', runtimeDir, '--no-audit', '--no-fund', '--no-progress', '--registry', reg], { stream: true, timeoutMs: 600_000 })
-      log('pnpm installed')
-      writePnpmShim(runtimeDir)
-      return
-    } catch (err) {
-      lastErr = err
-      log(`pnpm install failed (${reg}): ${err.message}`)
+  try {
+    for (const reg of [REGISTRY, fallback]) {
+      try {
+        await npm(['install', 'pnpm', '--prefix', tmp, '--no-audit', '--no-fund', '--no-progress', '--registry', reg], { stream: true, timeoutMs: 600_000 })
+        const src = join(tmp, 'node_modules', 'pnpm')
+        if (!existsSync(src)) throw new Error('npm 未产出 pnpm')
+        const dest = join(runtimeDir, 'node_modules', 'pnpm')
+        rmSync(dest, { recursive: true, force: true })
+        mkdirSync(dirname(dest), { recursive: true })
+        cpSync(src, dest, { recursive: true })
+        log('pnpm installed')
+        writePnpmShim(runtimeDir)
+        return
+      } catch (err) {
+        lastErr = err
+        log(`pnpm install failed (${reg}): ${err.message}`)
+      }
     }
+    throw new Error(`pnpm 安装失败：${lastErr?.message ?? 'unknown'}`)
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
   }
-  throw new Error(`pnpm 安装失败：${lastErr?.message ?? 'unknown'}`)
 }
 
 /** Create `pnpm` / `pnpm.cmd` shims that run the bundled pnpm under our Node. */

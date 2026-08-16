@@ -360,6 +360,14 @@ window.__ModuleLoader__.load({
   color: #e6edf3; font: 600 14px/1.4 system-ui,"Segoe UI","Microsoft YaHei",sans-serif;
 }
 .dshc-overlay .dshc-spin { width: 36px; height: 36px; border-width: 3px; }
+/* 自定义 tooltip（替代原生 title） */
+.dshc-tip {
+  position: fixed; z-index: 2147483998; max-width: 280px; padding: 7px 10px;
+  border-radius: 8px; background: rgba(13,17,23,.96); border: 1px solid rgba(255,255,255,.14);
+  color: #e6edf3; font: 12px/1.5 system-ui,"Segoe UI","Microsoft YaHei",sans-serif;
+  box-shadow: 0 8px 24px rgba(0,0,0,.45); pointer-events: none;
+  opacity: 0; transition: opacity .12s ease;
+}
 `
       ;(document.head || document.documentElement).appendChild(style)
     }
@@ -422,6 +430,37 @@ window.__ModuleLoader__.load({
       if (hint) bodyEl.appendChild(el('div', hint, 'dshc-hint'))
     }
 
+    // ── custom tooltip component (replaces native title) ──────────────────
+    let tipEl = null
+    function tip() {
+      if (!tipEl) {
+        tipEl = document.createElement('div')
+        tipEl.className = 'dshc-tip'
+        document.body.appendChild(tipEl)
+      }
+      return tipEl
+    }
+    /** Attach a styled tooltip (full text) to a clamped/truncated element. */
+    function attachTooltip(el, text) {
+      el.addEventListener('mouseenter', () => {
+        const t = tip()
+        t.textContent = text
+        t.style.opacity = '1'
+      })
+      el.addEventListener('mousemove', (e) => {
+        const t = tip()
+        const x = (e.clientX || 0) + 14
+        const y = (e.clientY || 0) + 14
+        const vw = globalThis.innerWidth || 1280
+        const vh = globalThis.innerHeight || 800
+        t.style.left = `${Math.min(x, vw - 300)}px`
+        t.style.top = `${Math.min(y, vh - 90)}px`
+      })
+      el.addEventListener('mouseleave', () => {
+        if (tipEl) tipEl.style.opacity = '0'
+      })
+    }
+
     function row(label, badge, badgeCls, rightHtml, sub) {
       const div = document.createElement('div')
       div.className = 'dshc-row'
@@ -438,7 +477,7 @@ window.__ModuleLoader__.load({
       }
       if (sub) {
         const s = el('div', sub, 'dshc-sub')
-        s.title = sub // 悬停显示完整说明
+        attachTooltip(s, sub) // 悬停显示完整说明（自定义组件，非原生 title）
         left.appendChild(s)
       }
       const right = document.createElement('div')

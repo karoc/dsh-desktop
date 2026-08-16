@@ -323,7 +323,20 @@ assert.ok(
   'check button POSTs /plugins/check-preinstalled-updates',
 )
 
-// ── scenario 9: unbaked bridge port -> no fetch, no crash ───────────────────
+// ── scenario 9: custom tooltip on hover (no native title) ───────────────────
+btn.click(); btn.click()
+await new Promise((r) => setTimeout(r, 10))
+const subEl = panel.querySelector('.dshc-sub')
+assert.ok(subEl, 'description line rendered')
+assert.equal(subEl.title, '', 'no native title attribute on descriptions')
+const enter = (subEl.listeners.mouseenter || [])[0]
+assert.ok(enter, 'mouseenter tooltip handler attached')
+enter()
+const tipEl = body.children.find((c) => c.className === 'dshc-tip')
+assert.ok(tipEl, 'custom tooltip element created on hover')
+assert.equal(tipEl.textContent, 'per-model reasoning effort settings', 'tooltip carries the full description')
+
+// ── scenario 10: unbaked bridge port -> no fetch, no crash ──────────────────
 delete globalThis.__DSH_BRIDGE_PORT__
 const body2 = makeEl('body')
 globalThis.document = { body: body2, head, createElement: (t) => makeEl(t), getElementById: () => null }
@@ -334,5 +347,5 @@ window.__handoff.factory().apply({})
 body2.children.find((c) => c.className === 'dshc-btn')?.click()
 assert.equal(calls.length, 0, 'unbaked bridge port must not fire fetches')
 
-console.log('PASS — plugin console behavioral test (13 scenarios)')
+console.log('PASS — plugin console behavioral test (14 scenarios)')
 process.exit(0)

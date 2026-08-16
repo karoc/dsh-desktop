@@ -263,3 +263,16 @@ Windows 的 NSIS 安装行为、toast 渲染、AUMID、事件投递——Linux s
      导航回启动页（setup 时 `w.url()` 捕获的 LAUNCHER_URL）重新待命；崩溃时显示错误+重试。
 - 教训：**"导航"职责不能绑在会被替换掉的页面上**。壳持有的 WebView 导航是唯一可靠重连路径。
 - `w.navigate()` 需要 `tauri::Url`（`tauri::Url::parse`），不是 `&str`；跨线程调用 OK（reload 已在桥线程用）。
+
+## 25. ensurePnpm 的 --prefix runtime prune 陷阱（预装描述消失的真凶）
+
+- 现象：第一次安装新插件时，预装插件的说明（乃至整个预装项）消失。
+- 根因：`ensurePnpm` 用 `npm install pnpm --prefix <runtime>` 装 pnpm——npm reify 整棵
+  runtime 树，**prune 掉不在 runtime/package.json dependencies 里的纯拷贝包**
+  （@dsh-desktop/* 插件、预装 dsh-model-reasoning）。§21 记录过同类坑，但 ensurePnpm 漏改。
+- 修复：ensurePnpm 改临时目录安装 + 拷贝进 runtime/node_modules/pnpm（永不 --prefix runtime）。
+- 同类第二处：`installDshUpdate`（`npm install @deepseek-ai/dsh --prefix runtime`）同样会
+  prune——`updateDshAndRestart` 装完后必须重跑 ensurePlugin + ensurePreinstalled 恢复。
+- 铁律：**凡 npm 写 runtime 树，之后必重拷纯拷贝包；能不 --prefix runtime 就不。**
+- 交互：自定义 tooltip 组件替代原生 title（描述两行省略，悬停显示完整，随鼠标定位、
+  视口内钳制），附测试（mouseenter 触发 dshc-tip 出现）。
