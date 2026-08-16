@@ -129,6 +129,60 @@ static PENDING_OPEN: Mutex<Option<String>> = Mutex::new(None);
 /// signal of "user clicked the toast and came back".
 static FOCUS_OPEN: Mutex<Option<String>> = Mutex::new(None);
 
+/// Windows: register a PROCESS-LEVEL toast activator. The WinRT `Activated`
+/// event used by notify-rust only fires while the toast is visible on screen;
+/// once it lands in the Action Center the system routes clicks to the app's
+/// COM activator instead. Registering our exe as the activator (the two
+/// registry keys DesktopNotificationManagerCompat::register_activator would
+/// write — CLSID LocalServer32 + AppUserModelId CustomActivator) makes
+/// Windows launch `dsh-desktop.exe -ToastActivated <args>` on ANY toast click,
+/// screen or Action Center; the fresh instance is caught by
+/// tauri-plugin-single-instance, which forwards the activation home and opens
+/// the last notified session. No INotificationActivationCallback COM object
+/// is needed — the relaunch IS the callback.
+#[cfg(target_os = "windows")]
+fn register_toast_activator(app_id: &str) -> Result<(), String> {
+    use std::process::Command;
+    // Stable CLSID for our activator; only the registry hook that makes
+    // Windows launch this exe on toast click.
+    const CLSID: &str = "{7C2F4B1A-9D3E-4A8F-B6C0-5E1D2A3B4C5D}";
+    let exe = std::env::current_exe()
+        .map_err(|e| format!("current_exe: {e}"))?
+        .to_string_lossy()
+        .to_string();
+    let run = |args: &[&str]| Command::new("reg").args(args).status();
+    // HKCU\Software\Classes\CLSID\{GUID}\LocalServer32  (default = exe path)
+    let _ = run(&[
+        "add",
+        &format!(r"HKCU\Software\Classes\CLSID\{CLSID}\LocalServer32"),
+        "/ve",
+        "/d",
+        &exe,
+        "/f",
+    ])
+    .map_err(|e| format!("reg add LocalServer32: {e}"))?;
+    // HKCU\Software\Classes\AppUserModelId\<app_id>\CustomActivator  (= {GUID})
+    let _ = run(&[
+        "add",
+        &format!(r"HKCU\Software\Classes\AppUserModelId\{app_id}"),
+        "/ve",
+        "/d",
+        app_id,
+        "/f",
+    ])
+    .map_err(|e| format!("reg add AUMID: {e}"))?;
+    let _ = run(&[
+        "add",
+        &format!(r"HKCU\Software\Classes\AppUserModelId\{app_id}\CustomActivator"),
+        "/ve",
+        "/d",
+        CLSID,
+        "/f",
+    ])
+    .map_err(|e| format!("reg add CustomActivator: {e}"))?;
+    Ok(())
+}
+
 /// Raise a native toast and record it. Shared by the event listener and the
 /// HTTP bridge (the only delivery the dsh page can actually use — Tauri v2
 /// does not inject `__TAURI__` into remote pages, tauri#11934).
@@ -1003,6 +1057,27 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            // ── process-level toast activator (Windows): makes Action Center
+            // clicks relaunch the exe (`-ToastActivated`), which
+            // single-instance then forwards home. Must happen before the
+            // first toast can be shown.
+            #[cfg(target_os = "windows")]
+            {
+                let data = app
+                    .path()
+                    .app_data_dir()
+                    .unwrap_or_else(|_| std::path::PathBuf::from("."));
+                match register_toast_activator("dev.dsh.desktop") {
+                    Ok(()) => {
+                        log_line(&data, "activator registered");
+                        eprintln!("[dsh-desktop] activator registered");
+                    }
+                    Err(e) => {
+                        log_line(&data, &format!("activator register FAILED: {e}"));
+                        eprintln!("[dsh-desktop] activator register FAILED: {e}");
+                    }
+                }
+            }
             // ── window icon (taskbar): force the bundled icon explicitly — the
             // tray already uses it; this guards against OS icon-cache staleness.
             if let Some(w) = app.get_webview_window("main") {
