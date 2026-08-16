@@ -38,6 +38,10 @@ function makeEl(tag) {
       remove(cls) { this.toggle(cls, false) },
     },
     appendChild(c) { el.children.push(c); return c },
+    contains(node) {
+      if (node === el) return true
+      return el.children.some((c) => (c.contains ? c.contains(node) : c === node))
+    },
     addEventListener(type, fn) { (el.listeners[type] = el.listeners[type] || []).push(fn) },
     click() { (el.listeners.click || []).forEach((fn) => fn()) },
     querySelector(sel) { return el.querySelectorAll(sel)[0] || null },
@@ -140,13 +144,18 @@ globalThis.fetch = (url, opts = {}) => {
   if (path === '/update-status') return Promise.resolve({ text: () => Promise.resolve('{}') })
   return Promise.resolve({ text: () => Promise.resolve('{}') })
 }
-globalThis.document = {
-  body,
-  head,
-  createElement: (t) => makeEl(t),
-  getElementById: () => null,
-  appendChild: (c) => { body.appendChild(c) },
+const docListeners = {} // document-level listeners (click-outside-close)
+function makeDoc(b) {
+  return {
+    body: b,
+    head,
+    createElement: (t) => makeEl(t),
+    getElementById: () => null,
+    appendChild: (c) => { b.appendChild(c) },
+    addEventListener(type, fn) { (docListeners[type] = docListeners[type] || []).push(fn) },
+  }
 }
+globalThis.document = makeDoc(body)
 globalThis.window = { __ModuleLoader__: { load(h) { window.__handoff = h } } }
 
 // eslint-disable-next-line no-eval
@@ -336,10 +345,26 @@ const tipEl = body.children.find((c) => c.className === 'dshc-tip')
 assert.ok(tipEl, 'custom tooltip element created on hover')
 assert.equal(tipEl.textContent, 'per-model reasoning effort settings', 'tooltip carries the full description')
 
-// ── scenario 11: unbaked bridge port -> no fetch, no crash ──────────────────
+// ── scenario 11: clicking outside the panel closes it ───────────────────────
+for (let i = 0; i < 3 && !panelElVisible(); i++) { btn.click(); await new Promise((r) => setTimeout(r, 10)) }
+assert.ok(panelElVisible(), 'panel is open before the outside click')
+const outsideClick = (docListeners.click || []).slice(-1)[0] // the console's own listener
+assert.ok(outsideClick, 'document click listener attached')
+// simulate a click on an element outside the panel and the button
+const someEl = makeEl('div')
+body.appendChild(someEl)
+outsideClick({ target: someEl })
+await new Promise((r) => setTimeout(r, 10))
+assert.ok(!panelElVisible(), 'clicking outside closes the panel')
+function panelElVisible() {
+  const p = body.children.find((c) => c.className === 'dshc-panel')
+  return p && p.style.display !== 'none'
+}
+
+// ── scenario 12: unbaked bridge port -> no fetch, no crash ──────────────────
 delete globalThis.__DSH_BRIDGE_PORT__
 const body2 = makeEl('body')
-globalThis.document = { body: body2, head, createElement: (t) => makeEl(t), getElementById: () => null }
+globalThis.document = makeDoc(body2)
 calls.length = 0
 // eslint-disable-next-line no-eval
 eval(clientJs)
@@ -347,5 +372,5 @@ window.__handoff.factory().apply({})
 body2.children.find((c) => c.className === 'dshc-btn')?.click()
 assert.equal(calls.length, 0, 'unbaked bridge port must not fire fetches')
 
-console.log('PASS — plugin console behavioral test (14 scenarios)')
+console.log('PASS — plugin console behavioral test (15 scenarios)')
 process.exit(0)

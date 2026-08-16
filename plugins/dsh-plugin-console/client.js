@@ -40,7 +40,7 @@ window.__ModuleLoader__.load({
           core: '内置核心',
           coreHint: 'dsh 自带，不可禁用',
           allPlugins: '全部插件',
-          fullListHint: '完整只读清单（含 dsh 内置 160+ 个内部插件）见 dsh 设置 → 插件',
+          fullListHint: '完整只读清单（含 dsh 内置的内部插件）见 dsh 设置 → 插件',
           enabled: '已启用',
           notEnabled: '未启用',
           enable: '启用',
@@ -90,7 +90,7 @@ window.__ModuleLoader__.load({
           core: 'Core (built-in)',
           coreHint: 'Shipped with dsh, cannot be disabled',
           allPlugins: 'All plugins',
-          fullListHint: 'Full read-only list (incl. 160+ built-in dsh plugins): dsh Settings → Plugins',
+          fullListHint: 'Full read-only list (incl. built-in dsh plugins): dsh Settings → Plugins',
           enabled: 'On',
           notEnabled: 'Off',
           enable: 'Enable',
@@ -812,6 +812,14 @@ window.__ModuleLoader__.load({
         if (!visible) refresh()
       })
       document.body.appendChild(btn)
+      // 点击弹窗外部关闭（点击弹窗内部或插件按钮本身不关）。
+      if (typeof document.addEventListener === 'function') {
+        document.addEventListener('click', (e) => {
+          if (panelEl && panelEl.style.display !== 'none' && !panelEl.contains(e.target) && !btn.contains(e.target)) {
+            panelEl.style.display = 'none'
+          }
+        })
+      }
       // Keep the panel fresh while open (cheap loopback polls); never re-render
       // while the user is typing in the install input.
       setInterval(() => {
