@@ -150,14 +150,18 @@ fn register_toast_activator(app_id: &str) -> Result<(), String> {
         .map_err(|e| format!("current_exe: {e}"))?
         .to_string_lossy()
         .to_string();
+    // COM parses LocalServer32 as a command line: a path containing spaces
+    // MUST be double-quoted, otherwise activation silently fails (the part
+    // before the first space is treated as the executable).
+    let exe_quoted = format!("\"{exe}\"");
     let run = |args: &[&str]| Command::new("reg").args(args).status();
-    // HKCU\Software\Classes\CLSID\{GUID}\LocalServer32  (default = exe path)
+    // HKCU\Software\Classes\CLSID\{GUID}\LocalServer32  (default = quoted exe)
     let _ = run(&[
         "add",
         &format!(r"HKCU\Software\Classes\CLSID\{CLSID}\LocalServer32"),
         "/ve",
         "/d",
-        &exe,
+        &exe_quoted,
         "/f",
     ])
     .map_err(|e| format!("reg add LocalServer32: {e}"))?;
