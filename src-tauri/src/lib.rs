@@ -1283,6 +1283,19 @@ pub fn run() {
                 .icon(app.default_window_icon().expect("app icon").clone())
                 .tooltip("DSH Desktop")
                 .menu(&menu)
+                // Double-click on the tray icon brings the window back
+                // (any state: hidden/minimized/behind). Single click keeps
+                // the classic right-click menu behaviour.
+                .on_tray_icon_event(|tray, event| {
+                    if let tauri::tray::TrayIconEvent::DoubleClick {
+                        button: tauri::tray::MouseButton::Left,
+                        ..
+                    } = event
+                    {
+                        let app = tray.app_handle();
+                        activate_window(app);
+                    }
+                })
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => {
                         activate_window(app);
