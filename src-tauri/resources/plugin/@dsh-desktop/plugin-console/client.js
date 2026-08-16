@@ -345,6 +345,21 @@ window.__ModuleLoader__.load({
 .dshc-install input::placeholder { color: color-mix(in srgb, var(--dshc-muted) 75%, transparent); }
 .dshc-footer { margin-top: 14px; padding-top: 11px; border-top: 1px solid var(--dshc-border); font-size: 11px; color: var(--dshc-muted); }
 @keyframes dshc-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+@keyframes dshc-spin { to { transform: rotate(360deg); } }
+/* 处理中 / 重启 的加载指示 */
+.dshc-spin {
+  display: inline-block; width: 12px; height: 12px; margin-right: 7px;
+  border: 2px solid currentColor; border-top-color: transparent; border-radius: 50%;
+  vertical-align: -1px; animation: dshc-spin .8s linear infinite;
+}
+/* 全屏重启遮罩：点重启后立刻有反馈，直到页面跳转 */
+.dshc-overlay {
+  position: fixed; inset: 0; z-index: 2147483999;
+  background: rgba(6, 8, 12, .7); backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px;
+  color: #e6edf3; font: 600 14px/1.4 system-ui,"Segoe UI","Microsoft YaHei",sans-serif;
+}
+.dshc-overlay .dshc-spin { width: 36px; height: 36px; border-width: 3px; }
 `
       ;(document.head || document.documentElement).appendChild(style)
     }
@@ -441,8 +456,35 @@ window.__ModuleLoader__.load({
       b.className = 'dshc-btn2 primary'
       b.textContent = L.restartNow
       b.style.cssText = 'margin-top:10px; display:block; width:100%;'
-      b.addEventListener('click', () => bridge('/restart-dsh', { method: 'POST' }))
+      b.addEventListener('click', () => {
+        bridge('/restart-dsh', { method: 'POST' })
+        showOverlay(L.restartNow + '…')
+      })
       bodyEl.appendChild(b)
+    }
+
+    // ── full-screen restart/update veil: instant feedback on click ─────────
+    // A restart navigates the page away (to the launcher or a fresh dsh page),
+    // so this veil stays up until the navigation happens; the timeout only
+    // unblocks a broken restart that never navigates.
+    let overlayEl = null
+    function showOverlay(text) {
+      if (!overlayEl) {
+        overlayEl = document.createElement('div')
+        overlayEl.className = 'dshc-overlay'
+        const spin = document.createElement('div')
+        spin.className = 'dshc-spin'
+        const txt = document.createElement('div')
+        txt.id = 'dshc-overlay-text'
+        overlayEl.appendChild(spin)
+        overlayEl.appendChild(txt)
+        document.body.appendChild(overlayEl)
+      }
+      const txt = overlayEl.querySelector('#dshc-overlay-text')
+      if (txt) txt.textContent = text
+      overlayEl.style.display = 'flex'
+      if (overlayEl._timer) clearTimeout(overlayEl._timer)
+      overlayEl._timer = setTimeout(() => { if (overlayEl) overlayEl.style.display = 'none' }, 20000)
     }
 
     async function refresh() {
@@ -494,7 +536,10 @@ window.__ModuleLoader__.load({
         bodyEl.appendChild(el('div', `✓ ${L.opDone} — ${L.restartToApply}`, 'dshc-op show'))
         showRestartNow()
       } else if (op && op.op && !op.done) {
-        bodyEl.appendChild(el('div', `${L.opActive}：${op.op} ${op.spec || ''}…`, 'dshc-op show'))
+        const opEl = document.createElement('div')
+        opEl.className = 'dshc-op show'
+        opEl.innerHTML = `<span class="dshc-spin"></span>${L.opActive}：${op.op} ${op.spec || ''}…`
+        bodyEl.appendChild(opEl)
       } else if (op && op.done && op.ok) {
         pendingRestart = true
         bodyEl.appendChild(el('div', `✓ ${L.opDone} — ${L.restartToApply}`, 'dshc-op show'))
@@ -535,9 +580,8 @@ window.__ModuleLoader__.load({
         let badgeCls = on ? 'on' : ''
         let sub = p.description || ''
         let right = `<button class="dshc-btn2 ${on ? '' : 'primary'}" data-toggle="${p.name}">${on ? L.disable : L.enable}</button>`
+        // 有更新时不再额外加 "有更新 vX" 徽标——右侧高亮的「更新到 vX」按钮本身就是提示
         if (info.updateAvailable) {
-          badge = `${L.hasUpdate} ${info.latest}`
-          badgeCls = 'warn'
           right = `<button class="dshc-btn2 primary" data-upd-pre="${p.name}">${L.updateTo}${info.latest}</button>` + right
         }
         if (info.userUpdated) {
@@ -687,12 +731,18 @@ window.__ModuleLoader__.load({
           updateBtn.textContent = L.updating
           const res = await bridge('/update-dsh', { method: 'POST' })
           if (res === null) status(L.failed, 'err')
+          else showOverlay(L.updating)
         })
       }
       const refreshBtn = bodyEl.querySelector('#dshc-refresh')
       if (refreshBtn) refreshBtn.addEventListener('click', () => bridge('/refresh', { method: 'POST' }))
       const restartBtn = bodyEl.querySelector('#dshc-restart')
-      if (restartBtn) restartBtn.addEventListener('click', () => bridge('/restart', { method: 'POST' }))
+      if (restartBtn) {
+        restartBtn.addEventListener('click', () => {
+          bridge('/restart', { method: 'POST' })
+          showOverlay(L.restart + '…')
+        })
+      }
       const dtBtn = bodyEl.querySelector('#dshc-devtools')
       if (dtBtn) dtBtn.addEventListener('click', () => bridge('/devtools', { method: 'POST' }))
     }

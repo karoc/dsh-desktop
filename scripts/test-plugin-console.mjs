@@ -216,6 +216,11 @@ const raBtn = panel.querySelector('#dshc-restart')
 raBtn.click()
 assert.ok(calls.some((c) => c[0] === '/refresh'), 'refresh action POSTs /refresh')
 assert.ok(calls.some((c) => c[0] === '/restart'), 'restart action POSTs /restart')
+await new Promise((r) => setTimeout(r, 10))
+assert.ok(
+  body.children.some((c) => c.className === 'dshc-overlay'),
+  'restart shows an immediate full-screen loading veil',
+)
 
 // ── scenario 7: install input + user-installed row (P5) ─────────────────────
 calls.length = 0
