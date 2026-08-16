@@ -40,8 +40,7 @@ window.__ModuleLoader__.load({
           core: '内置核心',
           coreHint: 'dsh 自带，不可禁用',
           allPlugins: '全部插件',
-          allPluginsHint: '与 dsh 设置页同源，只读',
-          searchPlugins: '搜索插件…',
+          fullListHint: '完整只读清单（含 dsh 内置 160+ 个内部插件）见 dsh 设置 → 插件',
           enabled: '已启用',
           notEnabled: '未启用',
           enable: '启用',
@@ -91,8 +90,7 @@ window.__ModuleLoader__.load({
           core: 'Core (built-in)',
           coreHint: 'Shipped with dsh, cannot be disabled',
           allPlugins: 'All plugins',
-          allPluginsHint: 'Read-only, same source as dsh Settings',
-          searchPlugins: 'Search plugins…',
+          fullListHint: 'Full read-only list (incl. 160+ built-in dsh plugins): dsh Settings → Plugins',
           enabled: 'On',
           notEnabled: 'Off',
           enable: 'Enable',
@@ -235,14 +233,6 @@ window.__ModuleLoader__.load({
     // Preserved install input value across re-renders (a 5s poll refresh must
     // not wipe what the user is typing).
     let installSpec = ''
-    // The client plugin context (captured in apply) — used to read the full
-    // dsh Loader inventory via the remote pluginInventory service.
-    let consoleCtx = null
-    // Read-only "all plugins" inventory state (mirrors dsh's own Settings list).
-    let inventoryOpen = false
-    let inventoryData = null
-    let inventoryAt = 0
-    let inventoryQuery = ''
 
     function bridge(path, opts) {
       if (!ready()) return Promise.resolve(null)
@@ -476,46 +466,6 @@ window.__ModuleLoader__.load({
       })
     }
 
-    // ── read-only "all plugins" inventory (same source as dsh Settings) ────
-    /** Compact a module specifier (mirrors dsh's own inventory short-name). */
-    function shortName(moduleName) {
-      const unscoped = moduleName.startsWith('@') ? moduleName.slice(moduleName.indexOf('/') + 1) : moduleName
-      return unscoped
-        .replace(/^cordis:/, '')
-        .replace(/^cordis-plugin-/, '')
-        .replace(/^dsh-(?:host-|client-)?/, '')
-    }
-
-    async function loadInventory() {
-      const svc = consoleCtx?.remote?.pluginInventory
-      if (!svc || typeof svc.list !== 'function') return
-      try {
-        const res = await svc.list()
-        if (res && res.ok && Array.isArray(res.value?.entries)) {
-          inventoryData = res.value.entries
-          inventoryAt = Date.now()
-        }
-      } catch { /* inventory unavailable — the section stays collapsed/empty */ }
-    }
-
-    function renderInventoryList() {
-      const wrap = bodyEl.querySelector('#dshc-inv-list')
-      if (!wrap || !inventoryData) return
-      wrap.textContent = ''
-      const q = inventoryQuery.trim().toLowerCase()
-      const rows = inventoryData.filter((e) => !q || String(e.moduleName).toLowerCase().includes(q))
-      if (rows.length === 0) {
-        wrap.appendChild(el('div', L.noPreinstalled, 'dshc-hint'))
-        return
-      }
-      for (const e of rows) {
-        const failed = e.fiberPhase === 'failed'
-        const badge = failed ? L.opErr : (e.enabled ? L.enabled : L.notEnabled)
-        const cls = failed ? 'err' : (e.enabled ? 'on' : '')
-        wrap.appendChild(row(shortName(e.moduleName), badge, cls, '<span></span>', ''))
-      }
-    }
-
     function row(label, badge, badgeCls, rightHtml, sub) {
       const div = document.createElement('div')
       div.className = 'dshc-row'
@@ -693,38 +643,6 @@ window.__ModuleLoader__.load({
       checkPreBtn.textContent = L.checkPreUpdates
       bodyEl.appendChild(checkPreBtn)
 
-      // ── all plugins (read-only inventory, mirrors dsh's own Settings list) ──
-      section(L.allPlugins, L.allPluginsHint)
-      const invToggle = document.createElement('button')
-      invToggle.id = 'dshc-inv-toggle'
-      invToggle.className = 'dshc-btn2'
-      invToggle.textContent = `${inventoryOpen ? '▾' : '▸'} ${L.allPlugins}${inventoryData ? `（${inventoryData.length}）` : ''}`
-      bodyEl.appendChild(invToggle)
-      if (inventoryOpen) {
-        const search = document.createElement('input')
-        search.id = 'dshc-inv-search'
-        search.type = 'text'
-        search.placeholder = L.searchPlugins
-        search.value = inventoryQuery
-        search.style.cssText = 'width:100%; margin-top:6px; box-sizing:border-box;'
-        search.className = 'dshc-inv-search'
-        search.addEventListener('input', () => {
-          inventoryQuery = search.value
-          renderInventoryList()
-        })
-        bodyEl.appendChild(search)
-        const listWrap = document.createElement('div')
-        listWrap.id = 'dshc-inv-list'
-        listWrap.style.cssText = 'max-height:240px; overflow:auto; margin-top:6px;'
-        bodyEl.appendChild(listWrap)
-        if (!inventoryData) {
-          listWrap.appendChild(el('div', `${L.loading}…`, 'dshc-hint'))
-          void loadInventory().then(() => renderInventoryList())
-        } else {
-          renderInventoryList()
-        }
-      }
-
       // ── user installed ──
       section(L.userInstalled, L.userInstalledHint)
       if (userPlugins.length === 0) {
@@ -734,6 +652,8 @@ window.__ModuleLoader__.load({
         const btn = `<button class="dshc-btn2" data-remove="${name}">${L.uninstall}</button><button class="dshc-btn2" data-update="${name}">${L.updateOne}</button>`
         bodyEl.appendChild(row(name, null, null, btn, ''))
       }
+      // 完整只读清单（含 dsh 内置 160+ 个内部插件）在 dsh 自己的设置页，不在此重复。
+      bodyEl.appendChild(el('div', L.fullListHint, 'dshc-hint'))
 
       // ── update ──
       section(L.update)
@@ -813,13 +733,6 @@ window.__ModuleLoader__.load({
             checkPreBtn.disabled = false
             checkPreBtn.textContent = L.checkPreUpdates
           }, 1500)
-        })
-      }
-      const invToggle = bodyEl.querySelector('#dshc-inv-toggle')
-      if (invToggle) {
-        invToggle.addEventListener('click', () => {
-          inventoryOpen = !inventoryOpen
-          refresh()
         })
       }
       bodyEl.querySelectorAll('[data-remove]').forEach((btn) => {
@@ -909,13 +822,8 @@ window.__ModuleLoader__.load({
 
     return {
       name: '@dsh-desktop/plugin-console',
-      // remote + remote.pluginInventory give the read-only "all plugins" list
-      // (the same service dsh's own Settings inventory page uses).
-      inject: ['remote', 'remote.pluginInventory'],
-      apply(ctx) {
-        consoleCtx = ctx
-        mount()
-      },
+      inject: [],
+      apply() { mount() },
     }
   },
 })
