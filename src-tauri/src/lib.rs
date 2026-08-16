@@ -1283,6 +1283,9 @@ pub fn run() {
                 .icon(app.default_window_icon().expect("app icon").clone())
                 .tooltip("DSH Desktop")
                 .menu(&menu)
+                // Left click shows no menu (only right-click does); left
+                // double-click restores the window below.
+                .menu_on_left_click(false)
                 // Double-click on the tray icon brings the window back
                 // (any state: hidden/minimized/behind). Single click keeps
                 // the classic right-click menu behaviour.
