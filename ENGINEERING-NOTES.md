@@ -248,3 +248,18 @@ Windows 的 NSIS 安装行为、toast 渲染、AUMID、事件投递——Linux s
   更新提醒改为三处：托盘常驻「有更新 vX（点击更新）」+ 控制台更新区 + **启动时原生 toast
   弹一次**（`UPDATE_TOAST_SHOWN` 每进程一次，提醒用户点托盘更新）。启动页滚动日志里
   manager 的 "update available" 行仍在（信息不丢，只是不再有按钮）。
+
+## 24. 重启后连不上——重连必须由壳驱动，不能靠启动页
+
+- 现象：开启/关闭插件后点「立即重启」、或托盘点「重启」，dsh 重启后 WebView 停在旧端口死页，
+  服务起不来（连不上）。
+- 根因：dsh 用 `--port 0` 每次重启换新端口。manager 发新 `{t:'url'}`，Rust 只 `emit("server-url")`，
+  **唯一监听它的启动页 JS 早在首次跳转时就被替换掉了**——重启后没有任何东西把 WebView 导航到新 URL。
+  原始代码就有此隐患（重启路径少用没暴露），「立即重启」让每次插件操作都触发，问题浮出。
+- 修复（两条）：
+  1. `server-url` 事件处理里**Rust 直接 `w.navigate(url)`**（幂等：已是当前页则 no-op）——重启重连
+     不依赖任何页面 JS。
+  2. manager 退出（stdout EOF → server-down）时，若当前页是 dsh 回环页（http://127.0.0.1|localhost），
+     导航回启动页（setup 时 `w.url()` 捕获的 LAUNCHER_URL）重新待命；崩溃时显示错误+重试。
+- 教训：**"导航"职责不能绑在会被替换掉的页面上**。壳持有的 WebView 导航是唯一可靠重连路径。
+- `w.navigate()` 需要 `tauri::Url`（`tauri::Url::parse`），不是 `&str`；跨线程调用 OK（reload 已在桥线程用）。

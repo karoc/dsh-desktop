@@ -136,6 +136,13 @@ static FOCUS_OPEN: Mutex<Option<String>> = Mutex::new(None);
 /// (the manager reports update-status at boot and on demand — remind once).
 static UPDATE_TOAST_SHOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// The launcher page URL, captured at setup. On manager-down we navigate back
+/// here so the page re-arms for the next dsh boot (restart) or shows the
+/// error + retry (crash). The launcher's `server-url` listener only exists
+/// while that page is loaded, so reconnection after a restart must be driven
+/// by the shell, not the page.
+static LAUNCHER_URL: Mutex<Option<String>> = Mutex::new(None);
+
 /// Windows: register a PROCESS-LEVEL toast activator. The WinRT `Activated`
 /// event used by notify-rust only fires while the toast is visible on screen;
 /// once it lands in the Action Center the system routes clicks to the app's
@@ -1025,6 +1032,16 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
                     Some("url") => {
                         if let Some(url) = ev.get("url").and_then(|v| v.as_str()) {
                             let _ = handle.emit("server-url", url);
+                            // Reconnect: the launcher page's JS listener is gone
+                            // once the webview is on the dsh page, so a dsh /
+                            // manager restart (new random port) must be driven by
+                            // the shell. Navigating on every server-url is
+                            // idempotent when it is already the current page.
+                            if let Ok(u) = tauri::Url::parse(url) {
+                                if let Some(w) = handle.get_webview_window("main") {
+                                    let _ = w.navigate(u);
+                                }
+                            }
                         }
                     }
                     Some("log") => {
@@ -1094,8 +1111,26 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
                 }
             }
         }
-        // stdout EOF => manager exited (or the dsh child detached) => tell the UI.
+        // stdout EOF => manager exited (or the dsh child detached) => tell the
+        // UI and go back to the launcher page so it re-arms for the next boot
+        // (a restart) or shows the error + retry (a crash).
         let _ = handle.emit("server-down", ());
+        // Back to the launcher so it re-arms for the next boot (a restart) or
+        // shows the error + retry (a crash). Guard: only when we're actually on
+        // a dsh loopback page, never away from a valid launcher URL.
+        if let Some(cur) = handle.get_webview_window("main").and_then(|w| w.url().ok()) {
+            let is_dsh = cur.scheme() == "http"
+                && cur.host_str().map(|h| h == "127.0.0.1" || h == "localhost").unwrap_or(false);
+            if is_dsh {
+                if let Some(url) = LAUNCHER_URL.lock().unwrap().clone() {
+                    if let Ok(u) = tauri::Url::parse(&url) {
+                        if let Some(w) = handle.get_webview_window("main") {
+                            let _ = w.navigate(u);
+                        }
+                    }
+                }
+            }
+        }
     });
 
     // Manager's stderr: surface in the UI log AND our own stderr so that any
@@ -1258,6 +1293,11 @@ pub fn run() {
             if let Some(w) = app.get_webview_window("main") {
                 if let Some(icon) = app.default_window_icon() {
                     let _ = w.set_icon(icon.clone());
+                }
+                // Capture the launcher URL for post-restart reconnection (the
+                // page itself is replaced by the dsh page on the first boot).
+                if let Ok(u) = w.url() {
+                    *LAUNCHER_URL.lock().unwrap() = Some(u.to_string());
                 }
             }
             // ── tray menu ────────────────────────────────────────────────
