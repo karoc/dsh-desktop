@@ -193,7 +193,66 @@ fn register_toast_activator(app_id: &str) -> Result<(), String> {
         "/f",
     ])
     .map_err(|e| format!("reg add CustomActivator: {e}"))?;
+    ensure_shortcut_toast_activator(CLSID)?;
     Ok(())
+}
+
+/// Windows 11 resolves toast activation through the Start Menu shortcut's
+/// `System.AppUserModel.ToastActivatorCLSID` property — the registry
+/// CustomActivator keys alone are NOT enough (verified on 25H2: clicks were
+/// silently dropped until this property was set). Set it (self-healing: runs
+/// on every launch, so reinstall/shortcut-recreate is covered).
+#[cfg(target_os = "windows")]
+fn ensure_shortcut_toast_activator(clsid: &str) -> Result<(), String> {
+    use windows::core::{GUID, HSTRING, Interface, PWSTR};
+    use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER, IPersistFile, STGM_READWRITE};
+    use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
+    use windows::Win32::System::Variant::VT_LPWSTR;
+    use windows::Win32::UI::Shell::IShellLinkW;
+    use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
+    use windows::Win32::Storage::EnhancedStorage::PKEY_AppUserModel_ToastActivatorCLSID;
+
+    // Locate the NSIS-created Start Menu shortcut (name = productName; Windows
+    // paths are case-insensitive, so both spellings hit the same file).
+    let apdata = std::env::var("APPDATA").map_err(|e| format!("APPDATA: {e}"))?;
+    let base = std::path::Path::new(&apdata)
+        .join("Microsoft")
+        .join("Windows")
+        .join("Start Menu")
+        .join("Programs");
+    let mut lnk = None;
+    for name in ["DSH Desktop.lnk", "dsh Desktop.lnk"] {
+        let p = base.join(name);
+        if p.is_file() {
+            lnk = Some(p);
+            break;
+        }
+    }
+    let lnk = lnk.ok_or_else(|| format!("start menu shortcut not found under {}", base.display()))?;
+    let lnk_str = lnk.to_string_lossy().to_string();
+
+    unsafe {
+        let clsid_shelllink = GUID::from_u128(0x00021401_0000_0000_c000_000000000046);
+        let link: IShellLinkW = CoCreateInstance(&clsid_shelllink, None, CLSCTX_INPROC_SERVER)
+            .map_err(|e| format!("CoCreate ShellLink: {e}"))?;
+        let persist: IPersistFile = link.cast().map_err(|e| format!("cast IPersistFile: {e}"))?;
+        persist
+            .Load(&HSTRING::from(&lnk_str), STGM_READWRITE)
+            .map_err(|e| format!("IShellLink Load: {e}"))?;
+        let store: IPropertyStore = link.cast().map_err(|e| format!("cast IPropertyStore: {e}"))?;
+        let mut wide: Vec<u16> = clsid.encode_utf16().chain(std::iter::once(0)).collect();
+        let mut v = PROPVARIANT::default();
+        (*v.Anonymous.Anonymous).vt = VT_LPWSTR;
+        (*v.Anonymous.Anonymous).Anonymous.pwszVal = PWSTR(wide.as_mut_ptr());
+        store
+            .SetValue(&PKEY_AppUserModel_ToastActivatorCLSID, &v)
+            .map_err(|e| format!("SetValue ToastActivatorCLSID: {e}"))?;
+        store.Commit().map_err(|e| format!("IPropertyStore Commit: {e}"))?;
+        persist
+            .Save(&HSTRING::from(&lnk_str), true)
+            .map_err(|e| format!("IShellLink Save: {e}"))?;
+        Ok(())
+    }
 }
 
 /// Raise a native toast and record it. Shared by the event listener and the

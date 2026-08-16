@@ -130,30 +130,3 @@ button.secondary {
   color: var(--muted);
   border-color: var(--border);
 }
-
-/* ── 更新横幅：发现新版本时显示，一键更新 ─────────────── */
-.update-banner {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 14px;
-  margin-top: 18px;
-  padding: 10px 18px;
-  border: 1px solid var(--border);
-  border-left: 3px solid #d29922;
-  border-radius: 8px;
-  background: var(--card);
-  font-size: 13px;
-  color: var(--fg);
-}
-
-.update-banner button {
-  margin: 0;
-  padding: 6px 16px;
-  font-size: 13px;
-}
-
-.update-banner.updating {
-  opacity: 0.7;
-  pointer-events: none;
-}

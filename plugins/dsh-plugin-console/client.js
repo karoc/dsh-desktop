@@ -253,6 +253,7 @@ window.__ModuleLoader__.load({
   transition: background .15s ease, transform .15s ease;
 }
 .dshc-row:hover { background: var(--dshc-surfaceHover); }
+.dshc-row > div:last-child { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
 .dshc-name { font-weight: 600; word-break: break-all; font-size: 12.5px; }
 .dshc-sub { color: var(--dshc-muted); font-size: 11px; margin-top: 1px; }
 .dshc-badge {
@@ -267,6 +268,7 @@ window.__ModuleLoader__.load({
   border: 1px solid var(--dshc-border); background: var(--dshc-surface); color: var(--dshc-text);
   border-radius: 8px; padding: 5px 12px; font: 600 12px/1.4 system-ui,"Segoe UI","Microsoft YaHei",sans-serif;
   cursor: pointer; transition: background .15s ease, transform .12s ease, border-color .15s ease;
+  white-space: nowrap;
 }
 .dshc-btn2:hover { background: var(--dshc-surfaceHover); border-color: var(--dshc-accent); }
 .dshc-btn2:active { transform: scale(.97); }

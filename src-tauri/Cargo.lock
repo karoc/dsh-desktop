@@ -834,6 +834,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-notification",
  "tauri-plugin-single-instance",
+ "windows",
 ]
 
 [[package]]
