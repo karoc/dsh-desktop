@@ -209,8 +209,11 @@ fn register_toast_activator(app_id: &str) -> Result<(), String> {
 #[cfg(target_os = "windows")]
 fn ensure_shortcut_toast_activator(clsid: &str) -> Result<(), String> {
     use windows::core::{GUID, HSTRING, Interface, PWSTR};
-    use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER, IPersistFile, STGM_READWRITE};
-    use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CoTaskMemAlloc, CoUninitialize, CLSCTX_INPROC_SERVER,
+        IPersistFile, STGM_READWRITE, COINIT_APARTMENTTHREADED,
+    };
+    use windows::Win32::System::Com::StructuredStorage::{PropVariantClear, PROPVARIANT};
     use windows::Win32::System::Variant::VT_LPWSTR;
     use windows::Win32::UI::Shell::IShellLinkW;
     use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
@@ -236,26 +239,41 @@ fn ensure_shortcut_toast_activator(clsid: &str) -> Result<(), String> {
     let lnk_str = lnk.to_string_lossy().to_string();
 
     unsafe {
-        let clsid_shelllink = GUID::from_u128(0x00021401_0000_0000_c000_000000000046);
-        let link: IShellLinkW = CoCreateInstance(&clsid_shelllink, None, CLSCTX_INPROC_SERVER)
-            .map_err(|e| format!("CoCreate ShellLink: {e}"))?;
-        let persist: IPersistFile = link.cast().map_err(|e| format!("cast IPersistFile: {e}"))?;
-        persist
-            .Load(&HSTRING::from(&lnk_str), STGM_READWRITE)
-            .map_err(|e| format!("IShellLink Load: {e}"))?;
-        let store: IPropertyStore = link.cast().map_err(|e| format!("cast IPropertyStore: {e}"))?;
-        let mut wide: Vec<u16> = clsid.encode_utf16().chain(std::iter::once(0)).collect();
-        let mut v = PROPVARIANT::default();
-        (*v.Anonymous.Anonymous).vt = VT_LPWSTR;
-        (*v.Anonymous.Anonymous).Anonymous.pwszVal = PWSTR(wide.as_mut_ptr());
-        store
-            .SetValue(&PKEY_AppUserModel_ToastActivatorCLSID, &v)
-            .map_err(|e| format!("SetValue ToastActivatorCLSID: {e}"))?;
-        store.Commit().map_err(|e| format!("IPropertyStore Commit: {e}"))?;
-        persist
-            .Save(&HSTRING::from(&lnk_str), true)
-            .map_err(|e| format!("IShellLink Save: {e}"))?;
-        Ok(())
+        // CRITICAL: this runs on a background thread — COM must be initialized
+        // on this thread before touching ShellLink objects. Missing this was
+        // the heap-corruption crash (0xc0000374) after the first successful
+        // reg.exe registration.
+        let _hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        let result = (|| -> Result<(), String> {
+            let clsid_shelllink = GUID::from_u128(0x00021401_0000_0000_c000_000000000046);
+            let link: IShellLinkW = CoCreateInstance(&clsid_shelllink, None, CLSCTX_INPROC_SERVER)
+                .map_err(|e| format!("CoCreate ShellLink: {e}"))?;
+            let persist: IPersistFile = link.cast().map_err(|e| format!("cast IPersistFile: {e}"))?;
+            persist
+                .Load(&HSTRING::from(&lnk_str), STGM_READWRITE)
+                .map_err(|e| format!("IShellLink Load: {e}"))?;
+            let store: IPropertyStore = link.cast().map_err(|e| format!("cast IPropertyStore: {e}"))?;
+            // The wide string must live in COM memory (CoTaskMemAlloc) — a
+            // Rust heap pointer handed to IPropertyStore::SetValue corrupts the
+            // heap when the property store copies/frees it.
+            let mut wide: Vec<u16> = clsid.encode_utf16().chain(std::iter::once(0)).collect();
+            let mem = CoTaskMemAlloc(wide.len() * 2) as *mut u16;
+            if mem.is_null() {
+                return Err("CoTaskMemAlloc failed".into());
+            }
+            std::ptr::copy_nonoverlapping(wide.as_mut_ptr(), mem, wide.len());
+            let mut v = PROPVARIANT::default();
+            (*v.Anonymous.Anonymous).vt = VT_LPWSTR;
+            (*v.Anonymous.Anonymous).Anonymous.pwszVal = PWSTR(mem);
+            let r = store
+                .SetValue(&PKEY_AppUserModel_ToastActivatorCLSID, &v)
+                .and_then(|_| store.Commit())
+                .and_then(|_| persist.Save(&HSTRING::from(&lnk_str), true));
+            let _ = PropVariantClear(&mut v); // free the COM string
+            r.map_err(|e| format!("Set/Commit/Save ToastActivatorCLSID: {e}"))
+        })();
+        CoUninitialize();
+        result
     }
 }
 
