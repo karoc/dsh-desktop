@@ -276,3 +276,21 @@ Windows 的 NSIS 安装行为、toast 渲染、AUMID、事件投递——Linux s
 - 铁律：**凡 npm 写 runtime 树，之后必重拷纯拷贝包；能不 --prefix runtime 就不。**
 - 交互：自定义 tooltip 组件替代原生 title（描述两行省略，悬停显示完整，随鼠标定位、
   视口内钳制），附测试（mouseenter 触发 dshc-tip 出现）。
+
+## 26. 重启后残留提示——op-status 生命周期审计（"✓ 完成 — 重启后生效" 反复出现）
+
+- 现象：更新插件 → 立即重启后，提示还在，且随 5s 轮询反复刷新。
+- 根因（两处，同为"状态在重启后未清空"）：
+  1. restart-dsh 只重启 dsh、manager 存活 → manager 的 `activeOp`（done+ok）残留；
+     页面重载后控制台从 /plugins/list 又读到旧 op → 重新置 pendingRestart。
+  2. 全量重启（托盘）时 manager 换新，但 **Rust `ServerState.op` 缓存没重置** →
+     新页面读到上个 manager 的旧 op。
+- 修复：
+  1. `requestRestart()` 清 `activeOp = null` 并 emit `{t:'op-status',op:null,done:false}`；
+     **必须用 null 而非 `{op:null,done:false}`**——busy 互斥 `activeOp && !done` 会把
+     done:false 误判为进行中而阻塞后续操作（当场踩坑，guard 又加 `activeOp.op` 双保险）。
+  2. `start_server()` 与 update 一起重置 `ServerState.op` 和 `preinstalled_updates`。
+- 审计教训（状态生命周期三问）：
+  1. 重启后该状态还会被读到吗？（op-status 会 → 必须清）
+  2. 清空方式会不会被误判？（`{op:null,done:false}` 撞 busy-guard → 用 null）
+  3. 值传递链上每一环（manager→Rust→client）的重启语义一致吗？（全量/增量重启都要清）

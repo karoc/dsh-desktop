@@ -996,11 +996,15 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
 
     let mut child = cmd.spawn().map_err(|e| format!("spawn manager: {e}"))?;
     {
-        // Fresh manager: reset the update status and the tray item text. The
-        // manager re-reports `update-status` right after boot.
+        // Fresh manager: reset every mirrored state and the tray item text.
+        // The manager re-reports `update-status`/`preinstalled-updates` after
+        // boot; op-status is reset here so a stale "restart to apply" hint from
+        // the previous manager never re-appears on the freshly loaded page.
         let state = app.state::<ServerState>();
         *state.stdin.lock().unwrap() = child.stdin.take();
         *state.update.lock().unwrap() = UpdateStatus::default();
+        *state.op.lock().unwrap() = OpStatus::default();
+        *state.preinstalled_updates.lock().unwrap() = serde_json::json!({});
         let guard = state.update_item.lock().unwrap();
         if let Some(item) = guard.as_ref() {
             let _ = item.set_text("检查更新…");

@@ -175,11 +175,24 @@ assert.equal(updStart.spec, 'dsh-model-reasoning', 'op-status start carries the 
 const updDone = await waitFor((e) => e.t === 'op-status' && e.op === 'update-preinstalled' && e.done === true, 'update-preinstalled done')
 assert.equal(typeof updDone.ok, 'boolean', 'op reports an outcome (sandbox npm fails -> ok false)')
 
+// ── scenario 6b: restart-dsh clears the op-status (no stale "restart to apply") ──
+send({ cmd: 'restart-dsh' })
+const opReset = await waitFor(
+  (e) => e.t === 'op-status' && e.op === null && e.done === false,
+  'op-status cleared after restart',
+)
+assert.ok(opReset, 'restart-dsh clears the op-status so the hint does not persist')
+// And a subsequent op is NOT blocked by the cleared state (busy-guard).
+send({ cmd: 'plugins-install', spec: 'after-restart@1.0.0' })
+const afterStart = await waitFor((e) => e.t === 'op-status' && e.op === 'install' && e.spec === 'after-restart@1.0.0' && e.done === false, 'install op starts after the cleared restart')
+assert.equal(afterStart.spec, 'after-restart@1.0.0', 'cleared state does not block new ops')
+await waitFor((e) => e.t === 'op-status' && e.op === 'install' && e.spec === 'after-restart@1.0.0' && e.done === true, 'install op settles')
+
 // ── scenario 7: SIGTERM tears the whole tree down ───────────────────────────
 child.kill('SIGTERM')
 const code = await new Promise((resolvePromise) => child.on('exit', (c) => resolvePromise(c)))
 assert.equal(code, 0, 'manager exits 0 on SIGTERM')
 
-console.log('PASS — manager control plane (8 scenarios)')
+console.log('PASS — manager control plane (9 scenarios)')
 rmSync(work, { recursive: true, force: true })
 process.exit(0)

@@ -397,7 +397,7 @@ async function updatePreinstalled(name) {
     log(`update-preinstalled: ${name} is not a preinstalled bundle`)
     return
   }
-  if (activeOp && !activeOp.done) {
+  if (activeOp && activeOp.op && !activeOp.done) {
     log(`update-preinstalled ignored: another op is running`)
     return
   }
@@ -440,7 +440,7 @@ async function resetPreinstalled(name) {
     log(`reset-preinstalled: ${name} is not a preinstalled bundle`)
     return
   }
-  if (activeOp && !activeOp.done) {
+  if (activeOp && activeOp.op && !activeOp.done) {
     log(`reset-preinstalled ignored: another op is running`)
     return
   }
@@ -528,6 +528,13 @@ function killTree(pid) {
 /** Ask the supervisor to re-spawn dsh (kill the current child if any). */
 function requestRestart() {
   restartRequested = true
+  // A restart APPLIES whatever op asked for it, so the "restart to apply"
+  // hint must not survive it. Clear the op-status and tell the shell, or the
+  // console would re-show "✓ 完成 — 重启后生效" on the freshly loaded page.
+  // Use null (not {op:null,done:false}): the busy guard `activeOp && !done`
+  // must not mistake a cleared state for an op in progress.
+  activeOp = null
+  emit({ t: 'op-status', op: null, done: false })
   if (currentChild) killTree(currentChild.pid)
 }
 
@@ -790,7 +797,7 @@ function emitOpStatus(status) {
 }
 
 async function runPluginOp(argsList, opInfo) {
-  if (activeOp && !activeOp.done) {
+  if (activeOp && activeOp.op && !activeOp.done) {
     log(`plugin ${opInfo.op} ignored: another op is already running`)
     return
   }
