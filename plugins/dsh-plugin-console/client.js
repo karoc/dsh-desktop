@@ -580,9 +580,13 @@ window.__ModuleLoader__.load({
         opEl.innerHTML = `<span class="dshc-spin"></span>${L.opActive}：${op.op} ${op.spec || ''}…`
         bodyEl.appendChild(opEl)
       } else if (op && op.done && op.ok) {
-        pendingRestart = true
-        bodyEl.appendChild(el('div', `✓ ${L.opDone} — ${L.restartToApply}`, 'dshc-op show'))
-        showRestartNow()
+        // A hint means the install landed as a plain dependency (no dsh.bundle):
+        // it will never load as a plugin, and no restart is needed — say so
+        // plainly instead of promising "重启后生效".
+        if (op.nextAction) pendingRestart = true
+        const text = op.hint ? `${L.opDone} — ${op.hint}` : `✓ ${L.opDone} — ${L.restartToApply}`
+        bodyEl.appendChild(el('div', text, 'dshc-op show'))
+        if (op.nextAction) showRestartNow()
       } else if (op && op.done && !op.ok) {
         bodyEl.appendChild(el('div', `✗ ${L.opErr}：${op.spec || ''} ${op.error || ''}`, 'dshc-op show err'))
       }

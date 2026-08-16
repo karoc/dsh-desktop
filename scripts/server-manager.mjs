@@ -636,8 +636,13 @@ function handleCommand(cmd) {
     case 'update-dsh': void updateDshAndRestart(); break
     case 'restart-dsh': log('restart-dsh requested'); requestRestart(); break
     case 'plugins-install':
-      if (cmd.spec) void runPluginOp(['add', String(cmd.spec)], { op: 'install', spec: String(cmd.spec) })
-      else log('plugins-install: missing spec')
+      if (cmd.spec) {
+        const spec = normalizeGitHubSpec(cmd.spec)
+        if (spec !== cmd.spec) log(`plugins-install: ${cmd.spec} -> ${spec}`)
+        void runPluginOp(['add', spec], { op: 'install', spec })
+      } else {
+        log('plugins-install: missing spec')
+      }
       break
     case 'plugins-remove':
       if (cmd.name) void runPluginOp(['remove', String(cmd.name)], { op: 'remove', spec: String(cmd.name) })
@@ -796,11 +801,46 @@ function emitOpStatus(status) {
   emit({ t: 'op-status', ...status })
 }
 
+/**
+ * Normalize common GitHub URL forms into a pnpm git spec. pnpm does NOT accept
+ * a bare `https://github.com/...` as a dependency spec — it needs
+ * `github:owner/repo` (or `git+https://...`). Users paste URLs, so we rewrite:
+ *   https://github.com/owner/repo[/...][.git][#ref]  ->  github:owner/repo[#ref]
+ * Other specs (npm names, github:, git+https://, paths) pass through untouched.
+ */
+function normalizeGitHubSpec(spec) {
+  const s = String(spec).trim()
+  const m = s.match(/^https?:\/\/(?:www\.)?github\.com\/([^/\s?#]+)\/([^/\s?#]+?)(?:\.git)?(?:\/.*)?(?:#([\w.-]+))?$/)
+  if (m) {
+    const [, owner, repo, ref] = m
+    return `github:${owner}/${repo}${ref ? `#${ref}` : ''}`
+  }
+  return s
+}
+
+/** The web profile manifest path (same DSH_HOME the `dsh plugin` CLI uses). */
+function profileManifestPath() {
+  const home = args.home ?? join(args.runtimeDir, 'dsh-home')
+  return join(home, 'profiles', 'web', 'package.json')
+}
+
+function readProfileManifest() {
+  try {
+    return JSON.parse(readFileSync(profileManifestPath(), 'utf8'))
+  } catch {
+    return { dependencies: {}, dsh: { profile: { bundles: [] } } }
+  }
+}
+
 async function runPluginOp(argsList, opInfo) {
   if (activeOp && activeOp.op && !activeOp.done) {
     log(`plugin ${opInfo.op} ignored: another op is already running`)
     return
   }
+  // Capture the dependency set before, so an install can tell whether the
+  // added package actually became a plugin layer (dsh.profile.bundles) or was
+  // just a plain dependency (no dsh.bundle) — the honest "did it take effect".
+  const beforeDeps = new Set(Object.keys(readProfileManifest().dependencies ?? {}))
   const cwd = args.cwd && existsSync(args.cwd) ? args.cwd : process.env.HOME ?? process.cwd()
   emitOpStatus({ op: opInfo.op, spec: opInfo.spec, done: false })
   log(`plugin ${opInfo.op}: ${opInfo.spec}`)
@@ -811,12 +851,28 @@ async function runPluginOp(argsList, opInfo) {
     const code = await runDshPlugin(args.runtimeDir, argsList, cwd)
     const ok = code === 0
     log(`plugin ${opInfo.op} ${opInfo.spec}: ${ok ? 'ok' : `failed (code ${code})`}`)
+    let hint
+    let nextAction = ok ? 'restart' : null
+    if (ok && opInfo.op === 'install') {
+      const after = readProfileManifest()
+      const afterDeps = Object.keys(after.dependencies ?? {})
+      const bundles = after.dsh?.profile?.bundles ?? []
+      const added = afterDeps.filter((n) => !beforeDeps.has(n))
+      const notLoaded = added.filter((n) => !bundles.includes(n))
+      if (notLoaded.length > 0) {
+        // Installed as a dependency but declares no dsh.bundle — it will never
+        // load as a plugin; no restart needed and the user deserves to know.
+        hint = `已安装：${notLoaded.join(', ')} 未声明 dsh.bundle，不会作为插件加载`
+        nextAction = null
+      }
+    }
     emitOpStatus({
       op: opInfo.op,
       spec: opInfo.spec,
       done: true,
       ok,
-      nextAction: ok ? 'restart' : null,
+      nextAction,
+      hint,
     })
   } catch (err) {
     log(`plugin ${opInfo.op} failed: ${err.message}`)

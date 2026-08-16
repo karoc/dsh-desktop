@@ -55,6 +55,8 @@ struct OpStatus {
     ok: Option<bool>,
     next_action: Option<String>,
     error: Option<String>,
+    /// Human hint, e.g. "installed but declares no dsh.bundle — won't load".
+    hint: Option<String>,
 }
 
 /// Send one JSON command line to the manager's stdin (no-op when absent).
@@ -738,6 +740,7 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
                     "ok": op.ok,
                     "nextAction": op.next_action,
                     "error": op.error,
+                    "hint": op.hint,
                 },
             })
             .to_string();
@@ -1105,6 +1108,7 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
                         s.ok = ev.get("ok").and_then(|v| v.as_bool());
                         s.next_action = ev.get("nextAction").and_then(|v| v.as_str()).map(String::from);
                         s.error = ev.get("error").and_then(|v| v.as_str()).map(String::from);
+                        s.hint = ev.get("hint").and_then(|v| v.as_str()).map(String::from);
                     }
                     Some("preinstalled-updates") => {
                         let state = handle.state::<ServerState>();

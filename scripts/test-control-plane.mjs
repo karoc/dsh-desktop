@@ -29,13 +29,29 @@ const dshDir = join(runtime, 'node_modules', '@deepseek-ai', 'dsh')
 mkdirSync(join(dshDir, 'lib'), { recursive: true })
 writeFileSync(join(dshDir, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '9.9.9-test' }, null, 2))
 writeFileSync(join(dshDir, 'lib', 'bin.js'), `
-import { appendFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 const argv = process.argv.slice(2)
-// dsh plugin --profile web <args> mode: record and exit 0 (the real CLI
-// would run pnpm + reconcile; the shell only needs the plumbing here).
+// dsh plugin --profile web <args> mode: record the call; on 'add', write the
+// web profile manifest with the package as a PLAIN dependency (no dsh.bundle),
+// so the manager's post-install bundle check has real data to read.
 if (argv.includes('plugin')) {
   const pm = process.env.DSH_TEST_PLUGIN_MARKER
   if (pm) appendFileSync(pm, argv.join(' ') + '\\n')
+  const addAt = argv.indexOf('add')
+  if (addAt >= 0 && argv[addAt + 1]) {
+    const spec = argv[addAt + 1]
+    const name = spec.split(':').pop().split('/').pop()
+    const home = process.env.DSH_HOME || '.'
+    const dir = join(home, 'profiles', 'web')
+    mkdirSync(dir, { recursive: true })
+    const p = join(dir, 'package.json')
+    let m = { dependencies: {}, dsh: { profile: { bundles: [] } } }
+    try { m = JSON.parse(readFileSync(p, 'utf8')) } catch {}
+    m.dependencies = { ...(m.dependencies || {}), [name]: '0.0.0-git' }
+    m.dsh = { profile: { bundles: m.dsh?.profile?.bundles || [] } }
+    writeFileSync(p, JSON.stringify(m))
+  }
   process.exit(0)
 }
 const m = process.env.DSH_TEST_MARKER
@@ -150,9 +166,11 @@ assert.equal(mrPkg.name, 'dsh-model-reasoning', 'copied package keeps its real n
 send({ cmd: 'plugins-install', spec: 'some-plugin@1.2.3' })
 const opStart = await waitFor((e) => e.t === 'op-status' && e.op === 'install' && e.done === false, 'op-status start')
 assert.equal(opStart.spec, 'some-plugin@1.2.3', 'op-status start carries the spec')
-const opDone = await waitFor((e) => e.t === 'op-status' && e.op === 'install' && e.done === true, 'op-status done')
+const opDone = await waitFor((e) => e.t === 'op-status' && e.op === 'install' && e.spec === 'some-plugin@1.2.3' && e.done === true, 'op-status done')
 assert.equal(opDone.ok, true, 'install op reports success')
-assert.equal(opDone.nextAction, 'restart', 'successful install asks for a restart')
+// The fake profile declares no dsh.bundle -> honest hint, no restart promised.
+assert.equal(opDone.nextAction, null, 'non-bundle install does not ask for a restart')
+assert.ok(opDone.hint && opDone.hint.includes('dsh.bundle'), 'non-bundle install emits a clear hint')
 await new Promise((r) => setTimeout(r, 300))
 const pluginCalls = existsSync(pluginMarker) ? readFileSync(pluginMarker, 'utf8').split('\n').filter(Boolean) : []
 assert.equal(pluginCalls.length, 1, 'dsh plugin CLI invoked exactly once')
@@ -188,11 +206,23 @@ const afterStart = await waitFor((e) => e.t === 'op-status' && e.op === 'install
 assert.equal(afterStart.spec, 'after-restart@1.0.0', 'cleared state does not block new ops')
 await waitFor((e) => e.t === 'op-status' && e.op === 'install' && e.spec === 'after-restart@1.0.0' && e.done === true, 'install op settles')
 
+// ── scenario 6c: a raw GitHub URL is normalized before reaching pnpm ─────────
+send({ cmd: 'plugins-install', spec: 'https://github.com/xiaobright/dsh-anchored-standard/' })
+const ghDone = await waitFor((e) => e.t === 'op-status' && e.op === 'install' && e.spec === 'github:xiaobright/dsh-anchored-standard' && e.done === true, 'github install settles')
+assert.equal(ghDone.ok, true, 'github install op reports success')
+assert.ok(ghDone.hint && ghDone.hint.includes('dsh.bundle'), 'non-bundle github repo still gets the honest hint')
+await new Promise((r) => setTimeout(r, 300))
+const ghCalls = existsSync(pluginMarker) ? readFileSync(pluginMarker, 'utf8').split('\n').filter(Boolean) : []
+assert.ok(
+  ghCalls.some((l) => l.includes('add github:xiaobright/dsh-anchored-standard')),
+  `raw github URL normalized to a pnpm spec (calls: ${JSON.stringify(ghCalls)})`,
+)
+
 // ── scenario 7: SIGTERM tears the whole tree down ───────────────────────────
 child.kill('SIGTERM')
 const code = await new Promise((resolvePromise) => child.on('exit', (c) => resolvePromise(c)))
 assert.equal(code, 0, 'manager exits 0 on SIGTERM')
 
-console.log('PASS — manager control plane (9 scenarios)')
+console.log('PASS — manager control plane (10 scenarios)')
 rmSync(work, { recursive: true, force: true })
 process.exit(0)
