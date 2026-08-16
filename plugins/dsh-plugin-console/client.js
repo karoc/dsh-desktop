@@ -29,6 +29,12 @@ window.__ModuleLoader__.load({
           installing: '安装中…',
           preinstalled: '预装插件',
           preinstalledHint: '随壳自带，默认关闭，启用后重启生效',
+          hasUpdate: '有更新',
+          updateTo: '更新到',
+          resetDefault: '恢复默认',
+          checkPreUpdates: '检查预装插件更新',
+          checkingPre: '正在检查…',
+          userUpdatedHint: '已手动更新，未随壳验证，可恢复默认',
           enabled: '已启用',
           notEnabled: '未启用',
           enable: '启用',
@@ -67,6 +73,12 @@ window.__ModuleLoader__.load({
           installing: 'Installing…',
           preinstalled: 'Preinstalled',
           preinstalledHint: 'Shipped with the app, off by default',
+          hasUpdate: 'Update available',
+          updateTo: 'Update to',
+          resetDefault: 'Reset to default',
+          checkPreUpdates: 'Check preinstalled updates',
+          checkingPre: 'Checking…',
+          userUpdatedHint: 'Manually updated, not shell-verified — can reset',
           enabled: 'On',
           notEnabled: 'Off',
           enable: 'Enable',
@@ -434,14 +446,33 @@ window.__ModuleLoader__.load({
 
       // ── preinstalled ──
       section(L.preinstalled, L.preinstalledHint)
+      const pu = data.preinstalledUpdates || {}
       if (pre.length === 0) {
         bodyEl.appendChild(el('div', L.noPreinstalled, 'dshc-hint'))
       }
       for (const p of pre) {
         const on = bundles.includes(p.name)
-        const btn = `<button class="dshc-btn2 ${on ? '' : 'primary'}" data-toggle="${p.name}">${on ? L.disable : L.enable}</button>`
-        bodyEl.appendChild(row(p.name, on ? L.enabled : L.notEnabled, on ? 'on' : '', btn, p.description || ''))
+        const info = pu[p.name] || {}
+        let badge = on ? L.enabled : L.notEnabled
+        let badgeCls = on ? 'on' : ''
+        let sub = p.description || ''
+        let right = `<button class="dshc-btn2 ${on ? '' : 'primary'}" data-toggle="${p.name}">${on ? L.disable : L.enable}</button>`
+        if (info.updateAvailable) {
+          badge = `${L.hasUpdate} ${info.latest}`
+          badgeCls = 'warn'
+          right = `<button class="dshc-btn2 primary" data-upd-pre="${p.name}">${L.updateTo}${info.latest}</button>` + right
+        }
+        if (info.userUpdated) {
+          if (!sub) sub = L.userUpdatedHint
+          right += `<button class="dshc-btn2" data-reset-pre="${p.name}">${L.resetDefault}</button>`
+        }
+        bodyEl.appendChild(row(p.name, badge, badgeCls, right, sub))
       }
+      const checkPreBtn = document.createElement('button')
+      checkPreBtn.id = 'dshc-check-pre'
+      checkPreBtn.className = 'dshc-btn2'
+      checkPreBtn.textContent = L.checkPreUpdates
+      bodyEl.appendChild(checkPreBtn)
 
       // ── user installed ──
       section(L.userInstalled, L.userInstalledHint)
@@ -506,6 +537,34 @@ window.__ModuleLoader__.load({
           }
         })
       })
+      bodyEl.querySelectorAll('[data-upd-pre]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const name = btn.dataset.updPre
+          await bridge('/plugins/update-preinstalled', { method: 'POST', body: { name } })
+          status(`${L.opActive}：${L.updateOne} ${name}`, 'warn')
+        })
+      })
+      bodyEl.querySelectorAll('[data-reset-pre]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const name = btn.dataset.resetPre
+          if (!globalThis.confirm || confirm(`${L.resetDefault}：${name}？`)) {
+            await bridge('/plugins/reset-preinstalled', { method: 'POST', body: { name } })
+            status(`${L.opActive}：${L.resetDefault} ${name}`, 'warn')
+          }
+        })
+      })
+      const checkPreBtn = bodyEl.querySelector('#dshc-check-pre')
+      if (checkPreBtn) {
+        checkPreBtn.addEventListener('click', async () => {
+          checkPreBtn.disabled = true
+          checkPreBtn.textContent = L.checkingPre
+          await bridge('/plugins/check-preinstalled-updates', { method: 'POST' })
+          setTimeout(() => {
+            checkPreBtn.disabled = false
+            checkPreBtn.textContent = L.checkPreUpdates
+          }, 1500)
+        })
+      }
       bodyEl.querySelectorAll('[data-remove]').forEach((btn) => {
         btn.addEventListener('click', async () => {
           const name = btn.dataset.remove

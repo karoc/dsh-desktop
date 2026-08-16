@@ -13,6 +13,7 @@
 | P3 刷新/重启/Dev | ✅ 完成 | 托盘刷新页 + 重启dsh（快速）；Dev 模式 = dsh.json `devMode`（更新冻结 + devtools 门控 + 托盘复选框）；**HMR module-roots 生产不可用**（dsh 硬编码 `root: []`），host 迭代走 restart-dsh 快速回路 |
 | P4 预装集成 | 🔶 进行中 | 产物已入 resources + 拷贝验证通过；真机端到端（WebView 内启用→Settings 出现页面）待桌面环境验证 |
 | P5 用户自装 | ✅ 完成（方案 X） | manager `ensurePnpm`（懒安装内置 pnpm + PATH shim）→ 复用 `dsh plugin --profile web add/remove/update` CLI（含 reconcile）；Rust `/plugins/install|remove|update` 端点 + op-status 缓存；控制台安装输入框 + 用户插件卸载/更新 + 操作状态/nextAction；控制面测试 7 场景 + 控制台测试 9 场景 |
+| P5b 预装更新机制 | ✅ 完成 | **用户门控**（与 D2 一致）：控制台预装卡片"有更新 vX → 更新到 vX" + "恢复默认" + "检查预装插件更新"；manager 临时目录 npm install + 拷贝覆盖 runtime 拷贝（**不能用 `--prefix runtime`，会 prune 纯拷贝插件**）；dsh.json `updates` 记录 + `ensurePreinstalled` 尊重记录不被壳旧版覆盖；`{t:'preinstalled-updates'}` 事件 → Rust 镜像 → /plugins/list 带出；控制面 8 场景 + 控制台 12 场景 |
 
 **两处相对本计划的设计偏差（均已实现，记录备查）：**
 

@@ -10,6 +10,9 @@ import assert from 'node:assert/strict'
 const root = dirname(fileURLToPath(import.meta.url))
 const clientJs = readFileSync(join(root, '..', 'plugins', 'dsh-plugin-console', 'client.js'), 'utf8')
 
+// Real DOM dataset semantics: `data-upd-pre` -> dataset.updPre.
+const camel = (s) => s.replace(/-([a-z])/g, (_, c) => c.toUpperCase())
+
 // ── minimal DOM stub (createElement / appendChild / querySelector) ──────────
 function makeEl(tag) {
   const el = {
@@ -46,7 +49,7 @@ function makeEl(tag) {
           else if (sel.startsWith('[')) {
             const key = sel.match(/\[([\w-]+)\]/)?.[1]
             // `[data-x]` maps to dataset.x (real DOM dataset semantics).
-            const prop = key && key.startsWith('data-') ? key.slice(5) : key
+            const prop = key && key.startsWith('data-') ? camel(key.slice(5)) : key
             if (prop && c.dataset[prop] !== undefined) out.push(c)
           } else if (sel.startsWith('.')) {
             if (c.className.split(/\s+/).includes(sel.slice(1))) out.push(c)
@@ -90,7 +93,7 @@ function parseChildren(el, html) {
     while ((a = attrRe.exec(attrs))) {
       if (a[1] === 'class') child.className = a[2]
       else if (a[1] === 'id') child.id = a[2]
-      else if (a[1].startsWith('data-')) child.dataset[a[1].slice(5)] = a[2]
+      else if (a[1].startsWith('data-')) child.dataset[camel(a[1].slice(5))] = a[2]
       else child[a[1]] = a[2]
     }
     if (cm >= 0) {
@@ -118,6 +121,7 @@ const calls = [] // [path, method, body]
 let listPayload = {
   bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', 'some-user-plugin'],
   preinstalled: [{ name: 'dsh-model-reasoning', description: 'per-model reasoning effort settings' }],
+  preinstalledUpdates: { 'dsh-model-reasoning': { installed: '0.1.1', latest: '0.1.3', updateAvailable: true, userUpdated: false } },
   update: { current: '1.0.0', latest: '1.1.0', updateAvailable: true },
   op: { op: null, done: true },
   devMode: false,
@@ -254,6 +258,54 @@ await new Promise((r) => setTimeout(r, 10))
 const restartNow = panel.querySelector('#dshc-restart-now')
 assert.ok(restartNow, 'completed install with nextAction renders an immediate-restart button')
 
+// ── scenario 8b: preinstalled update badge + update button (P5) ─────────────
+listPayload = {
+  ...listPayload,
+  preinstalledUpdates: { 'dsh-model-reasoning': { installed: '0.1.1', latest: '0.1.3', updateAvailable: true, userUpdated: false } },
+  op: { op: null, done: true },
+}
+btn.click(); btn.click() // close + reopen for a fresh render
+await new Promise((r) => setTimeout(r, 10))
+const updPre = panel.querySelector('[data-upd-pre]')
+assert.ok(updPre, 'preinstalled row renders an update button when a newer version exists')
+assert.equal(updPre.dataset.updPre, 'dsh-model-reasoning')
+calls.length = 0
+updPre.click()
+await new Promise((r) => setTimeout(r, 10))
+const updPreCall = calls.find((c) => c[0] === '/plugins/update-preinstalled')
+assert.ok(updPreCall, 'update-preinstalled posts /plugins/update-preinstalled')
+assert.deepEqual(updPreCall[2], { name: 'dsh-model-reasoning' })
+
+// ── scenario 8c: user-updated preinstalled shows reset-to-default ───────────
+listPayload = {
+  ...listPayload,
+  preinstalledUpdates: { 'dsh-model-reasoning': { installed: '0.1.3', latest: '0.1.3', updateAvailable: false, userUpdated: true } },
+}
+btn.click(); btn.click()
+await new Promise((r) => setTimeout(r, 10))
+const resetPre = panel.querySelector('[data-reset-pre]')
+assert.ok(resetPre, 'user-updated preinstalled renders a reset-to-default button')
+assert.equal(resetPre.dataset.resetPre, 'dsh-model-reasoning')
+calls.length = 0
+resetPre.click()
+await new Promise((r) => setTimeout(r, 10))
+const resetCall = calls.find((c) => c[0] === '/plugins/reset-preinstalled')
+assert.ok(resetCall, 'reset-preinstalled posts /plugins/reset-preinstalled')
+assert.deepEqual(resetCall[2], { name: 'dsh-model-reasoning' })
+
+// ── scenario 8d: check-preinstalled-updates button ──────────────────────────
+calls.length = 0
+btn.click(); btn.click()
+await new Promise((r) => setTimeout(r, 10))
+const checkPre = panel.querySelector('#dshc-check-pre')
+assert.ok(checkPre, 'check-preinstalled-updates button rendered')
+checkPre.click()
+await new Promise((r) => setTimeout(r, 10))
+assert.ok(
+  calls.some((c) => c[0] === '/plugins/check-preinstalled-updates'),
+  'check button POSTs /plugins/check-preinstalled-updates',
+)
+
 // ── scenario 9: unbaked bridge port -> no fetch, no crash ───────────────────
 delete globalThis.__DSH_BRIDGE_PORT__
 const body2 = makeEl('body')
@@ -265,5 +317,5 @@ window.__handoff.factory().apply({})
 body2.children.find((c) => c.className === 'dshc-btn')?.click()
 assert.equal(calls.length, 0, 'unbaked bridge port must not fire fetches')
 
-console.log('PASS — plugin console behavioral test (9 scenarios)')
+console.log('PASS — plugin console behavioral test (12 scenarios)')
 process.exit(0)

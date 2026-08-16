@@ -161,11 +161,25 @@ assert.ok(pluginCalls[0].includes('--profile web add some-plugin@1.2.3'), `CLI a
 const shim = join(runtime, 'bin', process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm')
 assert.ok(existsSync(shim), 'pnpm shim written for the bundled pnpm')
 
-// ── scenario 6: SIGTERM tears the whole tree down ───────────────────────────
+// ── scenario 6 (P5): preinstalled update check event + command routing ───────
+const pu = await waitFor((e) => e.t === 'preinstalled-updates', 'preinstalled-updates event')
+const entry = pu.updates?.['dsh-model-reasoning']
+assert.ok(entry, 'preinstalled-updates covers the shipped bundle')
+assert.equal(entry.installed, '0.1.1', 'installed version read from the copied package')
+assert.equal(entry.userUpdated, false, 'not user-updated on a fresh runtime')
+assert.equal(entry.updateAvailable, false, 'no registry in the sandbox -> not claimable as update')
+
+send({ cmd: 'preinstalled-update', name: 'dsh-model-reasoning' })
+const updStart = await waitFor((e) => e.t === 'op-status' && e.op === 'update-preinstalled' && e.done === false, 'update-preinstalled start')
+assert.equal(updStart.spec, 'dsh-model-reasoning', 'op-status start carries the bundle name')
+const updDone = await waitFor((e) => e.t === 'op-status' && e.op === 'update-preinstalled' && e.done === true, 'update-preinstalled done')
+assert.equal(typeof updDone.ok, 'boolean', 'op reports an outcome (sandbox npm fails -> ok false)')
+
+// ── scenario 7: SIGTERM tears the whole tree down ───────────────────────────
 child.kill('SIGTERM')
 const code = await new Promise((resolvePromise) => child.on('exit', (c) => resolvePromise(c)))
 assert.equal(code, 0, 'manager exits 0 on SIGTERM')
 
-console.log('PASS — manager control plane (7 scenarios)')
+console.log('PASS — manager control plane (8 scenarios)')
 rmSync(work, { recursive: true, force: true })
 process.exit(0)

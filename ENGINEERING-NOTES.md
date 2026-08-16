@@ -211,3 +211,30 @@ Windows 的 NSIS 安装行为、toast 渲染、AUMID、事件投递——Linux s
   卡片显示描述子行，用户才知道这个插件是干嘛的。
 - 全部由 test-plugin-console.mjs（9 场景）与 test-control-plane.mjs（7 场景）守护；测试桩
   补了 `classList` 与 `.class` 选择器支持。
+
+## 21. 预装插件更新机制（用户门控 / npm / 可恢复默认）
+
+- **设计**：预装包非 profile 依赖，`dsh plugin` 管不到。更新 = manager `npm view` 对比 →
+  临时目录 `npm install <pkg>@<latest> --prefix <tmp>` → 拷贝 node_modules/<pkg> 覆盖 runtime
+  拷贝 → 记录 dsh.json `updates` → op-status + "重启后生效"。恢复默认 = 删记录 +
+  ensurePreinstalled 重拷壳内置版。
+- **致命坑：不能 `npm install --prefix <runtime>` 更新预装包**——npm 会 reify 整棵树并
+  prune 掉不在 runtime/package.json dependencies 里的包（通知插件/控制台插件/其它预装包
+  全是纯拷贝的），会把他们删光。必须临时目录安装 + 拷贝。
+- **ensurePreinstalled 必须尊重 dsh.json `updates`**：否则下次启动字节对比会把用户刚更新
+  的版本盖回壳的旧版。
+- **事件**：`{t:'preinstalled-updates', updates:{name:{installed,latest,updateAvailable,userUpdated}}}`
+  由 manager 在启动后台 + 手动检查时发出，Rust 镜像进 ServerState，/plugins/list 带出。
+- 控制台：预装卡片"有更新 vX → 更新到vX"徽标 + "恢复默认"（userUpdated 时）+ "检查预装插件更新"。
+
+## 22. 启动黑屏 5s + reg.exe 命令弹窗（另一会话代码，诊断未改）
+
+- 两症状同一根因：另一会话 `register_toast_activator` 在 **setup 主线程同步** spawn 多个
+  `reg.exe`（`Command::new("reg").status()`），且 reg.exe 是控制台程序、**未加
+  CREATE_NO_WINDOW**（`no_console_window` 就在同 crate，可复用）。
+- 主线程被阻塞 → WebView 首帧画不出来 → 窗口只显示 backgroundColor（黑屏 ~5s）；
+  reg.exe 逐个弹控制台窗 → "命令弹窗一闪即逝"。
+- 建议修复（留给该会话）：reg 命令加 `no_console_window(&mut cmd)`，并把整个注册
+  挪到 `std::thread::spawn` 或窗口显示后，避免阻塞 setup。
+- 我方已修：manager `killTree` 的 taskkill spawn 补 `windowsHide: true`（重启/退出时
+  不再闪 cmd 窗——这也是我方代码里的同类问题）。

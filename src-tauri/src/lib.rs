@@ -32,6 +32,9 @@ struct ServerState {
     dev_item: Mutex<Option<CheckMenuItem<tauri::Wry>>>,
     /// Latest plugin operation status reported by the manager.
     op: Mutex<OpStatus>,
+    /// Cached per-preinstalled update state, mirrored from the manager's
+    /// `preinstalled-updates` protocol line ({name: {installed, latest, …}}).
+    preinstalled_updates: Mutex<serde_json::Value>,
 }
 
 /// dsh update status, mirrored from the manager's `update-status` protocol line.
@@ -623,9 +626,11 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
             let preinstalled = preinstalled_details(&runtime);
             let upd = app.state::<ServerState>().update.lock().unwrap().clone();
             let op = app.state::<ServerState>().op.lock().unwrap().clone();
+            let pre_updates = app.state::<ServerState>().preinstalled_updates.lock().unwrap().clone();
             let body = serde_json::json!({
                 "bundles": bundles,
                 "preinstalled": preinstalled,
+                "preinstalledUpdates": pre_updates,
                 "devMode": dev_mode(&runtime),
                 "update": {
                     "current": upd.current,
@@ -730,6 +735,37 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
             };
             send_line(&mut app.state::<ServerState>().stdin.lock().unwrap(), &line);
             ("202 Accepted", serde_json::json!({ "ok": true }).to_string())
+        }
+        ("POST", "/plugins/check-preinstalled-updates") => {
+            send_manager(
+                &mut app.state::<ServerState>().stdin.lock().unwrap(),
+                "preinstalled-check",
+            );
+            ("202 Accepted", serde_json::json!({ "ok": true }).to_string())
+        }
+        ("POST", "/plugins/update-preinstalled") => {
+            let name = body_name(&body);
+            let runtime = runtime_dir(app);
+            if !preinstalled_names(&runtime).contains(&name) {
+                let err = serde_json::json!({ "ok": false, "error": "not a preinstalled plugin" }).to_string();
+                ("400 Bad Request", err)
+            } else {
+                let line = serde_json::json!({ "cmd": "preinstalled-update", "name": name }).to_string();
+                send_line(&mut app.state::<ServerState>().stdin.lock().unwrap(), &line);
+                ("202 Accepted", serde_json::json!({ "ok": true }).to_string())
+            }
+        }
+        ("POST", "/plugins/reset-preinstalled") => {
+            let name = body_name(&body);
+            let runtime = runtime_dir(app);
+            if !preinstalled_names(&runtime).contains(&name) {
+                let err = serde_json::json!({ "ok": false, "error": "not a preinstalled plugin" }).to_string();
+                ("400 Bad Request", err)
+            } else {
+                let line = serde_json::json!({ "cmd": "preinstalled-reset", "name": name }).to_string();
+                send_line(&mut app.state::<ServerState>().stdin.lock().unwrap(), &line);
+                ("202 Accepted", serde_json::json!({ "ok": true }).to_string())
+            }
         }
         _ => ("404 Not Found", "not found".into()),
     };
@@ -945,6 +981,11 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
                         s.next_action = ev.get("nextAction").and_then(|v| v.as_str()).map(String::from);
                         s.error = ev.get("error").and_then(|v| v.as_str()).map(String::from);
                     }
+                    Some("preinstalled-updates") => {
+                        let state = handle.state::<ServerState>();
+                        let updates = ev.get("updates").cloned().unwrap_or(serde_json::json!({}));
+                        *state.preinstalled_updates.lock().unwrap() = updates;
+                    }
                     _ => {}
                 }
             }
@@ -1070,6 +1111,7 @@ pub fn run() {
             update_item: Mutex::new(None),
             dev_item: Mutex::new(None),
             op: Mutex::new(OpStatus::default()),
+            preinstalled_updates: Mutex::new(serde_json::json!({})),
         })
         // Belt-and-suspenders for the taskbar icon: re-apply the bundled icon
         // on every page load (window existence/creation timing is not relied

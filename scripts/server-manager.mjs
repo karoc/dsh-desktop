@@ -19,7 +19,8 @@
 //   7. on signal, kill the whole dsh tree (taskkill /T /F on Windows).
 
 import { spawn } from 'node:child_process'
-import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync, appendFileSync } from 'node:fs'
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, appendFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -294,12 +295,27 @@ function writeShellManifest(runtimeDir, manifest) {
   writeFileSync(join(runtimeDir, SHELL_MANIFEST), JSON.stringify(manifest, null, 2) + '\n')
 }
 
+/** Installed version of a package dir, or null. */
+function installedVersionOf(pkgDir) {
+  const p = join(pkgDir, 'package.json')
+  if (!existsSync(p)) return null
+  try {
+    return JSON.parse(readFileSync(p, 'utf8')).version ?? null
+  } catch {
+    return null
+  }
+}
+
 function ensurePreinstalled(runtimeDir, resourceDir) {
   const srcRoot = resolve(resourceDir, 'preinstalled')
   if (!existsSync(srcRoot)) {
     log('no preinstalled bundles in resources')
     return
   }
+  const manifest = readShellManifest(runtimeDir)
+  // User-chosen updates (dsh.json `updates`): keep the runtime copy at the
+  // user's version instead of overwriting it with the shell's bundled copy.
+  const userUpdated = manifest.updates ?? {}
   const names = []
   for (const name of readdirSync(srcRoot)) {
     const src = join(srcRoot, name)
@@ -310,6 +326,15 @@ function ensurePreinstalled(runtimeDir, resourceDir) {
     const pkgName = JSON.parse(readFileSync(pkgJson, 'utf8')).name ?? name
     names.push(pkgName)
     const dest = join(runtimeDir, 'node_modules', pkgName)
+    if (userUpdated[pkgName] !== undefined) {
+      const installed = installedVersionOf(dest)
+      if (installed === userUpdated[pkgName]) {
+        log(`keeping user-updated ${pkgName}@${installed}`)
+        continue
+      }
+      // Stale record (runtime missing or version mismatch): fall through and
+      // restore the bundled copy below.
+    }
     const updating = existsSync(dest) && !sameTree(src, dest)
     if (!existsSync(dest) || updating) {
       mkdirSync(dirname(dest), { recursive: true })
@@ -318,11 +343,124 @@ function ensurePreinstalled(runtimeDir, resourceDir) {
     }
   }
   if (names.length === 0) return
-  // Preserve other shell fields (e.g. devMode) while recording the list.
-  const manifest = readShellManifest(runtimeDir)
+  // Preserve other shell fields (devMode, updates) while recording the list.
   manifest.preinstalled = names
   writeShellManifest(runtimeDir, manifest)
   log(`preinstalled bundles: ${names.join(', ')}`)
+}
+
+// ── preinstalled plugin updates (user-gated, npm source, reset available) ──
+// Preinstalled bundles are NOT profile dependencies, so `dsh plugin` cannot
+// manage them. Updates fetch the package from npm into a TEMP prefix and copy
+// the extracted package over the runtime copy — never `npm install --prefix
+// <runtime>`, which would prune the copied-only plugin packages (notifications
+// / console / other preinstalled) not listed in runtime/package.json.
+let preinstalledUpdates = {}
+
+function emitPreinstalledUpdates() {
+  emit({ t: 'preinstalled-updates', updates: preinstalledUpdates })
+}
+
+/** Latest version of a package on the registry (npm view), or null. */
+async function npmViewVersion(name) {
+  const out = await npm(['view', name, 'version', '--json', '--registry', REGISTRY], { timeoutMs: 60_000 })
+  const parsed = JSON.parse(out)
+  return typeof parsed === 'string' ? parsed : parsed?.version ?? null
+}
+
+/** Refresh the cached update state for every preinstalled bundle. */
+async function checkPreinstalledUpdates() {
+  const names = shellManifest.preinstalled ?? []
+  const next = {}
+  for (const name of names) {
+    const installed = installedVersionOf(join(args.runtimeDir, 'node_modules', name))
+    let latest = null
+    try {
+      latest = await npmViewVersion(name)
+    } catch {
+      latest = null
+    }
+    next[name] = {
+      installed,
+      latest,
+      updateAvailable: Boolean(latest && installed && latest !== installed),
+      userUpdated: (shellManifest.updates ?? {})[name] !== undefined,
+    }
+  }
+  preinstalledUpdates = next
+  emitPreinstalledUpdates()
+}
+
+/** Update one preinstalled bundle from npm (user-gated). */
+async function updatePreinstalled(name) {
+  if (!(shellManifest.preinstalled ?? []).includes(name)) {
+    log(`update-preinstalled: ${name} is not a preinstalled bundle`)
+    return
+  }
+  if (activeOp && !activeOp.done) {
+    log(`update-preinstalled ignored: another op is running`)
+    return
+  }
+  emitOpStatus({ op: 'update-preinstalled', spec: name, done: false })
+  log(`updating preinstalled ${name}`)
+  const tmp = mkdtempSync(join(tmpdir(), 'dsh-pre-'))
+  try {
+    const latest = await npmViewVersion(name)
+    if (!latest) throw new Error('无法获取最新版本')
+    const dest = join(args.runtimeDir, 'node_modules', name)
+    const installed = installedVersionOf(dest)
+    if (installed !== latest) {
+      await npm(['install', `${name}@${latest}`, '--prefix', tmp, '--no-audit', '--no-fund', '--no-progress', '--registry', REGISTRY], { stream: true, timeoutMs: 600_000 })
+      const src = join(tmp, 'node_modules', name)
+      if (!existsSync(src)) throw new Error(`npm 未产出 ${name}@${latest}`)
+      rmSync(dest, { recursive: true, force: true })
+      mkdirSync(dirname(dest), { recursive: true })
+      cpSync(src, dest, { recursive: true })
+      log(`preinstalled ${name} updated to ${latest}`)
+    } else {
+      log(`preinstalled ${name} already at ${latest}`)
+    }
+    const manifest = readShellManifest(args.runtimeDir)
+    manifest.updates = { ...(manifest.updates ?? {}), [name]: latest }
+    writeShellManifest(args.runtimeDir, manifest)
+    shellManifest = manifest
+    await checkPreinstalledUpdates()
+    emitOpStatus({ op: 'update-preinstalled', spec: name, done: true, ok: true, nextAction: 'restart' })
+  } catch (err) {
+    log(`update-preinstalled ${name} failed: ${err.message}`)
+    emitOpStatus({ op: 'update-preinstalled', spec: name, done: true, ok: false, error: err.message })
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+}
+
+/** Reset one preinstalled bundle back to the shell-shipped (bundled) version. */
+async function resetPreinstalled(name) {
+  if (!(shellManifest.preinstalled ?? []).includes(name)) {
+    log(`reset-preinstalled: ${name} is not a preinstalled bundle`)
+    return
+  }
+  if (activeOp && !activeOp.done) {
+    log(`reset-preinstalled ignored: another op is running`)
+    return
+  }
+  emitOpStatus({ op: 'reset-preinstalled', spec: name, done: false })
+  log(`resetting preinstalled ${name}`)
+  try {
+    const manifest = readShellManifest(args.runtimeDir)
+    if (manifest.updates) delete manifest.updates[name]
+    writeShellManifest(args.runtimeDir, manifest)
+    shellManifest = manifest
+    // Re-copy the bundled copy over the user's version (byte-compare detects
+    // the difference and replaces it).
+    ensurePreinstalled(args.runtimeDir, args.resourceDir)
+    shellManifest = readShellManifest(args.runtimeDir)
+    await checkPreinstalledUpdates()
+    emitOpStatus({ op: 'reset-preinstalled', spec: name, done: true, ok: true, nextAction: 'restart' })
+  } catch (err) {
+    log(`reset-preinstalled ${name} failed: ${err.message}`)
+    emitOpStatus({ op: 'reset-preinstalled', spec: name, done: true, ok: false, error: err.message })
+  }
 }
 
 function bakeBridgePort(dest) {
@@ -378,7 +516,9 @@ let pendingTask = null
 function killTree(pid) {
   try {
     if (process.platform === 'win32') {
-      spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' })
+      // windowsHide: taskkill is a console app — without it every restart /
+      // shutdown flashes a cmd window on the user's desktop.
+      spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
     } else {
       process.kill(pid, 'SIGTERM')
     }
@@ -492,6 +632,15 @@ function handleCommand(cmd) {
         cmd.name ? ['update', String(cmd.name)] : ['update'],
         { op: 'update', spec: cmd.name ? String(cmd.name) : '(all)' },
       )
+      break
+    case 'preinstalled-check': void checkPreinstalledUpdates(); break
+    case 'preinstalled-update':
+      if (cmd.name) void updatePreinstalled(String(cmd.name))
+      else log('preinstalled-update: missing name')
+      break
+    case 'preinstalled-reset':
+      if (cmd.name) void resetPreinstalled(String(cmd.name))
+      else log('preinstalled-reset: missing name')
       break
     default: log(`unknown manager command: ${cmd?.cmd}`)
   }
@@ -660,6 +809,8 @@ async function main() {
   ensurePlugin(args.runtimeDir, args.resourceDir)
   ensurePreinstalled(args.runtimeDir, args.resourceDir)
   shellManifest = readShellManifest(args.runtimeDir)
+  // Preinstalled update badges (npm view per bundle) — background, never blocks.
+  void checkPreinstalledUpdates().catch(() => {})
 
   const cwd = args.cwd && existsSync(args.cwd) ? args.cwd : process.env.HOME ?? process.cwd()
   log(`launching dsh web (runtime=${args.runtimeDir})`)
