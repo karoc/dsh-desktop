@@ -154,7 +154,7 @@ eval(clientJs)
 assert.ok(window.__handoff, '__ModuleLoader__.load must be called')
 assert.equal(window.__handoff.id, '@dsh-desktop/plugin-console')
 const plugin = window.__handoff.factory()
-assert.deepEqual(plugin.inject, [], 'console plugin needs no dsh services')
+assert.deepEqual(plugin.inject, ['remote', 'remote.pluginInventory'], 'console injects the inventory remote for the read-only all-plugins list')
 
 // ── scenario 1: apply mounts the floating button ───────────────────────────
 plugin.apply({})
@@ -336,7 +336,45 @@ const tipEl = body.children.find((c) => c.className === 'dshc-tip')
 assert.ok(tipEl, 'custom tooltip element created on hover')
 assert.equal(tipEl.textContent, 'per-model reasoning effort settings', 'tooltip carries the full description')
 
-// ── scenario 10: unbaked bridge port -> no fetch, no crash ──────────────────
+// ── scenario 10: read-only "all plugins" inventory (expand + search) ────────
+const invBody = makeEl('body')
+globalThis.document = { body: invBody, head, createElement: (t) => makeEl(t), getElementById: () => null }
+// eslint-disable-next-line no-eval
+eval(clientJs)
+const invCtx = {
+  remote: {
+    pluginInventory: {
+      list: () => Promise.resolve({
+        ok: true,
+        value: { entries: [
+          { moduleName: '@deepseek-ai/dsh-tool-bash', enabled: true, fiberPhase: 'active' },
+          { moduleName: '@deepseek-ai/dsh-tool-web-search', enabled: false, fiberPhase: null },
+          { moduleName: 'cordis-plugin-timer', enabled: true, fiberPhase: 'active' },
+        ] },
+      }),
+    },
+  },
+}
+window.__handoff.factory().apply(invCtx)
+invBody.children.find((c) => c.className === 'dshc-btn')?.click()
+await new Promise((r) => setTimeout(r, 10))
+const invToggle = invBody.querySelector('#dshc-inv-toggle')
+assert.ok(invToggle, 'all-plugins toggle rendered')
+invToggle.click() // expand
+await new Promise((r) => setTimeout(r, 20))
+const invRows = invBody.querySelectorAll('.dshc-row')
+assert.ok(invRows.length >= 3, `expanded inventory lists the loaded plugins (got ${invRows.length})`)
+const invSearch = invBody.querySelector('#dshc-inv-search')
+assert.ok(invSearch, 'inventory search input rendered')
+invSearch.value = 'bash'
+const inputFn = (invSearch.listeners.input || [])[0]
+assert.ok(inputFn, 'search input wired')
+inputFn()
+await new Promise((r) => setTimeout(r, 10))
+const filtered = invBody.querySelectorAll('.dshc-row')
+assert.ok(filtered.length >= 1 && filtered.length < invRows.length, `search filters the inventory (${invRows.length} -> ${filtered.length})`)
+
+// ── scenario 11: unbaked bridge port -> no fetch, no crash ──────────────────
 delete globalThis.__DSH_BRIDGE_PORT__
 const body2 = makeEl('body')
 globalThis.document = { body: body2, head, createElement: (t) => makeEl(t), getElementById: () => null }
@@ -347,5 +385,5 @@ window.__handoff.factory().apply({})
 body2.children.find((c) => c.className === 'dshc-btn')?.click()
 assert.equal(calls.length, 0, 'unbaked bridge port must not fire fetches')
 
-console.log('PASS — plugin console behavioral test (14 scenarios)')
+console.log('PASS — plugin console behavioral test (15 scenarios)')
 process.exit(0)

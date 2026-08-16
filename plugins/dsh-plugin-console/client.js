@@ -39,6 +39,9 @@ window.__ModuleLoader__.load({
           userUpdatedHint: '已手动更新，未随壳验证，可恢复默认',
           core: '内置核心',
           coreHint: 'dsh 自带，不可禁用',
+          allPlugins: '全部插件',
+          allPluginsHint: '与 dsh 设置页同源，只读',
+          searchPlugins: '搜索插件…',
           enabled: '已启用',
           notEnabled: '未启用',
           enable: '启用',
@@ -87,6 +90,9 @@ window.__ModuleLoader__.load({
           userUpdatedHint: 'Manually updated, not shell-verified — can reset',
           core: 'Core (built-in)',
           coreHint: 'Shipped with dsh, cannot be disabled',
+          allPlugins: 'All plugins',
+          allPluginsHint: 'Read-only, same source as dsh Settings',
+          searchPlugins: 'Search plugins…',
           enabled: 'On',
           notEnabled: 'Off',
           enable: 'Enable',
@@ -229,6 +235,14 @@ window.__ModuleLoader__.load({
     // Preserved install input value across re-renders (a 5s poll refresh must
     // not wipe what the user is typing).
     let installSpec = ''
+    // The client plugin context (captured in apply) — used to read the full
+    // dsh Loader inventory via the remote pluginInventory service.
+    let consoleCtx = null
+    // Read-only "all plugins" inventory state (mirrors dsh's own Settings list).
+    let inventoryOpen = false
+    let inventoryData = null
+    let inventoryAt = 0
+    let inventoryQuery = ''
 
     function bridge(path, opts) {
       if (!ready()) return Promise.resolve(null)
@@ -307,6 +321,7 @@ window.__ModuleLoader__.load({
 .dshc-badge.on { background: color-mix(in srgb, var(--dshc-success) 20%, transparent); color: var(--dshc-success); }
 .dshc-badge.warn { background: color-mix(in srgb, var(--dshc-warn) 20%, transparent); color: var(--dshc-warn); }
 .dshc-badge.core { background: color-mix(in srgb, var(--dshc-muted) 16%, transparent); color: var(--dshc-muted); }
+.dshc-badge.err { background: color-mix(in srgb, var(--dshc-err) 18%, transparent); color: var(--dshc-err); }
 .dshc-actions { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 6px; }
 .dshc-btn2 {
   border: 1px solid var(--dshc-border); background: var(--dshc-surface); color: var(--dshc-text);
@@ -461,6 +476,46 @@ window.__ModuleLoader__.load({
       })
     }
 
+    // ── read-only "all plugins" inventory (same source as dsh Settings) ────
+    /** Compact a module specifier (mirrors dsh's own inventory short-name). */
+    function shortName(moduleName) {
+      const unscoped = moduleName.startsWith('@') ? moduleName.slice(moduleName.indexOf('/') + 1) : moduleName
+      return unscoped
+        .replace(/^cordis:/, '')
+        .replace(/^cordis-plugin-/, '')
+        .replace(/^dsh-(?:host-|client-)?/, '')
+    }
+
+    async function loadInventory() {
+      const svc = consoleCtx?.remote?.pluginInventory
+      if (!svc || typeof svc.list !== 'function') return
+      try {
+        const res = await svc.list()
+        if (res && res.ok && Array.isArray(res.value?.entries)) {
+          inventoryData = res.value.entries
+          inventoryAt = Date.now()
+        }
+      } catch { /* inventory unavailable — the section stays collapsed/empty */ }
+    }
+
+    function renderInventoryList() {
+      const wrap = bodyEl.querySelector('#dshc-inv-list')
+      if (!wrap || !inventoryData) return
+      wrap.textContent = ''
+      const q = inventoryQuery.trim().toLowerCase()
+      const rows = inventoryData.filter((e) => !q || String(e.moduleName).toLowerCase().includes(q))
+      if (rows.length === 0) {
+        wrap.appendChild(el('div', L.noPreinstalled, 'dshc-hint'))
+        return
+      }
+      for (const e of rows) {
+        const failed = e.fiberPhase === 'failed'
+        const badge = failed ? L.opErr : (e.enabled ? L.enabled : L.notEnabled)
+        const cls = failed ? 'err' : (e.enabled ? 'on' : '')
+        wrap.appendChild(row(shortName(e.moduleName), badge, cls, '<span></span>', ''))
+      }
+    }
+
     function row(label, badge, badgeCls, rightHtml, sub) {
       const div = document.createElement('div')
       div.className = 'dshc-row'
@@ -567,7 +622,6 @@ window.__ModuleLoader__.load({
       const preNames = pre.map((p) => p.name)
       const op = data.op || {}
       const TEMPLATE = ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app']
-      const coreBundles = bundles.filter((b) => TEMPLATE.includes(b))
       const userPlugins = bundles.filter((b) => !preNames.includes(b) && !TEMPLATE.includes(b))
 
       // ── pending restart banner (survives re-renders) ──
@@ -639,11 +693,35 @@ window.__ModuleLoader__.load({
       checkPreBtn.textContent = L.checkPreUpdates
       bodyEl.appendChild(checkPreBtn)
 
-      // ── core (dsh built-in bundles, informational, not manageable) ──
-      if (coreBundles.length > 0) {
-        section(L.core, L.coreHint)
-        for (const name of coreBundles) {
-          bodyEl.appendChild(row(name, L.builtin, 'core', `<button class="dshc-btn2" disabled>${L.unmanageable}</button>`, ''))
+      // ── all plugins (read-only inventory, mirrors dsh's own Settings list) ──
+      section(L.allPlugins, L.allPluginsHint)
+      const invToggle = document.createElement('button')
+      invToggle.id = 'dshc-inv-toggle'
+      invToggle.className = 'dshc-btn2'
+      invToggle.textContent = `${inventoryOpen ? '▾' : '▸'} ${L.allPlugins}${inventoryData ? `（${inventoryData.length}）` : ''}`
+      bodyEl.appendChild(invToggle)
+      if (inventoryOpen) {
+        const search = document.createElement('input')
+        search.id = 'dshc-inv-search'
+        search.type = 'text'
+        search.placeholder = L.searchPlugins
+        search.value = inventoryQuery
+        search.style.cssText = 'width:100%; margin-top:6px; box-sizing:border-box;'
+        search.className = 'dshc-inv-search'
+        search.addEventListener('input', () => {
+          inventoryQuery = search.value
+          renderInventoryList()
+        })
+        bodyEl.appendChild(search)
+        const listWrap = document.createElement('div')
+        listWrap.id = 'dshc-inv-list'
+        listWrap.style.cssText = 'max-height:240px; overflow:auto; margin-top:6px;'
+        bodyEl.appendChild(listWrap)
+        if (!inventoryData) {
+          listWrap.appendChild(el('div', `${L.loading}…`, 'dshc-hint'))
+          void loadInventory().then(() => renderInventoryList())
+        } else {
+          renderInventoryList()
         }
       }
 
@@ -737,6 +815,13 @@ window.__ModuleLoader__.load({
           }, 1500)
         })
       }
+      const invToggle = bodyEl.querySelector('#dshc-inv-toggle')
+      if (invToggle) {
+        invToggle.addEventListener('click', () => {
+          inventoryOpen = !inventoryOpen
+          refresh()
+        })
+      }
       bodyEl.querySelectorAll('[data-remove]').forEach((btn) => {
         btn.addEventListener('click', async () => {
           const name = btn.dataset.remove
@@ -822,6 +907,15 @@ window.__ModuleLoader__.load({
       }, 5000)
     }
 
-    return { name: '@dsh-desktop/plugin-console', inject: [], apply() { mount() } }
+    return {
+      name: '@dsh-desktop/plugin-console',
+      // remote + remote.pluginInventory give the read-only "all plugins" list
+      // (the same service dsh's own Settings inventory page uses).
+      inject: ['remote', 'remote.pluginInventory'],
+      apply(ctx) {
+        consoleCtx = ctx
+        mount()
+      },
+    }
   },
 })
