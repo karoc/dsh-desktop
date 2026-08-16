@@ -122,3 +122,71 @@ Windows 的 NSIS 安装行为、toast 渲染、AUMID、事件投递——Linux s
 - 升级杠杆（如仍旧，代码侧根治、不甩清单给用户）：`nsis.template` 自定义模板，
   CreateShortcut 显式写 icon 参数（NSIS 支持 icon-file/icon-index），与缓存语义解耦。
 - 教训：凡需要用户执行多步 PowerShell 的"修复"，都是产品缺陷信号——先找代码侧解法。
+
+## 15. 控制面（更新门控 + 重启语义）踩坑
+
+- 坑：Tauri 2.11 的 `MenuItem::set_text` 只接受一个参数（text），**没有 app handle**
+  参数——靠记忆写 `set_text(app, text)` 会 E0061。查 docs.rs 签名再落笔（延续 #8/#9 纪律）。
+- 坑：`if let Some(x) = state.field.lock().unwrap().as_ref()` 里，MutexGuard 临时变量
+  借用到块尾，比 `state` 活得长 → E0597"does not live long enough"。解法：先把 guard
+  绑成局部变量再 `.as_ref()`。
+- 语义：dsh 意外退出（非用户请求重启）时 manager 必须**照旧退出**（stdout EOF →
+  Rust 发 server-down → 启动页报错+重试），不能偷偷自动拉起；只有 stdin `restart-dsh`
+  命令才进监督循环重新 spawn。自动重启只在用户显式请求时发生。
+- 语义：manager 的 stdin 是管道且被 Rust 持有，**不会自然 EOF**——dsh 退出后 manager
+  若不 `process.exit()` 会被开着的 stdin 挂住，Rust 等不到 server-down。必须显式 exit。
+- 语义：Windows 上运行中的 dsh 锁着 node-pty/koffi 等原生模块，npm 替换不了 →
+  `update-dsh` 必须先杀 dsh 再装、装完再拉（监督循环的 pendingTask 就是这个顺序）。
+
+## 16. 更新门控（D2）设计落地
+
+- manager 启动**只查不装**：`checkDshUpdate()` 发 `{t:'update-status',...}` 协议行，
+  Rust 镜像到 `ServerState.update` + 托盘动态菜单项（"检查更新…" ⇄ "有更新 vX（点击更新）"）。
+- 一键更新链路：托盘/桥/启动页 → `{"cmd":"update-dsh"}` → 杀 dsh → npm 装（双 registry
+  回退 + 进度流）→ 监督循环拉起新 dsh → 新随机端口 → WebView 整页导航。
+- 测试：`scripts/test-control-plane.mjs` 用假 `@deepseek-ai/dsh` 包（bin.js 打 url 事件 +
+  常驻）进程级验证：更新门控 / 未知命令不崩 / restart-dsh 重启两次不同 pid / check-update
+  重报 / SIGTERM 退出码 0。
+
+## 17. P2 插件管理：三处实测教训
+
+- **源目录名 ≠ 包名**：`plugins/dsh-client-notifications` 的包名是 `@dsh-desktop/client-notifications`。
+  sync-resources 和 manager 的 ensurePlugin 必须读 package.json 的 `name` 决定目标路径，
+  按目录名拷贝会产出一个错误包名（`@dsh-desktop/dsh-client-notifications`）在 node_modules 里腐烂。
+  教训：凡"目录 → 包"的映射，一律以 manifest 为准。
+- **Settings slot 要 React，经典脚本拿不到 React**：dsh 的 slot 系统渲染 React 组件，React 不暴露为
+  全局（Vite 打包内部引用）。经典脚本插件（通知插件模式）无法注册进 Settings 页。
+  → 控制台 UI 改用**悬浮面板**（document.body 注入，零构建），与通知插件同款、零上游依赖。
+- **`textContent` 不会解析 HTML**：控制台 actions 容器用 `el('div', htmlString)`（内部 textContent）
+  导致按钮渲染成字面文本——行为测试（test-plugin-console.mjs）当场抓出。要用 `innerHTML` 装按钮
+  组合。测试桩的 `innerHTML`/`textContent` 必须模拟真实语义（parse children / 清空 children），
+  否则这类 bug 测不出来。
+- **Rust 桥做插件开关（文件操作）比 manager stdin 往返更稳**：`/plugins/enable|disable` 直接读写
+  profile manifest，无需请求/响应状态机。预装名白名单校验必须在 Rust 侧（桥是 loopback CORS-open）。
+- **生产构建没有 HMR module-roots 入口**：`dsh web` 的 `cordis-plugin-hmr` 以 `root: []` 硬编码挂载，
+  仅配置热更。Dev 模式不追求 host HMR，用 restart-dsh 快速回路（不查更新、不重装）即可秒级迭代。
+
+## 18. CheckMenuItem API（Tauri 2.11）
+
+- `CheckMenuItem::with_id(manager, id, text, enabled, checked, accelerator)` —— **enabled 在 checked 前面**，
+  6 参数。`is_checked()`/`set_checked(bool)` 都不需要 app handle（和 MenuItem::set_text 一致）。
+- setup 闭包里的 `app: &mut App`，调 `&AppHandle` 参数的函数要用 `app.handle()` 转换，直接传 `app` 会 E0308。
+
+## 19. P5 用户自装（方案 X：内置 pnpm + 复用 dsh plugin CLI）
+
+- **`dsh plugin` 硬依赖 PATH 上的 `pnpm`**（`spawnSync('pnpm')`）：壳必须提供。
+  方案 = 懒安装（首次插件操作时 `npm install pnpm --prefix <runtime>`）+ 在
+  `<runtime>/bin/` 写 `pnpm` / `pnpm.cmd` shim（exec 内置 node + pnpm.cjs），
+  运行 `dsh plugin` 时把 `<runtime>/bin` 前置到 PATH。pre-seeded pnpm 时也要确保 shim 存在。
+- **复用 vs 自实现**：install/remove/update 全走 `node dshBin plugin --profile web <args>`，
+  reconcile（dependency→bundles 自动增删）和 git/allowBuilds 诊断全归上游，壳只做
+  pnpm 供给 + 输出流（log 行）+ op-status 事件（start/done/ok/nextAction）。
+- **预装（非 dependency）与用户自装（dependency）语义分离**：reconcile 只管理
+  dependency 名，永不触碰预装包；Rust 侧 remove 白名单校验（在 bundles、非模板、
+  非预装才放行）。并发安全：安装走 manager 串行（activeOp 互斥），预装开关走 Rust
+  快速文件操作。
+- **测试教训**：行为测试的 HTML 解析器用 `closeRe.source.length` 计已转义的 `<\/button>`
+  （多 1 字符），导致同一 innerHTML 里第二个按钮解析不出来——off-by-one 把真 bug 和
+  桩 bug 混在一起。凡按正则长度推进，用**实际匹配文本长度**（`match()[0].length`）。
+- **沙箱 npm cache 只读（EROFS）**：manager 的 npm() 用默认 cache，本环境跑不了真实
+  pnpm 安装——控制面测试用预置 pnpm 桩验证 shim 与路由，真机安装留给用户环境。

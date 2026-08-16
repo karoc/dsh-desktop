@@ -1,0 +1,21 @@
+{
+  "name": "@dsh-desktop/plugin-console",
+  "version": "0.1.0",
+  "description": "DSH Desktop plugin console: a floating panel to manage preinstalled plugins (enable/disable), check and apply dsh updates, and restart/refresh the service. Talks to the shell's loopback bridge.",
+  "license": "MIT",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-client-runtime": ">=0.1.0-rc.5"
+  }
+}

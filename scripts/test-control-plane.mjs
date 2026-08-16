@@ -1,0 +1,171 @@
+#!/usr/bin/env node
+// Process-level integration test for the manager control plane:
+//   - startup reports `update-status` and NEVER auto-installs (D2);
+//   - stdin JSON commands: `restart-dsh` kills+respawns dsh (D5);
+//     `check-update` re-reports; unknown commands are ignored safely.
+//
+// Uses a FAKE @deepseek-ai/dsh package (a bin.js that prints a url event and
+// stays alive) so no real install / network is involved. DSH_DESKTOP_NO_UPDATE=1
+// keeps the registry check off.
+import { spawn } from 'node:child_process'
+import { mkdtempSync, writeFileSync, readFileSync, existsSync, mkdirSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import assert from 'node:assert/strict'
+
+const root = dirname(fileURLToPath(import.meta.url))
+const repoRoot = resolve(root, '..')
+const manager = join(repoRoot, 'scripts', 'server-manager.mjs')
+const resources = join(repoRoot, 'src-tauri', 'resources')
+
+const work = mkdtempSync(join(tmpdir(), 'dsh-ctrl-'))
+const runtime = join(work, 'runtime')
+const marker = join(work, 'boots.log')
+const pluginMarker = join(work, 'plugin.log')
+
+// ── fake dsh package ────────────────────────────────────────────────────────
+const dshDir = join(runtime, 'node_modules', '@deepseek-ai', 'dsh')
+mkdirSync(join(dshDir, 'lib'), { recursive: true })
+writeFileSync(join(dshDir, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '9.9.9-test' }, null, 2))
+writeFileSync(join(dshDir, 'lib', 'bin.js'), `
+import { appendFileSync } from 'node:fs'
+const argv = process.argv.slice(2)
+// dsh plugin --profile web <args> mode: record and exit 0 (the real CLI
+// would run pnpm + reconcile; the shell only needs the plumbing here).
+if (argv.includes('plugin')) {
+  const pm = process.env.DSH_TEST_PLUGIN_MARKER
+  if (pm) appendFileSync(pm, argv.join(' ') + '\\n')
+  process.exit(0)
+}
+const m = process.env.DSH_TEST_MARKER
+if (m) appendFileSync(m, 'boot ' + process.pid + '\\n')
+const port = 18000 + (process.pid % 1000)
+process.stdout.write(JSON.stringify({ t: 'url', url: 'http://127.0.0.1:' + port }) + '\\n')
+setInterval(() => {}, 1000)
+`)
+// Pre-seed pnpm (the sandbox npm cache is read-only; a real install would fail
+// here). ensurePnpm must accept the seeded entry and still write the shim.
+const pnpmDir = join(runtime, 'node_modules', 'pnpm', 'bin')
+mkdirSync(pnpmDir, { recursive: true })
+writeFileSync(join(pnpmDir, 'pnpm.cjs'), '// pnpm stub\n')
+
+// ── minimal patch file (manager passes it through; fake dsh ignores it) ─────
+writeFileSync(join(work, 'patch.yml'), '- insert:\n    - id: test\n      name: "@dsh-desktop/client-notifications"\n')
+// Pre-write a shell manifest with devMode: ensurePreinstalled must preserve it.
+writeFileSync(join(runtime, 'dsh.json'), JSON.stringify({ devMode: true }))
+
+// ── spawn the manager ───────────────────────────────────────────────────────
+const child = spawn(process.execPath, [
+  manager,
+  '--runtime-dir', runtime,
+  '--resource-dir', resources,
+  '--patch', join(work, 'patch.yml'),
+  '--cwd', work,
+], {
+  stdio: ['pipe', 'pipe', 'pipe'],
+  env: {
+    ...process.env,
+    DSH_DESKTOP_NO_UPDATE: '1',
+    DSH_TEST_MARKER: marker,
+    DSH_TEST_PLUGIN_MARKER: pluginMarker,
+  },
+  windowsHide: true,
+})
+
+const events = []
+let stderr = ''
+child.stderr.on('data', (b) => { stderr += String(b) })
+const waitFor = (pred, what, timeoutMs = 15_000) =>
+  new Promise((resolvePromise, rejectPromise) => {
+    const deadline = Date.now() + timeoutMs
+    const tick = () => {
+      const hit = events.find(pred)
+      if (hit) return resolvePromise(hit)
+      if (Date.now() > deadline) return rejectPromise(new Error(`timeout waiting for ${what}\nstderr: ${stderr}\nseen: ${JSON.stringify(events)}`))
+      setTimeout(tick, 50)
+    }
+    tick()
+  })
+
+let buf = ''
+child.stdout.on('data', (chunk) => {
+  buf += String(chunk)
+  let nl
+  while ((nl = buf.indexOf('\n')) >= 0) {
+    const line = buf.slice(0, nl).trim()
+    buf = buf.slice(nl + 1)
+    if (!line) continue
+    try { events.push(JSON.parse(line)) } catch { /* non-JSON noise */ }
+  }
+})
+
+function send(obj) {
+  child.stdin.write(JSON.stringify(obj) + '\n')
+}
+const boots = () => (existsSync(marker) ? readFileSync(marker, 'utf8').split('\n').filter(Boolean) : [])
+
+// ── scenario 1: startup reports update-status, NO auto-install ──────────────
+const bootEvent = await waitFor((e) => e.t === 'url', 'first url event')
+assert.ok(bootEvent.url.startsWith('http://127.0.0.1:'), 'url event carries the loopback url')
+
+const status1 = await waitFor((e) => e.t === 'update-status', 'initial update-status')
+assert.equal(status1.current, '9.9.9-test', 'update-status reports the installed fake version')
+assert.equal(status1.updateAvailable, false, 'NO_UPDATE mode must never claim an update is available')
+
+// ── scenario 2: unknown command is ignored without crashing ─────────────────
+send({ cmd: 'bogus-command' })
+await new Promise((r) => setTimeout(r, 400))
+assert.equal(child.exitCode, null, 'manager must still be alive after an unknown command')
+assert.equal(boots().length, 1, 'dsh must not have restarted from the unknown command')
+
+// ── scenario 3: restart-dsh kills and respawns dsh (D5) ────────────────────
+send({ cmd: 'restart-dsh' })
+const second = await waitFor((e) => e.t === 'url' && e.url !== bootEvent.url, 'second url event after restart-dsh')
+assert.notEqual(second.url, bootEvent.url, 'dsh restarts on a fresh (random) port')
+await new Promise((r) => setTimeout(r, 400))
+const b = boots()
+assert.equal(b.length, 2, `dsh must boot exactly twice (got ${b.length})`)
+assert.notEqual(b[0], b[1], 'the two boots are distinct processes')
+
+// ── scenario 4: check-update re-reports status without installing ───────────
+send({ cmd: 'check-update' })
+const status2 = await waitFor((e) => e.t === 'update-status' && e !== status1, 'reported update-status after check-update')
+assert.equal(status2.updateAvailable, false, 're-check keeps updateAvailable false (no network)')
+
+// ── scenario 4b: preinstalled bundles land in runtime + dsh.json (P2) ───────
+await new Promise((r) => setTimeout(r, 400)) // let ensurePreinstalled finish
+const dshJson = JSON.parse(readFileSync(join(runtime, 'dsh.json'), 'utf8'))
+assert.ok(
+  Array.isArray(dshJson.preinstalled) && dshJson.preinstalled.includes('dsh-model-reasoning'),
+  'dsh.json records the preinstalled list',
+)
+assert.equal(dshJson.devMode, true, 'ensurePreinstalled preserves other shell manifest fields (devMode)')
+const mr = join(runtime, 'node_modules', 'dsh-model-reasoning', 'package.json')
+assert.ok(existsSync(mr), 'preinstalled bundle copied into runtime node_modules')
+const mrPkg = JSON.parse(readFileSync(mr, 'utf8'))
+assert.equal(mrPkg.name, 'dsh-model-reasoning', 'copied package keeps its real name')
+
+// ── scenario 5 (P5): plugins-install routes through the dsh plugin CLI ───────
+send({ cmd: 'plugins-install', spec: 'some-plugin@1.2.3' })
+const opStart = await waitFor((e) => e.t === 'op-status' && e.op === 'install' && e.done === false, 'op-status start')
+assert.equal(opStart.spec, 'some-plugin@1.2.3', 'op-status start carries the spec')
+const opDone = await waitFor((e) => e.t === 'op-status' && e.op === 'install' && e.done === true, 'op-status done')
+assert.equal(opDone.ok, true, 'install op reports success')
+assert.equal(opDone.nextAction, 'restart', 'successful install asks for a restart')
+await new Promise((r) => setTimeout(r, 300))
+const pluginCalls = existsSync(pluginMarker) ? readFileSync(pluginMarker, 'utf8').split('\n').filter(Boolean) : []
+assert.equal(pluginCalls.length, 1, 'dsh plugin CLI invoked exactly once')
+assert.ok(pluginCalls[0].includes('--profile web add some-plugin@1.2.3'), `CLI args routed correctly (got: ${pluginCalls[0]})`)
+// ensurePnpm accepted the pre-seeded pnpm and wrote the shim.
+const shim = join(runtime, 'bin', process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm')
+assert.ok(existsSync(shim), 'pnpm shim written for the bundled pnpm')
+
+// ── scenario 6: SIGTERM tears the whole tree down ───────────────────────────
+child.kill('SIGTERM')
+const code = await new Promise((resolvePromise) => child.on('exit', (c) => resolvePromise(c)))
+assert.equal(code, 0, 'manager exits 0 on SIGTERM')
+
+console.log('PASS — manager control plane (7 scenarios)')
+rmSync(work, { recursive: true, force: true })
+process.exit(0)

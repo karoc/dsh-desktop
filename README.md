@@ -6,7 +6,7 @@
 
 把 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）打包成可独立运行的 Windows 桌面 App。
 
-- **dsh 本体自动更新**：每次启动检查 npm 上的 `@deepseek-ai/dsh` `latest`，有新版本就在运行时目录里更新到最新，然后再启动服务。dsh 永远来自官方 npm 包，本地零改动。
+- **dsh 更新由你决定**：启动时只检查 npm 上 `@deepseek-ai/dsh` 的最新版本，**不自动安装**。有新版时托盘菜单高亮「有更新 vX → 点击更新」、启动页显示横幅；点一下即下载安装并自动重启。dsh 永远来自官方 npm 包，本地零改动。
 - **内置 Node 24 运行时**：安装包自带 Node（满足 dsh 的运行要求），用户机器无需装 Node。
 - **原生通知**：dsh 需要你问答（`pendingInteraction`：问题 / 批准 / 计划审阅）时，或某个会话结束（`running` 由真变假）时，弹出系统通知；窗口在前台时不打扰。
 - **点击通知直达会话**：单击系统通知会把窗口带回前台并打开对应会话（单实例 + 本地桥实现）。

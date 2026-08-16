@@ -4,22 +4,26 @@
 // Runs under the bundled Node 24 (process.execPath). Owns everything
 // dsh-version-specific:
 //   1. ensure the per-user runtime dir (package.json);
-//   2. check npm for the latest @deepseek-ai/dsh and install it when newer;
+//   2. check npm for the latest @deepseek-ai/dsh — NOTIFY ONLY, never install
+//      on its own (the user decides; see the `update-dsh` stdin command);
 //   3. install the notification client plugin (copied from resources, no npm
 //      needed — it has no runtime deps, only a peer typing);
-//   4. spawn `dsh web --port 0 --patch <plugin roster>`;
+//   4. spawn `dsh web --port 0 --patch <plugin roster>` (and re-spawn it on
+//      request, without re-checking the registry or re-installing plugins);
 //   5. emit machine-readable protocol lines on stdout:
 //        {"t":"url","url":"http://127.0.0.1:<port>"}
 //        {"t":"log","line":"..."}
-//   6. on signal, kill the whole dsh tree (taskkill /T /F on Windows).
+//        {"t":"update-status","current":...,"latest":...,"updateAvailable":bool}
+//   6. read JSON-line commands on stdin from the Rust shell:
+//        {"cmd":"check-update"} / {"cmd":"update-dsh"} / {"cmd":"restart-dsh"}
+//   7. on signal, kill the whole dsh tree (taskkill /T /F on Windows).
 
 import { spawn } from 'node:child_process'
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync, appendFileSync } from 'node:fs'
+import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync, appendFileSync } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const PACKAGE = '@deepseek-ai/dsh'
-const PLUGIN_PACKAGE = '@dsh-desktop/client-notifications'
 
 // ── args ───────────────────────────────────────────────────────────────────
 function parseArgs(argv) {
@@ -136,6 +140,88 @@ function installedVersion(runtimeDir) {
   }
 }
 
+// ── update status ──────────────────────────────────────────────────────────
+let latestVersion = null
+// Shell manifest (<runtime>/dsh.json) snapshot: preinstalled list, devMode, …
+let shellManifest = {}
+
+/** Emit the current update status to the shell (Rust mirrors it to the tray). */
+function emitUpdateStatus(updateAvailable) {
+  emit({
+    t: 'update-status',
+    current: installedVersion(args.runtimeDir),
+    latest: latestVersion,
+    updateAvailable: updateAvailable ?? (latestVersion !== null && installedVersion(args.runtimeDir) !== latestVersion),
+  })
+}
+
+/**
+ * Startup / on-demand check: query the registry and REPORT, never install.
+ * The user decides via the `update-dsh` command. Dev mode (dsh.json devMode)
+ * freezes the check entirely — no registry round-trip at all.
+ */
+async function checkDshUpdate({ frozen = false } = {}) {
+  const current = installedVersion(args.runtimeDir)
+  log(`installed ${PACKAGE}: ${current ?? 'none'}`)
+  if (frozen || process.env.DSH_DESKTOP_NO_UPDATE === '1') {
+    emitUpdateStatus(false)
+    if (frozen) log('dev mode: dsh 更新已冻结')
+    return
+  }
+  try {
+    latestVersion = await latestRemoteVersion()
+    log(`npm latest ${PACKAGE}: ${latestVersion ?? 'unknown'}`)
+  } catch (err) {
+    latestVersion = null
+    log(`update check failed (offline?): ${err.message}`)
+    return
+  }
+  const available = latestVersion !== null && current !== latestVersion
+  emitUpdateStatus(available)
+  if (available) log(`update available: ${current ?? '(none)'} -> ${latestVersion} (user decides)`)
+}
+
+/**
+ * Install the newest dsh into the runtime dir. Must run while dsh is STOPPED:
+ * on Windows a live dsh locks the native modules (node-pty/koffi) npm has to
+ * replace. The caller kills dsh first (see `updateDshAndRestart`).
+ * @returns true when a new version was installed.
+ */
+async function installDshUpdate() {
+  const current = installedVersion(args.runtimeDir)
+  try {
+    latestVersion = await latestRemoteVersion()
+  } catch (err) {
+    throw new Error(`无法查询最新版本：${err.message}`)
+  }
+  if (!latestVersion) throw new Error('无法获取最新版本')
+  if (current === latestVersion) {
+    log(`dsh 已是最新 ${latestVersion}`)
+    return false
+  }
+  log(`updating ${PACKAGE} ${current ?? '(none)'} -> ${latestVersion}`)
+  // Registry fallback chain: mirrors can lag on freshly-published deps, so
+  // retry with the other default if the primary install fails.
+  const fallback = REGISTRY === 'https://registry.npmjs.org/'
+    ? 'https://registry.npmmirror.com'
+    : 'https://registry.npmjs.org/'
+  let lastErr = null
+  for (const reg of [REGISTRY, fallback]) {
+    try {
+      await npm(['install', `${PACKAGE}@${latestVersion}`, '--prefix', args.runtimeDir, '--no-audit', '--no-fund', '--no-progress', '--registry', reg], { stream: true, timeoutMs: 600_000 })
+      log(`updated to ${latestVersion}`)
+      lastErr = null
+      break
+    } catch (err) {
+      lastErr = err
+      log(`registry ${reg} 安装失败：${err.message}`)
+    }
+  }
+  if (lastErr) throw new Error(`所有 registry 安装失败：${lastErr.message}`)
+  emitUpdateStatus(false)
+  return true
+}
+
 // ── steps ──────────────────────────────────────────────────────────────────
 function ensureRuntimeDir(runtimeDir) {
   mkdirSync(runtimeDir, { recursive: true })
@@ -158,57 +244,85 @@ function ensureRuntimeDir(runtimeDir) {
   }
 }
 
-async function updateDsh(runtimeDir) {
-  const current = installedVersion(runtimeDir)
-  log(`installed ${PACKAGE}: ${current ?? 'none'}`)
-  if (process.env.DSH_DESKTOP_NO_UPDATE === '1') return
-  let latest = null
-  try {
-    latest = await latestRemoteVersion()
-    log(`npm latest ${PACKAGE}: ${latest ?? 'unknown'}`)
-  } catch (err) {
-    log(`update check failed (offline?): ${err.message}`)
-    return
-  }
-  if (!latest) return
-  if (current === latest) return
-  log(`updating ${PACKAGE} ${current ?? '(none)'} -> ${latest}`)
-  if (!current) log('首次安装/更新 dsh：视网络需 1~10 分钟，进度会实时显示')
-  // Registry fallback chain: mirrors can lag on freshly-published deps, so
-  // retry with the other default if the primary install fails.
-  const fallback = REGISTRY === 'https://registry.npmjs.org/'
-    ? 'https://registry.npmmirror.com'
-    : 'https://registry.npmjs.org/'
-  let lastErr = null
-  for (const reg of [REGISTRY, fallback]) {
-    try {
-      await npm(['install', `${PACKAGE}@${latest}`, '--prefix', runtimeDir, '--no-audit', '--no-fund', '--no-progress', '--registry', reg], { stream: true, timeoutMs: 600_000 })
-      log(`updated to ${latest}`)
-      lastErr = null
-      break
-    } catch (err) {
-      lastErr = err
-      log(`registry ${reg} 安装失败：${err.message}`)
+function ensurePlugin(runtimeDir, resourceDir) {
+  // Copy every desktop client plugin under resources/plugin/@dsh-desktop/*.
+  // The true package name comes from each package.json (source dir names are
+  // not the package name), so the runtime copy lands at the resolvable path.
+  const scopeRoot = resolve(resourceDir, 'plugin', '@dsh-desktop')
+  if (!existsSync(scopeRoot)) throw new Error(`plugin resources missing: ${scopeRoot}`)
+  for (const rel of readdirSync(scopeRoot)) {
+    const src = join(scopeRoot, rel)
+    if (!statSync(src).isDirectory()) continue
+    const pkgJson = join(src, 'package.json')
+    if (!existsSync(pkgJson)) continue
+    const pkgName = JSON.parse(readFileSync(pkgJson, 'utf8')).name ?? `@dsh-desktop/${rel}`
+    const dest = join(runtimeDir, 'node_modules', pkgName)
+    // Copy (and upgrade) whenever source differs: an old runtime copy must
+    // not pin the app to outdated client code forever.
+    const updating = existsSync(dest) && !sameTree(src, dest)
+    if (!existsSync(dest) || updating) {
+      mkdirSync(dirname(dest), { recursive: true })
+      cpSync(src, dest, { recursive: true })
+      log(updating ? `updated client plugin ${pkgName}` : `installed client plugin ${pkgName}`)
     }
+    // Bake the live bridge port into the served client.js (idempotent: skips
+    // the write when the port is unchanged, so sameTree stays stable).
+    bakeBridgePort(dest)
   }
-  if (lastErr) log(`update install failed on all registries, keeping ${current ?? 'existing'}`)
 }
 
-function ensurePlugin(runtimeDir, resourceDir) {
-  const dest = join(runtimeDir, 'node_modules', PLUGIN_PACKAGE)
-  const src = resolve(resourceDir, 'plugin', PLUGIN_PACKAGE)
-  if (!existsSync(src)) throw new Error(`plugin resource missing: ${src}`)
-  // Copy (and upgrade) whenever source differs: an old runtime copy must not
-  // pin the app to outdated client code forever.
-  const updating = existsSync(dest) && !sameTree(src, dest)
-  if (!existsSync(dest) || updating) {
-    mkdirSync(dirname(dest), { recursive: true })
-    cpSync(src, dest, { recursive: true })
-    log(updating ? `updated client plugin ${PLUGIN_PACKAGE}` : `installed client plugin ${PLUGIN_PACKAGE}`)
+// ── preinstalled plugins (D3: shell-shipped, default OFF, version-locked) ──
+// Each directory under resources/preinstalled/<pkg> is a self-contained dsh
+// bundle. Copies land in <runtime>/node_modules/<pkg> — NEVER in the profile's
+// dependencies, so `dsh plugin` reconcile (which only manages dependency
+// names) can neither auto-enable nor remove them. "Enable" = the Rust shell
+// appends the package name to dsh.profile.bundles; module resolution finds it
+// via the installation-anchor parent walk. The preinstalled list is recorded
+// in <runtime>/dsh.json for the shell's plugin console.
+const SHELL_MANIFEST = 'dsh.json'
+
+function readShellManifest(runtimeDir) {
+  const path = join(runtimeDir, SHELL_MANIFEST)
+  try {
+    return JSON.parse(readFileSync(path, 'utf8'))
+  } catch {
+    return {}
   }
-  // Bake the live bridge port into the served client.js (idempotent: skips
-  // the write when the port is unchanged, so sameTree stays stable).
-  bakeBridgePort(dest)
+}
+
+function writeShellManifest(runtimeDir, manifest) {
+  writeFileSync(join(runtimeDir, SHELL_MANIFEST), JSON.stringify(manifest, null, 2) + '\n')
+}
+
+function ensurePreinstalled(runtimeDir, resourceDir) {
+  const srcRoot = resolve(resourceDir, 'preinstalled')
+  if (!existsSync(srcRoot)) {
+    log('no preinstalled bundles in resources')
+    return
+  }
+  const names = []
+  for (const name of readdirSync(srcRoot)) {
+    const src = join(srcRoot, name)
+    if (!statSync(src).isDirectory()) continue
+    // The package's true name comes from its manifest, not the dir name.
+    const pkgJson = join(src, 'package.json')
+    if (!existsSync(pkgJson)) continue
+    const pkgName = JSON.parse(readFileSync(pkgJson, 'utf8')).name ?? name
+    names.push(pkgName)
+    const dest = join(runtimeDir, 'node_modules', pkgName)
+    const updating = existsSync(dest) && !sameTree(src, dest)
+    if (!existsSync(dest) || updating) {
+      mkdirSync(dirname(dest), { recursive: true })
+      cpSync(src, dest, { recursive: true })
+      log(updating ? `updated preinstalled ${pkgName}` : `installed preinstalled ${pkgName}`)
+    }
+  }
+  if (names.length === 0) return
+  // Preserve other shell fields (e.g. devMode) while recording the list.
+  const manifest = readShellManifest(runtimeDir)
+  manifest.preinstalled = names
+  writeShellManifest(runtimeDir, manifest)
+  log(`preinstalled bundles: ${names.join(', ')}`)
 }
 
 function bakeBridgePort(dest) {
@@ -257,6 +371,10 @@ function readdirRecursive(dir) {
 // ── dsh process ────────────────────────────────────────────────────────────
 const URL_RE = /(https?:\/\/127\.0\.0\.1:\d+)/
 
+let currentChild = null
+let restartRequested = false
+let pendingTask = null
+
 function killTree(pid) {
   try {
     if (process.platform === 'win32') {
@@ -265,6 +383,17 @@ function killTree(pid) {
       process.kill(pid, 'SIGTERM')
     }
   } catch { /* child already gone */ }
+}
+
+/** Ask the supervisor to re-spawn dsh (kill the current child if any). */
+function requestRestart() {
+  restartRequested = true
+  if (currentChild) killTree(currentChild.pid)
+}
+
+/** Register a task the supervisor must await before re-spawning (e.g. update install). */
+function setPendingTask(task) {
+  pendingTask = task
 }
 
 async function launchDsh(runtimeDir, patchPath, cwd) {
@@ -299,17 +428,239 @@ async function launchDsh(runtimeDir, patchPath, cwd) {
   return { code, pid: child.pid }
 }
 
-// ── main ───────────────────────────────────────────────────────────────────
-let currentChild
+/**
+ * Supervisor loop: keep dsh alive across requested restarts. After a child
+ * exit, an awaited pending task (update install) runs first, then a requested
+ * restart re-spawns; otherwise the loop returns the exit code.
+ */
+async function supervise(runtimeDir, patchPath, cwd) {
+  while (true) {
+    restartRequested = false
+    let code
+    try {
+      ({ code } = await launchDsh(runtimeDir, patchPath, cwd))
+    } catch (err) {
+      log(`launch failed: ${err.message}`)
+      return 1
+    }
+    if (pendingTask) {
+      await pendingTask
+      pendingTask = null
+    }
+    if (restartRequested) {
+      log('restarting dsh (requested)')
+      continue
+    }
+    log(`dsh exited with code ${code}`)
+    return code
+  }
+}
 
+// ── command channel (Rust shell → manager) ──────────────────────────────────
+async function updateDshAndRestart() {
+  log('update requested by user')
+  // Stop dsh first: a live dsh locks native modules npm must replace.
+  requestRestart()
+  const task = (async () => {
+    try {
+      const updated = await installDshUpdate()
+      if (updated) log('dsh updated — restarting service')
+    } catch (err) {
+      log(`update failed: ${err.message}`)
+      emitUpdateStatus(false)
+    }
+  })()
+  setPendingTask(task)
+  await task
+}
+
+function handleCommand(cmd) {
+  switch (cmd?.cmd) {
+    case 'check-update': void checkDshUpdate({ frozen: shellManifest.devMode === true }); break
+    case 'update-dsh': void updateDshAndRestart(); break
+    case 'restart-dsh': log('restart-dsh requested'); requestRestart(); break
+    case 'plugins-install':
+      if (cmd.spec) void runPluginOp(['add', String(cmd.spec)], { op: 'install', spec: String(cmd.spec) })
+      else log('plugins-install: missing spec')
+      break
+    case 'plugins-remove':
+      if (cmd.name) void runPluginOp(['remove', String(cmd.name)], { op: 'remove', spec: String(cmd.name) })
+      else log('plugins-remove: missing name')
+      break
+    case 'plugins-update':
+      void runPluginOp(
+        cmd.name ? ['update', String(cmd.name)] : ['update'],
+        { op: 'update', spec: cmd.name ? String(cmd.name) : '(all)' },
+      )
+      break
+    default: log(`unknown manager command: ${cmd?.cmd}`)
+  }
+}
+
+function setupCommandChannel() {
+  // Manual console runs have a TTY: keep the command channel off so typing
+  // does not become commands. The real shell pipes stdin (JSON lines).
+  if (process.stdin.isTTY) return
+  process.stdin.setEncoding('utf8')
+  process.stdin.on('data', (chunk) => {
+    for (const line of String(chunk).split(/\r?\n/)) {
+      const trimmed = line.trim()
+      if (!trimmed) continue
+      let cmd = null
+      try { cmd = JSON.parse(trimmed) } catch { log(`bad manager command: ${trimmed}`); continue }
+      handleCommand(cmd)
+    }
+  })
+  process.stdin.on('error', () => { /* stdin closed by the shell; ignore */ })
+}
+
+// ── user-installed plugins (P5, 方案 X: bundled pnpm + `dsh plugin` CLI) ────
+// The upstream CLI already does the whole job: init the web profile, run
+// pnpm add/remove/update in it, and reconcile dsh.profile.bundles against the
+// installed state. The shell only has to (a) provide pnpm (bundled into the
+// runtime dir on first use, exposed via a shim on PATH) and (b) stream the
+// CLI's output back as log lines + op-status events.
+
+/** Bundled pnpm's entry script (node_modules/pnpm/bin/pnpm.cjs). */
+function pnpmEntry(runtimeDir) {
+  return join(runtimeDir, 'node_modules', 'pnpm', 'bin', 'pnpm.cjs')
+}
+
+/** Directory holding the platform pnpm shim (prepended to PATH). */
+function pnpmShimDir(runtimeDir) {
+  return join(runtimeDir, 'bin')
+}
+
+/** Install pnpm into the runtime dir (lazy: only on first plugin operation). */
+async function ensurePnpm(runtimeDir) {
+  if (existsSync(pnpmEntry(runtimeDir))) {
+    // Pre-seeded pnpm (or a prior install): still make sure the shim exists.
+    writePnpmShim(runtimeDir)
+    return
+  }
+  log('installing bundled pnpm (plugin management)…')
+  const fallback = REGISTRY === 'https://registry.npmjs.org/'
+    ? 'https://registry.npmmirror.com'
+    : 'https://registry.npmjs.org/'
+  let lastErr = null
+  for (const reg of [REGISTRY, fallback]) {
+    try {
+      await npm(['install', 'pnpm', '--prefix', runtimeDir, '--no-audit', '--no-fund', '--no-progress', '--registry', reg], { stream: true, timeoutMs: 600_000 })
+      log('pnpm installed')
+      writePnpmShim(runtimeDir)
+      return
+    } catch (err) {
+      lastErr = err
+      log(`pnpm install failed (${reg}): ${err.message}`)
+    }
+  }
+  throw new Error(`pnpm 安装失败：${lastErr?.message ?? 'unknown'}`)
+}
+
+/** Create `pnpm` / `pnpm.cmd` shims that run the bundled pnpm under our Node. */
+function writePnpmShim(runtimeDir) {
+  const binDir = pnpmShimDir(runtimeDir)
+  mkdirSync(binDir, { recursive: true })
+  const node = process.execPath
+  const entry = pnpmEntry(runtimeDir)
+  const sh = `#!/bin/sh\nexec "${node}" "${entry}" "$@"\n`
+  const exe = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
+  const path = join(binDir, exe)
+  if (existsSync(path)) return
+  if (process.platform === 'win32') {
+    writeFileSync(join(binDir, 'pnpm.cmd'), `@echo off\r\n"${node}" "${entry}" %*\r\n`)
+    writeFileSync(join(binDir, 'pnpm'), sh)
+  } else {
+    writeFileSync(join(binDir, 'pnpm'), sh)
+    chmodSync(join(binDir, 'pnpm'), 0o755)
+  }
+  log(`pnpm shim ready at ${join(binDir, exe)}`)
+}
+
+/** Run `dsh plugin --profile web <args...>` under the web profile's DSH_HOME. */
+function runDshPlugin(runtimeDir, argsList, cwd) {
+  const dshBin = join(runtimeDir, 'node_modules', PACKAGE, 'lib', 'bin.js')
+  if (!existsSync(dshBin)) throw new Error(`dsh not installed at ${dshBin}`)
+  const dshHome = args.home ?? join(runtimeDir, 'dsh-home')
+  const env = {
+    ...process.env,
+    DSH_HOME: dshHome,
+    PATH: `${pnpmShimDir(runtimeDir)}${delimiter()}${process.env.PATH ?? ''}`,
+  }
+  return new Promise((resolvePromise, rejectPromise) => {
+    const child = spawn(process.execPath, [dshBin, 'plugin', '--profile', 'web', ...argsList], {
+      cwd,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env,
+      windowsHide: true,
+    })
+    const pump = (buf) => {
+      for (const line of String(buf).split(/\r?\n/)) {
+        const t = line.replace(/^\s+|\s+$/g, '')
+        if (t) log(t.slice(0, 500))
+      }
+    }
+    child.stdout.on('data', pump)
+    child.stderr.on('data', pump)
+    child.on('error', rejectPromise)
+    child.on('exit', (code) => resolvePromise(code ?? 1))
+  })
+}
+
+// Active plugin op, mirrored to the shell via {t:'op-status'} and included in
+// the bridge's /plugins/list so the console can show progress + nextAction.
+let activeOp = null
+
+function emitOpStatus(status) {
+  activeOp = status
+  emit({ t: 'op-status', ...status })
+}
+
+async function runPluginOp(argsList, opInfo) {
+  if (activeOp && !activeOp.done) {
+    log(`plugin ${opInfo.op} ignored: another op is already running`)
+    return
+  }
+  const cwd = args.cwd && existsSync(args.cwd) ? args.cwd : process.env.HOME ?? process.cwd()
+  emitOpStatus({ op: opInfo.op, spec: opInfo.spec, done: false })
+  log(`plugin ${opInfo.op}: ${opInfo.spec}`)
+  try {
+    // The `dsh plugin` CLI spawns `pnpm` — make sure the bundled one + shim
+    // are in place first (lazy install on the first plugin operation).
+    await ensurePnpm(args.runtimeDir)
+    const code = await runDshPlugin(args.runtimeDir, argsList, cwd)
+    const ok = code === 0
+    log(`plugin ${opInfo.op} ${opInfo.spec}: ${ok ? 'ok' : `failed (code ${code})`}`)
+    emitOpStatus({
+      op: opInfo.op,
+      spec: opInfo.spec,
+      done: true,
+      ok,
+      nextAction: ok ? 'restart' : null,
+    })
+  } catch (err) {
+    log(`plugin ${opInfo.op} failed: ${err.message}`)
+    emitOpStatus({ op: opInfo.op, spec: opInfo.spec, done: true, ok: false, error: err.message })
+  }
+}
+
+function delimiter() {
+  return process.platform === 'win32' ? ';' : ':'
+}
+
+// ── main ───────────────────────────────────────────────────────────────────
 async function main() {
   log('dsh-desktop manager started')
   ensureRuntimeDir(args.runtimeDir)
-  await updateDsh(args.runtimeDir)
+  shellManifest = readShellManifest(args.runtimeDir)
+  await checkDshUpdate({ frozen: shellManifest.devMode === true })
   ensurePlugin(args.runtimeDir, args.resourceDir)
+  ensurePreinstalled(args.runtimeDir, args.resourceDir)
+  shellManifest = readShellManifest(args.runtimeDir)
 
   const cwd = args.cwd && existsSync(args.cwd) ? args.cwd : process.env.HOME ?? process.cwd()
   log(`launching dsh web (runtime=${args.runtimeDir})`)
+  setupCommandChannel()
 
   const shutdown = () => {
     if (currentChild) killTree(currentChild.pid)
@@ -319,12 +670,13 @@ async function main() {
   process.on('SIGINT', shutdown)
 
   try {
-    const { code } = await launchDsh(args.runtimeDir, args.patch, cwd)
-    log(`dsh exited with code ${code}`)
-    process.exitCode = code === 0 ? 0 : 2
+    const code = await supervise(args.runtimeDir, args.patch, cwd)
+    // Explicit exit: the open stdin pipe would otherwise keep the process
+    // alive after dsh has gone, and the shell needs the stdout EOF (server-down).
+    process.exit(code === 0 ? 0 : 2)
   } catch (err) {
-    log(`launch failed: ${err.message}`)
-    process.exitCode = 1
+    log(`fatal: ${err.message}`)
+    process.exit(1)
   }
 }
 

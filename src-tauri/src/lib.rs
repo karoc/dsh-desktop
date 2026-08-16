@@ -13,18 +13,65 @@
 
 use std::io::{BufRead, BufReader};
 use std::net::{TcpListener, TcpStream};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::Mutex;
-use tauri::menu::{Menu, MenuItem};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem};
 use tauri::{AppHandle, Emitter, Listener, Manager, State};
 
-/// The spawned `server-manager` child (owns the dsh service tree).
+/// The spawned `server-manager` child (owns the dsh service tree) plus the
+/// control plane the shell needs to talk to it.
 struct ServerState {
     child: Mutex<Option<Child>>,
+    /// Manager's stdin pipe: JSON-line commands (`{"cmd":"restart-dsh"}` …).
+    stdin: Mutex<Option<ChildStdin>>,
+    /// Latest dsh update status reported by the manager.
+    update: Mutex<UpdateStatus>,
+    /// Tray item whose text flips between "检查更新…" and "有更新 vX（点击更新）".
+    update_item: Mutex<Option<MenuItem<tauri::Wry>>>,
+    /// Tray checkbox mirroring the dsh.json devMode flag.
+    dev_item: Mutex<Option<CheckMenuItem<tauri::Wry>>>,
+    /// Latest plugin operation status reported by the manager.
+    op: Mutex<OpStatus>,
+}
+
+/// dsh update status, mirrored from the manager's `update-status` protocol line.
+#[derive(Default, Clone)]
+struct UpdateStatus {
+    current: Option<String>,
+    latest: Option<String>,
+    update_available: bool,
+}
+
+/// Latest plugin operation status, mirrored from the manager's `op-status`
+/// protocol line (install / remove / update via the bundled-pnpm `dsh plugin`).
+#[derive(Default, Clone)]
+struct OpStatus {
+    op: Option<String>,
+    spec: Option<String>,
+    done: bool,
+    ok: Option<bool>,
+    next_action: Option<String>,
+    error: Option<String>,
+}
+
+/// Send one JSON command line to the manager's stdin (no-op when absent).
+fn send_manager(stdin: &mut Option<ChildStdin>, cmd: &str) {
+    send_line(stdin, &serde_json::json!({ "cmd": cmd }).to_string());
+}
+
+/// Send one raw JSON line to the manager's stdin (no-op when absent).
+fn send_line(stdin: &mut Option<ChildStdin>, line: &str) {
+    use std::io::Write as _;
+    if let Some(stdin) = stdin.as_mut() {
+        let _ = writeln!(stdin, "{line}");
+        let _ = stdin.flush();
+    }
 }
 
 /// Kill the manager child and, on Windows, its whole process tree.
 fn stop_child(state: &ServerState) {
+    // Drop our stdin handle first: the manager sees EOF and stops reading.
+    *state.stdin.lock().unwrap() = None;
     if let Some(mut child) = state.child.lock().unwrap().take() {
         #[cfg(windows)]
         {
@@ -173,6 +220,142 @@ fn show_toast(app: &AppHandle, title: String, body: String) {
     }
 }
 
+// ── plugin management (P2: preinstalled bundles, default OFF) ────────────────
+// The web profile manifest lives at <runtime>/dsh-home/profiles/web/package.json
+// and its dsh.profile.bundles is the enable/disable switch. Preinstalled
+// bundles are shell-shipped (resources/preinstalled -> <runtime>/node_modules,
+// recorded in <runtime>/dsh.json) and are NEVER dependencies, so `dsh plugin`
+// reconcile cannot touch them. Only names from the preinstalled list may be
+// toggled through the bridge (a loopback CORS-open endpoint must not let a
+// page enable arbitrary code).
+
+/// The runtime dir (same path the manager receives as --runtime-dir).
+fn runtime_dir(app: &AppHandle) -> std::path::PathBuf {
+    app.path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+        .join("runtime")
+}
+
+/// Absolute path of the web profile manifest.
+fn profile_manifest_path(runtime: &std::path::Path) -> std::path::PathBuf {
+    runtime
+        .join("dsh-home")
+        .join("profiles")
+        .join("web")
+        .join("package.json")
+}
+
+/// Template bundles for the web profile (mirror of upstream PROFILE_TEMPLATES.web).
+const WEB_PROFILE_TEMPLATE: &[&str] = &["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app"];
+
+/// Read the web profile's dsh.profile.bundles, initializing the manifest with
+/// the template when absent (idempotent, mirrors upstream initProfile).
+fn web_profile_bundles(runtime: &std::path::Path) -> Vec<String> {
+    let path = profile_manifest_path(runtime);
+    if !path.exists() {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let manifest = serde_json::json!({
+            "name": "dsh-profile-web",
+            "private": true,
+            "dependencies": {},
+            "dsh": { "profile": { "bundles": WEB_PROFILE_TEMPLATE } },
+        });
+        if let Ok(raw) = serde_json::to_string_pretty(&manifest) {
+            let _ = std::fs::write(&path, raw + "\n");
+        }
+    }
+    let raw = std::fs::read_to_string(&path).unwrap_or_default();
+    let value: serde_json::Value = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+    value
+        .get("dsh")
+        .and_then(|d| d.get("profile"))
+        .and_then(|p| p.get("bundles"))
+        .and_then(|b| b.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .unwrap_or_else(|| WEB_PROFILE_TEMPLATE.iter().map(|s| s.to_string()).collect())
+}
+
+/// Persist the bundles list, preserving every other manifest field.
+fn write_web_profile_bundles(runtime: &std::path::Path, bundles: &[String]) -> Result<(), String> {
+    let path = profile_manifest_path(runtime);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let raw = std::fs::read_to_string(&path).unwrap_or_else(|_| "{}".into());
+    let mut value: serde_json::Value =
+        serde_json::from_str(&raw).unwrap_or(serde_json::Value::Object(Default::default()));
+    let obj = value
+        .as_object_mut()
+        .ok_or_else(|| "profile manifest must be an object".to_string())?;
+    let dsh = obj
+        .entry("dsh")
+        .or_insert_with(|| serde_json::json!({}));
+    let dsh_obj = dsh
+        .as_object_mut()
+        .ok_or_else(|| "dsh section must be an object".to_string())?;
+    let profile = dsh_obj
+        .entry("profile")
+        .or_insert_with(|| serde_json::json!({}));
+    let profile_obj = profile
+        .as_object_mut()
+        .ok_or_else(|| "dsh.profile must be an object".to_string())?;
+    profile_obj.insert("bundles".into(), serde_json::json!(bundles));
+    let out = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())? + "\n";
+    std::fs::write(&path, out).map_err(|e| e.to_string())
+}
+
+/// Preinstalled plugin names from <runtime>/dsh.json.
+fn preinstalled_names(runtime: &std::path::Path) -> Vec<String> {
+    let raw = std::fs::read_to_string(runtime.join("dsh.json")).unwrap_or_default();
+    let value: serde_json::Value = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+    value
+        .get("preinstalled")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .unwrap_or_default()
+}
+
+/// Parse {"name": "..."} from a bridge POST body.
+fn body_name(body: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("name").and_then(|n| n.as_str()).map(String::from))
+        .unwrap_or_default()
+}
+
+// ── dev mode (P3) ───────────────────────────────────────────────────────────
+// dsh.json `devMode`: freezes dsh updates in the manager and unlocks the
+// WebView2 devtools. Module-level HMR roots are NOT available in production
+// builds (dsh hardcodes root: []), so dev iteration uses the fast restart-dsh
+// loop + config hot-reload (on by default) + page refresh.
+
+/// Whether dev mode is enabled in <runtime>/dsh.json.
+fn dev_mode(runtime: &std::path::Path) -> bool {
+    let raw = std::fs::read_to_string(runtime.join("dsh.json")).unwrap_or_default();
+    serde_json::from_str::<serde_json::Value>(&raw)
+        .ok()
+        .and_then(|v| v.get("devMode").and_then(|d| d.as_bool()))
+        .unwrap_or(false)
+}
+
+/// Flip dsh.json devMode, preserving every other field.
+fn set_dev_mode(runtime: &std::path::Path, on: bool) -> Result<(), String> {
+    let path = runtime.join("dsh.json");
+    let mut value: serde_json::Value = if let Ok(raw) = std::fs::read_to_string(&path) {
+        serde_json::from_str(&raw).unwrap_or(serde_json::Value::Object(Default::default()))
+    } else {
+        serde_json::Value::Object(Default::default())
+    };
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert("devMode".into(), serde_json::json!(on));
+    }
+    let out = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())? + "\n";
+    std::fs::write(&path, out).map_err(|e| e.to_string())
+}
+
 /// Minimal loopback HTTP server (std only): the injected client page POSTs
 /// `/notify` (raise a toast) and `/alive` (loading canary). CORS-open, binds
 /// 127.0.0.1:0 only — same attack surface as dsh web itself.
@@ -304,10 +487,175 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
             show_toast(app, title, body2);
             ("200 OK", String::new())
         }
+        ("GET", "/update-status") => {
+            let state = app.state::<ServerState>();
+            let s = state.update.lock().unwrap();
+            let body = serde_json::json!({
+                "current": s.current,
+                "latest": s.latest,
+                "updateAvailable": s.update_available,
+            })
+            .to_string();
+            ("200 OK", body)
+        }
+        ("POST", "/check-update") => {
+            send_manager(
+                &mut app.state::<ServerState>().stdin.lock().unwrap(),
+                "check-update",
+            );
+            ("200 OK", String::new())
+        }
+        ("POST", "/update-dsh") => {
+            send_manager(
+                &mut app.state::<ServerState>().stdin.lock().unwrap(),
+                "update-dsh",
+            );
+            ("200 OK", String::new())
+        }
+        ("POST", "/restart-dsh") => {
+            send_manager(
+                &mut app.state::<ServerState>().stdin.lock().unwrap(),
+                "restart-dsh",
+            );
+            ("200 OK", String::new())
+        }
+        ("POST", "/refresh") => {
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.reload();
+            }
+            ("200 OK", String::new())
+        }
+        ("POST", "/restart") => {
+            let _ = restart_server(app.clone(), app.state::<ServerState>());
+            ("200 OK", String::new())
+        }
+        ("POST", "/devtools") => {
+            if dev_mode(&runtime_dir(app)) {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.open_devtools();
+                }
+                ("200 OK", String::new())
+            } else {
+                ("403 Forbidden", "devtools requires dev mode (tray: 开发者模式)".into())
+            }
+        }
+        ("GET", "/plugins/list") => {
+            let runtime = runtime_dir(app);
+            let bundles = web_profile_bundles(&runtime);
+            let preinstalled = preinstalled_names(&runtime);
+            let upd = app.state::<ServerState>().update.lock().unwrap().clone();
+            let op = app.state::<ServerState>().op.lock().unwrap().clone();
+            let body = serde_json::json!({
+                "bundles": bundles,
+                "preinstalled": preinstalled,
+                "update": {
+                    "current": upd.current,
+                    "latest": upd.latest,
+                    "updateAvailable": upd.update_available,
+                },
+                "op": {
+                    "op": op.op,
+                    "spec": op.spec,
+                    "done": op.done,
+                    "ok": op.ok,
+                    "nextAction": op.next_action,
+                    "error": op.error,
+                },
+            })
+            .to_string();
+            ("200 OK", body)
+        }
+        ("POST", "/plugins/enable") => {
+            let name = body_name(&body);
+            let runtime = runtime_dir(app);
+            if !preinstalled_names(&runtime).contains(&name) {
+                let err = serde_json::json!({ "ok": false, "error": "not a preinstalled plugin" }).to_string();
+                ("400 Bad Request", err)
+            } else {
+                let mut bundles = web_profile_bundles(&runtime);
+                if !bundles.contains(&name) {
+                    bundles.push(name.clone());
+                }
+                match write_web_profile_bundles(&runtime, &bundles) {
+                    Ok(()) => {
+                        let ok = serde_json::json!({ "ok": true, "name": name, "nextAction": "restart" }).to_string();
+                        ("200 OK", ok)
+                    }
+                    Err(e) => {
+                        let err = serde_json::json!({ "ok": false, "error": e }).to_string();
+                        ("500 Internal Server Error", err)
+                    }
+                }
+            }
+        }
+        ("POST", "/plugins/disable") => {
+            let name = body_name(&body);
+            let runtime = runtime_dir(app);
+            if !preinstalled_names(&runtime).contains(&name) {
+                let err = serde_json::json!({ "ok": false, "error": "not a preinstalled plugin" }).to_string();
+                ("400 Bad Request", err)
+            } else {
+                let mut bundles = web_profile_bundles(&runtime);
+                bundles.retain(|b| b != &name);
+                match write_web_profile_bundles(&runtime, &bundles) {
+                    Ok(()) => {
+                        let ok = serde_json::json!({ "ok": true, "name": name, "nextAction": "restart" }).to_string();
+                        ("200 OK", ok)
+                    }
+                    Err(e) => {
+                        let err = serde_json::json!({ "ok": false, "error": e }).to_string();
+                        ("500 Internal Server Error", err)
+                    }
+                }
+            }
+        }
+        ("POST", "/plugins/install") => {
+            let spec = serde_json::from_str::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|v| v.get("spec").and_then(|n| n.as_str()).map(String::from))
+                .unwrap_or_default();
+            let valid = !spec.is_empty() && spec.len() <= 512 && !spec.contains(char::is_whitespace);
+            if !valid {
+                let err = serde_json::json!({ "ok": false, "error": "invalid plugin spec" }).to_string();
+                ("400 Bad Request", err)
+            } else {
+                let line = serde_json::json!({ "cmd": "plugins-install", "spec": spec }).to_string();
+                send_line(&mut app.state::<ServerState>().stdin.lock().unwrap(), &line);
+                ("202 Accepted", serde_json::json!({ "ok": true }).to_string())
+            }
+        }
+        ("POST", "/plugins/remove") => {
+            let name = body_name(&body);
+            let runtime = runtime_dir(app);
+            let is_user = web_profile_bundles(&runtime).iter().any(|b| b == &name)
+                && !preinstalled_names(&runtime).contains(&name)
+                && !WEB_PROFILE_TEMPLATE.iter().any(|t| *t == name);
+            if !is_user {
+                let err = serde_json::json!({ "ok": false, "error": "not a user-installed plugin" }).to_string();
+                ("400 Bad Request", err)
+            } else {
+                let line = serde_json::json!({ "cmd": "plugins-remove", "name": name }).to_string();
+                send_line(&mut app.state::<ServerState>().stdin.lock().unwrap(), &line);
+                ("202 Accepted", serde_json::json!({ "ok": true }).to_string())
+            }
+        }
+        ("POST", "/plugins/update") => {
+            let name = serde_json::from_str::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|v| v.get("name").and_then(|n| n.as_str()).map(String::from))
+                .unwrap_or_default();
+            let line = if name.is_empty() {
+                serde_json::json!({ "cmd": "plugins-update" }).to_string()
+            } else {
+                serde_json::json!({ "cmd": "plugins-update", "name": name }).to_string()
+            };
+            send_line(&mut app.state::<ServerState>().stdin.lock().unwrap(), &line);
+            ("202 Accepted", serde_json::json!({ "ok": true }).to_string())
+        }
         _ => ("404 Not Found", "not found".into()),
     };
     let resp = format!(
-        "HTTP/1.1 {status}\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: POST, OPTIONS\r\nAccess-Control-Allow-Headers: content-type\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{resp_body}",
+        "HTTP/1.1 {status}\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: POST, GET, OPTIONS\r\nAccess-Control-Allow-Headers: content-type\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{resp_body}",
         resp_body.len()
     );
     let _ = stream.write_all(resp.as_bytes());
@@ -422,7 +770,7 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
         .arg(&patch)
         .arg("--cwd")
         .arg(&home)
-        .stdin(Stdio::null())
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let bridge_port = BRIDGE_PORT.load(std::sync::atomic::Ordering::SeqCst);
@@ -438,6 +786,23 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
     }
 
     let mut child = cmd.spawn().map_err(|e| format!("spawn manager: {e}"))?;
+    {
+        // Fresh manager: reset the update status and the tray item text. The
+        // manager re-reports `update-status` right after boot.
+        let state = app.state::<ServerState>();
+        *state.stdin.lock().unwrap() = child.stdin.take();
+        *state.update.lock().unwrap() = UpdateStatus::default();
+        let guard = state.update_item.lock().unwrap();
+        if let Some(item) = guard.as_ref() {
+            let _ = item.set_text("检查更新…");
+        }
+        drop(guard);
+        // Mirror the dsh.json devMode flag onto the tray checkbox.
+        let guard = state.dev_item.lock().unwrap();
+        if let Some(item) = guard.as_ref() {
+            let _ = item.set_checked(dev_mode(&runtime_dir(app)));
+        }
+    }
 
     let stdout = child.stdout.take().expect("piped stdout");
     let handle = app.clone();
@@ -464,6 +829,42 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
                         if let Some(line) = ev.get("line").and_then(|v| v.as_str()) {
                             let _ = handle.emit("server-log", line);
                         }
+                    }
+                    Some("update-status") => {
+                        let current = ev.get("current").and_then(|v| v.as_str()).map(String::from);
+                        let latest = ev.get("latest").and_then(|v| v.as_str()).map(String::from);
+                        let available = ev.get("updateAvailable").and_then(|v| v.as_bool()).unwrap_or(false);
+                        let state = handle.state::<ServerState>();
+                        {
+                            let mut upd = state.update.lock().unwrap();
+                            upd.current = current.clone();
+                            upd.latest = latest.clone();
+                            upd.update_available = available;
+                        }
+                        // Flip the tray item between "检查更新…" and "有更新 vX（点击更新）".
+                        let guard = state.update_item.lock().unwrap();
+                        if let Some(item) = guard.as_ref() {
+                            let text = if available {
+                                format!(
+                                    "有更新 {}（当前 {}）→ 点击更新",
+                                    latest.as_deref().unwrap_or("?"),
+                                    current.as_deref().unwrap_or("?"),
+                                )
+                            } else {
+                                "检查更新…".to_string()
+                            };
+                            let _ = item.set_text(text);
+                        }
+                    }
+                    Some("op-status") => {
+                        let state = handle.state::<ServerState>();
+                        let mut s = state.op.lock().unwrap();
+                        s.op = ev.get("op").and_then(|v| v.as_str()).map(String::from);
+                        s.spec = ev.get("spec").and_then(|v| v.as_str()).map(String::from);
+                        s.done = ev.get("done").and_then(|v| v.as_bool()).unwrap_or(false);
+                        s.ok = ev.get("ok").and_then(|v| v.as_bool());
+                        s.next_action = ev.get("nextAction").and_then(|v| v.as_str()).map(String::from);
+                        s.error = ev.get("error").and_then(|v| v.as_str()).map(String::from);
                     }
                     _ => {}
                 }
@@ -525,6 +926,47 @@ fn quit_app(app: AppHandle, state: State<'_, ServerState>) -> Result<(), String>
     Ok(())
 }
 
+/// Current dsh update status (launcher page banner / console).
+#[tauri::command]
+fn get_update_status(state: State<'_, ServerState>) -> serde_json::Value {
+    let s = state.update.lock().unwrap();
+    serde_json::json!({
+        "current": s.current,
+        "latest": s.latest,
+        "updateAvailable": s.update_available,
+    })
+}
+
+/// Ask the manager to re-check the registry for a newer dsh.
+#[tauri::command]
+fn check_update(state: State<'_, ServerState>) -> Result<(), String> {
+    send_manager(&mut state.stdin.lock().unwrap(), "check-update");
+    Ok(())
+}
+
+/// One-click: install the newest dsh, then restart the service.
+#[tauri::command]
+fn update_now(state: State<'_, ServerState>) -> Result<(), String> {
+    send_manager(&mut state.stdin.lock().unwrap(), "update-dsh");
+    Ok(())
+}
+
+/// Reload the WebView (picks up edited client bundles — served no-cache).
+#[tauri::command]
+fn refresh_page(app: AppHandle) -> Result<(), String> {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.reload();
+    }
+    Ok(())
+}
+
+/// Restart only the dsh web process (no registry check, no plugin reinstall).
+#[tauri::command]
+fn restart_dsh(state: State<'_, ServerState>) -> Result<(), String> {
+    send_manager(&mut state.stdin.lock().unwrap(), "restart-dsh");
+    Ok(())
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
@@ -544,6 +986,11 @@ pub fn run() {
         }))
         .manage(ServerState {
             child: Mutex::new(None),
+            stdin: Mutex::new(None),
+            update: Mutex::new(UpdateStatus::default()),
+            update_item: Mutex::new(None),
+            dev_item: Mutex::new(None),
+            op: Mutex::new(OpStatus::default()),
         })
         // Belt-and-suspenders for the taskbar icon: re-apply the bundled icon
         // on every page load (window existence/creation timing is not relied
@@ -565,10 +1012,23 @@ pub fn run() {
             }
             // ── tray menu ────────────────────────────────────────────────
             let show = MenuItem::with_id(app, "show", "显示窗口", true, None::<&str>)?;
+            let refresh = MenuItem::with_id(app, "refresh", "刷新页面", true, None::<&str>)?;
+            let restart_dsh = MenuItem::with_id(app, "restart-dsh", "重启 dsh（快速）", true, None::<&str>)?;
             let restart = MenuItem::with_id(app, "restart", "重启服务", true, None::<&str>)?;
+            let check_update = MenuItem::with_id(app, "check-update", "检查更新…", true, None::<&str>)?;
+            let dev = CheckMenuItem::with_id(app, "dev-mode", "开发者模式", true, dev_mode(&runtime_dir(app.handle())), None::<&str>)?;
             let data = MenuItem::with_id(app, "data", "打开数据目录", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &restart, &data, &quit])?;
+            let menu = Menu::with_items(
+                app,
+                &[&show, &refresh, &restart_dsh, &restart, &check_update, &dev, &data, &quit],
+            )?;
+            // Keep the check-update item handle: its text flips to "有更新 vX…"
+            // when the manager reports an available update. Same for the dev
+            // checkbox, so the tray state mirrors dsh.json across restarts.
+            let state = app.state::<ServerState>();
+            *state.update_item.lock().unwrap() = Some(check_update.clone());
+            *state.dev_item.lock().unwrap() = Some(dev.clone());
 
             let _tray = tauri::tray::TrayIconBuilder::with_id("dsh-tray")
                 .icon(app.default_window_icon().expect("app icon").clone())
@@ -578,8 +1038,57 @@ pub fn run() {
                     "show" => {
                         activate_window(app);
                     }
+                    "refresh" => {
+                        if let Some(w) = app.get_webview_window("main") {
+                            let _ = w.reload();
+                        }
+                    }
+                    "restart-dsh" => {
+                        send_manager(
+                            &mut app.state::<ServerState>().stdin.lock().unwrap(),
+                            "restart-dsh",
+                        );
+                    }
                     "restart" => {
                         let _ = restart_server(app.clone(), app.state::<ServerState>());
+                    }
+                    "check-update" => {
+                        // One item, two roles: with an update pending it becomes
+                        // the one-click "更新" action; otherwise it re-checks.
+                        let available = app
+                            .state::<ServerState>()
+                            .update
+                            .lock()
+                            .unwrap()
+                            .update_available;
+                        let cmd = if available { "update-dsh" } else { "check-update" };
+                        send_manager(
+                            &mut app.state::<ServerState>().stdin.lock().unwrap(),
+                            cmd,
+                        );
+                    }
+                    "dev-mode" => {
+                        let runtime = runtime_dir(app);
+                        let on = dev_mode(&runtime);
+                        match set_dev_mode(&runtime, !on) {
+                            Ok(()) => {
+                                if let Some(item) = app.state::<ServerState>().dev_item.lock().unwrap().as_ref() {
+                                    let _ = item.set_checked(!on);
+                                }
+                                show_toast(
+                                    app,
+                                    "开发者模式".into(),
+                                    if !on {
+                                        "已开启（dsh 更新冻结、devtools 可用），重启服务后生效".into()
+                                    } else {
+                                        "已关闭，重启服务后生效".into()
+                                    },
+                                );
+                            }
+                            Err(e) => {
+                                show_toast(app, "开发者模式".into(), format!("切换失败：{e}"));
+                            }
+                        }
                     }
                     "data" => {
                         let _ = open_data_dir(app.clone());
@@ -678,7 +1187,12 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             restart_server,
             open_data_dir,
-            quit_app
+            quit_app,
+            get_update_status,
+            check_update,
+            update_now,
+            refresh_page,
+            restart_dsh
         ])
         .run(tauri::generate_context!())
         .expect("error while running DSH Desktop");

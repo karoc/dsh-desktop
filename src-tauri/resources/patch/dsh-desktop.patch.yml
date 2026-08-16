@@ -1,7 +1,10 @@
-# DSH Desktop overlay: inject the notification client plugin into the web
+# DSH Desktop overlay: inject the desktop client plugins into the web
 # profile's loader roster. Applied at runtime with `dsh web --patch <this>`;
-# the official @deepseek-ai/dsh package is never modified, so auto-updating
-# dsh to the latest npm release cannot wipe this plugin.
+# the official @deepseek-ai/dsh package is never modified, so updating dsh to
+# the latest npm release cannot wipe these plugins.
 - insert:
     - id: desktop-notifications
       name: '@dsh-desktop/client-notifications'
+- insert:
+    - id: desktop-plugin-console
+      name: '@dsh-desktop/plugin-console'

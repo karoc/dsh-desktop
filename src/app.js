@@ -5,6 +5,9 @@ const creditsEl = document.getElementById('credits');
 const retryBtn = document.getElementById('retry');
 const openDataBtn = document.getElementById('opendata');
 const spinner = document.getElementById('spinner');
+const updateBanner = document.getElementById('update-banner');
+const updateText = document.getElementById('update-text');
+const updateNowBtn = document.getElementById('update-now');
 
 function setState(text, failed = false) {
   stateEl.textContent = text;
@@ -37,6 +40,39 @@ function appendLog(line) {
 }
 
 const tauri = globalThis.__TAURI__;
+
+// ── 更新横幅：轮询壳里的 dsh 更新状态，有新版则提示一键更新 ──
+// 只在启动页可见期间有意义；托盘菜单的"检查更新/有更新"是常驻入口。
+let updating = false;
+
+async function pollUpdateStatus() {
+  if (!tauri || !tauri.core || updating) return;
+  try {
+    const s = await tauri.core.invoke('get_update_status');
+    if (s && s.updateAvailable && s.latest) {
+      updateText.textContent = `发现新版本 ${s.latest}${s.current ? `（当前 ${s.current}）` : ''}`;
+      updateBanner.hidden = false;
+    } else {
+      updateBanner.hidden = true;
+    }
+  } catch { /* IPC 未就绪，下轮再试 */ }
+}
+
+updateNowBtn.addEventListener('click', async () => {
+  updating = true;
+  updateBanner.classList.add('updating');
+  updateText.textContent = '正在更新 dsh 并重启服务…';
+  setState('正在更新 dsh（视网络需 1~10 分钟），完成后自动重启…');
+  try {
+    await tauri.core.invoke('update_now');
+  } catch (err) {
+    setState('更新失败：' + String(err), true);
+    appendLog('update failed: ' + String(err));
+    updating = false;
+    updateBanner.classList.remove('updating');
+    updateBanner.hidden = true;
+  }
+});
 
 if (tauri && tauri.event) {
   tauri.event.listen('server-url', (ev) => {
@@ -82,3 +118,8 @@ openDataBtn.addEventListener('click', async () => {
     appendLog('打开数据目录失败：' + String(err));
   }
 });
+
+// Poll the update status while the launcher page is visible (2s interval;
+// cheap local IPC; stops mattering once we navigate to the dsh page).
+setInterval(pollUpdateStatus, 2000);
+pollUpdateStatus();

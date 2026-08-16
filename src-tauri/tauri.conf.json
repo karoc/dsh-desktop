@@ -39,7 +39,8 @@
       "resources/node",
       "resources/manager",
       "resources/patch",
-      "resources/plugin"
+      "resources/plugin",
+      "resources/preinstalled"
     ],
     "category": "DeveloperTool",
     "shortDescription": "DeepSeek Harness desktop shell",

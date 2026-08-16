@@ -1,0 +1,76 @@
+{
+  "name": "dsh-model-reasoning",
+  "version": "0.1.1",
+  "description": "External DeepSeek Harness web client plugin: a Settings page to configure per-model reasoning efforts (thinking levels) for third-party (pi-ai) providers, written into llm-pi-ai.providers.*.models[].reasoningEfforts.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/client.js",
+    "cordis.patch.yml"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-api-remotes"
+      ],
+      "platform": "web"
+    }
+  },
+  "scripts": {
+    "bundle": "tsdown --config ./tsdown.config.ts",
+    "prepare": "tsdown --config ./tsdown.config.ts",
+    "prepublishOnly": "tsdown --config ./tsdown.config.ts"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "plugin",
+    "client-plugin",
+    "reasoning-effort",
+    "thinking",
+    "llm",
+    "settings"
+  ],
+  "author": "karoc",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/karoc/dsh-model-reasoning.git"
+  },
+  "bugs": {
+    "url": "https://github.com/karoc/dsh-model-reasoning/issues"
+  },
+  "homepage": "https://github.com/karoc/dsh-model-reasoning",
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "@types/react": "~18.3.1",
+    "react": "^18.2.0",
+    "tsdown": "^0.22.0"
+  },
+  "peerDependencies": {
+    "react": "^18.2.0"
+  }
+}

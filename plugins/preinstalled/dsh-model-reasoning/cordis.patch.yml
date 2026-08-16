@@ -1,0 +1,8 @@
+# Bundle layer applied when a profile lists this package. The row names the
+# package by name so Node resolution finds the installed code; its browser half
+# (exports["./client"] + dsh.client manifest) is discovered by dsh web's
+# client-modules service and served at /plugins/dsh-model-reasoning/client.js.
+# The row needs no config: the client plugin registers its own settings.section.
+- insert:
+    - id: model-reasoning
+      name: dsh-model-reasoning
