@@ -157,7 +157,13 @@ fn register_toast_activator(app_id: &str) -> Result<(), String> {
     // MUST be double-quoted, otherwise activation silently fails (the part
     // before the first space is treated as the executable).
     let exe_quoted = format!("\"{exe}\"");
-    let run = |args: &[&str]| Command::new("reg").args(args).status();
+    let run = |args: &[&str]| {
+        // reg.exe is a console program: without CREATE_NO_WINDOW every write
+        // flashes a cmd window on the user's desk.
+        let mut cmd = Command::new("reg");
+        no_console_window(&mut cmd);
+        cmd.args(args).status()
+    };
     // HKCU\Software\Classes\CLSID\{GUID}\LocalServer32  (default = quoted exe)
     let _ = run(&[
         "add",
@@ -1134,7 +1140,11 @@ pub fn run() {
                     .path()
                     .app_data_dir()
                     .unwrap_or_else(|_| std::path::PathBuf::from("."));
-                match register_toast_activator("dev.dsh.desktop") {
+                // 后台线程注册：原来在 setup 主线程同步 spawn 多个 reg.exe，
+                // 阻塞了 WebView 首帧（启动黑屏几秒）且闪 cmd 窗。注册必须在
+                // 第一次 toast 前完成即可——后台线程毫秒级跑完，远早于用户
+                // 触发任何通知。
+                std::thread::spawn(move || match register_toast_activator("dev.dsh.desktop") {
                     Ok(()) => {
                         log_line(&data, "activator registered");
                         eprintln!("[dsh-desktop] activator registered");
@@ -1143,7 +1153,7 @@ pub fn run() {
                         log_line(&data, &format!("activator register FAILED: {e}"));
                         eprintln!("[dsh-desktop] activator register FAILED: {e}");
                     }
-                }
+                });
             }
             // ── window icon (taskbar): force the bundled icon explicitly — the
             // tray already uses it; this guards against OS icon-cache staleness.
