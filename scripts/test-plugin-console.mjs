@@ -24,6 +24,16 @@ function makeEl(tag) {
     id: '',
     title: '',
     disabled: false,
+    classList: {
+      toggle(cls, force) {
+        const has = el.className.split(/\s+/).includes(cls)
+        const want = force === undefined ? !has : Boolean(force)
+        if (want && !has) el.className = (el.className + ' ' + cls).trim()
+        if (!want && has) el.className = el.className.split(/\s+/).filter((c) => c !== cls).join(' ')
+      },
+      add(cls) { this.toggle(cls, true) },
+      remove(cls) { this.toggle(cls, false) },
+    },
     appendChild(c) { el.children.push(c); return c },
     addEventListener(type, fn) { (el.listeners[type] = el.listeners[type] || []).push(fn) },
     click() { (el.listeners.click || []).forEach((fn) => fn()) },
@@ -38,6 +48,8 @@ function makeEl(tag) {
             // `[data-x]` maps to dataset.x (real DOM dataset semantics).
             const prop = key && key.startsWith('data-') ? key.slice(5) : key
             if (prop && c.dataset[prop] !== undefined) out.push(c)
+          } else if (sel.startsWith('.')) {
+            if (c.className.split(/\s+/).includes(sel.slice(1))) out.push(c)
           } else if (c.tagName === sel.toUpperCase()) out.push(c)
           walk(c)
         }
@@ -105,9 +117,10 @@ let bridgePort = '39999'
 const calls = [] // [path, method, body]
 let listPayload = {
   bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', 'some-user-plugin'],
-  preinstalled: ['dsh-model-reasoning'],
+  preinstalled: [{ name: 'dsh-model-reasoning', description: 'per-model reasoning effort settings' }],
   update: { current: '1.0.0', latest: '1.1.0', updateAvailable: true },
   op: { op: null, done: true },
+  devMode: false,
 }
 
 // Node 24 exposes navigator as a getter-only global; override via defineProperty.
@@ -195,10 +208,10 @@ btn.click()
 await new Promise((r) => setTimeout(r, 10))
 const refreshBtn = panel.querySelector('#dshc-refresh')
 refreshBtn.click()
-const raBtn = panel.querySelector('#dshc-restart-all')
+const raBtn = panel.querySelector('#dshc-restart')
 raBtn.click()
 assert.ok(calls.some((c) => c[0] === '/refresh'), 'refresh action POSTs /refresh')
-assert.ok(calls.some((c) => c[0] === '/restart'), 'restart-all action POSTs /restart')
+assert.ok(calls.some((c) => c[0] === '/restart'), 'restart action POSTs /restart')
 
 // ── scenario 7: install input + user-installed row (P5) ─────────────────────
 calls.length = 0

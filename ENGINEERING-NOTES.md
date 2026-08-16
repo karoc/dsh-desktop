@@ -190,3 +190,24 @@ Windows 的 NSIS 安装行为、toast 渲染、AUMID、事件投递——Linux s
   桩 bug 混在一起。凡按正则长度推进，用**实际匹配文本长度**（`match()[0].length`）。
 - **沙箱 npm cache 只读（EROFS）**：manager 的 npm() 用默认 cache，本环境跑不了真实
   pnpm 安装——控制面测试用预置 pnpm 桩验证 shim 与路由，真机安装留给用户环境。
+
+## 20. 用户体验修复轮（5 个真机问题）
+
+- **open_devtools 只在 release 炸**：被 `#[cfg(any(debug_assertions, feature="devtools"))]` 门控，
+  `cargo check`（debug）看不出来。**教训：涉及 Tauri API 的改动必须跑 release check**
+  （`cargo check --release`，或对有平台依赖的树用 `--target`）。修复 = tauri feature 加 `devtools`。
+- **启动白屏**：manager 启动时 `await checkDshUpdate()`（npm 网络查询，国内可达数秒）阻塞 dsh 拉起，
+  且 WebView2 首帧无背景色闪白。修复 = **先拉起 dsh、更新检查后台并行** + 窗口配置
+  `backgroundColor: "#0d1117"`。另一个会话在 setup 里同步跑的 COM activator 也疑似阻塞主线程（待其自行处理）。
+- **插件按钮首次点击无反应**：创建 panel 时 `style.display` 初始为 `''`，`'' === 'none'` 为假 →
+  首点被三元表达式设成 `'none'`（隐藏），第二次才显示。修复 = 创建即 `display:block` 并 return。
+- **启用后无下一步提示**：toggle 成功后调 `refresh()`，`textContent=''` 把刚弹出的"重启后生效 +
+  立即重启"**整个清掉**。修复 = `pendingRestart` 状态标志，`refresh()` 从标志重渲染横幅，
+  提示跨重绘存活（install/remove/update 的 op done 也置位）。
+- **"重启 dsh" vs "重启服务" 迷惑**：对普通用户语义不可分。修复 = 托盘只留一个"重启"（全量），
+  快速重启（restart-dsh）降级为控制台里的上下文按钮"立即重启"（插件变更后出现），
+  devtools 按钮仅 devMode 时渲染（/plugins/list 带 devMode 字段）。
+- **预装卡片无描述**：/plugins/list 的 preinstalled 改为 `{name, description}` 对象，
+  卡片显示描述子行，用户才知道这个插件是干嘛的。
+- 全部由 test-plugin-console.mjs（9 场景）与 test-control-plane.mjs（7 场景）守护；测试桩
+  补了 `classList` 与 `.class` 选择器支持。

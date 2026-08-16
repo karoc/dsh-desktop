@@ -653,7 +653,10 @@ async function main() {
   log('dsh-desktop manager started')
   ensureRuntimeDir(args.runtimeDir)
   shellManifest = readShellManifest(args.runtimeDir)
-  await checkDshUpdate({ frozen: shellManifest.devMode === true })
+  // Launch dsh FIRST; the update check runs in the background (it must never
+  // delay the UI — a slow registry lookup used to block dsh startup for
+  // seconds behind a dark/white launcher). It reports via update-status events.
+  void checkDshUpdate({ frozen: shellManifest.devMode === true }).catch(() => {})
   ensurePlugin(args.runtimeDir, args.resourceDir)
   ensurePreinstalled(args.runtimeDir, args.resourceDir)
   shellManifest = readShellManifest(args.runtimeDir)

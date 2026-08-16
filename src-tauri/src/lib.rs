@@ -372,6 +372,26 @@ fn preinstalled_names(runtime: &std::path::Path) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Preinstalled plugins with their package description, for the console UI.
+fn preinstalled_details(runtime: &std::path::Path) -> Vec<serde_json::Value> {
+    preinstalled_names(runtime)
+        .into_iter()
+        .map(|name| {
+            let description = std::fs::read_to_string(
+                runtime.join("node_modules").join(&name).join("package.json"),
+            )
+            .ok()
+            .and_then(|raw| {
+                serde_json::from_str::<serde_json::Value>(&raw)
+                    .ok()
+                    .and_then(|v| v.get("description").and_then(|d| d.as_str()).map(String::from))
+            })
+            .unwrap_or_default();
+            serde_json::json!({ "name": name, "description": description })
+        })
+        .collect()
+}
+
 /// Parse {"name": "..."} from a bridge POST body.
 fn body_name(body: &str) -> String {
     serde_json::from_str::<serde_json::Value>(body)
@@ -596,12 +616,13 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
         ("GET", "/plugins/list") => {
             let runtime = runtime_dir(app);
             let bundles = web_profile_bundles(&runtime);
-            let preinstalled = preinstalled_names(&runtime);
+            let preinstalled = preinstalled_details(&runtime);
             let upd = app.state::<ServerState>().update.lock().unwrap().clone();
             let op = app.state::<ServerState>().op.lock().unwrap().clone();
             let body = serde_json::json!({
                 "bundles": bundles,
                 "preinstalled": preinstalled,
+                "devMode": dev_mode(&runtime),
                 "update": {
                     "current": upd.current,
                     "latest": upd.latest,
@@ -1088,15 +1109,14 @@ pub fn run() {
             // ── tray menu ────────────────────────────────────────────────
             let show = MenuItem::with_id(app, "show", "显示窗口", true, None::<&str>)?;
             let refresh = MenuItem::with_id(app, "refresh", "刷新页面", true, None::<&str>)?;
-            let restart_dsh = MenuItem::with_id(app, "restart-dsh", "重启 dsh（快速）", true, None::<&str>)?;
-            let restart = MenuItem::with_id(app, "restart", "重启服务", true, None::<&str>)?;
+            let restart = MenuItem::with_id(app, "restart", "重启", true, None::<&str>)?;
             let check_update = MenuItem::with_id(app, "check-update", "检查更新…", true, None::<&str>)?;
             let dev = CheckMenuItem::with_id(app, "dev-mode", "开发者模式", true, dev_mode(&runtime_dir(app.handle())), None::<&str>)?;
             let data = MenuItem::with_id(app, "data", "打开数据目录", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
             let menu = Menu::with_items(
                 app,
-                &[&show, &refresh, &restart_dsh, &restart, &check_update, &dev, &data, &quit],
+                &[&show, &refresh, &restart, &check_update, &dev, &data, &quit],
             )?;
             // Keep the check-update item handle: its text flips to "有更新 vX…"
             // when the manager reports an available update. Same for the dev
@@ -1117,12 +1137,6 @@ pub fn run() {
                         if let Some(w) = app.get_webview_window("main") {
                             let _ = w.reload();
                         }
-                    }
-                    "restart-dsh" => {
-                        send_manager(
-                            &mut app.state::<ServerState>().stdin.lock().unwrap(),
-                            "restart-dsh",
-                        );
                     }
                     "restart" => {
                         let _ = restart_server(app.clone(), app.state::<ServerState>());

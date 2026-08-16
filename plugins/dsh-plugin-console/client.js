@@ -5,8 +5,10 @@
 // system). Renders a floating "插件" button (bottom-right) opening a panel
 // that manages the shell:
 //   - preinstalled plugins (D3): enable / disable (writes dsh.profile.bundles)
+//   - user-installed plugins (P5): install / remove / update via bundled pnpm
 //   - dsh update status + one-click update (D2: user decides)
-//   - service actions: refresh page / restart dsh / restart service
+//   - service actions: refresh page / restart
+//   - 4 selectable themes (design tokens), persisted in localStorage
 //
 // Delivery: plain-HTTP bridge to the Tauri shell (tauri#11934 — remote pages
 // have no __TAURI__). The manager bakes the bridge port into this script by
@@ -24,35 +26,38 @@ window.__ModuleLoader__.load({
           install: '安装新插件',
           installHint: 'npm 包名 或 github:user/repo / git+https://…',
           installBtn: '安装',
-          installing: '正在安装…',
-          preinstalled: '预装插件（默认关闭）',
+          installing: '安装中…',
+          preinstalled: '预装插件',
+          preinstalledHint: '随壳自带，默认关闭，启用后重启生效',
           enabled: '已启用',
           notEnabled: '未启用',
           enable: '启用',
           disable: '关闭',
           builtin: '内置',
-          userInstalled: '用户安装',
+          userInstalled: '已安装插件',
+          userInstalledHint: '通过下方输入框安装',
           uninstall: '卸载',
           updateOne: '更新',
           update: 'dsh 更新',
-          check: '检查更新',
-          updateNow: '一键更新',
           upToDate: '已是最新版本',
+          updateNow: '一键更新',
           updating: '正在更新并重启…',
           unknown: '未知',
           actions: '操作',
           refresh: '刷新页面',
-          restartDsh: '重启 dsh',
-          restartAll: '重启服务',
-          restartToApply: '重启 dsh 后生效',
+          restart: '重启',
+          restartHint: '重启 dsh 服务，插件变更生效',
+          devtools: '开发者工具',
+          restartToApply: '重启后生效',
           restartNow: '立即重启',
           failed: '操作失败',
           loading: '加载中…',
-          noPreinstalled: '（无预装插件）',
-          noUserPlugins: '（无用户安装的插件）',
-          opActive: '正在处理',
+          noPreinstalled: '没有预装插件',
+          noUserPlugins: '还没有安装其他插件',
+          opActive: '处理中',
           opDone: '完成',
           opErr: '失败',
+          theme: '主题',
         }
       : {
           title: 'Plugins & updates',
@@ -60,39 +65,120 @@ window.__ModuleLoader__.load({
           installHint: 'npm package, or github:user/repo / git+https://…',
           installBtn: 'Install',
           installing: 'Installing…',
-          preinstalled: 'Preinstalled (off by default)',
-          enabled: 'Enabled',
+          preinstalled: 'Preinstalled',
+          preinstalledHint: 'Shipped with the app, off by default',
+          enabled: 'On',
           notEnabled: 'Off',
           enable: 'Enable',
           disable: 'Disable',
           builtin: 'Built-in',
-          userInstalled: 'User installed',
+          userInstalled: 'Installed plugins',
+          userInstalledHint: 'Add more with the input above',
           uninstall: 'Remove',
           updateOne: 'Update',
           update: 'dsh update',
-          check: 'Check',
-          updateNow: 'Update now',
           upToDate: 'Up to date',
+          updateNow: 'Update now',
           updating: 'Updating & restarting…',
           unknown: 'unknown',
           actions: 'Actions',
           refresh: 'Refresh page',
-          restartDsh: 'Restart dsh',
-          restartAll: 'Restart service',
-          restartToApply: 'Restart dsh to apply',
+          restart: 'Restart',
+          restartHint: 'Restart dsh to apply plugin changes',
+          devtools: 'DevTools',
+          restartToApply: 'Restart to apply',
           restartNow: 'Restart now',
           failed: 'Operation failed',
           loading: 'Loading…',
-          noPreinstalled: '(no preinstalled plugins)',
-          noUserPlugins: '(no user-installed plugins)',
+          noPreinstalled: 'No preinstalled plugins',
+          noUserPlugins: 'No other plugins installed',
           opActive: 'Working…',
           opDone: 'Done',
           opErr: 'Failed',
+          theme: 'Theme',
         }
+
+    // ── themes (design tokens; the panel is restyled by swapping a class) ──
+    const THEMES = {
+      deep: {
+        label: '深空',
+        bg: 'linear-gradient(160deg, rgba(13,17,23,.92), rgba(22,27,34,.88))',
+        surface: 'rgba(255,255,255,.045)',
+        surfaceHover: 'rgba(255,255,255,.08)',
+        border: 'rgba(255,255,255,.10)',
+        text: '#e6edf3',
+        muted: '#9ba7b4',
+        accent: '#3b82f6',
+        accent2: '#8b5cf6',
+        success: '#4ade80',
+        warn: '#fbbf24',
+        err: '#f87171',
+        shadow: '0 16px 48px rgba(0,0,0,.55)',
+      },
+      aurora: {
+        label: '极光',
+        bg: 'linear-gradient(160deg, rgba(17,14,40,.94), rgba(10,26,38,.90))',
+        surface: 'rgba(255,255,255,.05)',
+        surfaceHover: 'rgba(255,255,255,.09)',
+        border: 'rgba(167,139,250,.22)',
+        text: '#ede9fe',
+        muted: '#a5b4fc',
+        accent: '#a78bfa',
+        accent2: '#22d3ee',
+        success: '#34d399',
+        warn: '#fcd34d',
+        err: '#fb7185',
+        shadow: '0 16px 48px rgba(76,29,149,.4)',
+      },
+      moon: {
+        label: '月光',
+        bg: 'linear-gradient(160deg, rgba(248,250,252,.94), rgba(241,245,249,.92))',
+        surface: 'rgba(255,255,255,.7)',
+        surfaceHover: 'rgba(255,255,255,.95)',
+        border: 'rgba(15,23,42,.10)',
+        text: '#1e293b',
+        muted: '#64748b',
+        accent: '#2563eb',
+        accent2: '#7c3aed',
+        success: '#16a34a',
+        warn: '#d97706',
+        err: '#dc2626',
+        shadow: '0 14px 40px rgba(15,23,42,.16)',
+      },
+      amber: {
+        label: '琥珀',
+        bg: 'linear-gradient(160deg, rgba(30,20,10,.94), rgba(40,26,12,.90))',
+        surface: 'rgba(255,255,255,.05)',
+        surfaceHover: 'rgba(255,255,255,.09)',
+        border: 'rgba(251,191,36,.22)',
+        text: '#fef3c7',
+        muted: '#d6b98a',
+        accent: '#f59e0b',
+        accent2: '#ef4444',
+        success: '#4ade80',
+        warn: '#fbbf24',
+        err: '#f87171',
+        shadow: '0 16px 48px rgba(120,53,15,.45)',
+      },
+    }
+
+    const THEME_STORAGE = 'dshc-theme'
+    function loadTheme() {
+      try {
+        const t = globalThis.localStorage?.getItem(THEME_STORAGE)
+        return THEMES[t] ? t : 'deep'
+      } catch { return 'deep' }
+    }
+    function saveTheme(t) {
+      try { globalThis.localStorage?.setItem(THEME_STORAGE, t) } catch { /* no storage */ }
+    }
 
     let panelEl = null
     let bodyEl = null
     let mounted = false
+    // Set when a plugin op / toggle succeeded and dsh must restart to apply;
+    // refresh() re-renders the banner from this flag so it survives re-renders.
+    let pendingRestart = false
 
     function bridge(path, opts) {
       if (!ready()) return Promise.resolve(null)
@@ -107,7 +193,7 @@ window.__ModuleLoader__.load({
         .catch(() => null)
     }
 
-    // ── styling (injected once) ───────────────────────────────────────────
+    // ── styling (injected once; themed via [data-theme] on the panel) ──────
     const STYLE_ID = 'dsh-desktop-console-style'
     function injectStyle() {
       if (document.getElementById(STYLE_ID)) return
@@ -115,65 +201,103 @@ window.__ModuleLoader__.load({
       style.id = STYLE_ID
       style.textContent = `
 .dshc-btn {
-  position: fixed; right: 18px; bottom: 18px; z-index: 2147483000;
-  padding: 8px 14px; border: 1px solid rgba(255,255,255,.14); border-radius: 10px;
-  background: rgba(22,27,34,.92); color: #e6edf3; font: 13px/1 system-ui,"Segoe UI","Microsoft YaHei",sans-serif;
-  cursor: pointer; box-shadow: 0 4px 16px rgba(0,0,0,.4); backdrop-filter: blur(6px);
+  position: fixed; right: 20px; bottom: 20px; z-index: 2147483000;
+  padding: 10px 16px; border: 1px solid rgba(255,255,255,.14); border-radius: 999px;
+  background: rgba(22,27,34,.9); color: #e6edf3; font: 600 13px/1 system-ui,"Segoe UI","Microsoft YaHei",sans-serif;
+  cursor: pointer; box-shadow: 0 8px 24px rgba(0,0,0,.35); backdrop-filter: blur(8px);
+  transition: transform .15s ease, box-shadow .15s ease, background .15s ease;
 }
-.dshc-btn:hover { background: rgba(33,38,45,.95); }
+.dshc-btn:hover { transform: translateY(-1px); box-shadow: 0 12px 32px rgba(0,0,0,.45); background: rgba(33,38,45,.95); }
 .dshc-panel {
-  position: fixed; right: 18px; bottom: 56px; z-index: 2147483000;
-  width: 340px; max-height: 70vh; overflow: auto;
-  background: rgba(22,27,34,.97); border: 1px solid rgba(255,255,255,.12); border-radius: 12px;
-  color: #e6edf3; font: 13px/1.5 system-ui,"Segoe UI","Microsoft YaHei",sans-serif;
-  box-shadow: 0 12px 40px rgba(0,0,0,.55); padding: 14px 16px;
+  position: fixed; right: 20px; bottom: 64px; z-index: 2147483000;
+  width: 356px; max-height: 74vh; overflow: auto;
+  border-radius: 16px; padding: 16px 18px;
+  color: var(--dshc-text); font: 13px/1.55 system-ui,"Segoe UI","Microsoft YaHei",sans-serif;
+  box-shadow: var(--dshc-shadow); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+  background: var(--dshc-bg);
+  border: 1px solid var(--dshc-border);
+  scrollbar-width: thin; scrollbar-color: var(--dshc-border) transparent;
 }
-.dshc-panel h3 { margin: 0 0 8px; font-size: 14px; color: #e6edf3; }
-.dshc-panel h4 { margin: 14px 0 6px; font-size: 12px; color: #8b949e; font-weight: 600; text-transform: none; }
+.dshc-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+.dshc-title { font-size: 14px; font-weight: 700; letter-spacing: .2px; }
+.dshc-themes { display: flex; gap: 6px; align-items: center; }
+.dshc-theme-dot {
+  width: 15px; height: 15px; border-radius: 50%; cursor: pointer; padding: 0;
+  border: 2px solid transparent; transition: transform .12s ease, border-color .12s ease;
+  box-shadow: 0 1px 4px rgba(0,0,0,.3);
+}
+.dshc-theme-dot:hover { transform: scale(1.2); }
+.dshc-theme-dot.active { border-color: var(--dshc-text); }
+.dshc-sec-label {
+  font-size: 11px; font-weight: 700; letter-spacing: .8px; text-transform: uppercase;
+  color: var(--dshc-muted); margin: 14px 0 6px; display: flex; align-items: center; gap: 6px;
+}
+.dshc-sec-label::after { content: ''; flex: 1; height: 1px; background: var(--dshc-border); }
+.dshc-hint { color: var(--dshc-muted); font-size: 11.5px; margin-top: 4px; }
 .dshc-row {
-  display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  padding: 7px 0; border-top: 1px solid rgba(255,255,255,.06);
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 9px 11px; margin: 4px 0; border-radius: 11px;
+  background: var(--dshc-surface); border: 1px solid var(--dshc-border);
+  transition: background .15s ease, transform .15s ease;
 }
-.dshc-row:first-of-type { border-top: none; }
-.dshc-name { font-weight: 600; color: #e6edf3; word-break: break-all; }
+.dshc-row:hover { background: var(--dshc-surfaceHover); }
+.dshc-name { font-weight: 600; word-break: break-all; font-size: 12.5px; }
+.dshc-sub { color: var(--dshc-muted); font-size: 11px; margin-top: 1px; }
 .dshc-badge {
-  font-size: 11px; padding: 1px 7px; border-radius: 99px;
-  background: rgba(31,111,235,.25); color: #79b8ff; margin-left: 6px; white-space: nowrap;
+  font-size: 10.5px; font-weight: 700; padding: 1px 8px; border-radius: 999px; margin-left: 6px;
+  background: color-mix(in srgb, var(--dshc-muted) 22%, transparent); color: var(--dshc-muted);
+  white-space: nowrap; vertical-align: 1px;
 }
-.dshc-badge.on { background: rgba(63,185,80,.2); color: #56d364; }
-.dshc-badge.core { background: rgba(139,148,158,.2); color: #8b949e; }
-.dshc-desc { color: #8b949e; font-size: 12px; margin-top: 2px; }
+.dshc-badge.on { background: color-mix(in srgb, var(--dshc-success) 20%, transparent); color: var(--dshc-success); }
+.dshc-badge.core { background: color-mix(in srgb, var(--dshc-muted) 16%, transparent); color: var(--dshc-muted); }
+.dshc-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
 .dshc-btn2 {
-  border: 1px solid rgba(255,255,255,.18); background: transparent; color: #e6edf3;
-  border-radius: 6px; padding: 3px 10px; font-size: 12px; cursor: pointer; white-space: nowrap;
+  border: 1px solid var(--dshc-border); background: var(--dshc-surface); color: var(--dshc-text);
+  border-radius: 8px; padding: 5px 12px; font: 600 12px/1.4 system-ui,"Segoe UI","Microsoft YaHei",sans-serif;
+  cursor: pointer; transition: background .15s ease, transform .12s ease, border-color .15s ease;
 }
-.dshc-btn2:hover { background: rgba(255,255,255,.08); }
-.dshc-btn2.primary { border-color: #1f6feb; background: rgba(31,111,235,.35); color: #c9e1ff; }
+.dshc-btn2:hover { background: var(--dshc-surfaceHover); border-color: var(--dshc-accent); }
+.dshc-btn2:active { transform: scale(.97); }
+.dshc-btn2.primary {
+  border-color: transparent;
+  background: linear-gradient(135deg, var(--dshc-accent), var(--dshc-accent2));
+  color: #fff;
+}
+.dshc-btn2.primary:hover { filter: brightness(1.08); }
 .dshc-btn2:disabled { opacity: .45; cursor: default; }
-.dshc-status {
-  margin-top: 10px; padding: 7px 10px; border-radius: 8px; font-size: 12px; display: none;
+.dshc-status, .dshc-op {
+  margin-top: 10px; padding: 8px 12px; border-radius: 10px; font-size: 12px;
+  display: none; animation: dshc-in .2s ease;
 }
-.dshc-status.show { display: block; }
-.dshc-status.ok { background: rgba(63,185,80,.14); color: #56d364; }
-.dshc-status.warn { background: rgba(210,153,34,.16); color: #d29922; }
-.dshc-status.err { background: rgba(248,81,73,.14); color: #f85149; }
-.dshc-hint { color: #8b949e; font-size: 12px; margin-top: 8px; }
-.dshc-install { display: flex; gap: 6px; margin: 8px 0 2px; }
+.dshc-status.show, .dshc-op.show { display: block; }
+.dshc-status.ok { background: color-mix(in srgb, var(--dshc-success) 16%, transparent); color: var(--dshc-success); }
+.dshc-status.warn { background: color-mix(in srgb, var(--dshc-warn) 16%, transparent); color: var(--dshc-warn); }
+.dshc-status.err { background: color-mix(in srgb, var(--dshc-err) 16%, transparent); color: var(--dshc-err); }
+.dshc-op { background: color-mix(in srgb, var(--dshc-warn) 16%, transparent); color: var(--dshc-warn); }
+.dshc-op.err { background: color-mix(in srgb, var(--dshc-err) 16%, transparent); color: var(--dshc-err); }
+.dshc-install { display: flex; gap: 6px; margin-top: 4px; }
 .dshc-install input {
-  flex: 1; min-width: 0; padding: 6px 9px; border-radius: 7px;
-  border: 1px solid rgba(255,255,255,.18); background: rgba(255,255,255,.05);
-  color: #e6edf3; font: 12px/1.4 system-ui,"Segoe UI","Microsoft YaHei",sans-serif;
+  flex: 1; min-width: 0; padding: 7px 11px; border-radius: 9px;
+  border: 1px solid var(--dshc-border); background: var(--dshc-surface);
+  color: var(--dshc-text); font: 12.5px/1.4 system-ui,"Segoe UI","Microsoft YaHei",sans-serif;
+  outline: none; transition: border-color .15s ease;
 }
-.dshc-install input:focus { outline: none; border-color: #1f6feb; }
-.dshc-install input::placeholder { color: #6e7681; }
-.dshc-op {
-  margin-top: 8px; padding: 7px 10px; border-radius: 8px; font-size: 12px;
-  background: rgba(210,153,34,.14); color: #d29922; display: none;
-}
-.dshc-op.show { display: block; }
-.dshc-op.err { background: rgba(248,81,73,.14); color: #f85149; }
+.dshc-install input:focus { border-color: var(--dshc-accent); }
+.dshc-install input::placeholder { color: color-mix(in srgb, var(--dshc-muted) 75%, transparent); }
+.dshc-footer { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--dshc-border); font-size: 11px; color: var(--dshc-muted); }
+@keyframes dshc-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
 `
       ;(document.head || document.documentElement).appendChild(style)
+    }
+
+    function applyTheme() {
+      const t = loadTheme()
+      const theme = THEMES[t] || THEMES.deep
+      if (panelEl) {
+        panelEl.style.cssText = `position: fixed; right: 20px; bottom: 64px; z-index: 2147483000; width: 356px; max-height: 74vh; overflow: auto; border-radius: 16px; padding: 16px 18px; color: var(--dshc-text); font: 13px/1.55 system-ui,"Segoe UI","Microsoft YaHei",sans-serif; box-shadow: var(--dshc-shadow); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); background: var(--dshc-bg); border: 1px solid var(--dshc-border); scrollbar-width: thin; scrollbar-color: var(--dshc-border) transparent; --dshc-bg: ${theme.bg}; --dshc-surface: ${theme.surface}; --dshc-surfaceHover: ${theme.surfaceHover}; --dshc-border: ${theme.border}; --dshc-text: ${theme.text}; --dshc-muted: ${theme.muted}; --dshc-accent: ${theme.accent}; --dshc-accent2: ${theme.accent2}; --dshc-success: ${theme.success}; --dshc-warn: ${theme.warn}; --dshc-err: ${theme.err}; --dshc-shadow: ${theme.shadow};`
+        const dots = panelEl.querySelectorAll('.dshc-theme-dot')
+        dots.forEach((d) => d.classList.toggle('active', d.dataset.theme === t))
+      }
     }
 
     // ── rendering ─────────────────────────────────────────────────────────
@@ -190,7 +314,22 @@ window.__ModuleLoader__.load({
       if (kind === 'err') setTimeout(() => el.classList.remove('show'), 6000)
     }
 
-    function row(label, badge, badgeCls, rightHtml) {
+    function el(tag, text, cls) {
+      const e = document.createElement(tag)
+      e.textContent = text
+      if (cls) e.className = cls
+      return e
+    }
+
+    function section(label, hint) {
+      const h = document.createElement('div')
+      h.className = 'dshc-sec-label'
+      h.textContent = label
+      bodyEl.appendChild(h)
+      if (hint) bodyEl.appendChild(el('div', hint, 'dshc-hint'))
+    }
+
+    function row(label, badge, badgeCls, rightHtml, sub) {
       const div = document.createElement('div')
       div.className = 'dshc-row'
       const left = document.createElement('div')
@@ -204,6 +343,7 @@ window.__ModuleLoader__.load({
         b.textContent = badge
         left.appendChild(b)
       }
+      if (sub) left.appendChild(el('div', sub, 'dshc-sub'))
       const right = document.createElement('div')
       right.innerHTML = rightHtml
       div.appendChild(left)
@@ -211,28 +351,72 @@ window.__ModuleLoader__.load({
       return div
     }
 
-    function section(title) {
-      const h = document.createElement('h4')
-      h.textContent = title
-      bodyEl.appendChild(h)
+    function showRestartNow() {
+      let b = bodyEl.querySelector('#dshc-restart-now')
+      if (b) return
+      b = document.createElement('button')
+      b.id = 'dshc-restart-now'
+      b.className = 'dshc-btn2 primary'
+      b.textContent = L.restartNow
+      b.style.cssText = 'margin-top:8px; display:block; width:100%;'
+      b.addEventListener('click', () => bridge('/restart-dsh', { method: 'POST' }))
+      bodyEl.appendChild(b)
     }
 
     async function refresh() {
       if (!bodyEl) return
       const data = await bridge('/plugins/list')
       bodyEl.textContent = ''
-      bodyEl.appendChild(el('h3', L.title))
+      applyTheme()
+
+      const head = document.createElement('div')
+      head.className = 'dshc-head'
+      head.appendChild(el('div', L.title, 'dshc-title'))
+      const themes = document.createElement('div')
+      themes.className = 'dshc-themes'
+      const cur = loadTheme()
+      for (const key of Object.keys(THEMES)) {
+        const dot = document.createElement('button')
+        dot.className = `dshc-theme-dot${key === cur ? ' active' : ''}`
+        dot.dataset.theme = key
+        dot.title = THEMES[key].label
+        dot.style.background = THEMES[key].accent2
+        dot.style.boxShadow = `0 0 0 1px ${THEMES[key].border}, 0 1px 4px rgba(0,0,0,.3)`
+        dot.addEventListener('click', () => {
+          saveTheme(key)
+          applyTheme()
+        })
+        themes.appendChild(dot)
+      }
+      head.appendChild(themes)
+      bodyEl.appendChild(head)
+
       if (!data) {
         bodyEl.appendChild(el('div', `${L.loading}（桥不可用）`))
         return
       }
       const bundles = data.bundles || []
-      const pre = data.preinstalled || []
+      const pre = (data.preinstalled || []).map((p) => (typeof p === 'string' ? { name: p, description: '' } : p))
+      const preNames = pre.map((p) => p.name)
       const op = data.op || {}
       const TEMPLATE = ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app']
-      const userPlugins = bundles.filter((b) => !pre.includes(b) && !TEMPLATE.includes(b))
+      const userPlugins = bundles.filter((b) => !preNames.includes(b) && !TEMPLATE.includes(b))
 
-      // ── install new plugin ──
+      // ── pending restart banner (survives re-renders) ──
+      if (pendingRestart) {
+        bodyEl.appendChild(el('div', `✓ ${L.opDone} — ${L.restartToApply}`, 'dshc-op show'))
+        showRestartNow()
+      } else if (op && op.op && !op.done) {
+        bodyEl.appendChild(el('div', `${L.opActive}：${op.op} ${op.spec || ''}…`, 'dshc-op show'))
+      } else if (op && op.done && op.ok) {
+        pendingRestart = true
+        bodyEl.appendChild(el('div', `✓ ${L.opDone} — ${L.restartToApply}`, 'dshc-op show'))
+        showRestartNow()
+      } else if (op && op.done && !op.ok) {
+        bodyEl.appendChild(el('div', `✗ ${L.opErr}：${op.spec || ''} ${op.error || ''}`, 'dshc-op show err'))
+      }
+
+      // ── install ──
       section(L.install)
       const inputWrap = document.createElement('div')
       inputWrap.className = 'dshc-install'
@@ -247,36 +431,20 @@ window.__ModuleLoader__.load({
       inputWrap.appendChild(input)
       inputWrap.appendChild(installBtn)
       bodyEl.appendChild(inputWrap)
-      bodyEl.appendChild(el('div', L.installHint, 'dshc-hint'))
-
-      // ── active operation status ──
-      if (op && op.op && !op.done) {
-        const opEl = el('div', `${L.opActive}：${op.op} ${op.spec || ''}`, 'dshc-op show')
-        bodyEl.appendChild(opEl)
-      } else if (op && op.done && op.ok) {
-        const opEl = el('div', `${L.opDone}：${op.spec || ''} — ${L.restartToApply}`, 'dshc-op show')
-        bodyEl.appendChild(opEl)
-        showRestartNow()
-      } else if (op && op.done && !op.ok) {
-        const opEl = el('div', `${L.opErr}：${op.spec || ''} ${op.error || ''}`, 'dshc-op show err')
-        bodyEl.appendChild(opEl)
-      }
 
       // ── preinstalled ──
-      section(L.preinstalled)
+      section(L.preinstalled, L.preinstalledHint)
       if (pre.length === 0) {
         bodyEl.appendChild(el('div', L.noPreinstalled, 'dshc-hint'))
       }
-      for (const name of pre) {
-        const on = bundles.includes(name)
-        const badge = on ? L.enabled : L.notEnabled
-        const badgeCls = on ? 'on' : ''
-        const btn = `<button class="dshc-btn2 ${on ? '' : 'primary'}" data-toggle="${name}">${on ? L.disable : L.enable}</button>`
-        bodyEl.appendChild(row(name, badge, badgeCls, btn))
+      for (const p of pre) {
+        const on = bundles.includes(p.name)
+        const btn = `<button class="dshc-btn2 ${on ? '' : 'primary'}" data-toggle="${p.name}">${on ? L.disable : L.enable}</button>`
+        bodyEl.appendChild(row(p.name, on ? L.enabled : L.notEnabled, on ? 'on' : '', btn, p.description || ''))
       }
 
       // ── user installed ──
-      section(L.userInstalled)
+      section(L.userInstalled, L.userInstalledHint)
       if (userPlugins.length === 0) {
         bodyEl.appendChild(el('div', L.noUserPlugins, 'dshc-hint'))
       }
@@ -296,43 +464,46 @@ window.__ModuleLoader__.load({
       } else {
         bodyEl.appendChild(el('div', `${L.update}: ${current}（${L.upToDate}）`, 'dshc-hint'))
       }
+
       // ── actions ──
-      section(L.actions)
+      section(L.actions, L.restartHint)
       const actions = [
         ['dshc-refresh', L.refresh],
-        ['dshc-restart-dsh', L.restartDsh],
-        ['dshc-restart-all', L.restartAll],
-        ['dshc-devtools', 'DevTools (F12)'],
+        ['dshc-restart', L.restart],
       ]
-        .map(([id, label]) => `<button class="dshc-btn2" id="${id}">${label}</button>`)
-        .join(' ')
+      if (data.devMode) actions.push(['dshc-devtools', L.devtools])
       const actionsEl = document.createElement('div')
       actionsEl.className = 'dshc-actions'
-      actionsEl.innerHTML = actions // innerHTML, not textContent — the buttons must parse
+      actionsEl.innerHTML = actions
+        .map(([id, label]) => `<button class="dshc-btn2" id="${id}">${label}</button>`)
+        .join(' ')
       bodyEl.appendChild(actionsEl)
+      bodyEl.appendChild(el('div', 'DSH Desktop', 'dshc-footer'))
       bindEvents()
     }
 
-    function el(tag, text, cls) {
-      const e = document.createElement(tag)
-      e.textContent = text
-      if (cls) e.className = cls
-      return e
-    }
-
     function bindEvents() {
+      bodyEl.querySelectorAll('.dshc-theme-dot').forEach((dot) => {
+        // re-bind after re-render (applyTheme toggles classes only)
+        if (dot._bound) return
+        dot._bound = true
+        dot.addEventListener('click', () => {
+          saveTheme(dot.dataset.theme)
+          applyTheme()
+        })
+      })
       bodyEl.querySelectorAll('[data-toggle]').forEach((btn) => {
         btn.addEventListener('click', async () => {
           const name = btn.dataset.toggle
           const on = (await bridge('/plugins/list'))?.bundles?.includes(name)
           const res = await bridge(on ? '/plugins/disable' : '/plugins/enable', { method: 'POST', body: { name } })
           if (res && res.ok) {
-            status(`${L.restartToApply}（${name}）`, 'warn')
-            showRestartNow()
+            pendingRestart = true
+            status(`${L.opDone} — ${L.restartToApply}`, 'ok')
+            refresh()
           } else {
             status(`${L.failed}：${(res && res.error) || 'bridge'}`, 'err')
           }
-          refresh()
         })
       })
       bodyEl.querySelectorAll('[data-remove]').forEach((btn) => {
@@ -376,24 +547,10 @@ window.__ModuleLoader__.load({
       }
       const refreshBtn = bodyEl.querySelector('#dshc-refresh')
       if (refreshBtn) refreshBtn.addEventListener('click', () => bridge('/refresh', { method: 'POST' }))
-      const rdBtn = bodyEl.querySelector('#dshc-restart-dsh')
-      if (rdBtn) rdBtn.addEventListener('click', () => bridge('/restart-dsh', { method: 'POST' }))
-      const raBtn = bodyEl.querySelector('#dshc-restart-all')
-      if (raBtn) raBtn.addEventListener('click', () => bridge('/restart', { method: 'POST' }))
+      const restartBtn = bodyEl.querySelector('#dshc-restart')
+      if (restartBtn) restartBtn.addEventListener('click', () => bridge('/restart', { method: 'POST' }))
       const dtBtn = bodyEl.querySelector('#dshc-devtools')
       if (dtBtn) dtBtn.addEventListener('click', () => bridge('/devtools', { method: 'POST' }))
-    }
-
-    function showRestartNow() {
-      let el2 = bodyEl.querySelector('#dshc-restart-now')
-      if (el2) return
-      el2 = document.createElement('button')
-      el2.id = 'dshc-restart-now'
-      el2.className = 'dshc-btn2 primary'
-      el2.textContent = L.restartNow
-      el2.style.cssText = 'margin-top:8px; display:block;'
-      el2.addEventListener('click', () => bridge('/restart-dsh', { method: 'POST' }))
-      bodyEl.appendChild(el2)
     }
 
     function mount() {
@@ -411,10 +568,13 @@ window.__ModuleLoader__.load({
           bodyEl = document.createElement('div')
           panelEl.appendChild(bodyEl)
           document.body.appendChild(panelEl)
+          applyTheme()
           refresh()
+          return // first click opens (display is visible from applyTheme)
         }
-        panelEl.style.display = panelEl.style.display === 'none' ? 'block' : 'none'
-        if (panelEl.style.display === 'block') refresh()
+        const visible = panelEl.style.display !== 'none'
+        panelEl.style.display = visible ? 'none' : 'block'
+        if (!visible) refresh()
       })
       document.body.appendChild(btn)
       // Keep the panel fresh while open (cheap loopback polls).

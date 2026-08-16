@@ -19,7 +19,8 @@
         "minHeight": 600,
         "resizable": true,
         "center": true,
-        "url": "index.html"
+        "url": "index.html",
+        "backgroundColor": "#0d1117"
       }
     ],
     "security": {
