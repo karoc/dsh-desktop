@@ -132,6 +132,10 @@ static PENDING_OPEN: Mutex<Option<String>> = Mutex::new(None);
 /// signal of "user clicked the toast and came back".
 static FOCUS_OPEN: Mutex<Option<String>> = Mutex::new(None);
 
+/// Whether the "dsh 有更新" toast has already been shown this process launch
+/// (the manager reports update-status at boot and on demand — remind once).
+static UPDATE_TOAST_SHOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Windows: register a PROCESS-LEVEL toast activator. The WinRT `Activated`
 /// event used by notify-rust only fires while the toast is visible on screen;
 /// once it lands in the Action Center the system routes clicks to the app's
@@ -1034,6 +1038,23 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
                                 "检查更新…".to_string()
                             };
                             let _ = item.set_text(text);
+                        }
+                        // Once per launch, remind the user an update is waiting
+                        // (the launcher page is only visible for seconds, so a
+                        // native toast is the real "red dot"; the tray item is
+                        // the persistent entry point).
+                        if available
+                            && !UPDATE_TOAST_SHOWN.swap(true, std::sync::atomic::Ordering::SeqCst)
+                        {
+                            show_toast(
+                                &handle,
+                                "dsh 有更新".into(),
+                                format!(
+                                    "{} → {}，点托盘「有更新」可一键更新",
+                                    current.as_deref().unwrap_or("?"),
+                                    latest.as_deref().unwrap_or("?"),
+                                ),
+                            );
                         }
                     }
                     Some("op-status") => {

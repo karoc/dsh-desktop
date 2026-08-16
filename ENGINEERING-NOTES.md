@@ -238,3 +238,13 @@ Windows 的 NSIS 安装行为、toast 渲染、AUMID、事件投递——Linux s
   挪到 `std::thread::spawn` 或窗口显示后，避免阻塞 setup。
 - 我方已修：manager `killTree` 的 taskkill spawn 补 `windowsHide: true`（重启/退出时
   不再闪 cmd 窗——这也是我方代码里的同类问题）。
+
+## 23. 按钮换行 + 启动页按钮位置（用户体验微调）
+
+- **按钮被挤成三行**：行内右侧按钮容器是普通 div（按钮 inline 排列），"更新到0.1.3"在窄容器里
+  按字符换行。修复 = `.dshc-btn2 { white-space: nowrap }` + 行右侧容器
+  `display:flex; flex-wrap:wrap; gap:6px; justify-content:flex-end`（整钮换行而非字符换行）。
+- **启动页按钮没用**：启动页只显示几秒，放"一键更新"按钮是无效交互。移除启动页横幅，
+  更新提醒改为三处：托盘常驻「有更新 vX（点击更新）」+ 控制台更新区 + **启动时原生 toast
+  弹一次**（`UPDATE_TOAST_SHOWN` 每进程一次，提醒用户点托盘更新）。启动页滚动日志里
+  manager 的 "update available" 行仍在（信息不丢，只是不再有按钮）。
