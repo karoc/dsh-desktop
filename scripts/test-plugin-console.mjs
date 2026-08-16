@@ -276,6 +276,18 @@ const updPreCall = calls.find((c) => c[0] === '/plugins/update-preinstalled')
 assert.ok(updPreCall, 'update-preinstalled posts /plugins/update-preinstalled')
 assert.deepEqual(updPreCall[2], { name: 'dsh-model-reasoning' })
 
+// ── scenario 8e: typed install input survives a re-render (5s poll bug) ─────
+btn.click(); btn.click()
+await new Promise((r) => setTimeout(r, 10))
+const inA = panel.querySelector('#dshc-spec')
+inA.value = 'keep-me-plugin'
+btn.click() // close
+btn.click() // reopen -> refresh re-renders the panel
+await new Promise((r) => setTimeout(r, 10))
+const inB = panel.querySelector('#dshc-spec')
+assert.ok(inB, 'input re-rendered')
+assert.equal(inB.value, 'keep-me-plugin', 'typed install input must survive the re-render')
+
 // ── scenario 8c: user-updated preinstalled shows reset-to-default ───────────
 listPayload = {
   ...listPayload,
@@ -317,5 +329,5 @@ window.__handoff.factory().apply({})
 body2.children.find((c) => c.className === 'dshc-btn')?.click()
 assert.equal(calls.length, 0, 'unbaked bridge port must not fire fetches')
 
-console.log('PASS — plugin console behavioral test (12 scenarios)')
+console.log('PASS — plugin console behavioral test (13 scenarios)')
 process.exit(0)
