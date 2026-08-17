@@ -74,6 +74,29 @@ const npmViaCli = existsSync(npmCli)
 // npmmirror) so the cold 500-package install doesn't look like a hang.
 const REGISTRY = args.registry ?? process.env.DSH_DESKTOP_REGISTRY ?? 'https://registry.npmjs.org/'
 
+// 把 npm 的 "npm http fetch GET 200 <url>" 行精简成可读的包名，供滚动字幕显示。
+// 不同 registry 的 URL 结构不同：npmmirror 用 /packages/<name>/<ver>/…，
+// npmjs 用 /registry…/<name>/-/…。提取失败就返回 null（调用方原样处理）。
+function npmLineToDisplay(raw) {
+  const m = raw.match(/npm http fetch GET \d+ (\S+)/)
+  if (!m) return null
+  const url = m[1]
+  let name = null
+  const pkgs = url.match(/\/packages\/((?:@[^/]+\/)?[^/]+)\//) // npmmirror
+  if (pkgs) name = pkgs[1]
+  if (!name) {
+    const reg = url.match(/\/registry\.[^/]+\/((?:@[^/]+\/)?[^/]+)\/-\//) // npmjs
+    if (reg) name = reg[1]
+  }
+  if (!name) {
+    const tgz = url.match(/\/([^/]+)-v?\d[^/]*\.tgz$/) // 最后手段：tgz 文件名去版本
+    if (tgz) name = tgz[1]
+  }
+  if (!name) return null
+  try { name = decodeURIComponent(name) } catch { /* keep as-is */ }
+  return `⬇ 下载 ${name}`
+}
+
 function npm(argsList, { timeoutMs = 600_000, stream = false, quiet = true } = {}) {
   return new Promise((resolvePromise, rejectPromise) => {
     const cmd = npmViaCli ? process.execPath : 'npm'
@@ -89,6 +112,14 @@ function npm(argsList, { timeoutMs = 600_000, stream = false, quiet = true } = {
     let stdout = ''
     let stderr = ''
     let settled = false
+    // 节流：下载行太多会刷屏导致滚动字幕看不清（像清空）。快速下载时
+    // 每 PACK_LOG_MS 至多滚一条；窗口内缓冲最新一条，结束时 flush。
+    const PACK_LOG_MS = 300
+    let lastPackAt = 0
+    let pendingPack = null
+    const flushPending = () => {
+      if (pendingPack) { log(pendingPack); pendingPack = null }
+    }
     const timer = setTimeout(() => {
       if (settled) return
       settled = true
@@ -105,7 +136,22 @@ function npm(argsList, { timeoutMs = 600_000, stream = false, quiet = true } = {
       if (stream) {
         for (const line of text.split(/\r?\n/)) {
           const t = line.replace(/^\s+|\s+$/g, '')
-          if (t && !/^npm (warn )/i.test(t)) log(t.slice(0, 500))
+          if (!t || /^npm (warn )/i.test(t)) continue
+          const display = npmLineToDisplay(t)
+          if (display) {
+            const now = Date.now()
+            if (now - lastPackAt >= PACK_LOG_MS) {
+              flushPending()
+              log(display)
+              lastPackAt = now
+            } else {
+              pendingPack = display
+            }
+          } else {
+            // 非下载行（summary、错误等）即时输出，不节流。
+            flushPending()
+            log(t.slice(0, 500))
+          }
         }
       }
     }
@@ -115,12 +161,14 @@ function npm(argsList, { timeoutMs = 600_000, stream = false, quiet = true } = {
       if (settled) return
       settled = true
       clearTimeout(timer)
+      flushPending()
       rejectPromise(e)
     })
     child.on('exit', (code) => {
       if (settled) return
       settled = true
       clearTimeout(timer)
+      flushPending()
       if (code === 0) resolvePromise(stdout)
       else {
         const e = new Error(`npm 退出码 ${code}: ${stderr.trim().split('\n').pop() ?? ''}`)
