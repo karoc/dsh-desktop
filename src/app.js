@@ -15,11 +15,12 @@ function setState(text, failed = false) {
   openDataBtn.hidden = !failed;
 }
 
-// ── 片尾字幕滚动（丝滑）：内容块从视口顶部开始，rAF 每帧上移；
-// 行滚出视口顶 → 移除并补偿 offset（视觉连续）；新行追加到底部，随
-// 滚动从视口底部自然滚入。绝不会"只看到一行就空"——日志持续就持续滚。
-const LINE_H = 26;
-const TRIM_AFTER = 50; // 缓冲上限（行数），超出裁剪顶部（补偿 offset）
+// ── 片尾字幕滚动（丝滑，无补偿逻辑）──
+// 内容块从视口顶部开始（.credits top:0），rAF 每帧 translateY 上移；
+// 行滚出视口顶自然被裁剪（不移除、不补偿——避免 offset 漂移）。
+// 内容全部滚出视口或超过 MAX_ROWS 时「换幕」：清空回到顶部重滚。
+// 追加快时内容在视口下方积累、持续滚入，绝不会"只看到一行就空"。
+const MAX_ROWS = 100;
 const SCROLL_SPEED = 28; // px/s
 const creditsViewport = document.querySelector('.credits-viewport');
 let offset = 0;
@@ -37,10 +38,11 @@ function tick(ts) {
   const dt = Math.min((ts - lastTs) / 1000, 0.1);
   lastTs = ts;
   offset -= SCROLL_SPEED * dt;
-  // 已完全滚出视口顶的行：移除并补偿，保持剩余内容位置连续
-  while (creditsEl.firstElementChild && offset <= -LINE_H) {
-    creditsEl.removeChild(creditsEl.firstElementChild);
-    offset += LINE_H;
+  const contentH = creditsEl.scrollHeight;
+  const viewH = creditsViewport.clientHeight;
+  if (contentH > 0 && offset <= -(contentH + viewH)) {
+    creditsEl.textContent = ''; // 全部滚出 → 换幕：清空回到顶部
+    offset = 0;
   }
   creditsEl.style.transform = `translateY(${offset}px)`;
   rafId = requestAnimationFrame(tick);
@@ -52,13 +54,12 @@ function appendLog(line) {
   el.textContent = line;
   el.title = line; // 长内容 ellipsis 截断，悬停看全文
   creditsEl.appendChild(el);
-  // 缓冲上限：超出裁剪顶部行，并补偿 offset（顶部行此时已在视口上方或即将滚出）
-  while (creditsEl.children.length > TRIM_AFTER) {
-    const first = creditsEl.firstElementChild;
-    if (!first) break;
-    const h = first.offsetHeight || LINE_H;
-    creditsEl.removeChild(first);
-    offset += h;
+  if (creditsEl.children.length > MAX_ROWS) {
+    // 缓冲上限：清掉最旧的一半，回到顶部重滚（保持滚动体验）
+    while (creditsEl.children.length > MAX_ROWS / 2) {
+      creditsEl.removeChild(creditsEl.firstElementChild);
+    }
+    offset = 0;
   }
   ensureScrolling();
 }
