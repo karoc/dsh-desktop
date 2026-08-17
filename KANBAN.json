@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "cards": [
+    {
+      "id": "card-95c5f5d1-9575-41da-9e2f-ab5946382e68",
+      "title": "DSH Desktop 测试",
+      "summary": "11233",
+      "rationale": "123123",
+      "rejected": "123131",
+      "status": "todo",
+      "tags": [],
+      "createdAt": 1786926194918,
+      "updatedAt": 1786926194918
+    }
+  ]
+}
