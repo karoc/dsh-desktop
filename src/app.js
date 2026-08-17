@@ -5,6 +5,7 @@ const creditsEl = document.getElementById('credits');
 const retryBtn = document.getElementById('retry');
 const openDataBtn = document.getElementById('opendata');
 const spinner = document.getElementById('spinner');
+const installProgress = document.getElementById('installProgress');
 
 function setState(text, failed = false) {
   stateEl.textContent = text;
@@ -60,6 +61,24 @@ if (tauri && tauri.event) {
   tauri.event.listen('server-down', () => {
     setState('dsh 服务已退出。', true);
     appendLog('server exited — 完整日志见数据目录里的 manager.log');
+  });
+
+  // 安装/更新 dsh 的进度反馈：阶段事件 + 秒数心跳，避免用户误判为卡死。
+  tauri.event.listen('install-status', (ev) => {
+    const p = ev.payload || {};
+    if (p.phase === 'start') {
+      installProgress.hidden = false;
+      setState(`正在安装 dsh ${p.version || ''}…`);
+    } else if (p.phase === 'running') {
+      installProgress.hidden = false;
+      setState(`正在安装 dsh… 已进行 ${p.seconds || 0} 秒`);
+    } else if (p.phase === 'done') {
+      installProgress.hidden = true;
+      setState('安装完成，正在启动服务…');
+    } else if (p.phase === 'error') {
+      installProgress.hidden = true;
+      setState(`安装失败：${p.error || '未知错误'}`, true);
+    }
   });
 } else {
   setState('Tauri IPC 不可用，无法启动服务。', true);

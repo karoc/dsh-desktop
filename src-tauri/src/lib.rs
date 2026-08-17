@@ -1056,6 +1056,17 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
                             let _ = handle.emit("server-log", line);
                         }
                     }
+                    Some("install-status") => {
+                        // Forward install/update progress to the launcher page
+                        // (phase: start|running|done|error, seconds heartbeat).
+                        let payload = serde_json::json!({
+                            "phase": ev.get("phase").and_then(|v| v.as_str()).unwrap_or(""),
+                            "version": ev.get("version").and_then(|v| v.as_str()).unwrap_or(""),
+                            "seconds": ev.get("seconds").and_then(|v| v.as_u64()).unwrap_or(0),
+                            "error": ev.get("error").and_then(|v| v.as_str()).unwrap_or(""),
+                        });
+                        let _ = handle.emit("install-status", payload);
+                    }
                     Some("update-status") => {
                         let current = ev.get("current").and_then(|v| v.as_str()).map(String::from);
                         let latest = ev.get("latest").and_then(|v| v.as_str()).map(String::from);
