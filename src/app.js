@@ -15,20 +15,19 @@ function setState(text, failed = false) {
   openDataBtn.hidden = !failed;
 }
 
-// ── 片尾字幕滚动：transform 连续平移（丝滑），非逐行追加推挤 ──
-// 内容块顶部贴视口底部（.credits top:100%），rAF 每帧向上平移，
-// 第一行从视口底部滚入；新行追加到尾部自然滚入。
-// 内容全部滚出视口顶 → 清空重来（新一轮日志继续滚动）。
-const TRIM_AFTER = 30;
+// ── 片尾字幕滚动（丝滑）：内容块从视口顶部开始，rAF 每帧上移；
+// 行滚出视口顶 → 移除并补偿 offset（视觉连续）；新行追加到底部，随
+// 滚动从视口底部自然滚入。绝不会"只看到一行就空"——日志持续就持续滚。
+const LINE_H = 26;
+const TRIM_AFTER = 50; // 缓冲上限（行数），超出裁剪顶部（补偿 offset）
 const SCROLL_SPEED = 28; // px/s
 const creditsViewport = document.querySelector('.credits-viewport');
-let scrollY = 0;
+let offset = 0;
 let lastTs = 0;
 let rafId = null;
 
 function ensureScrolling() {
   if (rafId !== null) return;
-  scrollY = 0; // 内容顶部贴视口底部，第一行立即可见，直接向上滚入
   lastTs = 0;
   rafId = requestAnimationFrame(tick);
 }
@@ -37,13 +36,13 @@ function tick(ts) {
   if (!lastTs) lastTs = ts;
   const dt = Math.min((ts - lastTs) / 1000, 0.1);
   lastTs = ts;
-  scrollY -= SCROLL_SPEED * dt;
-  const contentH = creditsEl.scrollHeight;
-  if (contentH > 0 && scrollY < -contentH) {
-    creditsEl.textContent = ''; // 全部滚出 → 清空，下一轮日志重新滚
-    scrollY = 0;
+  offset -= SCROLL_SPEED * dt;
+  // 已完全滚出视口顶的行：移除并补偿，保持剩余内容位置连续
+  while (creditsEl.firstElementChild && offset <= -LINE_H) {
+    creditsEl.removeChild(creditsEl.firstElementChild);
+    offset += LINE_H;
   }
-  creditsEl.style.transform = `translateY(${scrollY}px)`;
+  creditsEl.style.transform = `translateY(${offset}px)`;
   rafId = requestAnimationFrame(tick);
 }
 
@@ -53,11 +52,13 @@ function appendLog(line) {
   el.textContent = line;
   el.title = line; // 长内容 ellipsis 截断，悬停看全文
   creditsEl.appendChild(el);
+  // 缓冲上限：超出裁剪顶部行，并补偿 offset（顶部行此时已在视口上方或即将滚出）
   while (creditsEl.children.length > TRIM_AFTER) {
     const first = creditsEl.firstElementChild;
-    const h = first.offsetHeight || 26;
+    if (!first) break;
+    const h = first.offsetHeight || LINE_H;
     creditsEl.removeChild(first);
-    scrollY += h; // 顶部行被裁剪，补偿 translateY，保持视觉连续
+    offset += h;
   }
   ensureScrolling();
 }
@@ -152,7 +153,7 @@ retryBtn.addEventListener('click', async () => {
   setState('正在重启 dsh 服务…');
   installProgress.hidden = true;
   creditsEl.textContent = '';
-  scrollY = 0; // 重置滚动起点
+  offset = 0; // 重置滚动起点
   try {
     await tauri.core.invoke('restart_server');
   } catch (err) {

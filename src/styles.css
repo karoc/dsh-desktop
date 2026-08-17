@@ -82,7 +82,7 @@ h1 { font-size: 18px; margin: 0 0 8px; }
   position: absolute;
   left: 0;
   right: 0;
-  top: 100%;
+  top: 0;
   text-align: center;
   font-size: 13px;
   line-height: 26px;
