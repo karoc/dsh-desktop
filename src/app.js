@@ -218,6 +218,7 @@ const saveProxyBtn = document.getElementById('saveProxy');
 function hostCheckbox(host, label, checked, onChange) {
   const wrap = document.createElement('label');
   wrap.className = 'host-check';
+  wrap.dataset.host = host; // 保存时读 data-host，标签可展示人类可读名
   const cb = document.createElement('input');
   cb.type = 'checkbox';
   cb.checked = checked;
@@ -254,8 +255,11 @@ async function loadSettings() {
     proxyPass.value = up.password || '';
 
     const proxied = new Set(cfg.proxiedHosts || []);
-    // 模型提供方：settings.yaml 读到的 [{name, host}]。
-    const providers = (cfg.providers || []).map((p) => ({ label: p.host, host: p.host }));
+    // 模型提供方：settings.yaml 读到的 [{name, host}]，标签显示名字 + 主机。
+    const providers = (cfg.providers || []).map((p) => ({
+      label: p.name ? `${p.name}（${p.host}）` : p.host,
+      host: p.host,
+    }));
     // 其它已观测主机：knownHosts（持久化）+ hosts（本次运行观测），去重、剔除提供方。
     const providerHosts = new Set(providers.map((p) => p.host));
     const seen = new Map();
@@ -277,8 +281,9 @@ async function loadSettings() {
 function collectProxiedHosts() {
   const hosts = [];
   for (const el of [providerHostsEl, otherHostsEl]) {
-    for (const label of el.querySelectorAll('.host-check input:checked')) {
-      hosts.push(label.closest('.host-check').querySelector('span').textContent);
+    for (const input of el.querySelectorAll('.host-check input:checked')) {
+      const host = input.closest('.host-check').dataset.host;
+      if (host) hosts.push(host);
     }
   }
   return hosts;
