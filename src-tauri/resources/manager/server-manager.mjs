@@ -215,14 +215,27 @@ async function installDshUpdate() {
     : 'https://registry.npmjs.org/'
   let lastErr = null
   for (const reg of [REGISTRY, fallback]) {
+    // Install into a TEMP prefix, then merge the tree into the runtime —
+    // never `npm install --prefix <runtime>`, which prunes the copied-only
+    // packages (@dsh-desktop/* plugins, preinstalled bundles, user-updated
+    // preinstalled versions) that are not listed in runtime/package.json.
+    const tmp = mkdtempSync(join(tmpdir(), 'dsh-install-'))
     try {
-      await npm(['install', `${PACKAGE}@${latestVersion}`, '--prefix', args.runtimeDir, '--no-audit', '--no-fund', '--no-progress', '--registry', reg], { stream: true, timeoutMs: 600_000 })
+      await npm(['install', `${PACKAGE}@${latestVersion}`, '--prefix', tmp, '--no-audit', '--no-fund', '--no-progress', '--registry', reg], { stream: true, timeoutMs: 600_000 })
+      const src = join(tmp, 'node_modules')
+      const dest = join(args.runtimeDir, 'node_modules')
+      mkdirSync(dest, { recursive: true })
+      for (const entry of readdirSync(src)) {
+        cpSync(join(src, entry), join(dest, entry), { recursive: true })
+      }
       log(`updated to ${latestVersion}`)
       lastErr = null
       break
     } catch (err) {
       lastErr = err
       log(`registry ${reg} 安装失败：${err.message}`)
+    } finally {
+      rmSync(tmp, { recursive: true, force: true })
     }
   }
   if (lastErr) throw new Error(`所有 registry 安装失败：${lastErr.message}`)
@@ -896,6 +909,16 @@ async function main() {
   log('dsh-desktop manager started')
   ensureRuntimeDir(args.runtimeDir)
   shellManifest = readShellManifest(args.runtimeDir)
+  // Auto-install dsh when missing (fresh install, or the runtime copy was
+  // removed) — without this the launcher hangs on "dsh 服务已退出" forever.
+  if (!installedVersion(args.runtimeDir)) {
+    try {
+      log('dsh missing — installing automatically')
+      await installDshUpdate()
+    } catch (err) {
+      log(`auto-install dsh failed: ${err.message}`)
+    }
+  }
   // Launch dsh FIRST; the update check runs in the background (it must never
   // delay the UI — a slow registry lookup used to block dsh startup for
   // seconds behind a dark/white launcher). It reports via update-status events.
