@@ -66,6 +66,18 @@
         "headerImage": "icons/header.bmp",
         "sidebarImage": "icons/sidebar.bmp"
       }
+    },
+    "linux": {
+      "deb": {
+        "depends": [
+          "libwebkit2gtk-4.1-0",
+          "libgtk-3-0t64",
+          "libayatana-appindicator3-1",
+          "librsvg2-2",
+          "build-essential",
+          "python3"
+        ]
+      }
     }
   }
 }

@@ -21,7 +21,7 @@
 import { spawn } from 'node:child_process'
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, appendFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join, relative, resolve } from 'node:path'
+import { dirname, delimiter as pathDelimiter, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const PACKAGE = '@deepseek-ai/dsh'
@@ -78,7 +78,14 @@ function npm(argsList, { timeoutMs = 600_000, stream = false, quiet = true } = {
   return new Promise((resolvePromise, rejectPromise) => {
     const cmd = npmViaCli ? process.execPath : 'npm'
     const cmdArgs = npmViaCli ? [npmCli, ...argsList] : argsList
-    const child = spawn(cmd, cmdArgs, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env: process.env })
+    // Native deps (koffi, node-pty) run `node` from PATH during postinstall,
+    // but the bundled Node is NOT on PATH — prepend its directory so
+    // `sh -c node` resolves (Linux broke silently: "node: not found").
+    const env = {
+      ...process.env,
+      PATH: `${dirname(process.execPath)}${process.env.PATH ? pathDelimiter + process.env.PATH : ''}`,
+    }
+    const child = spawn(cmd, cmdArgs, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env })
     let stdout = ''
     let stderr = ''
     let settled = false
