@@ -11,6 +11,66 @@
       "tags": [],
       "createdAt": 1786926194918,
       "updatedAt": 1786926194918
+    },
+    {
+      "id": "card-bb8a88e0-c99d-41a4-8645-9f7826560b2a",
+      "title": "内置本地正向代理（manager 内嵌，CONNECT + HTTP + 路由 + Basic 认证）",
+      "description": "方案 B：manager(Node) 内嵌 127.0.0.1 正向代理作为 dsh 唯一出口；按主机路由——勾选主机走上游代理(可选 user/pass)，未勾选直连；默认全直连；绝不动 dsh 官方代码（只注入 Node 运行时环境变量 NODE_USE_ENV_PROXY + HTTP_PROXY + NO_PROXY）。",
+      "sourceSessionId": "session-2eeecd95-3717-4181-84e3-8149c899b472",
+      "status": "todo",
+      "tags": [
+        "proxy"
+      ],
+      "createdAt": 1786959259229,
+      "updatedAt": 1786959259229
+    },
+    {
+      "id": "card-2550f5d7-824d-4edf-afce-086a372acd4e",
+      "title": "代理配置持久化 + Rust 桥命令（dsh.json proxy 段 + get/set_proxy_config）",
+      "description": "设置存 <runtime>/dsh.json 的 proxy 段；Rust 提供 get_proxy_config/set_proxy_config 命令；manager 读取并注入 dsh env；启动页/托盘可进设置。",
+      "sourceSessionId": "session-2eeecd95-3717-4181-84e3-8149c899b472",
+      "status": "todo",
+      "tags": [
+        "proxy"
+      ],
+      "createdAt": 1786959259242,
+      "updatedAt": 1786959259242
+    },
+    {
+      "id": "card-eca7e36d-047e-4a92-8bed-165edc270eda",
+      "title": "启动页 ⚙ 设置面板 + 托盘「代理设置…」入口",
+      "description": "启动页右上角 ⚙ 打开设置面板（代理 section）；托盘菜单加「代理设置…」导航回设置视图；首次安装 dsh 前提示先配代理。",
+      "sourceSessionId": "session-2eeecd95-3717-4181-84e3-8149c899b472",
+      "status": "todo",
+      "tags": [
+        "proxy"
+      ],
+      "createdAt": 1786959259252,
+      "updatedAt": 1786959259252
+    },
+    {
+      "id": "card-19148b9d-4b88-4e5c-9d24-f4fa339ebc51",
+      "title": "提供方/主机枚举：读 settings.yaml + 代理观测主机，勾选走代理（默认全直连）",
+      "description": "静态读 <runtime>/dsh-home/settings.yaml 的 llm-deepseek/llm-pi-ai baseURL 提取主机；内置代理动态观测实际访问主机；分组勾选（模型提供方 + 其它：registry.npmjs.org 等安装流量）；保存即生效，无需重启 dsh。",
+      "sourceSessionId": "session-2eeecd95-3717-4181-84e3-8149c899b472",
+      "status": "todo",
+      "tags": [
+        "proxy"
+      ],
+      "createdAt": 1786959259262,
+      "updatedAt": 1786959259262
+    },
+    {
+      "id": "card-0ec7630e-5be1-46c9-853d-71fd2573442f",
+      "title": "代理测试：转发/CONNECT/路由/认证/防自环（scripts/test-*.mjs）",
+      "description": "假上游代理 + 假目标验证：HTTP 转发、CONNECT 隧道、按主机路由（勾选/未勾选）、Basic 认证头、127.0.0.1 排除、manager 自身不经过自身代理。",
+      "sourceSessionId": "session-2eeecd95-3717-4181-84e3-8149c899b472",
+      "status": "todo",
+      "tags": [
+        "proxy"
+      ],
+      "createdAt": 1786959259277,
+      "updatedAt": 1786959259277
     }
   ]
 }

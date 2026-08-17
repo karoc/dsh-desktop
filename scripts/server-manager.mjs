@@ -223,11 +223,16 @@ async function installDshUpdate() {
   // the process is killed mid-install (user retries), the originals stay in
   // place and main()'s startup recovery restores from the backup dir.
   const nodeModules = join(args.runtimeDir, 'node_modules')
+  mkdirSync(nodeModules, { recursive: true }) // may not exist on fresh runtime
   const backupDir = join(args.runtimeDir, '.plugin-backup')
   rmSync(backupDir, { recursive: true, force: true })
   mkdirSync(backupDir, { recursive: true })
   const PROTECTED = ['@dsh-desktop', 'dsh-model-reasoning']
-  const protectedEntries = (readdirSync(nodeModules)).filter((e) => PROTECTED.includes(e))
+  // node_modules may not exist yet on a first install (fresh runtime) — treat
+  // as empty instead of crashing on readdirSync(ENOENT).
+  const protectedEntries = existsSync(nodeModules)
+    ? (readdirSync(nodeModules)).filter((e) => PROTECTED.includes(e))
+    : []
   for (const entry of protectedEntries) {
     cpSync(join(nodeModules, entry), join(backupDir, entry), { recursive: true, force: true })
   }
@@ -241,7 +246,7 @@ async function installDshUpdate() {
     let lastErr = null
     for (const reg of [REGISTRY, fallback]) {
       try {
-        await npm(['install', `${PACKAGE}@${latestVersion}`, '--prefix', args.runtimeDir, '--no-audit', '--no-fund', '--no-progress', '--registry', reg], { stream: true, timeoutMs: 600_000 })
+        await npm(['install', `${PACKAGE}@${latestVersion}`, '--prefix', args.runtimeDir, '--no-audit', '--no-fund', '--no-progress', '--loglevel=http', '--registry', reg], { stream: true, timeoutMs: 600_000 })
         log(`updated to ${latestVersion}`)
         lastErr = null
         break
@@ -470,7 +475,7 @@ async function updatePreinstalled(name) {
     const dest = join(args.runtimeDir, 'node_modules', name)
     const installed = installedVersionOf(dest)
     if (installed !== latest) {
-      await npm(['install', `${name}@${latest}`, '--prefix', tmp, '--no-audit', '--no-fund', '--no-progress', '--registry', REGISTRY], { stream: true, timeoutMs: 600_000 })
+      await npm(['install', `${name}@${latest}`, '--prefix', tmp, '--no-audit', '--no-fund', '--no-progress', '--loglevel=http', '--registry', REGISTRY], { stream: true, timeoutMs: 600_000 })
       const src = join(tmp, 'node_modules', name)
       if (!existsSync(src)) throw new Error(`npm 未产出 ${name}@${latest}`)
       rmSync(dest, { recursive: true, force: true })
@@ -781,7 +786,7 @@ async function ensurePnpm(runtimeDir) {
   try {
     for (const reg of [REGISTRY, fallback]) {
       try {
-        await npm(['install', 'pnpm', '--prefix', tmp, '--no-audit', '--no-fund', '--no-progress', '--registry', reg], { stream: true, timeoutMs: 600_000 })
+        await npm(['install', 'pnpm', '--prefix', tmp, '--no-audit', '--no-fund', '--no-progress', '--loglevel=http', '--registry', reg], { stream: true, timeoutMs: 600_000 })
         const src = join(tmp, 'node_modules', 'pnpm')
         if (!existsSync(src)) throw new Error('npm 未产出 pnpm')
         const dest = join(runtimeDir, 'node_modules', 'pnpm')
