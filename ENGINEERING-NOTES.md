@@ -294,3 +294,26 @@ Windows 的 NSIS 安装行为、toast 渲染、AUMID、事件投递——Linux s
   1. 重启后该状态还会被读到吗？（op-status 会 → 必须清）
   2. 清空方式会不会被误判？（`{op:null,done:false}` 撞 busy-guard → 用 null）
   3. 值传递链上每一环（manager→Rust→client）的重启语义一致吗？（全量/增量重启都要清）
+
+## 27. 壳内置正向代理（方案 B）的关键工程发现
+
+- **undici 不读 *PROXY 环境变量**，但 Node ≥24.0 设 `NODE_USE_ENV_PROXY=1` 后全局 fetch 会尊重
+  HTTP_PROXY/HTTPS_PROXY/NO_PROXY（v24.18.0 实测生效，无告警输出）。dsh 的模型请求、web 搜索、
+  web fetch 全走服务端 Node 的全局 fetch —— 一个环境变量管住全部出站，浏览器侧零改动。
+- **dsh 官方认可"出口由启动环境决定"**：app-boot 把 HTTP_PROXY/HTTPS_PROXY/ALL_PROXY/NO_PROXY
+  列为 bootstrap-only 变量（只能由启动环境注入、不能写 .env）。往 dsh 进程注入代理变量是官方留的口子，
+  不算改动 dsh 代码。
+- **`ALL_PROXY` 不会破坏 undici env-proxy**（受控重测确认；一次"设了 ALL_PROXY 就不路由"的失败
+  是玩具代理自己的问题）。三个 *PROXY 都设，覆盖 curl/wget 类工具。
+- **undici env-proxy 对 http:// 目标也走 CONNECT 隧道**（不是绝对 URI GET）——真实流量以 CONNECT
+  为主，内置代理的 CONNECT 处理是核心路径。
+- **NO_PROXY 必须排除 loopback**：`127.0.0.1,localhost,::1` + 用户原有 NO_PROXY 追加，本地
+  dsh web/通知桥绝不走代理（实测正确绕过）。
+- **路由实时生效**：内置代理每请求读 <runtime>/proxy.json（小文件，µs 级），设置面板勾选"保存即生效"
+  无需重启 dsh；首次安装 dsh 前需先配好代理（manager 启动先起代理再装 dsh，安装流量已骑在代理上）。
+- **防自环两重**：loopback 目标永远直连（upstream 不得代理本机流量）；upstream 指向本代理端口视为
+  禁用；代理自身用 raw net/http，永远不经过 undici env-proxy。
+- **测试**：test-proxy.mjs（11 场景）、test-proxy-e2e.mjs（真实 undici→manager 代理→假上游）、
+  test-control-plane.mjs（假 dsh 探测 env 断言注入）、test-launcher-settings.mjs（vm 加载真实
+  app.js + 最小 DOM 桩验证设置面板；注意 vm 跨 realm 数组的 assert.deepEqual 因原型不同必失败，
+  先 `[...arr]` 展开再比）。

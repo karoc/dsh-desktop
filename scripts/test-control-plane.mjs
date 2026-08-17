@@ -23,6 +23,7 @@ const work = mkdtempSync(join(tmpdir(), 'dsh-ctrl-'))
 const runtime = join(work, 'runtime')
 const marker = join(work, 'boots.log')
 const pluginMarker = join(work, 'plugin.log')
+const envProbe = join(work, 'env.probe')
 
 // ── fake dsh package ────────────────────────────────────────────────────────
 const dshDir = join(runtime, 'node_modules', '@deepseek-ai', 'dsh')
@@ -56,6 +57,12 @@ if (argv.includes('plugin')) {
 }
 const m = process.env.DSH_TEST_MARKER
 if (m) appendFileSync(m, 'boot ' + process.pid + '\\n')
+// Probe the env the shell injected (forward-proxy choke point).
+const ep = process.env.DSH_TEST_ENV_PROBE
+if (ep) writeFileSync(ep, JSON.stringify({
+  http: process.env.HTTP_PROXY, https: process.env.HTTPS_PROXY,
+  nodeEnvProxy: process.env.NODE_USE_ENV_PROXY, noProxy: process.env.NO_PROXY,
+}))
 const port = 18000 + (process.pid % 1000)
 process.stdout.write(JSON.stringify({ t: 'url', url: 'http://127.0.0.1:' + port }) + '\\n')
 setInterval(() => {}, 1000)
@@ -85,6 +92,7 @@ const child = spawn(process.execPath, [
     DSH_DESKTOP_NO_UPDATE: '1',
     DSH_TEST_MARKER: marker,
     DSH_TEST_PLUGIN_MARKER: pluginMarker,
+    DSH_TEST_ENV_PROBE: envProbe,
   },
   windowsHide: true,
 })
@@ -124,6 +132,20 @@ const boots = () => (existsSync(marker) ? readFileSync(marker, 'utf8').split('\n
 // ── scenario 1: startup reports update-status, NO auto-install ──────────────
 const bootEvent = await waitFor((e) => e.t === 'url', 'first url event')
 assert.ok(bootEvent.url.startsWith('http://127.0.0.1:'), 'url event carries the loopback url')
+
+// ── scenario 1b: built-in forward proxy is up and injected into dsh ─────────
+const ps = await waitFor((e) => e.t === 'proxy-status', 'proxy-status event')
+assert.ok(typeof ps.port === 'number' && ps.port > 0, 'proxy-status carries a real loopback port')
+assert.equal(ps.upstreamEnabled, false, 'fresh runtime: upstream disabled (all direct)')
+await waitFor((e) => e.t === 'proxy-hosts', 'proxy-hosts event')
+await waitFor((e) => e.t === 'proxy-providers', 'proxy-providers event')
+// The fake dsh child runs under the manager's env — it must see the choke point.
+await new Promise((r) => setTimeout(r, 400))
+const probed = JSON.parse(readFileSync(envProbe, 'utf8'))
+assert.equal(probed.nodeEnvProxy, '1', 'NODE_USE_ENV_PROXY=1 injected (undici honors *PROXY)')
+assert.equal(probed.http, `http://127.0.0.1:${ps.port}`, 'HTTP_PROXY points at the built-in proxy')
+assert.equal(probed.https, `http://127.0.0.1:${ps.port}`, 'HTTPS_PROXY points at the built-in proxy')
+assert.ok(/127\.0\.0\.1/.test(probed.noProxy) && /localhost/.test(probed.noProxy), 'NO_PROXY keeps loopback direct')
 
 const status1 = await waitFor((e) => e.t === 'update-status', 'initial update-status')
 assert.equal(status1.current, '9.9.9-test', 'update-status reports the installed fake version')

@@ -13,6 +13,7 @@ const res = join(root, 'src-tauri', 'resources')
 
 mkdirSync(join(res, 'manager'), { recursive: true })
 cpSync(join(root, 'scripts', 'server-manager.mjs'), join(res, 'manager', 'server-manager.mjs'), { force: true })
+cpSync(join(root, 'scripts', 'proxy.mjs'), join(res, 'manager', 'proxy.mjs'), { force: true })
 
 // Desktop client plugins: plugins/<dir> -> resources/plugin/@dsh-desktop/<rel>
 // where <rel> comes from the package's real name (source dirs are NOT the

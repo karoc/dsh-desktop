@@ -23,6 +23,7 @@ import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rea
 import { tmpdir } from 'node:os'
 import { dirname, delimiter as pathDelimiter, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { createForwardProxy, providerHostsFromSettings } from './proxy.mjs'
 
 const PACKAGE = '@deepseek-ai/dsh'
 
@@ -334,6 +335,83 @@ async function installDshUpdate() {
   if (installError) throw new Error(`所有 registry 安装失败：${installError.message}`)
   emitUpdateStatus(false)
   return true
+}
+
+// ── built-in forward proxy (shell egress point; see proxy.mjs) ─────────────
+// The manager runs a loopback forward proxy and points EVERY child (dsh undici
+// fetch, npm, pnpm, git, subagent CLIs) at it via *PROXY env vars +
+// NODE_USE_ENV_PROXY=1. Routing (which hosts go through the optional upstream
+// proxy) is decided LIVE inside the proxy from <runtime>/proxy.json, so
+// toggling a host in the settings panel takes effect immediately (no dsh
+// restart). The proxy is shell code — @deepseek-ai/dsh is never modified.
+let forwardProxy = null
+let proxyHosts = []
+let proxyProviders = []
+let persistHostsTimer = null
+let providersTimer = null
+
+function proxyConfigFile() {
+  return join(args.runtimeDir, 'proxy.json')
+}
+
+function schedulePersistKnownHosts() {
+  clearTimeout(persistHostsTimer)
+  persistHostsTimer = setTimeout(() => {
+    try { forwardProxy?.persistKnownHosts() } catch { /* best-effort */ }
+  }, 2000)
+}
+
+async function refreshProxyProviders() {
+  const dshHome = args.home ?? join(args.runtimeDir, 'dsh-home')
+  const providers = providerHostsFromSettings(join(dshHome, 'settings.yaml'))
+  if (JSON.stringify(providers) !== JSON.stringify(proxyProviders)) {
+    proxyProviders = providers
+    return true // changed — caller emits
+  }
+  return false
+}
+
+/**
+ * Start the loopback forward proxy and re-point every child at it. MUST run
+ * before any npm/dsh child is spawned so the fresh install/update already
+ * rides the choke point.
+ */
+async function startForwardProxy() {
+  forwardProxy = createForwardProxy({
+    configFile: proxyConfigFile(),
+    onHosts: (hosts) => {
+      proxyHosts = hosts
+      emit({ t: 'proxy-hosts', hosts })
+      schedulePersistKnownHosts()
+    },
+    log,
+  })
+  const port = await forwardProxy.port
+  log(`forward proxy on 127.0.0.1:${port}`)
+  // The shell's single egress point: NODE_USE_ENV_PROXY makes undici's global
+  // fetch honor the *PROXY vars (all of dsh's model/web-search requests ride
+  // undici); npm/git/pnpm/child CLIs inherit them natively. NO_PROXY keeps the
+  // local web server and notification bridge on loopback.
+  process.env.NODE_USE_ENV_PROXY = '1'
+  process.env.HTTP_PROXY = `http://127.0.0.1:${port}`
+  process.env.HTTPS_PROXY = `http://127.0.0.1:${port}`
+  process.env.ALL_PROXY = `http://127.0.0.1:${port}`
+  process.env.NO_PROXY = ['127.0.0.1', 'localhost', '::1', process.env.NO_PROXY].filter(Boolean).join(',')
+  const cfg = forwardProxy.config()
+  emit({ t: 'proxy-status', port, upstreamEnabled: cfg.upstream?.enabled === true, proxiedHosts: cfg.proxiedHosts ?? [] })
+  // Provider host list for the settings panel; re-polled so edits to
+  // settings.yaml (adding a provider) land without a dsh restart.
+  await refreshProxyProviders().catch(() => {})
+  emit({ t: 'proxy-providers', providers: proxyProviders })
+  emit({ t: 'proxy-hosts', hosts: forwardProxy.hosts() })
+  providersTimer = setInterval(() => {
+    void (async () => {
+      try {
+        if (await refreshProxyProviders()) emit({ t: 'proxy-providers', providers: proxyProviders })
+      } catch { /* keep polling */ }
+    })()
+  }, 15000)
+  providersTimer.unref?.()
 }
 
 // ── steps ──────────────────────────────────────────────────────────────────
@@ -1002,6 +1080,13 @@ async function main() {
   log('dsh-desktop manager started')
   ensureRuntimeDir(args.runtimeDir)
   shellManifest = readShellManifest(args.runtimeDir)
+  // The built-in forward proxy must be up BEFORE the first npm/dsh child:
+  // the fresh install/update and every later request ride the choke point.
+  try {
+    await startForwardProxy()
+  } catch (err) {
+    log(`forward proxy start failed (continuing without it): ${err.message}`)
+  }
   // Auto-install dsh when missing (fresh install, or the runtime copy was
   // removed) — without this the launcher hangs on "dsh 服务已退出" forever.
   if (!installedVersion(args.runtimeDir)) {
@@ -1045,6 +1130,9 @@ async function main() {
   setupCommandChannel()
 
   const shutdown = () => {
+    clearTimeout(persistHostsTimer)
+    clearInterval(providersTimer)
+    try { forwardProxy?.close() } catch { /* already closed */ }
     if (currentChild) killTree(currentChild.pid)
     process.exit(0)
   }

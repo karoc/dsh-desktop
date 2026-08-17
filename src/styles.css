@@ -146,3 +146,126 @@ button.secondary {
   from { background-position: 200% 0; }
   to   { background-position: 0 0; }
 }
+
+/* ── 设置入口按钮（启动视图右上角） ──────────────────────── */
+.settings-btn {
+  position: fixed;
+  top: 12px;
+  right: 14px;
+  z-index: 20;
+  width: 34px;
+  height: 34px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.settings-btn:hover {
+  color: var(--fg);
+  border-color: var(--muted);
+}
+
+/* ── 设置视图（代理配置） ────────────────────────────────── */
+.settings {
+  height: 100%;
+  overflow-y: auto;
+  background: var(--bg);
+  padding: 20px 24px 32px;
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.settings-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.settings-head h2 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.settings-head button { margin: 0; }
+
+.settings-body { display: flex; flex-direction: column; gap: 18px; }
+
+.set-group {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+
+.set-group h3 { margin: 0 0 10px; font-size: 14px; }
+.set-group h4 { margin: 12px 0 6px; font-size: 13px; color: var(--muted); font-weight: 600; }
+
+.row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.row.check { cursor: pointer; }
+
+.row input[type="text"],
+.row input[type="password"],
+.row input[type="number"] {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 13px;
+}
+
+.row input[type="number"] { flex: 0 0 110px; }
+
+.row input:focus { outline: none; border-color: var(--accent); }
+
+.host-list { display: flex; flex-direction: column; gap: 6px; }
+
+.host-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  cursor: pointer;
+  color: var(--fg);
+  word-break: break-all;
+}
+
+.host-check input { accent-color: var(--accent); }
+
+.muted { color: var(--muted); }
+.muted.small { font-size: 12px; margin: 2px 0 0; }
+.row.actions { margin-top: 2px; align-items: center; }
+
+/* dsh 就绪提示（设置视图中不自动跳转，改用手动返回） */
+.ready-banner {
+  position: fixed;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  margin: 0;
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.ready-banner a { color: var(--accent); cursor: pointer; }

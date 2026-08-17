@@ -35,6 +35,19 @@ struct ServerState {
     /// Cached per-preinstalled update state, mirrored from the manager's
     /// `preinstalled-updates` protocol line ({name: {installed, latest, …}}).
     preinstalled_updates: Mutex<serde_json::Value>,
+    /// Proxy UI data mirrored from the manager's `proxy-hosts` /
+    /// `proxy-providers` protocol lines (observed hosts + settings.yaml
+    /// provider hosts, for the settings panel's checkbox list).
+    proxy: Mutex<ProxyState>,
+}
+
+/// Proxy panel data mirrored from manager protocol lines (see ServerState.proxy).
+#[derive(Default, Clone)]
+struct ProxyState {
+    /// Hosts the built-in proxy has actually seen traffic for.
+    hosts: Vec<String>,
+    /// Model provider hosts read from the web profile's settings.yaml.
+    providers: Vec<serde_json::Value>,
 }
 
 /// dsh update status, mirrored from the manager's `update-status` protocol line.
@@ -144,6 +157,10 @@ static UPDATE_TOAST_SHOWN: std::sync::atomic::AtomicBool = std::sync::atomic::At
 /// while that page is loaded, so reconnection after a restart must be driven
 /// by the shell, not the page.
 static LAUNCHER_URL: Mutex<Option<String>> = Mutex::new(None);
+
+/// The dsh loopback URL the shell last navigated to — "返回 dsh" from the
+/// settings view uses it (falls back to the launcher when never set).
+static CURRENT_DSH_URL: Mutex<Option<String>> = Mutex::new(None);
 
 /// Windows: register a PROCESS-LEVEL toast activator. The WinRT `Activated`
 /// event used by notify-rust only fires while the toast is visible on screen;
@@ -401,6 +418,41 @@ fn profile_manifest_path(runtime: &std::path::Path) -> std::path::PathBuf {
         .join("profiles")
         .join("web")
         .join("package.json")
+}
+
+/// Absolute path of the proxy settings file (<runtime>/proxy.json).
+fn proxy_config_path(runtime: &std::path::Path) -> std::path::PathBuf {
+    runtime.join("proxy.json")
+}
+
+/// Read <runtime>/proxy.json, tolerant of a missing/corrupt file. The manager
+/// keeps this file too (observed hosts), so both sides read-modify-write.
+fn read_proxy_json(runtime: &std::path::Path) -> serde_json::Value {
+    std::fs::read_to_string(proxy_config_path(runtime))
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .unwrap_or_else(|| {
+            serde_json::json!({
+                "upstream": { "enabled": false, "host": "", "port": 0, "username": "", "password": "" },
+                "proxiedHosts": [],
+                "knownHosts": [],
+            })
+        })
+}
+
+/// Sanitize the upstream proxy object coming from the settings panel: only
+/// known fields, only valid types/ports (a hostile page must not smuggle
+/// extra keys into proxy.json).
+fn sanitize_upstream(v: &serde_json::Value) -> serde_json::Value {
+    let obj = v.as_object().cloned().unwrap_or_default();
+    let get = |k: &str| obj.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+    serde_json::json!({
+        "enabled": obj.get("enabled").and_then(|x| x.as_bool()).unwrap_or(false),
+        "host": get("host").trim().to_string(),
+        "port": obj.get("port").and_then(|x| x.as_u64()).unwrap_or(0).min(u16::MAX as u64),
+        "username": get("username"),
+        "password": get("password"),
+    })
 }
 
 /// Template bundles for the web profile (mirror of upstream PROFILE_TEMPLATES.web).
@@ -1038,6 +1090,7 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
                 match t {
                     Some("url") => {
                         if let Some(url) = ev.get("url").and_then(|v| v.as_str()) {
+                            *CURRENT_DSH_URL.lock().unwrap() = Some(url.to_string());
                             let _ = handle.emit("server-url", url);
                             // Reconnect: the launcher page's JS listener is gone
                             // once the webview is on the dsh page, so a dsh /
@@ -1126,6 +1179,22 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
                         let updates = ev.get("updates").cloned().unwrap_or(serde_json::json!({}));
                         *state.preinstalled_updates.lock().unwrap() = updates;
                     }
+                    Some("proxy-hosts") => {
+                        let hosts = ev
+                            .get("hosts")
+                            .and_then(|v| v.as_array())
+                            .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect::<Vec<_>>())
+                            .unwrap_or_default();
+                        handle.state::<ServerState>().proxy.lock().unwrap().hosts = hosts;
+                    }
+                    Some("proxy-providers") => {
+                        let providers = ev
+                            .get("providers")
+                            .and_then(|v| v.as_array())
+                            .cloned()
+                            .unwrap_or_default();
+                        handle.state::<ServerState>().proxy.lock().unwrap().providers = providers;
+                    }
                     _ => {}
                 }
             }
@@ -1194,6 +1263,86 @@ fn open_data_dir(app: AppHandle) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     let res = Command::new("xdg-open").arg(&data).status();
     res.map(|_| ()).map_err(|e| format!("open dir: {e}"))
+}
+
+/// Current proxy configuration + the settings panel's candidate host lists.
+/// `upstream`/`proxiedHosts`/`knownHosts` come from proxy.json (persisted);
+/// `hosts`/`providers` are mirrored live from the manager (observed traffic +
+/// settings.yaml providers) so the checkbox list reflects reality.
+#[tauri::command]
+fn get_proxy_config(app: AppHandle, state: State<'_, ServerState>) -> Result<serde_json::Value, String> {
+    let runtime = runtime_dir(&app);
+    let cfg = read_proxy_json(&runtime);
+    let proxy = state.proxy.lock().unwrap();
+    Ok(serde_json::json!({
+        "upstream": cfg.get("upstream").cloned().unwrap_or_else(|| serde_json::json!({})),
+        "proxiedHosts": cfg.get("proxiedHosts").cloned().unwrap_or_else(|| serde_json::json!([])),
+        "knownHosts": cfg.get("knownHosts").cloned().unwrap_or_else(|| serde_json::json!([])),
+        "hosts": proxy.hosts,
+        "providers": proxy.providers,
+    }))
+}
+
+/// Persist the proxy configuration from the settings panel. Takes effect
+/// immediately: the built-in proxy re-reads proxy.json on every request, so no
+/// dsh restart is needed.
+#[tauri::command]
+fn set_proxy_config(
+    app: AppHandle,
+    upstream: serde_json::Value,
+    proxied_hosts: Vec<String>,
+) -> Result<serde_json::Value, String> {
+    let runtime = runtime_dir(&app);
+    let path = proxy_config_path(&runtime);
+    let mut cfg = read_proxy_json(&runtime);
+    let hosts: Vec<serde_json::Value> = proxied_hosts
+        .iter()
+        .filter_map(|h| {
+            let t = h.trim().to_lowercase();
+            if t.is_empty() { None } else { Some(serde_json::Value::String(t)) }
+        })
+        .collect();
+    cfg["upstream"] = sanitize_upstream(&upstream);
+    cfg["proxiedHosts"] = serde_json::Value::Array(hosts);
+    let text = serde_json::to_string_pretty(&cfg).map_err(|e| format!("serialize proxy config: {e}"))?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("mkdir proxy dir: {e}"))?;
+    }
+    std::fs::write(&path, format!("{text}\n")).map_err(|e| format!("write proxy config: {e}"))?;
+    Ok(cfg)
+}
+
+/// Leave the settings view: navigate back to the dsh page (fallback: launcher).
+#[tauri::command]
+fn back_to_dsh(app: AppHandle) -> Result<(), String> {
+    let target = CURRENT_DSH_URL
+        .lock()
+        .unwrap()
+        .clone()
+        .or_else(|| LAUNCHER_URL.lock().unwrap().clone());
+    if let Some(url) = target {
+        if let Ok(u) = tauri::Url::parse(&url) {
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.navigate(u);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Navigate the main window to a launcher view (`?view=<name>`). Used by the
+/// tray's "代理设置…" entry; the launcher page reads the query and shows the
+/// settings panel instead of the startup view.
+fn navigate_to_launcher_view(app: &AppHandle, view: &str) {
+    if let Some(url) = LAUNCHER_URL.lock().unwrap().clone() {
+        let sep = if url.contains('?') { '&' } else { '?' };
+        let target = format!("{url}{sep}view={view}");
+        if let Ok(u) = tauri::Url::parse(&target) {
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.navigate(u);
+            }
+        }
+    }
 }
 
 /// Quit: kill the service tree and exit the app.
@@ -1270,6 +1419,7 @@ pub fn run() {
             dev_item: Mutex::new(None),
             op: Mutex::new(OpStatus::default()),
             preinstalled_updates: Mutex::new(serde_json::json!({})),
+            proxy: Mutex::new(ProxyState::default()),
         })
         // Belt-and-suspenders for the taskbar icon: re-apply the bundled icon
         // on every page load (window existence/creation timing is not relied
@@ -1323,13 +1473,14 @@ pub fn run() {
             let show = MenuItem::with_id(app, "show", "显示窗口", true, None::<&str>)?;
             let refresh = MenuItem::with_id(app, "refresh", "刷新页面", true, None::<&str>)?;
             let restart = MenuItem::with_id(app, "restart", "重启", true, None::<&str>)?;
+            let proxy_settings = MenuItem::with_id(app, "proxy-settings", "代理设置…", true, None::<&str>)?;
             let check_update = MenuItem::with_id(app, "check-update", "检查更新…", true, None::<&str>)?;
             let dev = CheckMenuItem::with_id(app, "dev-mode", "开发者模式", true, dev_mode(&runtime_dir(app.handle())), None::<&str>)?;
             let data = MenuItem::with_id(app, "data", "打开数据目录", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
             let menu = Menu::with_items(
                 app,
-                &[&show, &refresh, &restart, &check_update, &dev, &data, &quit],
+                &[&show, &refresh, &restart, &proxy_settings, &check_update, &dev, &data, &quit],
             )?;
             // Keep the check-update item handle: its text flips to "有更新 vX…"
             // when the manager reports an available update. Same for the dev
@@ -1369,6 +1520,12 @@ pub fn run() {
                     }
                     "restart" => {
                         let _ = restart_server(app.clone(), app.state::<ServerState>());
+                    }
+                    "proxy-settings" => {
+                        // Open the settings panel (launcher ?view=settings); the
+                        // page itself loads current config via get_proxy_config.
+                        activate_window(app);
+                        navigate_to_launcher_view(app, "settings");
                     }
                     "check-update" => {
                         // One item, two roles: with an update pending it becomes
@@ -1518,7 +1675,10 @@ pub fn run() {
             check_update,
             update_now,
             refresh_page,
-            restart_dsh
+            restart_dsh,
+            get_proxy_config,
+            set_proxy_config,
+            back_to_dsh
         ])
         .run(tauri::generate_context!())
         .expect("error while running DSH Desktop");

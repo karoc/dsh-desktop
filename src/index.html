@@ -8,7 +8,10 @@
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <main class="shell">
+    <button id="settingsBtn" class="settings-btn" title="代理设置" aria-label="代理设置">⚙</button>
+
+    <!-- 启动视图（等待 dsh 就绪 / 安装进度 / 滚动日志） -->
+    <main class="shell" id="launchView">
       <div class="hero">
         <div class="logo" aria-hidden="true"><img src="logo.png" width="64" height="64" alt="" draggable="false"></div>
         <h1>DeepSeek Harness</h1>
@@ -23,7 +26,46 @@
       <div class="credits-viewport">
         <div class="credits" id="credits" aria-live="polite"></div>
       </div>
+      <p class="ready-banner" id="readyBanner" hidden>dsh 已就绪 — <a href="#" id="readyBack">点此返回</a></p>
     </main>
+
+    <!-- 设置视图（代理配置，托盘「代理设置…」或 ⚙ 进入） -->
+    <section class="settings" id="settingsView" hidden>
+      <header class="settings-head">
+        <h2>代理设置</h2>
+        <button id="settingsClose" class="secondary">← 返回</button>
+      </header>
+      <div class="settings-body">
+        <section class="set-group">
+          <h3>上游代理（可选）</h3>
+          <label class="row check"><input type="checkbox" id="proxyEnabled" /> 启用上游代理（未启用时所有主机直连）</label>
+          <div class="row">
+            <input id="proxyHost" placeholder="代理主机，如 127.0.0.1" autocomplete="off" spellcheck="false" />
+            <input id="proxyPort" placeholder="端口，如 7890" type="number" min="1" max="65535" />
+          </div>
+          <div class="row">
+            <input id="proxyUser" placeholder="用户名（可选）" autocomplete="off" spellcheck="false" />
+            <input id="proxyPass" placeholder="密码（可选）" type="password" autocomplete="new-password" />
+          </div>
+        </section>
+
+        <section class="set-group">
+          <h3>走代理的主机 <span class="muted">（默认全部直连，勾选才走上游代理）</span></h3>
+          <p class="muted small" id="hostHint">模型提供方来自 dsh 设置（settings.yaml）；其它为实际访问过的主机（含安装/更新流量）。</p>
+          <h4>模型提供方</h4>
+          <div class="host-list" id="providerHosts"></div>
+          <h4>其它已观测主机</h4>
+          <div class="host-list" id="otherHosts"></div>
+        </section>
+
+        <p class="muted small">保存后立即生效，无需重启；改动「安装/更新」相关主机的代理会在下次安装/更新时生效。</p>
+        <div class="row actions">
+          <button id="saveProxy" class="primary">保存</button>
+          <span class="muted" id="saveStatus"></span>
+        </div>
+      </div>
+    </section>
+
     <script src="app.js"></script>
   </body>
 </html>
