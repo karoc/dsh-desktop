@@ -16,7 +16,8 @@ function setState(text, failed = false) {
 }
 
 // ── 片尾字幕滚动：transform 连续平移（丝滑），非逐行追加推挤 ──
-// 内容块整体在视口正下方，rAF 每帧向上平移；新行追加到尾部自然滚入。
+// 内容块顶部贴视口底部（.credits top:100%），rAF 每帧向上平移，
+// 第一行从视口底部滚入；新行追加到尾部自然滚入。
 // 内容全部滚出视口顶 → 清空重来（新一轮日志继续滚动）。
 const TRIM_AFTER = 30;
 const SCROLL_SPEED = 28; // px/s
@@ -27,7 +28,7 @@ let rafId = null;
 
 function ensureScrolling() {
   if (rafId !== null) return;
-  scrollY = creditsViewport.clientHeight;
+  scrollY = 0; // 内容顶部贴视口底部，第一行立即可见，直接向上滚入
   lastTs = 0;
   rafId = requestAnimationFrame(tick);
 }
@@ -40,7 +41,7 @@ function tick(ts) {
   const contentH = creditsEl.scrollHeight;
   if (contentH > 0 && scrollY < -contentH) {
     creditsEl.textContent = ''; // 全部滚出 → 清空，下一轮日志重新滚
-    scrollY = creditsViewport.clientHeight;
+    scrollY = 0;
   }
   creditsEl.style.transform = `translateY(${scrollY}px)`;
   rafId = requestAnimationFrame(tick);
@@ -151,7 +152,7 @@ retryBtn.addEventListener('click', async () => {
   setState('正在重启 dsh 服务…');
   installProgress.hidden = true;
   creditsEl.textContent = '';
-  scrollY = creditsViewport.clientHeight; // 重置滚动起点
+  scrollY = 0; // 重置滚动起点
   try {
     await tauri.core.invoke('restart_server');
   } catch (err) {
