@@ -208,6 +208,13 @@ async function installDshUpdate() {
     return false
   }
   log(`updating ${PACKAGE} ${current ?? '(none)'} -> ${latestVersion}`)
+  // Progress feedback for the launcher: explicit phase events + a heartbeat
+  // so the user can tell "still working" from "stuck" during a long install.
+  emit({ t: 'install-status', phase: 'start', version: latestVersion })
+  const startedAt = Date.now()
+  const heartbeat = setInterval(() => {
+    emit({ t: 'install-status', phase: 'running', seconds: Math.round((Date.now() - startedAt) / 1000) })
+  }, 5000)
 
   // `npm install --prefix <runtime>` prunes packages not listed in
   // runtime/package.json — the copied-only @dsh-desktop/* plugins and the
@@ -222,6 +229,7 @@ async function installDshUpdate() {
   for (const entry of protectedEntries) {
     renameSync(join(nodeModules, entry), join(backupDir, entry))
   }
+  let installError = null
   try {
     // Registry fallback chain: mirrors can lag on freshly-published deps, so
     // retry with the other default if the primary install fails.
@@ -248,7 +256,7 @@ async function installDshUpdate() {
       renameSync(join(backupDir, entry), to)
     }
     rmSync(backupDir, { recursive: true, force: true })
-    if (lastErr) throw new Error(`所有 registry 安装失败：${lastErr.message}`)
+    installError = lastErr
   } finally {
     // Safety net: if anything above threw before the restore loop, put the
     // protected plugins back so they are never lost.
@@ -260,7 +268,15 @@ async function installDshUpdate() {
       }
       rmSync(backupDir, { recursive: true, force: true })
     }
+    clearInterval(heartbeat)
+    emit({
+      t: 'install-status',
+      phase: installError ? 'error' : 'done',
+      version: latestVersion,
+      error: installError ? installError.message : undefined,
+    })
   }
+  if (installError) throw new Error(`所有 registry 安装失败：${installError.message}`)
   emitUpdateStatus(false)
   return true
 }
