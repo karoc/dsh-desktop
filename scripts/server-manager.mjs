@@ -19,7 +19,7 @@
 //   7. on signal, kill the whole dsh tree (taskkill /T /F on Windows).
 
 import { spawn } from 'node:child_process'
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, appendFileSync } from 'node:fs'
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, appendFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, delimiter as pathDelimiter, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -208,37 +208,59 @@ async function installDshUpdate() {
     return false
   }
   log(`updating ${PACKAGE} ${current ?? '(none)'} -> ${latestVersion}`)
-  // Registry fallback chain: mirrors can lag on freshly-published deps, so
-  // retry with the other default if the primary install fails.
-  const fallback = REGISTRY === 'https://registry.npmjs.org/'
-    ? 'https://registry.npmmirror.com'
-    : 'https://registry.npmjs.org/'
-  let lastErr = null
-  for (const reg of [REGISTRY, fallback]) {
-    // Install into a TEMP prefix, then merge the tree into the runtime —
-    // never `npm install --prefix <runtime>`, which prunes the copied-only
-    // packages (@dsh-desktop/* plugins, preinstalled bundles, user-updated
-    // preinstalled versions) that are not listed in runtime/package.json.
-    const tmp = mkdtempSync(join(tmpdir(), 'dsh-install-'))
-    try {
-      await npm(['install', `${PACKAGE}@${latestVersion}`, '--prefix', tmp, '--no-audit', '--no-fund', '--no-progress', '--registry', reg], { stream: true, timeoutMs: 600_000 })
-      const src = join(tmp, 'node_modules')
-      const dest = join(args.runtimeDir, 'node_modules')
-      mkdirSync(dest, { recursive: true })
-      for (const entry of readdirSync(src)) {
-        cpSync(join(src, entry), join(dest, entry), { recursive: true })
+
+  // `npm install --prefix <runtime>` prunes packages not listed in
+  // runtime/package.json — the copied-only @dsh-desktop/* plugins and the
+  // preinstalled bundles (incl. user-updated versions). Move them aside first
+  // and restore afterwards so they survive the install.
+  const nodeModules = join(args.runtimeDir, 'node_modules')
+  const backupDir = join(args.runtimeDir, '.plugin-backup')
+  rmSync(backupDir, { recursive: true, force: true })
+  mkdirSync(backupDir, { recursive: true })
+  const PROTECTED = ['@dsh-desktop', 'dsh-model-reasoning']
+  const protectedEntries = (readdirSync(nodeModules)).filter((e) => PROTECTED.includes(e))
+  for (const entry of protectedEntries) {
+    renameSync(join(nodeModules, entry), join(backupDir, entry))
+  }
+  try {
+    // Registry fallback chain: mirrors can lag on freshly-published deps, so
+    // retry with the other default if the primary install fails.
+    const fallback = REGISTRY === 'https://registry.npmjs.org/'
+      ? 'https://registry.npmmirror.com'
+      : 'https://registry.npmjs.org/'
+    let lastErr = null
+    for (const reg of [REGISTRY, fallback]) {
+      try {
+        await npm(['install', `${PACKAGE}@${latestVersion}`, '--prefix', args.runtimeDir, '--no-audit', '--no-fund', '--no-progress', '--registry', reg], { stream: true, timeoutMs: 600_000 })
+        log(`updated to ${latestVersion}`)
+        lastErr = null
+        break
+      } catch (err) {
+        lastErr = err
+        log(`registry ${reg} 安装失败：${err.message}`)
       }
-      log(`updated to ${latestVersion}`)
-      lastErr = null
-      break
-    } catch (err) {
-      lastErr = err
-      log(`registry ${reg} 安装失败：${err.message}`)
-    } finally {
-      rmSync(tmp, { recursive: true, force: true })
+    }
+    // Restore the protected plugins (whatever npm pruned comes back as-is,
+    // preserving user-updated versions).
+    for (const entry of readdirSync(backupDir)) {
+      const to = join(nodeModules, entry)
+      rmSync(to, { recursive: true, force: true })
+      renameSync(join(backupDir, entry), to)
+    }
+    rmSync(backupDir, { recursive: true, force: true })
+    if (lastErr) throw new Error(`所有 registry 安装失败：${lastErr.message}`)
+  } finally {
+    // Safety net: if anything above threw before the restore loop, put the
+    // protected plugins back so they are never lost.
+    if (existsSync(backupDir)) {
+      for (const entry of readdirSync(backupDir)) {
+        const to = join(nodeModules, entry)
+        rmSync(to, { recursive: true, force: true })
+        renameSync(join(backupDir, entry), to)
+      }
+      rmSync(backupDir, { recursive: true, force: true })
     }
   }
-  if (lastErr) throw new Error(`所有 registry 安装失败：${lastErr.message}`)
   emitUpdateStatus(false)
   return true
 }
