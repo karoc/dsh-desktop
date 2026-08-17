@@ -1418,8 +1418,16 @@ pub fn run() {
                         // 托盘语义：关窗=隐藏（不真关、不进任务栏）。
                         // 点击 toast 时由进程内激活回调 show() 恢复，不再依赖
                         // 系统 SW_RESTORE（它对隐藏窗口无效）。
+                        // Linux/GNOME 默认没有托盘图标（需 AppIndicator 扩展），
+                        // 隐藏会让窗口"消失且无法找回"——退化为最小化
+                        // （任务栏可见，双击/托盘/激活都能恢复）。
                         api.prevent_close();
-                        let _ = handle.get_webview_window("main").map(|w| w.hide());
+                        if let Some(w) = handle.get_webview_window("main") {
+                            #[cfg(target_os = "linux")]
+                            let _ = w.minimize();
+                            #[cfg(not(target_os = "linux"))]
+                            let _ = w.hide();
+                        }
                     }
                     tauri::WindowEvent::Focused(true) => {
                         if let Some(sid) = FOCUS_OPEN.lock().unwrap().take() {

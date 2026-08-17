@@ -80,11 +80,12 @@ jobs:
             src-tauri/target/release/bundle/nsis/*.exe
           if-no-files-found: error
 
-  # Publish: on a v* tag, attach the CI-built Windows installer to a GitHub
-  # Release, so distribution is a `git tag vX.Y.Z` away — no local build needed.
+  # Publish: on a v* tag, attach the CI-built installers (Windows + Linux) to
+  # a GitHub Release, so distribution is a `git tag vX.Y.Z` away — no local
+  # build needed.
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: windows
+    needs: [windows, linux]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -97,7 +98,11 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: dsh-desktop-windows
-          path: dist
+          path: dist-win
+      - uses: actions/download-artifact@v4
+        with:
+          name: dsh-desktop-linux
+          path: dist-linux
       # Deterministic publish: any pre-existing release for this tag (e.g. a
       # stale draft from a re-cut) is deleted by id via the API — no silent
       # swallow: if deletion is impossible the step fails loudly and visibly.
@@ -114,7 +119,7 @@ jobs:
             echo "deleting stale release for ${GITHUB_REF_NAME}"
             gh release delete "${GITHUB_REF_NAME}" --yes
           fi
-          gh release create "${GITHUB_REF_NAME}" dist/*.exe \
+          gh release create "${GITHUB_REF_NAME}" dist-win/*.exe dist-linux/*.AppImage dist-linux/*.deb \
             --generate-notes --title "${GITHUB_REF_NAME}"
           gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets[].name'
 
