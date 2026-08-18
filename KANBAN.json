@@ -60,6 +60,19 @@
       ],
       "createdAt": 1786959259277,
       "updatedAt": 1786959259277
+    },
+    {
+      "id": "card-fce90c17-ded0-47e7-9d43-f73a0f8f044d",
+      "title": "预装 dsh-kanban 插件（bundle + sync + PROTECTED + 测试）",
+      "description": "Bundle dsh-kanban into plugins/preinstalled/dsh-kanban (lib, cordis.patch.yml, LICENSE, trimmed package.json + README); wire into sync-resources.mjs list, server-manager.mjs PROTECTED list; sync into src-tauri/resources/preinstalled/dsh-kanban.",
+      "sourceSessionId": "session-ed595292-f0ad-4592-8d37-b13ebce29e69",
+      "status": "done",
+      "tags": [
+        "preinstalled",
+        "plugins"
+      ],
+      "createdAt": 1787025321032,
+      "updatedAt": 1787025321032
     }
   ]
 }

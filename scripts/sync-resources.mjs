@@ -38,7 +38,7 @@ for (const dir of readdirSync(join(root, 'plugins'))) {
 // Version-locked with the shell release (see PLUGIN-CONSOLE-PLAN.md D3).
 const preinstalledDest = join(res, 'preinstalled')
 mkdirSync(preinstalledDest, { recursive: true })
-for (const name of ['dsh-model-reasoning']) {
+for (const name of ['dsh-model-reasoning', 'dsh-kanban']) {
   cpSync(join(root, 'plugins', 'preinstalled', name), join(preinstalledDest, name), { recursive: true, force: true })
 }
 

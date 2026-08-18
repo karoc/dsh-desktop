@@ -1,0 +1,9 @@
+# Bundle layer applied when a profile lists this package. The row names the
+# package by name so Node resolution finds the installed code; its browser half
+# (exports["./client"] + dsh.client manifest) is discovered by dsh web's
+# client-modules service and served at /plugins/dsh-kanban/client.js.
+# The row's host apply registers the board tools and the /kanban/api route; the
+# client half registers the sidebar entry and the full-screen board page.
+- insert:
+    - id: dsh-kanban
+      name: dsh-kanban

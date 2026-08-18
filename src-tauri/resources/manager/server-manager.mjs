@@ -276,7 +276,7 @@ async function installDshUpdate() {
   const backupDir = join(args.runtimeDir, '.plugin-backup')
   rmSync(backupDir, { recursive: true, force: true })
   mkdirSync(backupDir, { recursive: true })
-  const PROTECTED = ['@dsh-desktop', 'dsh-model-reasoning']
+  const PROTECTED = ['@dsh-desktop', 'dsh-model-reasoning', 'dsh-kanban']
   // node_modules may not exist yet on a first install (fresh runtime) — treat
   // as empty instead of crashing on readdirSync(ENOENT).
   const protectedEntries = existsSync(nodeModules)

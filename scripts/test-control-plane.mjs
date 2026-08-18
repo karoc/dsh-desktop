@@ -183,6 +183,15 @@ const mr = join(runtime, 'node_modules', 'dsh-model-reasoning', 'package.json')
 assert.ok(existsSync(mr), 'preinstalled bundle copied into runtime node_modules')
 const mrPkg = JSON.parse(readFileSync(mr, 'utf8'))
 assert.equal(mrPkg.name, 'dsh-model-reasoning', 'copied package keeps its real name')
+// dsh-kanban ships alongside as a second preinstalled bundle.
+assert.ok(
+  Array.isArray(dshJson.preinstalled) && dshJson.preinstalled.includes('dsh-kanban'),
+  'dsh.json records the dsh-kanban preinstalled bundle',
+)
+const kb = join(runtime, 'node_modules', 'dsh-kanban', 'package.json')
+assert.ok(existsSync(kb), 'dsh-kanban preinstalled bundle copied into runtime node_modules')
+const kbPkg = JSON.parse(readFileSync(kb, 'utf8'))
+assert.equal(kbPkg.name, 'dsh-kanban', 'copied dsh-kanban package keeps its real name')
 
 // ── scenario 5 (P5): plugins-install routes through the dsh plugin CLI ───────
 send({ cmd: 'plugins-install', spec: 'some-plugin@1.2.3' })
@@ -208,6 +217,11 @@ assert.ok(entry, 'preinstalled-updates covers the shipped bundle')
 assert.equal(entry.installed, '0.1.1', 'installed version read from the copied package')
 assert.equal(entry.userUpdated, false, 'not user-updated on a fresh runtime')
 assert.equal(entry.updateAvailable, false, 'no registry in the sandbox -> not claimable as update')
+const kbEntry = pu.updates?.['dsh-kanban']
+assert.ok(kbEntry, 'preinstalled-updates also covers dsh-kanban')
+assert.equal(kbEntry.installed, '0.1.0', 'dsh-kanban installed version read from the copied package')
+assert.equal(kbEntry.userUpdated, false, 'dsh-kanban not user-updated on a fresh runtime')
+assert.equal(kbEntry.updateAvailable, false, 'dsh-kanban not claimable as update without a registry')
 
 send({ cmd: 'preinstalled-update', name: 'dsh-model-reasoning' })
 const updStart = await waitFor((e) => e.t === 'op-status' && e.op === 'update-preinstalled' && e.done === false, 'update-preinstalled start')

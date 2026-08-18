@@ -35,6 +35,7 @@
 | D6 | **增加「刷新页面」** | 托盘 + Ctrl+R；client bundle 已 `no-cache`，普通 reload 即拿到磁盘新内容 |
 | D7 | **Dev 模式开关** | 冻结 dsh 版本 +（验证可行性）HMR roots + WebView2 devtools |
 | D8 | **首个预装插件**：`dsh-model-reasoning` | 纯 client bundle、自包含无依赖、作者自持，适合预装；默认关闭 |
+| D9 | **第二预装插件**：`dsh-kanban` | host + client 双半 bundle（board_* 工具 + 看板页），依赖 dsh 自带的 `@deepseek-ai/dsh-tools` 与 client 包，随壳锁定版本；默认关闭 |
 
 **层级模型（三层身份）：**
 

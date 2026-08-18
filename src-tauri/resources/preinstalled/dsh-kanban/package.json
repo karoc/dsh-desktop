@@ -1,0 +1,79 @@
+{
+  "name": "dsh-kanban",
+  "version": "0.1.0",
+  "description": "External DeepSeek Harness plugin: a cross-session, workspace-scoped kanban board for plans and todos, persisted to a git-trackable KANBAN.json. Model-facing tools (board_list/board_add/board_update/board_remove) plus a sidebar '看板' entry with a full-screen three-column board page.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/client.js",
+    "cordis.patch.yml"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-sidebar",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-web-react",
+        "@deepseek-ai/dsh-api-remotes"
+      ],
+      "platform": "web"
+    }
+  },
+  "scripts": {
+    "bundle": "tsdown --config ./tsdown.config.ts",
+    "prepare": "tsdown --config ./tsdown.config.ts",
+    "prepublishOnly": "tsdown --config ./tsdown.config.ts"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "plugin",
+    "kanban",
+    "board",
+    "todo",
+    "plan"
+  ],
+  "author": "karoc",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/karoc/dsh-kanban.git"
+  },
+  "bugs": {
+    "url": "https://github.com/karoc/dsh-kanban/issues"
+  },
+  "homepage": "https://github.com/karoc/dsh-kanban",
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "~18.3.1",
+    "react": "^18.2.0",
+    "tsdown": "^0.22.0",
+    "typescript": "^5.6.0"
+  },
+  "peerDependencies": {
+    "react": "^18.2.0"
+  }
+}
