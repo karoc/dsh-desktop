@@ -179,10 +179,12 @@ assert.ok(listCall, 'opening the panel fetches /plugins/list')
 assert.equal(listCall[1], 'GET')
 await new Promise((r) => setTimeout(r, 10)) // let the async render finish
 
-// ── scenario 3: preinstalled row renders with a toggle button ───────────────
+// ── scenario 3: preinstalled row renders with a toggle switch ───────────────
 const toggle = panel.querySelectorAll('[data-toggle]')
 assert.equal(toggle.length, 1, 'one preinstalled plugin row with a toggle')
 assert.equal(toggle[0].dataset.toggle, 'dsh-model-reasoning')
+assert.ok(toggle[0].className.includes('dshc-switch'), 'the toggle is a switch, not a text button')
+assert.ok(!toggle[0].className.includes(' on'), 'switch starts off (plugin not enabled)')
 
 // ── scenario 4: toggle posts enable (name not in bundles) then disable ──────
 toggle[0].click()

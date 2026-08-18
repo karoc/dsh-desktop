@@ -41,10 +41,6 @@ window.__ModuleLoader__.load({
           coreHint: 'dsh 自带，不可禁用',
           allPlugins: '全部插件',
           fullListHint: '完整只读清单（含 dsh 内置的内部插件）见 dsh 设置 → 插件',
-          enabled: '已启用',
-          notEnabled: '未启用',
-          enable: '启用',
-          disable: '关闭',
           builtin: '内置',
           unmanageable: '不可管理',
           userInstalled: '已安装插件',
@@ -91,10 +87,6 @@ window.__ModuleLoader__.load({
           coreHint: 'Shipped with dsh, cannot be disabled',
           allPlugins: 'All plugins',
           fullListHint: 'Full read-only list (incl. built-in dsh plugins): dsh Settings → Plugins',
-          enabled: 'On',
-          notEnabled: 'Off',
-          enable: 'Enable',
-          disable: 'Disable',
           builtin: 'Built-in',
           unmanageable: 'Fixed',
           userInstalled: 'Installed plugins',
@@ -312,6 +304,24 @@ window.__ModuleLoader__.load({
 .dshc-badge.warn { background: color-mix(in srgb, var(--dshc-warn) 20%, transparent); color: var(--dshc-warn); }
 .dshc-badge.core { background: color-mix(in srgb, var(--dshc-muted) 16%, transparent); color: var(--dshc-muted); }
 .dshc-badge.err { background: color-mix(in srgb, var(--dshc-err) 18%, transparent); color: var(--dshc-err); }
+/* 启停开关（替代文字徽标 + 启用/关闭按钮） */
+.dshc-switch {
+  position: relative; width: 40px; height: 22px; border-radius: 999px; padding: 0;
+  background: color-mix(in srgb, var(--dshc-muted) 35%, transparent);
+  border: 1px solid var(--dshc-border); cursor: pointer; flex-shrink: 0;
+  transition: background .18s ease, border-color .18s ease;
+}
+.dshc-switch .dshc-switch-knob {
+  position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.35);
+  transition: transform .18s ease;
+}
+.dshc-switch.on {
+  background: linear-gradient(135deg, var(--dshc-accent), var(--dshc-accent2));
+  border-color: transparent;
+}
+.dshc-switch.on .dshc-switch-knob { transform: translateX(18px); }
+.dshc-switch:disabled { opacity: .45; cursor: default; }
 .dshc-actions { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 6px; }
 .dshc-btn2 {
   border: 1px solid var(--dshc-border); background: var(--dshc-surface); color: var(--dshc-text);
@@ -623,11 +633,10 @@ window.__ModuleLoader__.load({
       for (const p of pre) {
         const on = bundles.includes(p.name)
         const info = pu[p.name] || {}
-        let badge = on ? L.enabled : L.notEnabled
-        let badgeCls = on ? 'on' : ''
         let sub = p.description || ''
-        let right = `<button class="dshc-btn2 ${on ? '' : 'primary'}" data-toggle="${p.name}">${on ? L.disable : L.enable}</button>`
-        // 有更新时不再额外加 "有更新 vX" 徽标——右侧高亮的「更新到 vX」按钮本身就是提示
+        // 启停 = 开关本身（状态即开关位置），不再用文字徽标 + 右侧按钮。
+        let right = `<button class="dshc-switch${on ? ' on' : ''}" data-toggle="${p.name}" role="switch" aria-checked="${on}"><span class="dshc-switch-knob"></span></button>`
+        // 有更新时右侧高亮的「更新到 vX」按钮本身就是提示
         if (info.updateAvailable) {
           right = `<button class="dshc-btn2 primary" data-upd-pre="${p.name}">${L.updateTo}${info.latest}</button>` + right
         }
@@ -635,7 +644,7 @@ window.__ModuleLoader__.load({
           if (!sub) sub = L.userUpdatedHint
           right += `<button class="dshc-btn2" data-reset-pre="${p.name}">${L.resetDefault}</button>`
         }
-        bodyEl.appendChild(row(p.name, badge, badgeCls, right, sub))
+        bodyEl.appendChild(row(p.name, null, '', right, sub))
       }
       const checkPreBtn = document.createElement('button')
       checkPreBtn.id = 'dshc-check-pre'
