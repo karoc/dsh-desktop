@@ -1308,10 +1308,13 @@ fn set_proxy_config(
     let runtime = runtime_dir(&app);
     let path = proxy_config_path(&runtime);
     let mut cfg = read_proxy_json(&runtime);
+    // Clean each host: trim, lowercase, drop a trailing comma (a historical
+    // "api.xxx.com," never matches the real CONNECT target and silently breaks
+    // routing — never let it back into proxy.json).
     let hosts: Vec<serde_json::Value> = proxied_hosts
         .iter()
         .filter_map(|h| {
-            let t = h.trim().to_lowercase();
+            let t = h.trim().to_lowercase().trim_end_matches(',').trim().to_string();
             if t.is_empty() { None } else { Some(serde_json::Value::String(t)) }
         })
         .collect();

@@ -103,7 +103,9 @@ const tauriMock = {
       if (cmd === 'get_proxy_config') {
         return {
           upstream: { enabled: true, host: '127.0.0.1', port: 7890, username: 'u', password: 'p' },
-          proxiedHosts: ['api.deepseek.com'],
+          // 'api.deepseek.com,' is a historical dirty value (trailing comma)
+          // that must still light up the clean 'api.deepseek.com' checkbox.
+          proxiedHosts: ['api.deepseek.com,', 'web.example'],
           knownHosts: ['registry.npmjs.org'],
           hosts: ['registry.npmjs.org', 'web.example'],
           providers: [

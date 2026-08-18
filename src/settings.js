@@ -52,7 +52,12 @@ async function loadSettings() {
     proxyUser.value = up.username || '';
     proxyPass.value = up.password || '';
 
-    const proxied = new Set(cfg.proxiedHosts || []);
+    // Hosts saved before the comma-cleaning fix may carry a trailing comma
+    // ("api.xxx.com,") that never matches the real target — normalize them so
+    // old selections still light up (and get overwritten with clean values on
+    // the next save).
+    const normalizeHost = (h) => String(h || '').trim().toLowerCase().replace(/,\s*$/, '');
+    const proxied = new Set((cfg.proxiedHosts || []).map(normalizeHost).filter(Boolean));
     // 模型提供方：settings.yaml 读到的 [{name, host, displayName?}]。
     // 路由是 host 级（TCP 层只能按地址区分），所以同一地址下的多个提供方
     // 归并成一个条目：标签列出所有名称，共用一个开关（同地址一起走代理）。

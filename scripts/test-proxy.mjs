@@ -321,6 +321,23 @@ o1.srv.close()
   assert.deepEqual(bare, [
     { name: 'llm-pi-ai/bare', host: 'bare.example' },
   ], 'no displayName -> name is the provider key; non-llm namespaces skipped')
+  // Trailing comma / comma-separated fallback list must NOT leak into the host
+  // (Node's URL parser would swallow the comma, breaking proxying).
+  writeFileSync(settingsPath, [
+    'llm-pi-ai:',
+    '  providers:',
+    '    gw:',
+    '      baseURL: https://api.xxx.com,',
+    '    multi:',
+    '      baseURL: https://api1.example,https://api2.example',
+    '',
+  ].join('\n'))
+  const comma = providerHostsFromSettings(settingsPath)
+  assert.deepEqual(comma, [
+    { name: 'llm-pi-ai/gw', host: 'api.xxx.com' },
+    { name: 'llm-pi-ai/multi', host: 'api1.example' },
+    { name: 'llm-pi-ai/multi', host: 'api2.example' },
+  ], 'trailing comma stripped; comma-separated list yields one host per candidate')
 }
 
 rmSync(work, { recursive: true, force: true })

@@ -77,10 +77,17 @@ export function providerHostsFromSettings(settingsPath) {
     return out
   }
   const push = (baseUrl, name, displayName) => {
-    try {
-      const host = new URL(String(baseUrl).trim()).hostname
-      if (host) out.push({ name, ...(displayName ? { displayName } : {}), host })
-    } catch { /* malformed baseURL — skip */ }
+    // baseURL may carry a trailing comma or be a comma-separated fallback list
+    // (e.g. "https://api.xxx.com," or "a,b"). Node's URL parser would swallow
+    // the comma INTO the hostname ("api.xxx.com,"), which then never matches
+    // the real CONNECT target and silently breaks proxying — split and parse
+    // each candidate instead.
+    for (const candidate of String(baseUrl).split(',').map((s) => s.trim()).filter(Boolean)) {
+      try {
+        const host = new URL(candidate).hostname
+        if (host) out.push({ name, ...(displayName ? { displayName } : {}), host })
+      } catch { /* malformed candidate — skip */ }
+    }
   }
   // Lightweight two-level walk: a 2-space `providers:` key opens the provider
   // map (llm-pi-ai), whose entries sit at 4 spaces (with an optional
