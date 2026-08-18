@@ -70,6 +70,10 @@ struct OpStatus {
     error: Option<String>,
     /// Human hint, e.g. "installed but declares no dsh.bundle — won't load".
     hint: Option<String>,
+    /// Structured hint key so the console can localize it (e.g. "not-a-bundle").
+    hint_key: Option<String>,
+    /// Params for the localized hint (e.g. the plugin names that didn't load).
+    hint_plugins: Option<Vec<String>>,
 }
 
 /// Send one JSON command line to the manager's stdin (no-op when absent).
@@ -796,6 +800,8 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
                     "nextAction": op.next_action,
                     "error": op.error,
                     "hint": op.hint,
+                    "hintKey": op.hint_key,
+                    "hintPlugins": op.hint_plugins,
                 },
             })
             .to_string();
@@ -1175,6 +1181,11 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
                         s.next_action = ev.get("nextAction").and_then(|v| v.as_str()).map(String::from);
                         s.error = ev.get("error").and_then(|v| v.as_str()).map(String::from);
                         s.hint = ev.get("hint").and_then(|v| v.as_str()).map(String::from);
+                        s.hint_key = ev.get("hintKey").and_then(|v| v.as_str()).map(String::from);
+                        s.hint_plugins = ev
+                            .get("hintPlugins")
+                            .and_then(|v| v.as_array())
+                            .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect());
                     }
                     Some("preinstalled-updates") => {
                         let state = handle.state::<ServerState>();

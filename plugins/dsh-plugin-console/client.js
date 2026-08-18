@@ -21,102 +21,142 @@ window.__ModuleLoader__.load({
     const BRIDGE_PORT = globalThis.__DSH_BRIDGE_PORT__ || '__DSH_BRIDGE_PORT__'
     const ready = () => Boolean(BRIDGE_PORT) && !String(BRIDGE_PORT).startsWith('__DSH')
 
+    // ── i18n：面板支持中/英切换，默认中文；所有文案（含预装简介）双语文档 ──
     // 格式约定：中文与数字/字母之间统一加空格（"更新到 0.1.3"、"有更新 0.1.3"）。
-    const L = (navigator.language || 'en').toLowerCase().startsWith('zh')
-      ? {
-          title: '插件与更新',
-          install: '安装新插件',
-          installHint: 'npm 包名 或 github:user/repo / git+https://…',
-          installBtn: '安装',
-          installing: '安装中…',
-          preinstalled: '预装插件',
-          preinstalledHint: '随壳自带，默认关闭，启用后重启生效',
-          hasUpdate: '有更新',
-          updateTo: '更新到 ',
-          resetDefault: '恢复默认',
-          checkPreUpdates: '检查预装插件更新',
-          checkingPre: '正在检查…',
-          userUpdatedHint: '已手动更新，未随壳验证，可恢复默认',
-          core: '内置核心',
-          coreHint: 'dsh 自带，不可禁用',
-          allPlugins: '全部插件',
-          fullListHint: '完整只读清单（含 dsh 内置的内部插件）见 dsh 设置 → 插件',
-          builtin: '内置',
-          unmanageable: '不可管理',
-          userInstalled: '已安装插件',
-          userInstalledHint: '通过下方输入框安装',
-          uninstall: '卸载',
-          updateOne: '更新',
-          update: 'dsh 更新',
-          upToDate: '已是最新版本',
-          updateNow: '一键更新',
-          updating: '正在更新并重启…',
-          unknown: '未知',
-          current: '当前',
-          actions: '操作',
-          refresh: '刷新页面',
-          restart: '重启',
-          restartHint: '重启 dsh 服务，插件变更生效',
-          devtools: '开发者工具',
-          proxySettings: '代理设置',
-          restartToApply: '重启后生效',
-          restartNow: '立即重启',
-          failed: '操作失败',
-          loading: '加载中…',
-          noPreinstalled: '没有预装插件',
-          noUserPlugins: '还没有安装其他插件',
-          opActive: '处理中',
-          opDone: '完成',
-          opErr: '失败',
-          theme: '主题',
-        }
-      : {
-          title: 'Plugins & updates',
-          install: 'Install plugin',
-          installHint: 'npm package, or github:user/repo / git+https://…',
-          installBtn: 'Install',
-          installing: 'Installing…',
-          preinstalled: 'Preinstalled',
-          preinstalledHint: 'Shipped with the app, off by default',
-          hasUpdate: 'Update',
-          updateTo: 'Update to ',
-          resetDefault: 'Reset to default',
-          checkPreUpdates: 'Check preinstalled updates',
-          checkingPre: 'Checking…',
-          userUpdatedHint: 'Manually updated, not shell-verified — can reset',
-          core: 'Core (built-in)',
-          coreHint: 'Shipped with dsh, cannot be disabled',
-          allPlugins: 'All plugins',
-          fullListHint: 'Full read-only list (incl. built-in dsh plugins): dsh Settings → Plugins',
-          builtin: 'Built-in',
-          unmanageable: 'Fixed',
-          userInstalled: 'Installed plugins',
-          userInstalledHint: 'Add more with the input above',
-          uninstall: 'Remove',
-          updateOne: 'Update',
-          update: 'dsh update',
-          upToDate: 'Up to date',
-          updateNow: 'Update now',
-          updating: 'Updating & restarting…',
-          unknown: 'unknown',
-          current: 'current',
-          actions: 'Actions',
-          refresh: 'Refresh page',
-          restart: 'Restart',
-          restartHint: 'Restart dsh to apply plugin changes',
-          devtools: 'DevTools',
-          proxySettings: 'Proxy settings',
-          restartToApply: 'Restart to apply',
-          restartNow: 'Restart now',
-          failed: 'Operation failed',
-          loading: 'Loading…',
-          noPreinstalled: 'No preinstalled plugins',
-          noUserPlugins: 'No other plugins installed',
-          opActive: 'Working…',
-          opDone: 'Done',
-          opErr: 'Failed',
-          theme: 'Theme',
-        }
+    const ZH = {
+      title: '插件与更新',
+      btnLabel: '插件',
+      langSwitch: '切换语言',
+      install: '安装新插件',
+      installHint: 'npm 包名 或 github:user/repo / git+https://…',
+      installBtn: '安装',
+      installing: '安装中…',
+      preinstalled: '预装插件',
+      preinstalledHint: '随壳自带，默认关闭，启用后重启生效',
+      hasUpdate: '有更新',
+      updateTo: '更新到 ',
+      resetDefault: '恢复默认',
+      checkPreUpdates: '检查预装插件更新',
+      checkingPre: '正在检查…',
+      userUpdatedHint: '已手动更新，未随壳验证，可恢复默认',
+      core: '内置核心',
+      coreHint: 'dsh 自带，不可禁用',
+      allPlugins: '全部插件',
+      fullListHint: '完整只读清单（含 dsh 内置的内部插件）见 dsh 设置 → 插件',
+      builtin: '内置',
+      unmanageable: '不可管理',
+      userInstalled: '已安装插件',
+      userInstalledHint: '通过下方输入框安装',
+      uninstall: '卸载',
+      updateOne: '更新',
+      update: 'dsh 更新',
+      upToDate: '已是最新版本',
+      updateNow: '一键更新',
+      updating: '正在更新并重启…',
+      unknown: '未知',
+      current: '当前',
+      actions: '操作',
+      refresh: '刷新页面',
+      restart: '重启',
+      restartHint: '重启 dsh 服务，插件变更生效',
+      devtools: '开发者工具',
+      proxySettings: '代理设置',
+      restartToApply: '重启后生效',
+      restartNow: '立即重启',
+      failed: '操作失败',
+      loading: '加载中…',
+      noPreinstalled: '没有预装插件',
+      noUserPlugins: '还没有安装其他插件',
+      opActive: '处理中',
+      opDone: '完成',
+      opErr: '失败',
+      theme: '主题',
+      confirmUninstall: '卸载插件 %s？',
+      notABundle: '已安装：%s 未声明 dsh.bundle，不会作为插件加载',
+    }
+    const EN = {
+      title: 'Plugins & updates',
+      btnLabel: 'Plugins',
+      langSwitch: 'Switch language',
+      install: 'Install plugin',
+      installHint: 'npm package, or github:user/repo / git+https://…',
+      installBtn: 'Install',
+      installing: 'Installing…',
+      preinstalled: 'Preinstalled',
+      preinstalledHint: 'Shipped with the app, off by default',
+      hasUpdate: 'Update',
+      updateTo: 'Update to ',
+      resetDefault: 'Reset to default',
+      checkPreUpdates: 'Check preinstalled updates',
+      checkingPre: 'Checking…',
+      userUpdatedHint: 'Manually updated, not shell-verified — can reset',
+      core: 'Core (built-in)',
+      coreHint: 'Shipped with dsh, cannot be disabled',
+      allPlugins: 'All plugins',
+      fullListHint: 'Full read-only list (incl. built-in dsh plugins): dsh Settings → Plugins',
+      builtin: 'Built-in',
+      unmanageable: 'Fixed',
+      userInstalled: 'Installed plugins',
+      userInstalledHint: 'Add more with the input above',
+      uninstall: 'Remove',
+      updateOne: 'Update',
+      update: 'dsh update',
+      upToDate: 'Up to date',
+      updateNow: 'Update now',
+      updating: 'Updating & restarting…',
+      unknown: 'unknown',
+      current: 'current',
+      actions: 'Actions',
+      refresh: 'Refresh page',
+      restart: 'Restart',
+      restartHint: 'Restart dsh to apply plugin changes',
+      devtools: 'DevTools',
+      proxySettings: 'Proxy settings',
+      restartToApply: 'Restart to apply',
+      restartNow: 'Restart now',
+      failed: 'Operation failed',
+      loading: 'Loading…',
+      noPreinstalled: 'No preinstalled plugins',
+      noUserPlugins: 'No other plugins installed',
+      opActive: 'Working…',
+      opDone: 'Done',
+      opErr: 'Failed',
+      theme: 'Theme',
+      confirmUninstall: 'Remove plugin %s?',
+      notABundle: 'Installed: %s declares no dsh.bundle — will not load as a plugin',
+    }
+
+    const LANG_STORAGE = 'dshc-lang'
+    function loadLang() {
+      try {
+        return globalThis.localStorage?.getItem(LANG_STORAGE) === 'en' ? 'en' : 'zh'
+      } catch { return 'zh' }
+    }
+    function saveLang(l) {
+      try { globalThis.localStorage?.setItem(LANG_STORAGE, l) } catch { /* no storage */ }
+    }
+    let lang = loadLang()
+    let L = lang === 'zh' ? ZH : EN
+    function setLang(next) {
+      lang = next === 'en' ? 'en' : 'zh'
+      L = lang === 'zh' ? ZH : EN
+      saveLang(lang)
+      if (floatingBtn) {
+        floatingBtn.textContent = `⚙ ${L.btnLabel}`
+        floatingBtn.title = L.title
+      }
+    }
+
+    // 预装插件的双语简介（壳自有插件的简介我们维护；未收录的用包自带 description）。
+    const DESC = {
+      'dsh-model-reasoning': {
+        zh: '为第三方（pi-ai）模型提供按模型配置思考等级（reasoning effort）的设置页',
+        en: 'Settings page to configure per-model reasoning efforts (thinking levels) for third-party (pi-ai) providers',
+      },
+    }
+    function descFor(name, fallback) {
+      return DESC[name]?.[lang] || fallback || ''
+    }
 
     // ── themes: color tokens + layout/style tokens (radius/blur/padding) ──
     // Each theme is a distinct look, not just a palette:
@@ -227,6 +267,8 @@ window.__ModuleLoader__.load({
     // Preserved install input value across re-renders (a 5s poll refresh must
     // not wipe what the user is typing).
     let installSpec = ''
+    // The floating button element (label updates on language switch).
+    let floatingBtn = null
 
     function bridge(path, opts) {
       if (!ready()) return Promise.resolve(null)
@@ -324,6 +366,25 @@ window.__ModuleLoader__.load({
 }
 .dshc-switch.on .dshc-switch-knob { transform: translateX(18px); }
 .dshc-switch:disabled { opacity: .45; cursor: default; }
+/* 升级箭头：绿色向上箭头，放在开关前面，与开关同一行垂直对齐 */
+.dshc-upd-arrow {
+  width: 24px; height: 24px; border-radius: 50%; border: none; padding: 0; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: linear-gradient(135deg, var(--dshc-success), #22c55e); color: #fff;
+  font-size: 13px; line-height: 1; flex-shrink: 0;
+  box-shadow: 0 1px 4px rgba(34,197,94,.35);
+  transition: transform .12s ease, filter .12s ease;
+}
+.dshc-upd-arrow:hover { transform: scale(1.1); filter: brightness(1.08); }
+.dshc-upd-arrow:active { transform: scale(.95); }
+/* 预装项容器：行 + 下方独立一行（恢复默认） */
+.dshc-item { margin: 7px 0; }
+.dshc-item .dshc-row { margin: 0; }
+.dshc-reset {
+  display: block; margin: 6px 0 0 auto; font-size: 11px; padding: 4px 10px;
+}
+/* 语言切换按钮（头部，主题点左侧） */
+.dshc-lang { min-width: 44px; font-size: 11px; padding: 4px 8px; }
 .dshc-actions { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 6px; }
 .dshc-btn2 {
   border: 1px solid var(--dshc-border); background: var(--dshc-surface); color: var(--dshc-text);
@@ -556,6 +617,14 @@ window.__ModuleLoader__.load({
       const head = document.createElement('div')
       head.className = 'dshc-head'
       head.appendChild(el('div', L.title, 'dshc-title'))
+      // 语言切换（中/EN），默认中文；点击切换并重渲染。
+      const langBtn = document.createElement('button')
+      langBtn.id = 'dshc-lang'
+      langBtn.className = 'dshc-btn2 dshc-lang'
+      langBtn.textContent = lang === 'zh' ? 'EN' : '中文'
+      langBtn.title = L.langSwitch
+      langBtn.addEventListener('click', () => { setLang(lang === 'zh' ? 'en' : 'zh'); refresh() })
+      head.appendChild(langBtn)
       const themes = document.createElement('div')
       themes.className = 'dshc-themes'
       const cur = loadTheme()
@@ -600,7 +669,13 @@ window.__ModuleLoader__.load({
         // it will never load as a plugin, and no restart is needed — say so
         // plainly instead of promising "重启后生效".
         if (op.nextAction) pendingRestart = true
-        const text = op.hint ? `${L.opDone} — ${op.hint}` : `✓ ${L.opDone} — ${L.restartToApply}`
+        let hintText = ''
+        if (op.hintKey === 'not-a-bundle') {
+          hintText = L.notABundle.replace('%s', (op.hintPlugins || []).join(', '))
+        } else if (op.hint) {
+          hintText = op.hint
+        }
+        const text = hintText ? `${L.opDone} — ${hintText}` : `✓ ${L.opDone} — ${L.restartToApply}`
         bodyEl.appendChild(el('div', text, 'dshc-op show'))
         if (op.nextAction) showRestartNow()
       } else if (op && op.done && !op.ok) {
@@ -635,18 +710,26 @@ window.__ModuleLoader__.load({
       for (const p of pre) {
         const on = bundles.includes(p.name)
         const info = pu[p.name] || {}
-        let sub = p.description || ''
-        // 启停 = 开关本身（状态即开关位置），不再用文字徽标 + 右侧按钮。
+        let sub = descFor(p.name, p.description)
+        // 启停 = 开关本身；有新版时，开关前放一个绿色向上箭头（点击更新，
+        // 悬停 tips 显示短文案「更新到 vX」）。
         let right = `<button class="dshc-switch${on ? ' on' : ''}" data-toggle="${p.name}" role="switch" aria-checked="${on}"><span class="dshc-switch-knob"></span></button>`
-        // 有更新时右侧高亮的「更新到 vX」按钮本身就是提示
         if (info.updateAvailable) {
-          right = `<button class="dshc-btn2 primary" data-upd-pre="${p.name}">${L.updateTo}${info.latest}</button>` + right
+          const tip = `${L.updateTo}${info.latest}`
+          right = `<button class="dshc-upd-arrow" data-upd-pre="${p.name}" aria-label="${tip}">↑</button>` + right
         }
+        const wrap = document.createElement('div')
+        wrap.className = 'dshc-item'
+        wrap.appendChild(row(p.name, null, '', right, sub))
         if (info.userUpdated) {
           if (!sub) sub = L.userUpdatedHint
-          right += `<button class="dshc-btn2" data-reset-pre="${p.name}">${L.resetDefault}</button>`
+          const resetBtn = document.createElement('button')
+          resetBtn.className = 'dshc-btn2 dshc-reset'
+          resetBtn.dataset.resetPre = p.name
+          resetBtn.textContent = L.resetDefault
+          wrap.appendChild(resetBtn)
         }
-        bodyEl.appendChild(row(p.name, null, '', right, sub))
+        bodyEl.appendChild(wrap)
       }
       const checkPreBtn = document.createElement('button')
       checkPreBtn.id = 'dshc-check-pre'
@@ -720,6 +803,9 @@ window.__ModuleLoader__.load({
         })
       })
       bodyEl.querySelectorAll('[data-upd-pre]').forEach((btn) => {
+        // 升级箭头：悬停显示短文案（aria-label 即「更新到 vX」），点击触发更新。
+        const label = btn.getAttribute('aria-label') || ''
+        if (label) attachTooltip(btn, label)
         btn.addEventListener('click', async () => {
           const name = btn.dataset.updPre
           await bridge('/plugins/update-preinstalled', { method: 'POST', body: { name } })
@@ -758,7 +844,7 @@ window.__ModuleLoader__.load({
       bodyEl.querySelectorAll('[data-remove]').forEach((btn) => {
         btn.addEventListener('click', async () => {
           const name = btn.dataset.remove
-          if (!globalThis.confirm || confirm(`卸载插件 ${name}？`)) {
+          if (!globalThis.confirm || confirm(L.confirmUninstall.replace('%s', name))) {
             await bridge('/plugins/remove', { method: 'POST', body: { name } })
             status(`${L.opActive}：${L.uninstall} ${name}`, 'warn')
           }
@@ -814,8 +900,9 @@ window.__ModuleLoader__.load({
       injectStyle()
       const btn = document.createElement('button')
       btn.className = 'dshc-btn'
-      btn.textContent = '⚙ 插件'
+      btn.textContent = `⚙ ${L.btnLabel}`
       btn.title = L.title
+      floatingBtn = btn
       btn.addEventListener('click', () => {
         if (!panelEl) {
           panelEl = document.createElement('div')

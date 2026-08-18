@@ -38,6 +38,7 @@ function makeEl(tag) {
       remove(cls) { this.toggle(cls, false) },
     },
     appendChild(c) { el.children.push(c); return c },
+    getAttribute(name) { return el[name] !== undefined ? String(el[name]) : null },
     contains(node) {
       if (node === el) return true
       return el.children.some((c) => (c.contains ? c.contains(node) : c === node))
@@ -357,7 +358,11 @@ assert.ok(enter, 'mouseenter tooltip handler attached')
 enter()
 const tipEl = body.children.find((c) => c.className === 'dshc-tip')
 assert.ok(tipEl, 'custom tooltip element created on hover')
-assert.equal(tipEl.textContent, 'per-model reasoning effort settings', 'tooltip carries the full description')
+assert.equal(
+  tipEl.textContent,
+  '为第三方（pi-ai）模型提供按模型配置思考等级（reasoning effort）的设置页',
+  'tooltip carries the (zh) full description',
+)
 
 // ── scenario 11: clicking outside the panel closes it ───────────────────────
 for (let i = 0; i < 3 && !panelElVisible(); i++) { btn.click(); await new Promise((r) => setTimeout(r, 10)) }
@@ -375,7 +380,24 @@ function panelElVisible() {
   return p && p.style.display !== 'none'
 }
 
-// ── scenario 12: unbaked bridge port -> no fetch, no crash ──────────────────
+// ── scenario 12: language toggle switches zh -> en (default is zh) ───────────
+for (let i = 0; i < 3 && !panelElVisible(); i++) { btn.click(); await new Promise((r) => setTimeout(r, 10)) }
+let langBtn = panel.querySelector('#dshc-lang')
+assert.ok(langBtn, 'language toggle rendered')
+assert.equal(langBtn.textContent, 'EN', 'default zh shows EN as the switch target')
+assert.equal(panel.querySelector('.dshc-title').textContent, '插件与更新', 'title is zh by default')
+langBtn.click() // switch to en
+await new Promise((r) => setTimeout(r, 10))
+langBtn = panel.querySelector('#dshc-lang')
+assert.equal(langBtn.textContent, '中文', 'after switching, target is 中文')
+assert.equal(panel.querySelector('.dshc-title').textContent, 'Plugins & updates', 'title switched to en')
+const enSub = panel.querySelector('.dshc-sub')
+assert.ok(enSub && enSub.textContent.includes('Settings page'), 'preinstalled description switched to en')
+// switch back to zh so later scenarios stay deterministic
+panel.querySelector('#dshc-lang').click()
+await new Promise((r) => setTimeout(r, 10))
+
+// ── scenario 13: unbaked bridge port -> no fetch, no crash ──────────────────
 delete globalThis.__DSH_BRIDGE_PORT__
 const body2 = makeEl('body')
 globalThis.document = makeDoc(body2)
@@ -386,5 +408,5 @@ window.__handoff.factory().apply({})
 body2.children.find((c) => c.className === 'dshc-btn')?.click()
 assert.equal(calls.length, 0, 'unbaked bridge port must not fire fetches')
 
-console.log('PASS — plugin console behavioral test (15 scenarios)')
+console.log('PASS — plugin console behavioral test (16 scenarios)')
 process.exit(0)

@@ -1043,6 +1043,8 @@ async function runPluginOp(argsList, opInfo) {
     const ok = code === 0
     log(`plugin ${opInfo.op} ${opInfo.spec}: ${ok ? 'ok' : `failed (code ${code})`}`)
     let hint
+    let hintKey
+    let hintPlugins
     let nextAction = ok ? 'restart' : null
     if (ok && opInfo.op === 'install') {
       const after = readProfileManifest()
@@ -1053,7 +1055,10 @@ async function runPluginOp(argsList, opInfo) {
       if (notLoaded.length > 0) {
         // Installed as a dependency but declares no dsh.bundle — it will never
         // load as a plugin; no restart needed and the user deserves to know.
+        // hintKey + hintPlugins let the console render this in the UI language.
         hint = `已安装：${notLoaded.join(', ')} 未声明 dsh.bundle，不会作为插件加载`
+        hintKey = 'not-a-bundle'
+        hintPlugins = notLoaded
         nextAction = null
       }
     }
@@ -1064,6 +1069,8 @@ async function runPluginOp(argsList, opInfo) {
       ok,
       nextAction,
       hint,
+      hintKey,
+      hintPlugins,
     })
   } catch (err) {
     log(`plugin ${opInfo.op} failed: ${err.message}`)
