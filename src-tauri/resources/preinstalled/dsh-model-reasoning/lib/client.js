@@ -124,9 +124,11 @@ window.__ModuleLoader__.load({
 			const { api, t, useModelReasoning } = props;
 			const raw = useModelReasoning((snapshot) => snapshot);
 			const value = raw?.value;
-			const editable = (0, react.useMemo)(() => Object.entries(value?.providers ?? {}), [value]).filter(([, route]) => Array.isArray(route?.models));
+			const routes = (0, react.useMemo)(() => Object.entries(value?.providers ?? {}), [value]);
+			const editable = routes.filter(([, route]) => Array.isArray(route?.models));
 			const [routeKey, setRouteKey] = (0, react.useState)(void 0);
 			const [modelIndex, setModelIndex] = (0, react.useState)(void 0);
+			const [modelQuery, setModelQuery] = (0, react.useState)("");
 			const [mode, setMode] = (0, react.useState)("inherit");
 			const [levels, setLevels] = (0, react.useState)(/* @__PURE__ */ new Set(["high"]));
 			const [wire, setWire] = (0, react.useState)({});
@@ -140,9 +142,18 @@ window.__ModuleLoader__.load({
 			const models = activeRoute?.[1]?.models ?? [];
 			const activeModel = modelIndex === void 0 ? void 0 : models[modelIndex];
 			activeModel?.id;
+			const query = modelQuery.trim().toLowerCase();
+			const filteredModels = query === "" ? models.map((model, index) => ({
+				model,
+				index
+			})) : models.map((model, index) => ({
+				model,
+				index
+			})).filter(({ model, index }) => `${model.name ?? ""} ${model.id ?? ""} ${String(index)}`.toLowerCase().includes(query));
 			const pickRoute = (key) => {
 				setRouteKey(key);
 				setModelIndex(void 0);
+				setModelQuery("");
 				setSaved(false);
 				setFailure(void 0);
 				const route = editable.find(([k]) => k === key)?.[1];
@@ -178,6 +189,10 @@ window.__ModuleLoader__.load({
 			const routeDefaultDirty = activeRouteKey !== void 0 && routeDefault !== (activeRoute?.[1]?.reasoning ?? "");
 			const modelDirty = activeModel !== void 0 && JSON.stringify(activeModel.reasoningEfforts) !== JSON.stringify(nextDict);
 			const canSave = !busy && (mode !== "on" || onHasLevel) && (routeDefaultDirty || modelDirty);
+			const scopeLoading = raw?.status === "loading";
+			const scopeUnavailable = raw?.status === "unavailable";
+			const showEmpty = raw?.status === "ready" && editable.length === 0;
+			const hasAnyProviders = routes.length > 0;
 			const save = async () => {
 				if (api === void 0 || activeRouteKey === void 0) return;
 				setBusy(true);
@@ -245,6 +260,54 @@ window.__ModuleLoader__.load({
 				}
 				setSaved(true);
 			};
+			/** Whether the "apply to all models" action is available. Requires a selected
+			* model (its declaration is what gets copied) plus a valid mode. */
+			const canApplyAll = !busy && activeRouteKey !== void 0 && modelIndex !== void 0 && models.length > 0 && (mode !== "on" || onHasLevel);
+			/**
+			* Apply the current model's reasoning declaration (inherit / false / levels +
+			* wire spellings) to EVERY model on the route, writing the whole models array
+			* (path ops cannot address array indices).
+			*/
+			const applyToAll = async () => {
+				if (api === void 0 || activeRouteKey === void 0) return;
+				setBusy(true);
+				setFailure(void 0);
+				const next = mode === "inherit" ? void 0 : mode === "off" ? false : wireOf(levels, wire, offEmpty);
+				const newModels = models.map((model) => {
+					const entry = { ...model };
+					if (next === void 0) {
+						const { reasoningEfforts: _dropped, ...rest } = entry;
+						return rest;
+					}
+					return {
+						...entry,
+						reasoningEfforts: next
+					};
+				});
+				if (JSON.stringify(models) === JSON.stringify(newModels)) {
+					setBusy(false);
+					return;
+				}
+				const response = await api.settings.mutate({
+					ns: "llm-pi-ai",
+					ops: [{
+						op: "set",
+						path: [
+							"providers",
+							activeRouteKey,
+							"models"
+						],
+						value: newModels
+					}],
+					...raw?.revision === void 0 ? {} : { expectedRevision: raw.revision }
+				});
+				setBusy(false);
+				if (!response.result.ok) {
+					setFailure(response.result.error.code === "settings-conflict" ? t("conflict") : response.result.error.message);
+					return;
+				}
+				setSaved(true);
+			};
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 				className: "mr-stack",
 				style: { padding: "4px 0" },
@@ -261,195 +324,278 @@ window.__ModuleLoader__.load({
 						className: "mr-hint",
 						children: t("readOnly")
 					}) : null,
-					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-						className: "mr-field",
-						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("label", {
-							className: "mr-label",
-							children: t("routeLabel")
-						}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(Selector, {
-							value: routeKey ?? "",
-							placeholder: t("routeUnset"),
-							disabled: !raw?.writable,
-							options: editable.map(([key, route]) => ({
-								id: key,
-								label: route?.displayName ?? key
-							})),
-							onChange: (id) => {
-								pickRoute(id);
-							}
-						})]
-					}),
-					activeRouteKey === void 0 ? null : /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-						className: "mr-field",
-						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("label", {
-							className: "mr-label",
-							children: t("modelLabel")
-						}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(Selector, {
-							value: modelIndex === void 0 ? "" : String(modelIndex),
-							placeholder: t("modelUnset"),
-							disabled: !raw?.writable,
-							options: models.map((model, index) => ({
-								id: String(index),
-								label: model.name ?? model.id ?? String(index)
-							})),
-							onChange: (id) => {
-								pickModel(Number(id));
-							}
-						})]
-					}),
-					activeRouteKey !== void 0 ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("fieldset", {
-						className: "mr-panel",
-						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("legend", {
-							className: "mr-panel-title",
-							children: t("routeDefault")
-						}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(Selector, {
-							value: routeDefault,
-							placeholder: t("routeDefaultUnset"),
-							disabled: !raw?.writable,
-							options: REASONING_LEVELS.map((level) => ({
-								id: level,
-								label: level
-							})),
-							onChange: (id) => {
-								setRouteDefault(id);
-								setSaved(false);
-							}
-						})]
-					}) : null,
-					activeModel === void 0 ? null : /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("fieldset", {
-						className: "mr-panel",
-						children: [
-							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("legend", {
-								className: "mr-panel-title",
-								children: `${t("modelEfforts")} — ${activeModel.name ?? activeModel.id ?? modelIndex}`
-							}),
-							/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-								className: "mr-stack",
-								children: [
-									/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("label", {
-										className: "mr-radio-row",
-										children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
-											type: "radio",
-											name: "effort-mode",
-											checked: mode === "inherit",
-											disabled: !raw?.writable,
-											onChange: () => {
-												setMode("inherit");
-												setSaved(false);
-											}
-										}), t("modeInherit")]
-									}),
-									/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("label", {
-										className: "mr-radio-row",
-										children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
-											type: "radio",
-											name: "effort-mode",
-											checked: mode === "off",
-											disabled: !raw?.writable,
-											onChange: () => {
-												setMode("off");
-												setSaved(false);
-											}
-										}), t("modeOff")]
-									}),
-									/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("label", {
-										className: "mr-radio-row",
-										children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
-											type: "radio",
-											name: "effort-mode",
-											checked: mode === "on",
-											disabled: !raw?.writable,
-											onChange: () => {
-												setMode("on");
-												setSaved(false);
-											}
-										}), t("modeOn")]
-									})
-								]
-							}),
-							mode === "on" ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-								className: "mr-levels",
-								children: REASONING_LEVELS.map((level) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Pill, {
-									active: levels.has(level),
-									disabled: !raw?.writable,
-									onClick: () => {
-										toggleLevel(level);
-									},
-									children: level
-								}, level))
-							}), levels.size > 0 ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-								className: "mr-wire",
-								children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-									className: "mr-wire-title",
-									children: t("wireTitle")
-								}), REASONING_LEVELS.filter((level) => levels.has(level)).map((level) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-									className: "mr-wire-row",
-									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-										className: "mr-wire-label",
-										children: level
-									}), level === "off" ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("label", {
-										className: "mr-wire-off",
-										children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
-											type: "checkbox",
-											checked: offEmpty,
-											disabled: !raw?.writable,
-											onChange: () => {
-												setOffEmpty((v) => !v);
-												setSaved(false);
-											}
-										}), t("offEmpty")]
-									}), offEmpty ? null : /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Input, {
-										className: "mr-wire-input",
-										value: wire[level] ?? "off",
-										disabled: !raw?.writable,
-										onChange: (e) => {
-											setWire({
-												...wire,
-												[level]: e.target.value
-											});
-											setSaved(false);
-										}
-									})] }) : /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Input, {
-										className: "mr-wire-input",
-										value: wire[level] ?? level,
-										disabled: !raw?.writable,
-										onChange: (e) => {
-											setWire({
-												...wire,
-												[level]: e.target.value
-											});
-											setSaved(false);
-										}
-									})]
-								}, level))]
-							}) : null] }) : null,
-							mode === "on" && !onHasLevel ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
-								className: "mr-error",
-								children: t("needLevel")
-							}) : null
-						]
-					}),
-					saved ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
-						className: "mr-success",
+					scopeUnavailable ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+						className: "mr-hint",
+						children: t("unavailable")
+					}) : scopeLoading ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+						className: "mr-hint",
+						children: t("loading")
+					}) : showEmpty ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						className: "mr-empty",
 						role: "status",
-						children: t("saved")
-					}) : null,
-					failure !== void 0 ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
-						className: "mr-error",
-						children: failure
-					}) : null,
-					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-						className: "mr-actions",
-						children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
-							variant: "primary",
-							size: "md",
-							disabled: !canSave,
-							onClick: () => {
-								save();
-							},
-							children: t("save")
+						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconThinkOutline16, {
+							className: "mr-empty-icon",
+							size: 16
+						}), hasAnyProviders ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+							className: "mr-empty-title",
+							children: t("emptyNoEditableTitle")
+						}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+							className: "mr-empty-body",
+							children: t("emptyNoEditableBody")
+						})] }) : /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+								className: "mr-empty-title",
+								children: t("emptyNoProvidersTitle")
+							}),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+								className: "mr-empty-body",
+								children: t("emptyNoProvidersBody")
+							}),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+								className: "mr-empty-hint",
+								children: t("emptyNoProvidersAction")
+							})
+						] })]
+					}) : /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [
+						/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+							className: "mr-field",
+							children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("label", {
+								className: "mr-label",
+								children: t("routeLabel")
+							}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(Selector, {
+								value: routeKey ?? "",
+								placeholder: t("routeUnset"),
+								disabled: !raw?.writable,
+								options: editable.map(([key, route]) => ({
+									id: key,
+									label: route?.displayName ?? key
+								})),
+								onChange: (id) => {
+									pickRoute(id);
+								}
+							})]
+						}),
+						activeRouteKey === void 0 ? null : models.length === 0 ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+							className: "mr-empty mr-model-empty",
+							role: "status",
+							children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+								className: "mr-empty-title",
+								children: t("emptyModelsTitle")
+							}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+								className: "mr-empty-body",
+								children: t("emptyModelsBody")
+							})]
+						}) : /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+							className: "mr-field",
+							children: [
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("label", {
+									className: "mr-label",
+									children: t("modelLabel")
+								}),
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Input, {
+									className: "mr-search",
+									value: modelQuery,
+									placeholder: t("modelSearchPlaceholder"),
+									disabled: !raw?.writable,
+									onChange: (e) => {
+										setModelQuery(e.target.value);
+									}
+								}),
+								filteredModels.length === 0 ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+									className: "mr-hint",
+									children: t("modelSearchEmpty")
+								}) : /* @__PURE__ */ (0, react_jsx_runtime.jsx)(Selector, {
+									value: modelIndex === void 0 ? "" : String(modelIndex),
+									placeholder: t("modelUnset"),
+									disabled: !raw?.writable,
+									options: filteredModels.map(({ model, index }) => ({
+										id: String(index),
+										label: model.name ?? model.id ?? String(index)
+									})),
+									onChange: (id) => {
+										pickModel(Number(id));
+									}
+								})
+							]
+						}),
+						activeRouteKey !== void 0 ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("fieldset", {
+							className: "mr-panel",
+							children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("legend", {
+								className: "mr-panel-title",
+								children: t("routeDefault")
+							}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(Selector, {
+								value: routeDefault,
+								placeholder: t("routeDefaultUnset"),
+								disabled: !raw?.writable,
+								options: REASONING_LEVELS.map((level) => ({
+									id: level,
+									label: level
+								})),
+								onChange: (id) => {
+									setRouteDefault(id);
+									setSaved(false);
+								}
+							})]
+						}) : null,
+						activeModel === void 0 ? null : /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("fieldset", {
+							className: "mr-panel",
+							children: [
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("legend", {
+									className: "mr-panel-title",
+									children: `${t("modelEfforts")} — ${activeModel.name ?? activeModel.id ?? modelIndex}`
+								}),
+								/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+									className: "mr-mode-row",
+									children: [
+										/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
+											label: t("modeInheritTip"),
+											side: "bottom",
+											children: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("label", {
+												className: "mr-radio-row",
+												children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
+													type: "radio",
+													name: "effort-mode",
+													checked: mode === "inherit",
+													disabled: !raw?.writable,
+													onChange: () => {
+														setMode("inherit");
+														setSaved(false);
+													}
+												}), t("modeInheritLabel")]
+											})
+										}),
+										/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
+											label: t("modeOffTip"),
+											side: "bottom",
+											children: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("label", {
+												className: "mr-radio-row",
+												children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
+													type: "radio",
+													name: "effort-mode",
+													checked: mode === "off",
+													disabled: !raw?.writable,
+													onChange: () => {
+														setMode("off");
+														setSaved(false);
+													}
+												}), t("modeOffLabel")]
+											})
+										}),
+										/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
+											label: t("modeOnTip"),
+											side: "bottom",
+											children: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("label", {
+												className: "mr-radio-row",
+												children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
+													type: "radio",
+													name: "effort-mode",
+													checked: mode === "on",
+													disabled: !raw?.writable,
+													onChange: () => {
+														setMode("on");
+														setSaved(false);
+													}
+												}), t("modeOnLabel")]
+											})
+										})
+									]
+								}),
+								mode === "on" ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+									className: "mr-levels",
+									children: REASONING_LEVELS.map((level) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Pill, {
+										active: levels.has(level),
+										disabled: !raw?.writable,
+										onClick: () => {
+											toggleLevel(level);
+										},
+										children: level
+									}, level))
+								}), levels.size > 0 ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+									className: "mr-wire",
+									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+										className: "mr-wire-title",
+										children: t("wireTitle")
+									}), REASONING_LEVELS.filter((level) => levels.has(level)).map((level) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+										className: "mr-wire-row",
+										children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+											className: "mr-wire-label",
+											children: level
+										}), level === "off" ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("label", {
+											className: "mr-wire-off",
+											children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
+												type: "checkbox",
+												checked: offEmpty,
+												disabled: !raw?.writable,
+												onChange: () => {
+													setOffEmpty((v) => !v);
+													setSaved(false);
+												}
+											}), t("offEmpty")]
+										}), offEmpty ? null : /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Input, {
+											className: "mr-wire-input",
+											value: wire[level] ?? "off",
+											disabled: !raw?.writable,
+											onChange: (e) => {
+												setWire({
+													...wire,
+													[level]: e.target.value
+												});
+												setSaved(false);
+											}
+										})] }) : /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Input, {
+											className: "mr-wire-input",
+											value: wire[level] ?? level,
+											disabled: !raw?.writable,
+											onChange: (e) => {
+												setWire({
+													...wire,
+													[level]: e.target.value
+												});
+												setSaved(false);
+											}
+										})]
+									}, level))]
+								}) : null] }) : null,
+								mode === "on" && !onHasLevel ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+									className: "mr-error",
+									children: t("needLevel")
+								}) : null
+							]
+						}),
+						saved ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+							className: "mr-success",
+							role: "status",
+							children: t("saved")
+						}) : null,
+						failure !== void 0 ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+							className: "mr-error",
+							children: failure
+						}) : null,
+						/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+							className: "mr-actions",
+							children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+								variant: "primary",
+								size: "md",
+								disabled: !canSave,
+								onClick: () => {
+									save();
+								},
+								children: t("save")
+							}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
+								label: t("applyAllTip"),
+								side: "top",
+								children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+									variant: "outline",
+									size: "md",
+									disabled: !canApplyAll,
+									onClick: () => {
+										applyToAll();
+									},
+									children: t("applyAll")
+								})
+							})]
 						})
-					})
+					] })
 				]
 			});
 		}
@@ -490,6 +636,10 @@ window.__ModuleLoader__.load({
 .mr-panel-title { margin: 0 0 10px; font-size: 13px; line-height: 18px; color: var(--dsw-alias-label-primary); }
 .mr-stack { display: flex; flex-direction: column; gap: 10px; }
 .mr-radio-row { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; line-height: 18px; color: var(--dsw-alias-label-primary); cursor: pointer; }
+/* The three mode choices laid out side by side. */
+.mr-mode-row { display: flex; flex-wrap: wrap; gap: 18px; }
+/* A route with an empty models list reuses the empty-placeholder look, lighter. */
+.mr-model-empty { padding: 16px 20px; margin-top: 2px; }
 .mr-levels { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 /* Native radio themed like DSH's own forms (RiskConfirmation keeps native
    inputs and colors them via accent-color so they follow the theme instead of
@@ -505,6 +655,20 @@ window.__ModuleLoader__.load({
 .mr-wire-off { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); cursor: pointer; }
 .mr-wire-off input[type='checkbox'] { accent-color: var(--dsw-alias-button-primary-fill); }
 .mr-wire-input { width: 200px; }
+/* Model search filter above the model selector; matches the built-in field
+   input width so the dropdown sits under a same-sized box. */
+.mr-search { width: 200px; margin-bottom: 8px; }
+/* Empty state: dashed placeholder box matching the built-in Models form's
+   empty catalog (modelEmpty: dashed border-l3, centered, tertiary label). */
+.mr-empty {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding: 28px 20px; text-align: center;
+  border: 1px dashed var(--dsw-alias-border-l3); border-radius: 8px;
+}
+.mr-empty-icon { color: var(--dsw-alias-label-tertiary); margin-bottom: 4px; }
+.mr-empty-title { margin: 0; font-size: 13px; line-height: 18px; color: var(--dsw-alias-label-primary); }
+.mr-empty-body { margin: 0; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-tertiary); max-width: 320px; }
+.mr-empty-hint { margin: 4px 0 0; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
 .mr-hint { margin: 8px 0 0; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-tertiary); }
 .mr-error { margin: 8px 0 0; font-size: 12px; line-height: 18px; color: var(--dsw-alias-state-error-primary); }
 .mr-success { margin: 8px 0 0; font-size: 12px; line-height: 18px; color: var(--dsw-alias-state-success-primary); }
@@ -536,16 +700,32 @@ window.__ModuleLoader__.load({
 			intro: "Set per-model thinking levels (reasoning efforts) for third-party (pi-ai) providers. Values are written to llm-pi-ai and picked up by the model picker.",
 			readOnly: "The settings document is read-only in this deployment.",
 			conflict: "Someone else changed these settings while this page was open. Reopen it to edit the current values.",
+			loading: "Loading…",
+			unavailable: "The settings document is not available in this deployment.",
+			emptyNoProvidersTitle: "No third-party providers yet",
+			emptyNoProvidersBody: "Add a custom provider first, then come back here to configure each model's thinking levels.",
+			emptyNoProvidersAction: "Settings → Models → Add a custom provider",
+			emptyNoEditableTitle: "No editable providers yet",
+			emptyNoEditableBody: "Your providers have no custom model list. Add a models list under a provider in the Models page, or pick a catalog model's reasoning level in the composer.",
 			routeLabel: "Provider route",
 			routeUnset: "Choose a provider…",
 			modelLabel: "Model",
 			modelUnset: "Choose a model…",
+			modelSearchPlaceholder: "Search models…",
+			modelSearchEmpty: "No models match your search.",
 			routeDefault: "Route default thinking level",
 			routeDefaultUnset: "Provider default (unset)",
 			modelEfforts: "Model thinking levels",
-			modeInherit: "Inherit (no override — keep whatever is already declared)",
-			modeOff: "Non-reasoning (reasoningEfforts: false)",
-			modeOn: "Reasoning — select supported levels:",
+			modeInheritLabel: "Inherit",
+			modeOffLabel: "Non-reasoning",
+			modeOnLabel: "Reasoning",
+			modeInheritTip: "No override — keep whatever is already declared.",
+			modeOffTip: "Mark as non-reasoning (reasoningEfforts: false).",
+			modeOnTip: "Enable reasoning and pick the supported levels.",
+			applyAll: "Apply to all models",
+			applyAllTip: "Apply this model's thinking levels (and wire spellings) to every model on the route.",
+			emptyModelsTitle: "No models yet",
+			emptyModelsBody: "This provider has no models. Add a models list under it in the Models page.",
 			wireTitle: "Wire spelling per level (customize what each level sends, e.g. max → ultra)",
 			offEmpty: "off sends nothing",
 			needLevel: "At least one level beyond \"off\" must be selected.",
@@ -559,16 +739,32 @@ window.__ModuleLoader__.load({
 			intro: "为第三方（pi-ai）提供方的每个模型设置思考等级（推理强度）。写入 llm-pi-ai，模型选择器会自动识别。",
 			readOnly: "此部署中设置文档为只读。",
 			conflict: "页面打开期间有其他人修改了这些设置。请重新打开以编辑当前值。",
+			loading: "加载中…",
+			unavailable: "此部署中设置文档不可用。",
+			emptyNoProvidersTitle: "还没有第三方提供方",
+			emptyNoProvidersBody: "请先添加自定义提供方，再回来为每个模型配置思考等级。",
+			emptyNoProvidersAction: "设置 → 模型 → 添加自定义提供方",
+			emptyNoEditableTitle: "还没有可编辑的提供方",
+			emptyNoEditableBody: "当前提供方没有自定义模型列表。请在「模型」页为提供方添加模型列表，或直接在 composer 中选择目录模型的推理等级。",
 			routeLabel: "提供方路由",
 			routeUnset: "选择提供方…",
 			modelLabel: "模型",
 			modelUnset: "选择模型…",
+			modelSearchPlaceholder: "搜索模型…",
+			modelSearchEmpty: "没有匹配的模型。",
 			routeDefault: "路由默认思考等级",
 			routeDefaultUnset: "提供方默认（未设置）",
 			modelEfforts: "模型思考等级",
-			modeInherit: "继承（不覆盖——保留已有声明）",
-			modeOff: "不思考（reasoningEfforts: false）",
-			modeOn: "思考——选择支持的等级：",
+			modeInheritLabel: "继承",
+			modeOffLabel: "不思考",
+			modeOnLabel: "思考",
+			modeInheritTip: "不覆盖——保留已有声明。",
+			modeOffTip: "标记为不思考（reasoningEfforts: false）。",
+			modeOnTip: "启用思考并选择支持的等级。",
+			applyAll: "应用到所有模型",
+			applyAllTip: "把当前模型的思考等级（含线上拼写）应用到该路由的所有模型。",
+			emptyModelsTitle: "还没有模型",
+			emptyModelsBody: "该提供方还没有模型。请在「模型」页为其添加模型列表。",
 			wireTitle: "每个等级的线上拼写（自定义该等级发到上游的值，如 max → ultra）",
 			offEmpty: "off 不发送值",
 			needLevel: "必须至少选择一个除 \"off\" 之外的等级。",

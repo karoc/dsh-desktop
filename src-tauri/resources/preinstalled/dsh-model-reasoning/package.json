@@ -1,6 +1,6 @@
 {
   "name": "dsh-model-reasoning",
-  "version": "0.1.1",
+  "version": "0.1.4",
   "description": "External DeepSeek Harness web client plugin: a Settings page to configure per-model reasoning efforts (thinking levels) for third-party (pi-ai) providers, written into llm-pi-ai.providers.*.models[].reasoningEfforts.",
   "type": "module",
   "main": "lib/index.js",

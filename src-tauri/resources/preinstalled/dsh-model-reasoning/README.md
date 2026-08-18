@@ -28,6 +28,14 @@ built-in **Models** page. For each third-party provider that carries an explicit
   set** (`reasoningEfforts`), ticking the canonical levels
   `off minimal low medium high xhigh max`.
 
+The three mode choices sit side by side with hover explanations (tooltips), and
+an **Apply to all models** button copies the current model's thinking
+declaration (levels + wire spellings) to every model on the route at once.
+Empty states guide you when there is no provider yet, no editable provider, or
+a provider with no models. A **model search filter** above the model selector
+narrows a long provider model list by name / id as you type — display-only, so
+the stored declaration order and the write path are never touched.
+
 ### Custom wire spelling (adapt to any upstream vocabulary)
 
 Each selected level has a **wire-spelling** field (defaults to the level name).
@@ -41,6 +49,15 @@ model's thinking vocabulary **without waiting for an adapter update**.
 > and resolution only reads those keys, so a bare `ultra:` key is rejected at
 > write and ignored at request time. "Ultra" is expressed by remapping an
 > existing level's wire spelling (`max: ultra`), not by adding an `ultra` key.
+
+### Empty state
+
+When no third-party provider is configured yet, the page shows a friendly
+placeholder card (instead of a dead empty dropdown) prompting you to add a
+custom provider first, pointing at **Settings → Models → Add a custom
+provider**. It distinguishes "no providers at all" from "providers without a
+custom models list", and shows loading / unavailable hints while the settings
+document loads.
 
 The write path uses the official `settings.mutate` RPC with revision fencing, so
 a concurrent change is refused rather than silently overwritten.
@@ -105,6 +122,8 @@ src/client/locales.ts # en/zh copy
 ```sh
 pnpm install
 pnpm bundle          # emits lib/index.js + lib/client.js
+pnpm release:check   # release gate: docs/changelog/tag/tree/build/registry must all pass
+pnpm publish         # runs the gate (prepack/prepublishOnly), then postpublish verifies the live release
 ```
 
 The bundle leaves the platform packages (`react`, `@deepseek-ai/cordis`,
@@ -130,4 +149,9 @@ module table; everything else is inlined.
 ## License
 
 [MIT](LICENSE)
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) (development + release checklist) and
+[CHANGELOG.md](CHANGELOG.md) for version history.
 

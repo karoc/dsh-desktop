@@ -73,6 +73,20 @@
       ],
       "createdAt": 1787025321032,
       "updatedAt": 1787025321032
+    },
+    {
+      "id": "card-7e44771a-6fb6-4a28-b6fb-2ef1135ab3bc",
+      "title": "预装插件同步：dsh-model-reasoning 0.1.1→0.1.4（kanban 已最新）",
+      "summary": "dsh-model-reasoning bundle 由 0.1.1 升级到仓库 HEAD 0.1.4（empty states/apply-to-all/tooltips/模型搜索）；dsh-kanban 与仓库 HEAD 一致无改动；sync:resources 已刷新；test-control-plane 改为从 bundle 动态读版本。",
+      "rationale": "bundle 随壳锁定作者仓库最新开发态（kanban 先例），非仅 npm 已发布版；npm latest 对 kanban 反而更旧。",
+      "sourceSessionId": "session-b07fc740-c633-402a-ad13-adca9d76e0b5",
+      "status": "done",
+      "tags": [
+        "preinstalled",
+        "plugins"
+      ],
+      "createdAt": 1787032101064,
+      "updatedAt": 1787032101064
     }
   ]
 }

@@ -18,6 +18,10 @@ const root = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(root, '..')
 const manager = join(repoRoot, 'scripts', 'server-manager.mjs')
 const resources = join(repoRoot, 'src-tauri', 'resources')
+// Expected preinstalled versions come from the actual bundled packages, so
+// this test tracks version bumps instead of pinning a hardcoded string.
+const bundledVersion = (name) =>
+  JSON.parse(readFileSync(join(resources, 'preinstalled', name, 'package.json'), 'utf8')).version
 
 const work = mkdtempSync(join(tmpdir(), 'dsh-ctrl-'))
 const runtime = join(work, 'runtime')
@@ -214,12 +218,12 @@ assert.ok(existsSync(shim), 'pnpm shim written for the bundled pnpm')
 const pu = await waitFor((e) => e.t === 'preinstalled-updates', 'preinstalled-updates event')
 const entry = pu.updates?.['dsh-model-reasoning']
 assert.ok(entry, 'preinstalled-updates covers the shipped bundle')
-assert.equal(entry.installed, '0.1.1', 'installed version read from the copied package')
+assert.equal(entry.installed, bundledVersion('dsh-model-reasoning'), 'installed version read from the copied package')
 assert.equal(entry.userUpdated, false, 'not user-updated on a fresh runtime')
 assert.equal(entry.updateAvailable, false, 'no registry in the sandbox -> not claimable as update')
 const kbEntry = pu.updates?.['dsh-kanban']
 assert.ok(kbEntry, 'preinstalled-updates also covers dsh-kanban')
-assert.equal(kbEntry.installed, '0.1.0', 'dsh-kanban installed version read from the copied package')
+assert.equal(kbEntry.installed, bundledVersion('dsh-kanban'), 'dsh-kanban installed version read from the copied package')
 assert.equal(kbEntry.userUpdated, false, 'dsh-kanban not user-updated on a fresh runtime')
 assert.equal(kbEntry.updateAvailable, false, 'dsh-kanban not claimable as update without a registry')
 
