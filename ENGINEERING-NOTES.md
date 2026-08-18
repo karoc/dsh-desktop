@@ -315,24 +315,34 @@ Windows 的 NSIS 安装行为、toast 渲染、AUMID、事件投递——Linux s
   禁用；代理自身用 raw net/http，永远不经过 undici env-proxy。
 - **测试**：test-proxy.mjs（11 场景）、test-proxy-e2e.mjs（真实 undici→manager 代理→假上游）、
   test-control-plane.mjs（假 dsh 探测 env 断言注入）、test-launcher-settings.mjs（vm 加载真实
-  app.js + 最小 DOM 桩验证设置面板；注意 vm 跨 realm 数组的 assert.deepEqual 因原型不同必失败，
-  先 `[...arr]` 展开再比）。
+  src/settings.js + 最小 DOM 桩验证独立设置窗口；注意 vm 跨 realm 数组的 assert.deepEqual 因原型
+  不同必失败，先 `[...arr]` 展开再比）。
 
-## 28. 代理设置的放置：启动页不是入口（独立窗口 + 窗口菜单栏）
+## 28. 代理设置的放置：启动页不是入口（独立窗口 + 控制台面板 + 托盘）
 
 - **教训**：启动页只存在到 dsh 就绪（几秒），作为低频设置的主入口是错误放置——用户根本来不及，
   且 dsh 加载后没有入口。产品决策"放哪"必须先想清楚，而不是顺着"启动页能设置"就做。
-- **最终放置**：
-  - 主入口 = **主窗口菜单栏「设置 → 代理设置…」**（`WebviewWindow::set_menu`，窗口 chrome，
-    dsh 页面加载后依然常驻；Tauri 2.11.5 该 API 存在，cargo check 确认）；
-  - 辅助入口 = **托盘「代理设置…」**（与菜单栏共用 id `proxy-settings`，事件走 Builder::on_menu_event
-    统一处理 → `open_settings_window`，托盘 TrayIconBuilder 的 on_menu_event 也调同一函数，不会双重触发）；
+- **第一版**（fcb03d2）：独立设置窗口 + 主窗口菜单栏「设置 → 代理设置…」+ 托盘。
+- **再次调整（用户反馈菜单栏挤占空间——只有一项"设置"不值得占一整行）**：
+  - 去掉主窗口菜单栏（`WebviewWindow::set_menu`、Builder::on_menu_event、Submenu 全删）；
+  - 主入口 = **dsh 页面右下角「插件」控制台面板的「代理设置」按钮**——复用已有悬浮面板，零新增占用；
+    远程页面无 `__TAURI__`，点击走桥端点 **`POST /settings/open-proxy`** → `open_settings_window`；
+  - 辅助入口 = **托盘「代理设置…」**（保留，TrayIconBuilder::on_menu_event 的 `proxy-settings` 分支）；
   - 落点 = **独立设置窗口**（`WebviewWindowBuilder::new(label="settings", WebviewUrl::App("settings.html"))`，
-    `open_settings_window` 幂等：已存在则 show+focus，否则新建）；窗口独立于 dsh 主页面，设置不打断使用。
+    `open_settings_window` 幂等：已存在则 show+focus，否则新建；窗口独立于 dsh 主页面，设置不打断使用）。
   - **启动页彻底移除设置**（⚙ 按钮、?view=settings 视图、ready-banner 全删）；back_to_dsh /
     navigate_to_launcher_view / CURRENT_DSH_URL 一并移除。
+- **提供方显示（用户反馈"显示地址不如名称；同地址可能多名"）**：
+  - `providerHostsFromSettings` 提取 llm-pi-ai providers 的 **`displayName`** 字段 + llm-deepseek 固定
+    "DeepSeek"，返回 `{name, displayName?, host}`；
+  - 设置面板按 **host 归并**：同一地址下的多个提供方合成一个条目（标签列出所有名称，如
+    `DeepSeek / ACME 网关（api.deepseek.com）`），一个开关；
+  - **技术限制（已与用户确认接受）**：代理路由发生在 TCP 层（CONNECT 到 host:port），只能按目标地址
+    区分，看不到 URL/提供方身份（HTTPS 加密）。同 host 的多个提供方必然一起走代理或一起直连；要单独
+    控制只能改 dsh 应用层或做 HTTPS MITM（均不现实）。
 - **权限**：独立窗口是本地页，capability `launcher` 的 windows 加 `"settings"`；显式补
   `core:window:allow-close`（core:window:default 是否含 allow-close 在自动生成的权限里查不到静态定义，
   显式声明保证关闭按钮可用，冗余无害）。
-- **测试**：test-launcher-settings.mjs 改为加载独立的 src/settings.js（vm + 最小 DOM + mock Tauri 桥），
-  验证渲染/保存/关闭按钮（5 场景）。
+- **测试**：test-launcher-settings.mjs 加载独立的 src/settings.js（vm + 最小 DOM + mock Tauri 桥），
+  验证渲染（含同 host 归并标签）/保存/关闭按钮（5 场景）；test-plugin-console.mjs 断言控制台面板
+  「代理设置」按钮点击 POST `/settings/open-proxy`。

@@ -53,13 +53,23 @@ async function loadSettings() {
     proxyPass.value = up.password || '';
 
     const proxied = new Set(cfg.proxiedHosts || []);
-    // 模型提供方：settings.yaml 读到的 [{name, host}]，标签显示名字 + 主机。
-    const providers = (cfg.providers || []).map((p) => ({
-      label: p.name ? `${p.name}（${p.host}）` : p.host,
-      host: p.host,
+    // 模型提供方：settings.yaml 读到的 [{name, host, displayName?}]。
+    // 路由是 host 级（TCP 层只能按地址区分），所以同一地址下的多个提供方
+    // 归并成一个条目：标签列出所有名称，共用一个开关（同地址一起走代理）。
+    const byHost = new Map(); // host -> [friendly names]
+    for (const p of cfg.providers || []) {
+      const host = p.host;
+      if (!host) continue;
+      const disp = p.displayName || p.name || host;
+      if (!byHost.has(host)) byHost.set(host, []);
+      byHost.get(host).push(disp);
+    }
+    const providers = [...byHost.entries()].map(([host, names]) => ({
+      label: `${[...new Set(names)].join(' / ')}（${host}）`,
+      host,
     }));
     // 其它已观测主机：knownHosts（持久化）+ hosts（本次运行观测），去重、剔除提供方。
-    const providerHosts = new Set(providers.map((p) => p.host));
+    const providerHosts = new Set(byHost.keys());
     const seen = new Map();
     for (const h of [...(cfg.knownHosts || []), ...(cfg.hosts || [])]) {
       if (!providerHosts.has(h)) seen.set(h, h);

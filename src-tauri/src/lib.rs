@@ -15,7 +15,7 @@ use std::io::{BufRead, BufReader};
 use std::net::{TcpListener, TcpStream};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::Mutex;
-use tauri::menu::{CheckMenuItem, Menu, MenuItem, Submenu};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem};
 use tauri::{AppHandle, Emitter, Listener, Manager, State};
 
 /// The spawned `server-manager` child (owns the dsh service tree) plus the
@@ -661,6 +661,13 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
                 .unwrap_or_else(|_| std::path::PathBuf::from("."));
             log_line(&data, &format!("client-ready (http): {body}"));
             eprintln!("[dsh-desktop] client-ready (http): {body}");
+            ("200 OK", String::new())
+        }
+        ("POST", "/settings/open-proxy") => {
+            // The console plugin's "代理设置" entry lives inside the dsh page
+            // (remote, no __TAURI__) — it opens the standalone settings window
+            // through this bridge endpoint.
+            open_settings_window(app);
             ("200 OK", String::new())
         }
         ("POST", "/log") => {
@@ -1551,18 +1558,6 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            // ── 主窗口菜单栏：设置 → 代理设置… ───────────────────────
-            // Shell-native entry that survives the launcher page and the dsh
-            // page alike (it is window chrome, not page content), so proxy
-            // settings are reachable any time dsh is loaded.
-            let settings_sub = Submenu::with_items(app, "设置", true, &[
-                &MenuItem::with_id(app, "proxy-settings", "代理设置…", true, None::<&str>)?,
-            ])?;
-            let win_menu = Menu::with_items(app, &[&settings_sub])?;
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.set_menu(win_menu);
-            }
-
             // ── 关窗=隐藏到托盘（真正的托盘语义）；只有菜单"退出"才真正退出。
 // 点击 toast 由 notify-rust 进程内激活回调驱动 activate_window()，对
 // 隐藏/最小化/置后/置前任意状态都能恢复并置前。窗口重新获得焦点时，
@@ -1667,12 +1662,6 @@ pub fn run() {
             get_proxy_config,
             set_proxy_config
         ])
-        // Window menu bar events (the tray handles its own in TrayIconBuilder).
-        // The "设置 → 代理设置…" item and the tray's item share this id.
-        .on_menu_event(|app, event| match event.id.as_ref() {
-            "proxy-settings" => open_settings_window(app),
-            _ => {}
-        })
         .run(tauri::generate_context!())
         .expect("error while running DSH Desktop");
 }

@@ -60,10 +60,13 @@ export function readProxyConfig(configFile) {
 /**
  * Best-effort extraction of model provider hosts from a dsh settings.yaml
  * (llm-deepseek.baseURL / llm-pi-ai.providers.<n>.baseURL / any other llm-*
- * namespace). Returns [{name, host}]; empty when unreadable — the proxy's
- * observed-host list still populates the settings UI.
+ * namespace). Returns [{name, host, displayName?}]: `name` is the dsh
+ * namespace (or `ns/provider`), `displayName` the friendly name when known
+ * (llm-pi-ai providers carry a `displayName` field; llm-deepseek is fixed to
+ * "DeepSeek"). Empty when unreadable — the proxy's observed-host list still
+ * populates the settings UI.
  * @param {string} settingsPath
- * @returns {Array<{name: string, host: string}>}
+ * @returns {Array<{name: string, host: string, displayName?: string}>}
  */
 export function providerHostsFromSettings(settingsPath) {
   const out = []
@@ -73,35 +76,44 @@ export function providerHostsFromSettings(settingsPath) {
   } catch {
     return out
   }
-  const push = (baseUrl, label) => {
+  const push = (baseUrl, name, displayName) => {
     try {
       const host = new URL(String(baseUrl).trim()).hostname
-      if (host) out.push({ name: label, host })
+      if (host) out.push({ name, ...(displayName ? { displayName } : {}), host })
     } catch { /* malformed baseURL — skip */ }
   }
   // Lightweight two-level walk: a 2-space `providers:` key opens the provider
-  // map (llm-pi-ai), whose entries sit at 4 spaces; other llm-* namespaces put
-  // baseURL directly at 2 spaces (llm-deepseek).
+  // map (llm-pi-ai), whose entries sit at 4 spaces (with an optional
+  // `displayName` at 6 spaces); other llm-* namespaces put baseURL directly
+  // at 2 spaces (llm-deepseek).
   let ns = null
   let inProviders = false
   let provider = null
+  let displayName = null
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.replace(/#.*$/, '').replace(/\s+$/, '')
     const top = line.match(/^([A-Za-z0-9_.-]+):\s*$/)
-    if (top) { ns = top[1]; inProviders = false; provider = null; continue }
+    if (top) { ns = top[1]; inProviders = false; provider = null; displayName = null; continue }
     if (!ns?.startsWith('llm-')) continue
     const two = line.match(/^\s{2}([A-Za-z0-9_.-]+):\s*$/)
     if (two) {
       inProviders = two[1] === 'providers'
       provider = inProviders ? null : two[1]
+      displayName = null
       continue
     }
     if (inProviders) {
       const four = line.match(/^\s{4}([A-Za-z0-9_.-]+):\s*$/)
-      if (four) { provider = four[1]; continue }
+      if (four) { provider = four[1]; displayName = null; continue }
+      const dn = line.match(/^\s{6}displayName:\s*(.+)$/)
+      if (dn) displayName = String(dn[1]).trim().replace(/^['"]|['"]$/g, '')
     }
     const b = line.match(/^\s*baseURL:\s*(.+)$/)
-    if (b) push(b[1], provider ? `${ns}/${provider}` : ns)
+    if (b) {
+      const name = provider ? `${ns}/${provider}` : ns
+      const disp = displayName || (ns === 'llm-deepseek' ? 'DeepSeek' : null)
+      push(b[1], name, disp)
+    }
   }
   return out
 }

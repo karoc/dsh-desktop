@@ -106,7 +106,11 @@ const tauriMock = {
           proxiedHosts: ['api.deepseek.com'],
           knownHosts: ['registry.npmjs.org'],
           hosts: ['registry.npmjs.org', 'web.example'],
-          providers: [{ name: 'llm-deepseek', host: 'api.deepseek.com' }],
+          providers: [
+            { name: 'llm-deepseek', displayName: 'DeepSeek', host: 'api.deepseek.com' },
+            // Same host as DeepSeek: must merge into one checkbox.
+            { name: 'llm-pi-ai/gw', displayName: 'ACME 网关', host: 'api.deepseek.com' },
+          ],
         }
       }
       if (cmd === 'set_proxy_config') return {}
@@ -148,10 +152,11 @@ assert.equal(getEl('proxyPass').value, 'p', 'proxy password loaded')
 
 // ── scenario 3: host checkboxes rendered from providers + observed ──────────
 const providerList = getEl('providerHosts')
-assert.equal(providerList.querySelectorAll('.host-check').length, 1, 'one provider host rendered')
+// Two providers share api.deepseek.com → exactly ONE merged checkbox.
+assert.equal(providerList.querySelectorAll('.host-check').length, 1, 'same-host providers merge into one checkbox')
 const providerCb = providerList.querySelector('input')
 assert.equal(providerCb.checked, true, 'provider host checked because it is in proxiedHosts')
-assert.equal(providerCb.closest('.host-check').querySelector('span').textContent, 'llm-deepseek（api.deepseek.com）', 'provider checkbox label shows name + host')
+assert.equal(providerCb.closest('.host-check').querySelector('span').textContent, 'DeepSeek / ACME 网关（api.deepseek.com）', 'merged label lists friendly names + host')
 assert.equal(providerCb.closest('.host-check').dataset.host, 'api.deepseek.com', 'host kept in data-host for saving')
 
 const otherList = getEl('otherHosts')

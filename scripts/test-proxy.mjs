@@ -295,6 +295,7 @@ o1.srv.close()
     'llm-pi-ai:',
     '  providers:',
     '    acme:',
+    '      displayName: "ACME 网关"',
     '      baseURL: https://gateway.acme.example/v1',
     'ui-theme:',
     '  theme: dark',
@@ -302,10 +303,24 @@ o1.srv.close()
   ].join('\n'))
   const providers = providerHostsFromSettings(settingsPath)
   assert.deepEqual(providers, [
-    { name: 'llm-deepseek', host: 'api.deepseek.com' },
-    { name: 'llm-pi-ai/acme', host: 'gateway.acme.example' },
-  ], 'settings.yaml provider hosts extracted (llm-* namespaces only)')
+    { name: 'llm-deepseek', displayName: 'DeepSeek', host: 'api.deepseek.com' },
+    { name: 'llm-pi-ai/acme', displayName: 'ACME 网关', host: 'gateway.acme.example' },
+  ], 'settings.yaml provider hosts extracted with friendly displayNames (llm-* only)')
   assert.deepEqual(providerHostsFromSettings(join(work, 'missing.yaml')), [], 'missing settings.yaml -> empty list')
+  // provider without displayName falls back to its key; non-llm namespaces ignored
+  writeFileSync(settingsPath, [
+    'llm-pi-ai:',
+    '  providers:',
+    '    bare:',
+    '      baseURL: https://bare.example/v1',
+    'web-search:',
+    '  baseURL: https://search.example',
+    '',
+  ].join('\n'))
+  const bare = providerHostsFromSettings(settingsPath)
+  assert.deepEqual(bare, [
+    { name: 'llm-pi-ai/bare', host: 'bare.example' },
+  ], 'no displayName -> name is the provider key; non-llm namespaces skipped')
 }
 
 rmSync(work, { recursive: true, force: true })
