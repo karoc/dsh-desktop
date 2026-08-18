@@ -66,16 +66,14 @@ h1 { font-size: 18px; margin: 0 0 8px; }
 
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* ── 无框片尾字幕式滚动日志 ───────────────────────────────
-   无边框 / 无背景 / 无滚动条：日志浮在深色背景上，新行从底部
-   淡入，旧行向上滚动并在顶部淡出。视口高度固定为 5 行。 */
+/* ── 5 行替换 + 光辉扫过（demo-K 效果）─────────────────────
+   无边框 / 无背景 / 无滚动条 / 无遮罩：日志浮在深色背景上，
+   固定 5 行，新行从顶部直接替换，光辉从下向上扫过。 */
 .credits-viewport {
   position: relative;
   width: min(760px, 90vw);
   height: calc(5 * 26px);
   overflow: hidden;
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, rgba(0, 0, 0, 0.55) 16%, #000 42%);
-  mask-image: linear-gradient(to bottom, transparent 0%, rgba(0, 0, 0, 0.55) 16%, #000 42%);
 }
 
 .credits {
@@ -86,9 +84,8 @@ h1 { font-size: 18px; margin: 0 0 8px; }
   text-align: center;
   font-size: 13px;
   line-height: 26px;
-  color: var(--muted);
+  color: var(--fg);
   font-variant-numeric: tabular-nums;
-  will-change: transform;
 }
 
 .credit-line {
@@ -96,6 +93,7 @@ h1 { font-size: 18px; margin: 0 0 8px; }
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  transition: text-shadow 0.5s ease;
 }
 
 @media (prefers-reduced-motion: reduce) {

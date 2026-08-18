@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Launcher Marquee 集成自测（真实 app.js + styles.css）</title>
+    <link rel="stylesheet" href="../src/styles.css" />
+    <style>
+      /* 测试页自身的控制面板，不影响被测试的启动器样式 */
+      #tester {
+        position: fixed;
+        top: 12px;
+        left: 14px;
+        z-index: 50;
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        max-width: 560px;
+        padding: 10px 12px;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: rgba(13, 17, 23, 0.92);
+        font-size: 12px;
+        color: var(--muted);
+      }
+      #tester button {
+        margin: 0;
+        padding: 4px 10px;
+        font-size: 12px;
+        border-radius: 6px;
+      }
+      #tester button.ghost { background: transparent; color: var(--muted); border-color: var(--border); }
+      #tester .note { width: 100%; margin: 0; }
+    </style>
+  </head>
+  <body>
+    <!-- 控制面板（仅测试用） -->
+    <div id="tester">
+      <button id="tStart" class="ghost">模拟安装开始</button>
+      <button id="tLine" class="ghost">+ 一行</button>
+      <button id="tDone" class="ghost">安装完成(done)</button>
+      <button id="tErr" class="ghost">安装失败(error)</button>
+      <button id="tAuto">▶ 自动演示</button>
+      <p class="note">这个页面加载真实的 <code>src/app.js</code> + <code>src/styles.css</code>，用 mock 的 Tauri 事件驱动：安装开始 → 每 300ms 一行 → 完成。光辉 9 次递增 → 全部点亮。</p>
+    </div>
+
+    <button id="settingsBtn" class="settings-btn" title="代理设置" aria-label="代理设置">⚙</button>
+
+    <!-- 与 index.html 相同的启动视图 -->
+    <main class="shell" id="launchView">
+      <div class="hero">
+        <div class="logo" aria-hidden="true"><img src="../src/logo.png" width="64" height="64" alt="" draggable="false"></div>
+        <h1>DeepSeek Harness</h1>
+        <p class="state" id="state">正在启动 dsh 服务…</p>
+        <div class="spinner" id="spinner" aria-hidden="true"></div>
+        <div class="install-progress" id="installProgress" hidden aria-hidden="true">
+          <div class="install-progress-bar"></div>
+        </div>
+        <button id="retry" hidden>重试</button>
+        <button id="opendata" class="secondary" hidden>打开数据目录（看 manager.log）</button>
+      </div>
+      <div class="credits-viewport">
+        <div class="credits" id="credits" aria-live="polite"></div>
+      </div>
+      <p class="ready-banner" id="readyBanner" hidden>dsh 已就绪 — <a href="#" id="readyBack">点此返回</a></p>
+    </main>
+
+    <!-- 设置视图（app.js 引用了这些元素，必须存在） -->
+    <section class="settings" id="settingsView" hidden>
+      <header class="settings-head">
+        <h2>代理设置</h2>
+        <button id="settingsClose" class="secondary">← 返回</button>
+      </header>
+      <div class="settings-body">
+        <section class="set-group">
+          <h3>上游代理（可选）</h3>
+          <label class="row check"><input type="checkbox" id="proxyEnabled" /> 启用上游代理</label>
+          <div class="row"><input id="proxyHost" placeholder="代理主机" autocomplete="off" spellcheck="false" /></div>
+          <div class="row"><input id="proxyPort" placeholder="端口" type="number" min="1" max="65535" /></div>
+          <div class="row"><input id="proxyUser" placeholder="用户名（可选）" autocomplete="off" spellcheck="false" /></div>
+          <div class="row"><input id="proxyPass" placeholder="密码（可选）" type="password" autocomplete="new-password" /></div>
+        </section>
+        <section class="set-group">
+          <h3>走代理的主机</h3>
+          <div class="host-list" id="providerHosts"></div>
+          <div class="host-list" id="otherHosts"></div>
+        </section>
+        <div class="row actions">
+          <button id="saveProxy" class="primary">保存</button>
+          <span class="muted" id="saveStatus"></span>
+        </div>
+      </div>
+    </section>
+
+    <!-- mock Tauri：必须在 app.js 之前定义 -->
+    <script>
+      window.__TAURI__ = {
+        event: {
+          listen(name, handler) {
+            (window.__dshEvents = window.__dshEvents || {})[name] =
+              (window.__dshEvents[name] || []).concat([handler]);
+          },
+        },
+        core: { invoke: async (cmd) => { console.log('[mock invoke]', cmd); return {}; } },
+      };
+      window.dshEmit = (name, payload) => {
+        for (const h of window.__dshEvents[name] || []) h({ payload });
+      };
+    </script>
+
+    <!-- 被测的真实启动器代码 -->
+    <script src="../src/app.js"></script>
+
+    <!-- 模拟器 -->
+    <script>
+      const PKGS = ['koffi', 'node-pty', 'typescript', 'chokidar', 'axios', 'react', 'lodash', 'semver', 'tar', 'glob', 'uuid', 'yaml', 'typescript', '@babel/core', 'use-sync-external-store'];
+      let n = 0, autoTimer = null;
+      function addLine() {
+        dshEmit('server-log', '⬇ 下载 ' + PKGS[n % PKGS.length] + '@1.2.' + (n % 10));
+        n++;
+      }
+      function autoDemo() {
+        if (autoTimer) clearInterval(autoTimer);
+        n = 0;
+        dshEmit('install-status', { phase: 'start', version: '0.2.1' });
+        autoTimer = setInterval(() => {
+          addLine();
+          if (n >= 40) {
+            clearInterval(autoTimer);
+            setTimeout(() => dshEmit('install-status', { phase: 'done' }), 800);
+          }
+        }, 300);
+      }
+      document.getElementById('tStart').addEventListener('click', () => { n = 0; dshEmit('install-status', { phase: 'start', version: '0.2.1' }); });
+      document.getElementById('tLine').addEventListener('click', addLine);
+      document.getElementById('tDone').addEventListener('click', () => dshEmit('install-status', { phase: 'done' }));
+      document.getElementById('tErr').addEventListener('click', () => dshEmit('install-status', { phase: 'error', error: 'ESOCKET timeout registry.npmjs.org' }));
+      document.getElementById('tAuto').addEventListener('click', autoDemo);
+      // 打开即自动演示
+      autoDemo();
+    </script>
+  </body>
+</html>
