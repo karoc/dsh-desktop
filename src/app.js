@@ -27,8 +27,9 @@ function setState(text, failed = false) {
 // ── 5 行替换 + 光辉扫过（demo-K 效果）────────────────────
 // 固定 5 行：新行直接替换到顶部，最旧一行移除（直接模式，无动画）。
 // 光辉从视口下方向上扫过，扫出顶部后按当前停止时间休息，再扫下一次。
-// 安装期间：以停止时间为步进节奏——速度 200→999 分 9 次递增、停止
-// 700→20ms 分 9 次递减，第 9 次同到顶点 → 停止扫描、所有行全部点亮。
+// 单一逻辑（不分安装/日常）：光辉以停止时间为步进节奏——每次扫完推进，
+// 速度 200→999 分 9 次递增、停止 700→20ms 分 9 次递减，第 9 次到顶点
+// → 停止扫描、所有行全部点亮；时间不足则只看到前面阶段。
 const MAX_ROWS = 5;
 const GLOW_RADIUS = 40;
 const GLOW_BASE = 0.28;
@@ -37,7 +38,7 @@ const creditsViewport = document.querySelector('.credits-viewport');
 const REDUCED_MOTION = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 let rows = [];
 let scanPos = null, restUntil = 0, lastTs = 0, rafId = null;
-let allLit = false, installActive = false, sweepDisabled = false;
+let allLit = false, sweepDisabled = false;
 let GLOW_SPEED = 200, REST_MS = 700, step = 0;
 
 function lightRow(el) {
@@ -50,7 +51,7 @@ function lightAll() {
   rows.forEach(lightRow);
 }
 
-// 以停止时间为步进节奏：每次扫完才推进一次（9 次后到顶点并全部点亮）
+// 单一步进逻辑：每次扫完推进一次（9 次后到顶点并全部点亮）
 function advanceStep() {
   step++;
   if (step >= RAMP_COUNT) {
@@ -76,10 +77,8 @@ function scanTick(ts) {
     if (scanPos < -40) {
       scanPos = null;
       restUntil = ts + REST_MS;               // 按当前停止时间休息
-      if (installActive) {
-        advanceStep();                        // 安装期间：扫完即推进
-        if (allLit) return;                   // 顶点：lightAll 已点亮全部 → 不再渲染/调度
-      }
+      advanceStep();                          // 扫完即推进（单一逻辑，不分安装/日常）
+      if (allLit) return;                     // 顶点：lightAll 已点亮全部 → 不再渲染/调度
     }
   }
   rows.forEach((el, i) => {
@@ -131,7 +130,7 @@ function appendLog(line) {
     if (old.parentNode) old.parentNode.removeChild(old);
   }
   if (allLit) { lightRow(el); return; }
-  if (!sweepDisabled) startSweep(); // 有行即启动光辉扫动（日常启动/安装/更新都生效）；加速与"全部点亮"仅在安装期间
+  if (!sweepDisabled) startSweep(); // 有行即启动光辉扫动（单一逻辑，不分安装/日常）
 }
 
 // ── 卡住 / 失败处理 ──────────────────────────────────────
@@ -174,7 +173,6 @@ if (tauri && tauri.event) {
     clearTimeout(launchStallTimer);
     clearTimeout(installStallTimer);
     installProgress.hidden = true;
-    installActive = false;
     sweepDisabled = true;
     stopSweep();
     showActionable('dsh 服务已退出。', '完整日志见数据目录里的 manager.log');
@@ -188,7 +186,6 @@ if (tauri && tauri.event) {
       installStartAt = Date.now();
       retryBtn.hidden = false; // 安装中也可重试（中断当前安装，备份不丢插件）
       setState(`正在安装 dsh ${p.version || ''}…`);
-      installActive = true;
       resetSweep(); // 新一轮安装：光辉重新从 200/700 起步
       clearTimeout(installStallTimer);
       installStallTimer = setTimeout(() => {
@@ -203,12 +200,10 @@ if (tauri && tauri.event) {
       clearTimeout(installStallTimer);
       retryBtn.hidden = true;
       setState('安装完成，正在启动服务…');
-      installActive = false;
-      if (!allLit) lightAll(); // 安装完成 → 所有数据全部点亮
+      if (!allLit) lightAll(); // 安装完成 → 所有数据全部点亮（兜底）
     } else if (p.phase === 'error') {
       installProgress.hidden = true;
       clearTimeout(installStallTimer);
-      installActive = false;
       stopSweep();
       allLit = false;
       sweepDisabled = true;
@@ -239,7 +234,6 @@ retryBtn.addEventListener('click', async () => {
   installProgress.hidden = true;
   creditsEl.textContent = '';
   rows = [];
-  installActive = false;
   resetSweep(); // 重置光辉状态
   try {
     await tauri.core.invoke('restart_server');
