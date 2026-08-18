@@ -11,6 +11,7 @@
 - **原生通知**：dsh 需要你问答（`pendingInteraction`：问题 / 批准 / 计划审阅）时，或某个会话结束（`running` 由真变假）时，弹出系统通知；窗口在前台时不打扰。
 - **点击通知直达会话**：单击系统通知会把窗口带回前台并打开对应会话（单实例 + 本地桥实现）。
 - **托盘常驻**：关窗只是隐藏，服务继续跑；托盘菜单"退出"才真正停止并退出。
+- **壳内代理**：所有 dsh 出站流量（模型请求、web 搜索、npm 安装/更新、插件、子代理）都经壳内置的本地正向代理；默认直连，可在设置里勾选哪些主机走上游代理（含可选账号密码），保存即生效。**入口 = 主窗口菜单栏「设置 → 代理设置…」+ 托盘「代理设置…」**，打开独立设置窗口，不打断 dsh 页面。
 - **官方零改动**：通知插件通过 `dsh web --patch` 在运行时注入，更新 dsh 不会冲掉它。
 - 桌面端数据自包含（`DSH_HOME` 默认在运行时目录内），与浏览器版各自独立，可随时切回共用。
 
@@ -41,16 +42,19 @@
 
 ```
 src/                      Tauri 前端加载页（纯静态，无打包器）
+  index.html / app.js      启动页：等 dsh 就绪 → 跳转；安装进度 + 滚动日志
+  settings.html / settings.js  独立代理设置窗口（菜单栏/托盘打开）
 src-tauri/                Tauri 2 壳：
-  src/lib.rs               窗口/托盘/单实例/通知桥/服务生命周期
+  src/lib.rs               窗口/托盘/菜单栏/单实例/通知桥/服务生命周期/代理桥
   capabilities/            权限（launcher + remote-notifications）
   resources/patch/         --patch 注入文件（dsh-desktop.patch.yml）
-  resources/manager/       同步后的 server-manager.mjs
+  resources/manager/       同步后的 server-manager.mjs + proxy.mjs
   resources/node/          fetch-node.mjs 下载的 Node 24（不入库）
   resources/plugin/        通知插件（bundle 用）
   icons/                   应用图标全套（含 NSIS 安装器图标/向导横幅）
 scripts/
-  server-manager.mjs       更新 dsh + 拉起服务 + URL/日志上报（核心）
+  server-manager.mjs       更新 dsh + 内置代理 + 拉起服务 + URL/日志上报（核心）
+  proxy.mjs                壳内置正向代理（CONNECT/HTTP + 按主机路由 + Basic 认证）
   fetch-node.mjs           下载/校验/解压 Node 24（幂等）
   sync-resources.mjs       把 scripts/plugins 同步进 src-tauri/resources
   make-icon-png.mjs        图标源生成工具（开发用）

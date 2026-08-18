@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-// Behavioral test for the launcher's settings view (src/app.js under
-// `?view=settings`): loads the REAL app.js in a vm sandbox with a minimal DOM
-// + a mocked Tauri bridge, then drives the proxy settings panel:
-//   - settings view renders the provider + observed-host checkboxes;
+// Behavioral test for the standalone proxy settings window (src/settings.js):
+// loads the REAL settings.js in a vm sandbox with a minimal DOM + a mocked
+// Tauri bridge, then drives the panel:
+//   - upstream fields + provider/observed-host checkboxes render from config;
 //   - saving collects exactly the checked hosts and posts upstream + hosts;
-//   - the auto-navigate on server-url is suppressed while in the settings view.
+//   - the close button closes the current window.
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -12,7 +12,7 @@ import vm from 'node:vm'
 import assert from 'node:assert/strict'
 
 const root = dirname(fileURLToPath(import.meta.url))
-const appJs = readFileSync(join(root, '..', 'src', 'app.js'), 'utf8')
+const settingsJs = readFileSync(join(root, '..', 'src', 'settings.js'), 'utf8')
 
 // ── minimal DOM ─────────────────────────────────────────────────────────────
 function makeEl(tag = 'div') {
@@ -95,8 +95,8 @@ const doc = {
 
 // ── sandbox globals ─────────────────────────────────────────────────────────
 let invokeCalls = []
+let closeCalls = 0
 const tauriMock = {
-  event: { listen: () => Promise.resolve() },
   core: {
     invoke: async (cmd, args) => {
       invokeCalls.push({ cmd, args })
@@ -110,16 +110,18 @@ const tauriMock = {
         }
       }
       if (cmd === 'set_proxy_config') return {}
-      if (cmd === 'back_to_dsh') return {}
       return {}
     },
+  },
+  window: {
+    getCurrentWindow: () => ({ close: async () => { closeCalls += 1 } }),
   },
 }
 
 const sandbox = {
   document: doc,
-  location: { search: '?view=settings', href: 'tauri://localhost/?view=settings' },
-  window: { location: { search: '?view=settings', href: 'tauri://localhost/?view=settings' } },
+  location: { search: '', href: 'tauri://localhost/settings.html' },
+  window: {},
   globalThis: null, // set below
   URL,
   URLSearchParams,
@@ -134,15 +136,10 @@ sandbox.globalThis = sandbox
 sandbox.window.__TAURI__ = tauriMock
 sandbox.globalThis.__TAURI__ = tauriMock
 
-vm.runInContext(appJs, vm.createContext(sandbox), { filename: 'app.js' })
+vm.runInContext(settingsJs, vm.createContext(sandbox), { filename: 'settings.js' })
 await new Promise((r) => setTimeout(r, 30)) // let the async loadSettings() settle
 
-// ── scenario 1: settings view is shown, launch view hidden ──────────────────
-assert.equal(getEl('launchView').hidden, true, 'launch view hidden in settings view')
-assert.equal(getEl('settingsView').hidden, false, 'settings view shown')
-assert.equal(getEl('settingsBtn').hidden, true, 'settings button hidden while in settings view')
-
-// ── scenario 2: upstream fields loaded from config ──────────────────────────
+// ── scenario 1: upstream fields loaded from config ──────────────────────────
 assert.equal(getEl('proxyEnabled').checked, true, 'upstream enabled checkbox reflects config')
 assert.equal(getEl('proxyHost').value, '127.0.0.1', 'proxy host loaded')
 assert.equal(getEl('proxyPort').value, '7890', 'proxy port loaded')
@@ -176,5 +173,10 @@ assert.equal(save.args.upstream.host, '127.0.0.1', 'upstream object posted')
 assert.deepEqual([...save.args.proxiedHosts], ['web.example'], 'only the checked host is saved')
 assert.match(getEl('saveStatus').textContent, /已保存/, 'save status feedback shown')
 
-console.log('PASS — launcher settings view (4 scenarios)')
+// ── scenario 5: close button closes the current window ──────────────────────
+getEl('settingsClose').click()
+await new Promise((r) => setTimeout(r, 20))
+assert.equal(closeCalls, 1, 'close button calls window.close()')
+
+console.log('PASS — proxy settings window (5 scenarios)')
 process.exit(0)

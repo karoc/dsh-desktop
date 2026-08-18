@@ -15,7 +15,7 @@ use std::io::{BufRead, BufReader};
 use std::net::{TcpListener, TcpStream};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::Mutex;
-use tauri::menu::{CheckMenuItem, Menu, MenuItem};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, Submenu};
 use tauri::{AppHandle, Emitter, Listener, Manager, State};
 
 /// The spawned `server-manager` child (owns the dsh service tree) plus the
@@ -157,10 +157,6 @@ static UPDATE_TOAST_SHOWN: std::sync::atomic::AtomicBool = std::sync::atomic::At
 /// while that page is loaded, so reconnection after a restart must be driven
 /// by the shell, not the page.
 static LAUNCHER_URL: Mutex<Option<String>> = Mutex::new(None);
-
-/// The dsh loopback URL the shell last navigated to — "返回 dsh" from the
-/// settings view uses it (falls back to the launcher when never set).
-static CURRENT_DSH_URL: Mutex<Option<String>> = Mutex::new(None);
 
 /// Windows: register a PROCESS-LEVEL toast activator. The WinRT `Activated`
 /// event used by notify-rust only fires while the toast is visible on screen;
@@ -1090,7 +1086,6 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
                 match t {
                     Some("url") => {
                         if let Some(url) = ev.get("url").and_then(|v| v.as_str()) {
-                            *CURRENT_DSH_URL.lock().unwrap() = Some(url.to_string());
                             let _ = handle.emit("server-url", url);
                             // Reconnect: the launcher page's JS listener is gone
                             // once the webview is on the dsh page, so a dsh /
@@ -1312,37 +1307,21 @@ fn set_proxy_config(
     Ok(cfg)
 }
 
-/// Leave the settings view: navigate back to the dsh page (fallback: launcher).
-#[tauri::command]
-fn back_to_dsh(app: AppHandle) -> Result<(), String> {
-    let target = CURRENT_DSH_URL
-        .lock()
-        .unwrap()
-        .clone()
-        .or_else(|| LAUNCHER_URL.lock().unwrap().clone());
-    if let Some(url) = target {
-        if let Ok(u) = tauri::Url::parse(&url) {
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.navigate(u);
-            }
-        }
+/// Open (or focus) the standalone proxy settings window. Never interrupts the
+/// main window's dsh page — settings live in their own window, reachable from
+/// the window menu bar and the tray whether or not dsh is loaded.
+fn open_settings_window(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("settings") {
+        let _ = w.show();
+        let _ = w.set_focus();
+        return;
     }
-    Ok(())
-}
-
-/// Navigate the main window to a launcher view (`?view=<name>`). Used by the
-/// tray's "代理设置…" entry; the launcher page reads the query and shows the
-/// settings panel instead of the startup view.
-fn navigate_to_launcher_view(app: &AppHandle, view: &str) {
-    if let Some(url) = LAUNCHER_URL.lock().unwrap().clone() {
-        let sep = if url.contains('?') { '&' } else { '?' };
-        let target = format!("{url}{sep}view={view}");
-        if let Ok(u) = tauri::Url::parse(&target) {
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.navigate(u);
-            }
-        }
-    }
+    let _ = tauri::WebviewWindowBuilder::new(app, "settings", tauri::WebviewUrl::App("settings.html".into()))
+        .title("DSH Desktop — 代理设置")
+        .inner_size(640.0, 720.0)
+        .min_inner_size(480.0, 560.0)
+        .resizable(true)
+        .build();
 }
 
 /// Quit: kill the service tree and exit the app.
@@ -1522,10 +1501,7 @@ pub fn run() {
                         let _ = restart_server(app.clone(), app.state::<ServerState>());
                     }
                     "proxy-settings" => {
-                        // Open the settings panel (launcher ?view=settings); the
-                        // page itself loads current config via get_proxy_config.
-                        activate_window(app);
-                        navigate_to_launcher_view(app, "settings");
+                        open_settings_window(app);
                     }
                     "check-update" => {
                         // One item, two roles: with an update pending it becomes
@@ -1574,6 +1550,18 @@ pub fn run() {
                     _ => {}
                 })
                 .build(app)?;
+
+            // ── 主窗口菜单栏：设置 → 代理设置… ───────────────────────
+            // Shell-native entry that survives the launcher page and the dsh
+            // page alike (it is window chrome, not page content), so proxy
+            // settings are reachable any time dsh is loaded.
+            let settings_sub = Submenu::with_items(app, "设置", true, &[
+                &MenuItem::with_id(app, "proxy-settings", "代理设置…", true, None::<&str>)?,
+            ])?;
+            let win_menu = Menu::with_items(app, &[&settings_sub])?;
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.set_menu(win_menu);
+            }
 
             // ── 关窗=隐藏到托盘（真正的托盘语义）；只有菜单"退出"才真正退出。
 // 点击 toast 由 notify-rust 进程内激活回调驱动 activate_window()，对
@@ -1677,9 +1665,14 @@ pub fn run() {
             refresh_page,
             restart_dsh,
             get_proxy_config,
-            set_proxy_config,
-            back_to_dsh
+            set_proxy_config
         ])
+        // Window menu bar events (the tray handles its own in TrayIconBuilder).
+        // The "设置 → 代理设置…" item and the tray's item share this id.
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "proxy-settings" => open_settings_window(app),
+            _ => {}
+        })
         .run(tauri::generate_context!())
         .expect("error while running DSH Desktop");
 }

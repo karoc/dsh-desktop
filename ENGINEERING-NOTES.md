@@ -317,3 +317,22 @@ Windows 的 NSIS 安装行为、toast 渲染、AUMID、事件投递——Linux s
   test-control-plane.mjs（假 dsh 探测 env 断言注入）、test-launcher-settings.mjs（vm 加载真实
   app.js + 最小 DOM 桩验证设置面板；注意 vm 跨 realm 数组的 assert.deepEqual 因原型不同必失败，
   先 `[...arr]` 展开再比）。
+
+## 28. 代理设置的放置：启动页不是入口（独立窗口 + 窗口菜单栏）
+
+- **教训**：启动页只存在到 dsh 就绪（几秒），作为低频设置的主入口是错误放置——用户根本来不及，
+  且 dsh 加载后没有入口。产品决策"放哪"必须先想清楚，而不是顺着"启动页能设置"就做。
+- **最终放置**：
+  - 主入口 = **主窗口菜单栏「设置 → 代理设置…」**（`WebviewWindow::set_menu`，窗口 chrome，
+    dsh 页面加载后依然常驻；Tauri 2.11.5 该 API 存在，cargo check 确认）；
+  - 辅助入口 = **托盘「代理设置…」**（与菜单栏共用 id `proxy-settings`，事件走 Builder::on_menu_event
+    统一处理 → `open_settings_window`，托盘 TrayIconBuilder 的 on_menu_event 也调同一函数，不会双重触发）；
+  - 落点 = **独立设置窗口**（`WebviewWindowBuilder::new(label="settings", WebviewUrl::App("settings.html"))`，
+    `open_settings_window` 幂等：已存在则 show+focus，否则新建）；窗口独立于 dsh 主页面，设置不打断使用。
+  - **启动页彻底移除设置**（⚙ 按钮、?view=settings 视图、ready-banner 全删）；back_to_dsh /
+    navigate_to_launcher_view / CURRENT_DSH_URL 一并移除。
+- **权限**：独立窗口是本地页，capability `launcher` 的 windows 加 `"settings"`；显式补
+  `core:window:allow-close`（core:window:default 是否含 allow-close 在自动生成的权限里查不到静态定义，
+  显式声明保证关闭按钮可用，冗余无害）。
+- **测试**：test-launcher-settings.mjs 改为加载独立的 src/settings.js（vm + 最小 DOM + mock Tauri 桥），
+  验证渲染/保存/关闭按钮（5 场景）。
