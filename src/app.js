@@ -37,7 +37,7 @@ const creditsViewport = document.querySelector('.credits-viewport');
 const REDUCED_MOTION = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 let rows = [];
 let scanPos = null, restUntil = 0, lastTs = 0, rafId = null;
-let allLit = false, installActive = false;
+let allLit = false, installActive = false, sweepDisabled = false;
 let GLOW_SPEED = 200, REST_MS = 700, step = 0;
 
 function lightRow(el) {
@@ -106,10 +106,11 @@ function stopSweep() {
   if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
 }
 
-// 安装开始时归零：光辉重新从 200/700 起步
+// 安装开始时归零：光辉重新从 200/700 起步；错误/退出态解除
 function resetSweep() {
   stopSweep();
   allLit = false;
+  sweepDisabled = false;
   step = 0;
   GLOW_SPEED = 200;
   REST_MS = 700;
@@ -130,7 +131,7 @@ function appendLog(line) {
     if (old.parentNode) old.parentNode.removeChild(old);
   }
   if (allLit) { lightRow(el); return; }
-  if (installActive) startSweep(); // 仅安装期间跑光辉扫动
+  if (!sweepDisabled) startSweep(); // 有行即启动光辉扫动（日常启动/安装/更新都生效）；加速与"全部点亮"仅在安装期间
 }
 
 // ── 卡住 / 失败处理 ──────────────────────────────────────
@@ -174,6 +175,7 @@ if (tauri && tauri.event) {
     clearTimeout(installStallTimer);
     installProgress.hidden = true;
     installActive = false;
+    sweepDisabled = true;
     stopSweep();
     showActionable('dsh 服务已退出。', '完整日志见数据目录里的 manager.log');
   });
@@ -209,6 +211,7 @@ if (tauri && tauri.event) {
       installActive = false;
       stopSweep();
       allLit = false;
+      sweepDisabled = true;
       rows.forEach((el) => { el.style.opacity = ''; el.style.textShadow = ''; }); // 回到基础样式
       const msg = String(p.error || '');
       let hint = '';

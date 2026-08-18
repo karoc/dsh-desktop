@@ -309,10 +309,11 @@ button.secondary {
     <div id="tester">
       <button id="tStart" class="ghost">模拟安装开始</button>
       <button id="tLine" class="ghost">+ 一行</button>
+      <button id="tDaily" class="ghost">日常启动（无安装）</button>
       <button id="tDone" class="ghost">安装完成(done)</button>
       <button id="tErr" class="ghost">安装失败(error)</button>
       <button id="tAuto">▶ 自动演示</button>
-      <p class="note">这个页面加载真实的 <code>src/app.js</code> + <code>src/styles.css</code>，用 mock 的 Tauri 事件驱动：安装开始 → 每 300ms 一行 → 完成。光辉 9 次递增 → 全部点亮。</p>
+      <p class="note">这个页面加载真实的 <code>src/app.js</code> + <code>src/styles.css</code>，用 mock 的 Tauri 事件驱动：安装开始 → 每 300ms 一行 → 完成。光辉 9 次递增 → 全部点亮。「日常启动」只发 server-log，验证无安装时的平静光辉。</p>
     </div>
 
     <button id="settingsBtn" class="settings-btn" title="代理设置" aria-label="代理设置">⚙</button>
@@ -420,7 +421,7 @@ const creditsViewport = document.querySelector('.credits-viewport');
 const REDUCED_MOTION = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 let rows = [];
 let scanPos = null, restUntil = 0, lastTs = 0, rafId = null;
-let allLit = false, installActive = false;
+let allLit = false, installActive = false, sweepDisabled = false;
 let GLOW_SPEED = 200, REST_MS = 700, step = 0;
 
 function lightRow(el) {
@@ -489,10 +490,11 @@ function stopSweep() {
   if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
 }
 
-// 安装开始时归零：光辉重新从 200/700 起步
+// 安装开始时归零：光辉重新从 200/700 起步；错误/退出态解除
 function resetSweep() {
   stopSweep();
   allLit = false;
+  sweepDisabled = false;
   step = 0;
   GLOW_SPEED = 200;
   REST_MS = 700;
@@ -513,7 +515,7 @@ function appendLog(line) {
     if (old.parentNode) old.parentNode.removeChild(old);
   }
   if (allLit) { lightRow(el); return; }
-  if (installActive) startSweep(); // 仅安装期间跑光辉扫动
+  if (!sweepDisabled) startSweep(); // 有行即启动光辉扫动（日常启动/安装/更新都生效）；加速与"全部点亮"仅在安装期间
 }
 
 // ── 卡住 / 失败处理 ──────────────────────────────────────
@@ -557,6 +559,7 @@ if (tauri && tauri.event) {
     clearTimeout(installStallTimer);
     installProgress.hidden = true;
     installActive = false;
+    sweepDisabled = true;
     stopSweep();
     showActionable('dsh 服务已退出。', '完整日志见数据目录里的 manager.log');
   });
@@ -592,6 +595,7 @@ if (tauri && tauri.event) {
       installActive = false;
       stopSweep();
       allLit = false;
+      sweepDisabled = true;
       rows.forEach((el) => { el.style.opacity = ''; el.style.textShadow = ''; }); // 回到基础样式
       const msg = String(p.error || '');
       let hint = '';
@@ -795,13 +799,20 @@ if (VIEW === 'settings') {
           }
         }, 300);
       }
+      function dailyStartup() {
+        if (autoTimer) clearInterval(autoTimer);
+        n = 0;
+        document.getElementById('credits').textContent = '';
+        for (let i = 0; i < 5; i++) dshEmit('server-log', 'dsh-desktop manager started (' + i + ')');
+      }
       document.getElementById('tStart').addEventListener('click', () => { n = 0; dshEmit('install-status', { phase: 'start', version: '0.2.1' }); });
       document.getElementById('tLine').addEventListener('click', addLine);
+      document.getElementById('tDaily').addEventListener('click', dailyStartup);
       document.getElementById('tDone').addEventListener('click', () => dshEmit('install-status', { phase: 'done' }));
       document.getElementById('tErr').addEventListener('click', () => dshEmit('install-status', { phase: 'error', error: 'ESOCKET timeout registry.npmjs.org' }));
       document.getElementById('tAuto').addEventListener('click', autoDemo);
-      // 打开即自动演示
-      autoDemo();
+      // 带 ?auto 才自动演示；否则由用户/测试脚本控制
+      if (location.search.includes('auto')) autoDemo();
     </script>
   </body>
 </html>
