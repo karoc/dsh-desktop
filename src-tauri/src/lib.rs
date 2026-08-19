@@ -11,7 +11,7 @@
 //!    client plugin (permission is scoped to `http://127.0.0.1/*` only).
 //! 3. Tray: close hides to tray; "退出" kills the whole service tree.
 
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read as _, Write as _};
 use std::net::{TcpListener, TcpStream};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::Mutex;
@@ -452,8 +452,16 @@ fn read_proxy_json(runtime: &std::path::Path) -> serde_json::Value {
 fn sanitize_upstream(v: &serde_json::Value) -> serde_json::Value {
     let obj = v.as_object().cloned().unwrap_or_default();
     let get = |k: &str| obj.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+    // Upstream protocol whitelist: http (default, legacy configs have no
+    // field) / https / socks5. Anything else collapses to http.
+    let protocol = match obj.get("protocol").and_then(|x| x.as_str()) {
+        Some("https") => "https",
+        Some("socks5") => "socks5",
+        _ => "http",
+    };
     serde_json::json!({
         "enabled": obj.get("enabled").and_then(|x| x.as_bool()).unwrap_or(false),
+        "protocol": protocol,
         "host": get("host").trim().to_string(),
         "port": obj.get("port").and_then(|x| x.as_u64()).unwrap_or(0).min(u16::MAX as u64),
         "username": get("username"),
@@ -1346,6 +1354,143 @@ fn open_settings_window(app: &AppHandle) {
         .build();
 }
 
+// ── proxy connection test (settings window "测试连接") ────────────────────────
+/// Basic base64 (RFC 4648, no padding variants) — avoids a crate for one use.
+fn b64(input: &[u8]) -> String {
+    const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for chunk in input.chunks(3) {
+        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        out.push(TABLE[(b[0] >> 2) as usize] as char);
+        out.push(TABLE[(((b[0] & 0x03) << 4) | (b[1] >> 4)) as usize] as char);
+        out.push(if chunk.len() > 1 { TABLE[(((b[1] & 0x0f) << 2) | (b[2] >> 6)) as usize] as char } else { '=' });
+        out.push(if chunk.len() > 2 { TABLE[(b[2] & 0x3f) as usize] as char } else { '=' });
+    }
+    out
+}
+
+fn read_n(stream: &mut std::net::TcpStream, n: usize) -> Result<Vec<u8>, String> {
+    let mut buf = vec![0u8; n];
+    let mut got = 0;
+    while got < n {
+        match stream.read(&mut buf[got..]) {
+            Ok(0) => return Err("上游提前关闭连接".into()),
+            Ok(k) => got += k,
+            Err(e) => return Err(format!("读取失败: {e}")),
+        }
+    }
+    Ok(buf)
+}
+
+fn read_line(stream: &mut std::net::TcpStream) -> Result<String, String> {
+    let mut line = Vec::new();
+    let mut byte = [0u8; 1];
+    loop {
+        match stream.read(&mut byte) {
+            Ok(0) => break,
+            Ok(_) => {
+                line.push(byte[0]);
+                if line.ends_with(b"\n") { break; }
+            }
+            Err(e) => return Err(format!("读取失败: {e}")),
+        }
+    }
+    Ok(String::from_utf8_lossy(&line).to_string())
+}
+
+/// Verify the configured upstream proxy is reachable and speaks its protocol.
+/// HTTP/HTTPS: send a CONNECT probe (1.1.1.1:443); SOCKS5: handshake + CONNECT.
+/// HTTPS upstreams can't be TLS-verified without a TLS crate — TCP reachability
+/// is the honest signal available.
+#[tauri::command]
+fn test_proxy(upstream: serde_json::Value) -> Result<serde_json::Value, String> {
+    let u = sanitize_upstream(&upstream);
+    let host = u.get("host").and_then(|x| x.as_str()).unwrap_or("").to_string();
+    let port = u.get("port").and_then(|x| x.as_u64()).unwrap_or(0) as u16;
+    let protocol = u.get("protocol").and_then(|x| x.as_str()).unwrap_or("http").to_string();
+    let username = u.get("username").and_then(|x| x.as_str()).unwrap_or("").to_string();
+    let password = u.get("password").and_then(|x| x.as_str()).unwrap_or("").to_string();
+    if host.is_empty() || port == 0 {
+        return Ok(serde_json::json!({ "ok": false, "detail": "请先填写代理主机和端口" }));
+    }
+    let addr = format!("{host}:{port}");
+    let mut stream = match std::net::TcpStream::connect_timeout(
+        &addr.parse().map_err(|e| format!("地址无效: {e}"))?,
+        std::time::Duration::from_secs(5),
+    ) {
+        Ok(s) => s,
+        Err(e) => return Ok(serde_json::json!({ "ok": false, "detail": format!("无法连接 {addr}: {e}") })),
+    };
+    stream.set_read_timeout(Some(std::time::Duration::from_secs(5))).map_err(|e| format!("set timeout: {e}"))?;
+    stream.set_write_timeout(Some(std::time::Duration::from_secs(5))).map_err(|e| format!("set timeout: {e}"))?;
+
+    match protocol.as_str() {
+        "socks5" => {
+            let has_auth = !username.is_empty();
+            if has_auth {
+                stream.write_all(&[0x05, 0x02, 0x00, 0x02]).map_err(|e| format!("write: {e}"))?;
+            } else {
+                stream.write_all(&[0x05, 0x01, 0x00]).map_err(|e| format!("write: {e}"))?;
+            }
+            let resp = read_n(&mut stream, 2)?;
+            if resp[0] != 0x05 { return Ok(serde_json::json!({ "ok": false, "detail": format!("SOCKS5 版本异常 ({})", resp[0]) })); }
+            match resp[1] {
+                0xff => return Ok(serde_json::json!({ "ok": false, "detail": "上游无可用认证方式" })),
+                0x02 => {
+                    let user = username.as_bytes();
+                    let pass = password.as_bytes();
+                    let mut auth = vec![0x01, user.len() as u8];
+                    auth.extend_from_slice(user);
+                    auth.push(pass.len() as u8);
+                    auth.extend_from_slice(pass);
+                    stream.write_all(&auth).map_err(|e| format!("write: {e}"))?;
+                    let ar = read_n(&mut stream, 2)?;
+                    if ar[0] != 0x01 || ar[1] != 0x00 {
+                        return Ok(serde_json::json!({ "ok": false, "detail": "SOCKS5 认证失败" }));
+                    }
+                }
+                _ if resp[1] != 0x00 => return Ok(serde_json::json!({ "ok": false, "detail": format!("不支持的认证方式 ({})", resp[1]) })),
+                _ => {}
+            }
+            // CONNECT 1.1.1.1:443 (IPv4 atyp=1, port 0x01bb)
+            stream.write_all(&[0x05, 0x01, 0x00, 0x01, 1, 1, 1, 1, 0x01, 0xbb]).map_err(|e| format!("write: {e}"))?;
+            let cr = read_n(&mut stream, 4)?;
+            if cr[0] != 0x05 || cr[1] != 0x00 {
+                return Ok(serde_json::json!({ "ok": false, "detail": format!("SOCKS5 CONNECT 失败 (code {})", cr[1]) }));
+            }
+            let _ = read_n(&mut stream, 6)?; // BND.ADDR/PORT (IPv4)
+            Ok(serde_json::json!({ "ok": true, "detail": "SOCKS5 握手成功，可转发" }))
+        }
+        "https" => {
+            // No TLS crate in this shell: TCP reachability is what we can verify.
+            Ok(serde_json::json!({ "ok": true, "detail": "端口已连通（HTTPS 代理的 TLS 握手未验证）" }))
+        }
+        _ => {
+            // http proxy: CONNECT probe through the upstream.
+            let target = "1.1.1.1:443";
+            let mut req = format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n");
+            if !username.is_empty() {
+                let token = b64(format!("{username}:{password}").as_bytes());
+                req.push_str(&format!("Proxy-Authorization: Basic {token}\r\n"));
+            }
+            req.push_str("\r\n");
+            stream.write_all(req.as_bytes()).map_err(|e| format!("write: {e}"))?;
+            let status = read_line(&mut stream)?;
+            loop {
+                let l = read_line(&mut stream)?;
+                if l.trim().is_empty() { break; }
+            }
+            if status.starts_with("HTTP/1.") && status.contains(" 2") {
+                Ok(serde_json::json!({ "ok": true, "detail": "上游代理可转发（CONNECT 2xx）" }))
+            } else if status.contains("407") {
+                Ok(serde_json::json!({ "ok": false, "detail": "上游要求认证（407）" }))
+            } else {
+                Ok(serde_json::json!({ "ok": false, "detail": format!("上游响应异常: {}", status.trim()) }))
+            }
+        }
+    }
+}
+
 /// Quit: kill the service tree and exit the app.
 #[tauri::command]
 fn quit_app(app: AppHandle, state: State<'_, ServerState>) -> Result<(), String> {
@@ -1705,7 +1850,8 @@ pub fn run() {
             refresh_page,
             restart_dsh,
             get_proxy_config,
-            set_proxy_config
+            set_proxy_config,
+            test_proxy
         ])
         .run(tauri::generate_context!())
         .expect("error while running DSH Desktop");

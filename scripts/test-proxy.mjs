@@ -8,7 +8,7 @@
 // Uses fake upstream proxy + fake origin servers on 127.0.0.1 — no external
 // network involved.
 import { createServer, request as httpRequest } from 'node:http'
-import { connect } from 'node:net'
+import { connect, createServer as netCreateServer } from 'node:net'
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -281,10 +281,6 @@ writeCfg({
   assert.ok(up.seen.some((s) => s.kind === 'http' && s.url === 'http://routing.example/p'), 'live config flip takes effect on the next request')
 }
 
-proxy.close()
-up.srv.close()
-o1.srv.close()
-
 // ── scenario 11: provider host extraction from settings.yaml ────────────────
 {
   const settingsPath = join(work, 'settings.yaml')
@@ -340,6 +336,82 @@ o1.srv.close()
   ], 'trailing comma stripped; comma-separated list yields one host per candidate')
 }
 
+// ── scenario 12: SOCKS5 upstream ────────────────────────────────────────────
+// A fake SOCKS5 proxy: greeting (no auth) -> CONNECT -> records the target and
+// echoes tunneled bytes so the client can prove the tunnel works.
+{
+  const s5seen = []
+  const s5 = netCreateServer((socket) => {
+    let buf = Buffer.alloc(0)
+    let stage = 'greeting' // greeting -> connect -> tunnel
+    socket.on('data', (chunk) => {
+      buf = Buffer.concat([buf, chunk])
+      while (true) {
+        if (stage === 'greeting') {
+          if (buf.length < 2) return
+          const nmethods = buf[1]
+          if (buf.length < 2 + nmethods) return
+          buf = buf.slice(2 + nmethods)
+          socket.write(Buffer.from([0x05, 0x00])) // no auth
+          stage = 'connect'
+        } else if (stage === 'connect') {
+          if (buf.length < 4) return
+          const atyp = buf[3]
+          let need = 0
+          if (atyp === 0x01) need = 4 + 2
+          else if (atyp === 0x03) need = 1 + buf[4] + 2
+          else if (atyp === 0x04) need = 16 + 2
+          if (buf.length < 4 + need) return
+          let host = ''
+          let port = 0
+          if (atyp === 0x01) { host = [...buf.slice(4, 8)].join('.'); port = buf.readUInt16BE(8) }
+          else if (atyp === 0x03) { const l = buf[4]; host = buf.slice(5, 5 + l).toString(); port = buf.readUInt16BE(5 + l) }
+          s5seen.push(`${host}:${port}`)
+          socket.write(Buffer.from([0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0])) // success, BND 0.0.0.0:0
+          buf = buf.slice(4 + need)
+          stage = 'tunnel'
+        } else {
+          // Tunnel: answer tunneled bytes so the client can prove it works.
+          socket.write('HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK')
+          buf = Buffer.alloc(0)
+          return
+        }
+      }
+    })
+  })
+  await new Promise((r) => s5.listen(0, '127.0.0.1', r))
+  const s5Port = s5.address().port
+
+  // CONNECT through a socks5 upstream must succeed.
+  writeCfg({
+    upstream: { enabled: true, protocol: 'socks5', host: '127.0.0.1', port: s5Port, username: '', password: '' },
+    proxiedHosts: ['socks-target.example'],
+    knownHosts: [],
+  })
+  {
+    const { sock, status } = await rawConnect(proxyPort, 'socks-target.example:443')
+    assert.match(status, /200/, 'CONNECT through socks5 upstream establishes')
+    assert.ok(s5seen.includes('socks-target.example:443'), `socks5 upstream saw CONNECT to the target (got ${JSON.stringify(s5seen)})`)
+    sock.destroy()
+  }
+  // A plain http:// target with a socks5 upstream falls back to DIRECT.
+  {
+    s5seen.length = 0
+    writeCfg({
+      upstream: { enabled: true, protocol: 'socks5', host: '127.0.0.1', port: s5Port, username: '', password: '' },
+      proxiedHosts: ['socks-target.example', '127.0.0.1'],
+      knownHosts: [],
+    })
+    const res = await httpViaProxy('/socks-http')
+    assert.equal(res.body, 'origin:GET:/socks-http', 'http target with socks5 upstream falls back to direct')
+    assert.equal(s5seen.length, 0, 'socks5 upstream not touched for an http target')
+  }
+  s5.close()
+}
+
+proxy.close()
+up.srv.close()
+o1.srv.close()
 rmSync(work, { recursive: true, force: true })
-console.log('PASS — forward proxy (11 scenarios)')
+console.log('PASS — forward proxy (12 scenarios)')
 process.exit(0)

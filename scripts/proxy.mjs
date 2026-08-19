@@ -30,14 +30,153 @@
 
 import { createServer, request as httpRequest } from 'node:http'
 import { connect as tcpConnect } from 'node:net'
+import { connect as tlsConnect } from 'node:tls'
 import { readFileSync, writeFileSync } from 'node:fs'
 
 const LOOPBACK = /^(127\.0\.0\.1|localhost|::1|0\.0\.0\.0)$/i
 
+/** Upstream proxy protocol, defaulting to http (legacy configs have no field). */
+function upstreamProtocol(cfg) {
+  return String(cfg?.upstream?.protocol || 'http').toLowerCase()
+}
+
+/** Read exactly n bytes from a socket (SOCKS5 fixed-size frames). */
+function readExactly(socket, n, timeoutMs = 10_000) {
+  return new Promise((resolvePromise, rejectPromise) => {
+    let buf = Buffer.alloc(0)
+    const timer = setTimeout(() => { cleanup(); rejectPromise(new Error('upstream handshake timeout')) }, timeoutMs)
+    const onData = (chunk) => {
+      buf = Buffer.concat([buf, chunk])
+      if (buf.length >= n) { cleanup(); resolvePromise(buf) }
+    }
+    const onErr = (e) => { cleanup(); rejectPromise(e) }
+    const cleanup = () => {
+      clearTimeout(timer)
+      socket.removeListener('data', onData)
+      socket.removeListener('error', onErr)
+    }
+    socket.on('data', onData)
+    socket.on('error', onErr)
+  })
+}
+
+/** Read until a byte terminator (HTTP CONNECT response headers). */
+function readUntil(socket, terminator, timeoutMs = 10_000) {
+  return new Promise((resolvePromise, rejectPromise) => {
+    let buf = Buffer.alloc(0)
+    const timer = setTimeout(() => { cleanup(); rejectPromise(new Error('upstream handshake timeout')) }, timeoutMs)
+    const onData = (chunk) => {
+      buf = Buffer.concat([buf, chunk])
+      const idx = buf.indexOf(terminator)
+      if (idx >= 0) {
+        cleanup()
+        resolvePromise({ head: buf.slice(0, idx + terminator.length).toString(), rest: buf.slice(idx + terminator.length) })
+      }
+    }
+    const onErr = (e) => { cleanup(); rejectPromise(e) }
+    const cleanup = () => {
+      clearTimeout(timer)
+      socket.removeListener('data', onData)
+      socket.removeListener('error', onErr)
+    }
+    socket.on('data', onData)
+    socket.on('error', onErr)
+  })
+}
+
+/**
+ * SOCKS5 handshake against the upstream: greeting (with optional RFC1929
+ * user/pass auth), then CONNECT to the target. Resolves once the tunnel is
+ * ready (BND.ADDR consumed).
+ */
+async function socks5Handshake(socket, upstream, targetHost, targetPort) {
+  const hasAuth = Boolean(upstream.username)
+  const methods = hasAuth ? [0x00, 0x02] : [0x00]
+  socket.write(Buffer.from([0x05, methods.length, ...methods]))
+  const methodResp = await readExactly(socket, 2)
+  if (methodResp[0] !== 0x05) throw new Error(`socks5: bad version ${methodResp[0]}`)
+  const method = methodResp[1]
+  if (method === 0xff) throw new Error('socks5: no acceptable auth method')
+  if (method === 0x02) {
+    const user = Buffer.from(upstream.username || '', 'utf8')
+    const pass = Buffer.from(upstream.password || '', 'utf8')
+    socket.write(Buffer.concat([Buffer.from([0x01, user.length]), user, Buffer.from([pass.length]), pass]))
+    const authResp = await readExactly(socket, 2)
+    if (authResp[0] !== 0x01 || authResp[1] !== 0x00) throw new Error('socks5: auth failed')
+  } else if (method !== 0x00) {
+    throw new Error(`socks5: unsupported auth method ${method}`)
+  }
+  const isIpv4 = /^\d{1,3}(?:\.\d{1,3}){3}$/.test(targetHost)
+  let addrPart
+  if (isIpv4) {
+    addrPart = Buffer.concat([Buffer.from([0x01]), ...targetHost.split('.').map((o) => Buffer.from([Number(o) & 0xff]))])
+  } else {
+    const name = Buffer.from(targetHost, 'ascii')
+    addrPart = Buffer.concat([Buffer.from([0x03, name.length]), name])
+  }
+  const portBuf = Buffer.from([(targetPort >> 8) & 0xff, targetPort & 0xff])
+  socket.write(Buffer.concat([Buffer.from([0x05, 0x01, 0x00]), addrPart, portBuf]))
+  const connResp = await readExactly(socket, 4)
+  if (connResp[0] !== 0x05 || connResp[1] !== 0x00) {
+    throw new Error(`socks5: CONNECT failed (code ${connResp[1]})`)
+  }
+  // Consume BND.ADDR/BND.PORT (variable length by atyp).
+  const atyp = connResp[3]
+  if (atyp === 0x03) {
+    const lenByte = await readExactly(socket, 1)
+    await readExactly(socket, 1 + lenByte[0] + 2)
+  } else if (atyp === 0x01) {
+    await readExactly(socket, 4 + 2)
+  } else if (atyp === 0x04) {
+    await readExactly(socket, 16 + 2)
+  }
+}
+
+/**
+ * Open a tunnel THROUGH the configured upstream proxy to target:port.
+ * Returns { socket, rest } where `socket` is ready to pipe and `rest` holds
+ * any bytes already read past the handshake (HTTP CONNECT responses).
+ * Supports http / https / socks5 upstream protocols.
+ * @returns {Promise<{socket: import('node:net').Socket, rest: Buffer}>}
+ */
+function openUpstreamTunnel(cfg, targetHost, targetPort, authHeader) {
+  const u = cfg.upstream
+  const protocol = upstreamProtocol(cfg)
+  return new Promise((resolvePromise, rejectPromise) => {
+    let socket = null
+    const fail = (e) => { try { socket?.destroy() } catch {}; rejectPromise(e) }
+    if (protocol === 'https') {
+      socket = tlsConnect({ host: u.host, port: Number(u.port), servername: u.host })
+    } else {
+      socket = tcpConnect({ host: u.host, port: Number(u.port) })
+    }
+    socket.on('error', fail)
+    socket.on('connect', async () => {
+      try {
+        if (protocol === 'socks5') {
+          await socks5Handshake(socket, u, targetHost, targetPort)
+          resolvePromise({ socket, rest: Buffer.alloc(0) })
+        } else {
+          const lines = [`CONNECT ${targetHost}:${targetPort} HTTP/1.1`, `Host: ${targetHost}:${targetPort}`]
+          if (authHeader) lines.push(`Proxy-Authorization: ${authHeader}`)
+          socket.write(lines.join('\r\n') + '\r\n\r\n')
+          const { head, rest } = await readUntil(socket, '\r\n\r\n')
+          if (!/^HTTP\/1\.[01]\s+2\d\d/.test(head)) {
+            throw new Error(`upstream CONNECT rejected: ${head.split('\r\n')[0] || 'no status'}`)
+          }
+          resolvePromise({ socket, rest })
+        }
+      } catch (e) {
+        fail(e)
+      }
+    })
+  })
+}
+
 /** Fresh default proxy config (factory so callers never share a mutable copy). */
 export function defaultProxyConfig() {
   return {
-    upstream: { enabled: false, host: '', port: 0, username: '', password: '' },
+    upstream: { enabled: false, protocol: 'http', host: '', port: 0, username: '', password: '' },
     proxiedHosts: [],
     knownHosts: [],
   }
@@ -218,7 +357,15 @@ export function createForwardProxy({ configFile, onHosts, log = () => {} }) {
     const headers = { ...req.headers }
     delete headers['proxy-connection']
     delete headers['connection']
-    if (via === 'upstream') {
+    // SOCKS5 upstreams only speak CONNECT (no absolute-URI HTTP): a plain
+    // http:// target through one falls back to direct so the request still
+    // works (rare combination; noted in the manager log).
+    let useUpstream = via === 'upstream'
+    if (useUpstream && upstreamProtocol(cfg) === 'socks5') {
+      log(`socks5 upstream: http target ${host} falls back to direct`)
+      useUpstream = false
+    }
+    if (useUpstream) {
       const auth = upstreamAuth(cfg)
       if (auth) headers['proxy-authorization'] = auth
       const up = httpRequest(
@@ -265,6 +412,7 @@ export function createForwardProxy({ configFile, onHosts, log = () => {} }) {
     // hanging on a silently closed socket).
     const rejectClient = (reason) => {
       const msg = String(reason?.message ?? reason).slice(0, 200).replace(/[\r\n]+/g, ' ')
+      log(`connect ${host}:${port} failed: ${msg}`)
       try {
         clientSocket.write(`HTTP/1.1 502 Bad Gateway\r\nContent-Length: ${Buffer.byteLength(msg)}\r\n\r\n${msg}`)
       } catch { /* socket already gone */ }
@@ -272,35 +420,15 @@ export function createForwardProxy({ configFile, onHosts, log = () => {} }) {
     }
 
     if (via === 'upstream') {
-      const auth = upstreamAuth(cfg)
-      const upstream = tcpConnect({ host: cfg.upstream.host, port: Number(cfg.upstream.port) })
-      upstream.on('error', rejectClient)
-      upstream.on('connect', () => {
-        const lines = [`CONNECT ${host}:${port} HTTP/1.1`, `Host: ${host}:${port}`]
-        if (auth) lines.push(`Proxy-Authorization: ${auth}`)
-        upstream.write(lines.join('\r\n') + '\r\n\r\n')
-        let buf = Buffer.alloc(0)
-        const onData = (chunk) => {
-          buf = Buffer.concat([buf, chunk])
-          const end = buf.indexOf('\r\n\r\n')
-          if (end < 0) return
-          const headEnd = end + 4
-          const statusLine = buf.slice(0, buf.indexOf('\r\n')).toString()
-          upstream.removeListener('data', onData)
-          const rest = buf.slice(headEnd)
-          if (!/^HTTP\/1\.[01]\s+2\d\d/.test(statusLine)) {
-            clientSocket.write(`HTTP/1.1 502 Bad Gateway\r\n\r\n${statusLine}`)
-            clientSocket.destroy()
-            upstream.destroy()
-            return
-          }
+      // Tunnel through the configured upstream (http / https / socks5).
+      openUpstreamTunnel(cfg, host, port, upstreamAuth(cfg))
+        .then(({ socket: tunnel, rest }) => {
           clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n')
-          if (head?.length) upstream.write(head)
+          if (head?.length) tunnel.write(head)
           if (rest.length) clientSocket.write(rest)
-          pipeTunnel(clientSocket, upstream)
-        }
-        upstream.on('data', onData)
-      })
+          pipeTunnel(clientSocket, tunnel)
+        })
+        .catch(rejectClient)
     } else {
       const origin = tcpConnect({ host, port })
       origin.on('error', rejectClient)

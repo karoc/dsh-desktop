@@ -224,7 +224,9 @@ const shim = join(runtime, 'bin', process.platform === 'win32' ? 'pnpm.cmd' : 'p
 assert.ok(existsSync(shim), 'pnpm shim written for the bundled pnpm')
 
 // ── scenario 6 (P5): preinstalled update check event + command routing ───────
-const pu = await waitFor((e) => e.t === 'preinstalled-updates', 'preinstalled-updates event')
+// Parallel registry checks across N preinstalled bundles still take a few
+// seconds offline; give the wait a generous window.
+const pu = await waitFor((e) => e.t === 'preinstalled-updates', 'preinstalled-updates event', 45_000)
 const entry = pu.updates?.['dsh-model-reasoning']
 assert.ok(entry, 'preinstalled-updates covers the shipped bundle')
 assert.equal(entry.installed, bundledVersion('dsh-model-reasoning'), 'installed version read from the copied package')
@@ -244,7 +246,7 @@ assert.equal(tnEntry.updateAvailable, false, 'dsh-turn-navigator not claimable a
 send({ cmd: 'preinstalled-update', name: 'dsh-model-reasoning' })
 const updStart = await waitFor((e) => e.t === 'op-status' && e.op === 'update-preinstalled' && e.done === false, 'update-preinstalled start')
 assert.equal(updStart.spec, 'dsh-model-reasoning', 'op-status start carries the bundle name')
-const updDone = await waitFor((e) => e.t === 'op-status' && e.op === 'update-preinstalled' && e.done === true, 'update-preinstalled done')
+const updDone = await waitFor((e) => e.t === 'op-status' && e.op === 'update-preinstalled' && e.done === true, 'update-preinstalled done', 75_000)
 assert.equal(typeof updDone.ok, 'boolean', 'op reports an outcome (sandbox npm fails -> ok false)')
 
 // ── scenario 6b: restart-dsh clears the op-status (no stale "restart to apply") ──

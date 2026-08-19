@@ -562,22 +562,27 @@ async function npmViewVersion(name) {
 /** Refresh the cached update state for every preinstalled bundle. */
 async function checkPreinstalledUpdates() {
   const names = shellManifest.preinstalled ?? []
-  const next = {}
-  for (const name of names) {
-    const installed = installedVersionOf(join(args.runtimeDir, 'node_modules', name))
-    let latest = null
-    try {
-      latest = await npmViewVersion(name)
-    } catch {
-      latest = null
-    }
-    next[name] = {
-      installed,
-      latest,
-      updateAvailable: Boolean(latest && installed && latest !== installed),
-      userUpdated: (shellManifest.updates ?? {})[name] !== undefined,
-    }
-  }
+  // Query the registry in PARALLEL: N bundles must not serialize N registry
+  // round-trips (offline each npm view can take seconds — serialized this
+  // delayed the preinstalled-updates event past the shell's patience).
+  const entries = await Promise.all(
+    names.map(async (name) => {
+      const installed = installedVersionOf(join(args.runtimeDir, 'node_modules', name))
+      let latest = null
+      try {
+        latest = await npmViewVersion(name)
+      } catch {
+        latest = null
+      }
+      return [name, {
+        installed,
+        latest,
+        updateAvailable: Boolean(latest && installed && latest !== installed),
+        userUpdated: (shellManifest.updates ?? {})[name] !== undefined,
+      }]
+    }),
+  )
+  const next = Object.fromEntries(entries)
   preinstalledUpdates = next
   emitPreinstalledUpdates()
 }
