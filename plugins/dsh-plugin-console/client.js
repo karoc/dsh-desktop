@@ -60,7 +60,6 @@ window.__ModuleLoader__.load({
       restart: '重启',
       restartHint: '重启 dsh 服务，插件变更生效',
       devtools: '开发者工具',
-      proxySettings: '代理设置',
       restartToApply: '重启后生效',
       restartNow: '立即重启',
       failed: '操作失败',
@@ -111,7 +110,6 @@ window.__ModuleLoader__.load({
       restart: 'Restart',
       restartHint: 'Restart dsh to apply plugin changes',
       devtools: 'DevTools',
-      proxySettings: 'Proxy settings',
       restartToApply: 'Restart to apply',
       restartNow: 'Restart now',
       failed: 'Operation failed',
@@ -774,7 +772,6 @@ window.__ModuleLoader__.load({
       // ── actions ──
       section(L.actions, L.restartHint)
       const actions = [
-        ['dshc-proxy', L.proxySettings],
         ['dshc-refresh', L.refresh],
         ['dshc-restart', L.restart],
       ]
@@ -841,14 +838,6 @@ window.__ModuleLoader__.load({
             checkPreBtn.disabled = false
             checkPreBtn.textContent = L.checkPreUpdates
           }, 1500)
-        })
-      }
-      const proxyBtn = bodyEl.querySelector('#dshc-proxy')
-      if (proxyBtn) {
-        proxyBtn.addEventListener('click', async () => {
-          // Opens the standalone proxy settings window through the shell bridge
-          // (remote pages have no __TAURI__).
-          await bridge('/settings/open-proxy', { method: 'POST' })
         })
       }
       bodyEl.querySelectorAll('[data-remove]').forEach((btn) => {
