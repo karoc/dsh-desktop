@@ -120,6 +120,32 @@ button.secondary {
   border-color: var(--border);
 }
 
+button:disabled { opacity: 0.5; cursor: default; }
+
+/* 设置窗口内的按钮（保存/测试/关闭）不套用启动页的大上边距 */
+.settings button {
+  margin-top: 0;
+  margin-right: 8px;
+}
+
+/* 上游协议选择 */
+.proto-select {
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 13px;
+}
+
+.proto-select:focus { outline: none; border-color: var(--accent); }
+
+.proto-label {
+  flex: 0 0 auto;
+  font-size: 13px;
+  color: var(--muted);
+}
+
 /* 安装/更新进度：流动条纹表达"推进中"，不承诺确定性百分比；
    配合状态文字的秒数心跳，让用户能区分"正在下载"与"卡死"。 */
 .install-progress {
@@ -160,6 +186,8 @@ button.secondary {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 16px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
 }
 
 .settings-head h2 {
@@ -207,6 +235,19 @@ button.secondary {
 
 .row input:focus { outline: none; border-color: var(--accent); }
 
+.search {
+  width: 100%;
+  padding: 7px 10px;
+  margin: 0 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 13px;
+}
+
+.search:focus { outline: none; border-color: var(--accent); }
+
 .host-list { display: flex; flex-direction: column; gap: 6px; }
 
 .host-check {
@@ -217,9 +258,18 @@ button.secondary {
   cursor: pointer;
   color: var(--fg);
   word-break: break-all;
+  padding: 4px 6px;
+  margin: 0 -6px;
+  border-radius: 6px;
+  transition: background 0.12s;
 }
 
+.host-check:hover { background: rgba(127, 132, 142, 0.10); }
+
 .host-check input { accent-color: var(--accent); }
+
+/* 已勾选的主机：名称用强调色，一眼区分当前要走代理的项 */
+.host-check:has(input:checked) span { color: var(--accent); }
 
 .muted { color: var(--muted); }
 .muted.small { font-size: 12px; margin: 2px 0 0; }

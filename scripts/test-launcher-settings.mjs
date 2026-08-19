@@ -102,7 +102,7 @@ const tauriMock = {
       invokeCalls.push({ cmd, args })
       if (cmd === 'get_proxy_config') {
         return {
-          upstream: { enabled: true, host: '127.0.0.1', port: 7890, username: 'u', password: 'p' },
+          upstream: { enabled: true, protocol: 'http', host: '127.0.0.1', port: 7890, username: 'u', password: 'p' },
           // 'api.deepseek.com,' is a historical dirty value (trailing comma)
           // that must still light up the clean 'api.deepseek.com' checkbox.
           proxiedHosts: ['api.deepseek.com,', 'web.example'],
@@ -112,10 +112,15 @@ const tauriMock = {
             { name: 'llm-deepseek', displayName: 'DeepSeek', host: 'api.deepseek.com' },
             // Same host as DeepSeek: must merge into one checkbox.
             { name: 'llm-pi-ai/gw', displayName: 'ACME 网关', host: 'api.deepseek.com' },
+            // No displayName -> falls back to the route key (no namespace).
+            { name: 'llm-pi-ai/anyrouter', host: 'anyrouter.top' },
+            // No displayName AND no route key -> falls back to host label.
+            { name: 'llm-pi-ai', host: 'bare.example' },
           ],
         }
       }
       if (cmd === 'set_proxy_config') return {}
+      if (cmd === 'test_proxy') return { ok: true, detail: 'upstream proxy can forward (CONNECT 2xx)' }
       return {}
     },
   },
@@ -147,6 +152,7 @@ await new Promise((r) => setTimeout(r, 30)) // let the async loadSettings() sett
 
 // ── scenario 1: upstream fields loaded from config ──────────────────────────
 assert.equal(getEl('proxyEnabled').checked, true, 'upstream enabled checkbox reflects config')
+assert.equal(getEl('proxyProtocol').value, 'http', 'upstream protocol loaded')
 assert.equal(getEl('proxyHost').value, '127.0.0.1', 'proxy host loaded')
 assert.equal(getEl('proxyPort').value, '7890', 'proxy port loaded')
 assert.equal(getEl('proxyUser').value, 'u', 'proxy username loaded')
@@ -154,19 +160,27 @@ assert.equal(getEl('proxyPass').value, 'p', 'proxy password loaded')
 
 // ── scenario 3: host checkboxes rendered from providers + observed ──────────
 const providerList = getEl('providerHosts')
-// Two providers share api.deepseek.com → exactly ONE merged checkbox.
-assert.equal(providerList.querySelectorAll('.host-check').length, 1, 'same-host providers merge into one checkbox')
+// Two providers share api.deepseek.com → ONE merged checkbox; two more entries
+// with friendly-name fallbacks (route key / host label).
+const providerLabels = providerList.querySelectorAll('.host-check').map((l) => l.querySelector('span').textContent)
+assert.deepEqual(providerLabels, [
+  'DeepSeek / ACME 网关（api.deepseek.com）',
+  'anyrouter（anyrouter.top）',
+  'bare（bare.example）',
+], 'providers render merged same-host label + route-key/host-label fallbacks')
 const providerCb = providerList.querySelector('input')
 assert.equal(providerCb.checked, true, 'provider host checked because it is in proxiedHosts')
-assert.equal(providerCb.closest('.host-check').querySelector('span').textContent, 'DeepSeek / ACME 网关（api.deepseek.com）', 'merged label lists friendly names + host')
 assert.equal(providerCb.closest('.host-check').dataset.host, 'api.deepseek.com', 'host kept in data-host for saving')
+// No displayName / no namespace prefix in ANY label.
+assert.ok(providerLabels.every((l) => !l.includes('llm-')), 'no llm-pi-ai namespace text leaks into provider labels')
 
 const otherList = getEl('otherHosts')
 const otherLabels = otherList.querySelectorAll('.host-check').map((l) => l.querySelector('span').textContent)
 assert.deepEqual(otherLabels, ['registry.npmjs.org', 'web.example'], 'observed hosts rendered (deduped, providers excluded)')
 
 // ── scenario 4: saving posts upstream + the checked hosts ───────────────────
-// uncheck the provider, check the second observed host
+// switch protocol to socks5, uncheck the provider, check the second observed host
+getEl('proxyProtocol').value = 'socks5'
 providerCb.checked = false
 providerCb.change()
 const otherCbs = otherList.querySelectorAll('input')
@@ -177,13 +191,33 @@ await new Promise((r) => setTimeout(r, 20))
 const save = invokeCalls.find((c) => c.cmd === 'set_proxy_config')
 assert.ok(save, 'set_proxy_config invoked on save')
 assert.equal(save.args.upstream.host, '127.0.0.1', 'upstream object posted')
+assert.equal(save.args.upstream.protocol, 'socks5', 'protocol posted from the select')
 assert.deepEqual([...save.args.proxiedHosts], ['web.example'], 'only the checked host is saved')
 assert.match(getEl('saveStatus').textContent, /已保存/, 'save status feedback shown')
+
+// ── scenario 4b: test connection button invokes test_proxy with the form ─────
+getEl('testProxy').click()
+await new Promise((r) => setTimeout(r, 20))
+const testCall = invokeCalls.find((c) => c.cmd === 'test_proxy')
+assert.ok(testCall, 'test_proxy invoked on 测试连接')
+assert.equal(testCall.args.upstream.protocol, 'socks5', 'test uses the selected protocol')
+assert.equal(testCall.args.upstream.host, '127.0.0.1', 'test uses the host field')
+assert.match(getEl('testStatus').textContent, /连接成功/, 'test result shown')
 
 // ── scenario 5: close button closes the current window ──────────────────────
 getEl('settingsClose').click()
 await new Promise((r) => setTimeout(r, 20))
 assert.equal(closeCalls, 1, 'close button calls window.close()')
 
-console.log('PASS — proxy settings window (5 scenarios)')
+// ── scenario 6: search filters the host lists ───────────────────────────────
+const search = getEl('hostSearch')
+search.value = 'anyrouter'
+;(search.listeners.input || []).forEach((f) => f())
+let labelsAfter = getEl('providerHosts').querySelectorAll('.host-check').map((l) => l.querySelector('span').textContent)
+assert.deepEqual(labelsAfter, ['anyrouter（anyrouter.top）'], 'search filters providers by name/host')
+search.value = ''
+;(search.listeners.input || []).forEach((f) => f())
+assert.equal(getEl('providerHosts').querySelectorAll('.host-check').length, 3, 'clearing the search restores the full list')
+
+console.log('PASS — proxy settings window (6 scenarios)')
 process.exit(0)
