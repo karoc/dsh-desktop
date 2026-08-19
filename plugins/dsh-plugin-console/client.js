@@ -379,9 +379,19 @@ window.__ModuleLoader__.load({
 .dshc-upd-arrow:active { transform: scale(.95); }
 /* 预装项容器：行 + 下方独立一行（恢复默认） */
 .dshc-item { margin: 7px 0; }
-.dshc-item .dshc-row { margin: 0; }
+/* 卡片框：整个预装项（插件名+简介 / 箭头+开关 / 恢复默认）在一个统一卡片内 */
+.dshc-item {
+  background: var(--dshc-surface); border: 1px solid var(--dshc-border);
+  border-radius: var(--dshc-radius-row); padding: 11px 13px;
+}
+.dshc-item:hover { background: var(--dshc-surfaceHover); }
+/* 卡片内的行不再自带卡片视觉（背景/边框/圆角/外边距归卡片容器） */
+.dshc-item .dshc-row {
+  margin: 0; padding: 0; background: transparent; border: none; border-radius: 0;
+}
+.dshc-item .dshc-row:hover { background: transparent; }
 .dshc-reset {
-  display: block; margin: 6px 0 0 auto; font-size: 11px; padding: 4px 10px;
+  display: block; margin: 8px 0 0 auto; font-size: 11px; padding: 4px 10px;
 }
 /* 语言切换按钮（头部，主题点左侧） */
 .dshc-lang { min-width: 44px; font-size: 11px; padding: 4px 8px; }
