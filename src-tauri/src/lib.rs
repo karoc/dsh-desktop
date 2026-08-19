@@ -667,13 +667,6 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
             eprintln!("[dsh-desktop] client-ready (http): {body}");
             ("200 OK", String::new())
         }
-        ("POST", "/settings/open-proxy") => {
-            // The console plugin's "代理设置" entry lives inside the dsh page
-            // (remote, no __TAURI__) — it opens the standalone settings window
-            // through this bridge endpoint.
-            open_settings_window(app);
-            ("200 OK", String::new())
-        }
         ("POST", "/log") => {
             let data = app
                 .path()
