@@ -1,0 +1,9 @@
+# Bundle layer applied when a profile lists this package. The row names the
+# package by name so Node resolution finds the installed code; its browser half
+# (exports["./client"] + dsh.client manifest) is discovered by dsh web's
+# client-modules service and served at /plugins/dsh-turn-navigator/client.js.
+# The host half is an empty apply (no tools/routes); the client half registers
+# the session-header trigger and the shell.overlay drawer.
+- insert:
+    - id: dsh-turn-navigator
+      name: dsh-turn-navigator

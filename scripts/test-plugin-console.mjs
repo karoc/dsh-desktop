@@ -128,10 +128,12 @@ let listPayload = {
   preinstalled: [
     { name: 'dsh-model-reasoning', description: 'per-model reasoning effort settings' },
     { name: 'dsh-kanban', description: 'workspace kanban board' },
+    { name: 'dsh-turn-navigator', description: 'conversation turn navigation rail' },
   ],
   preinstalledUpdates: {
     'dsh-model-reasoning': { installed: '0.1.1', latest: '0.1.3', updateAvailable: true, userUpdated: false },
     'dsh-kanban': { installed: '0.1.0', latest: '0.1.0', updateAvailable: false, userUpdated: false },
+    'dsh-turn-navigator': { installed: '0.1.1', latest: '0.1.1', updateAvailable: false, userUpdated: false },
   },
   update: { current: '1.0.0', latest: '1.1.0', updateAvailable: true },
   op: { op: null, done: true },
@@ -188,12 +190,14 @@ await new Promise((r) => setTimeout(r, 10)) // let the async render finish
 
 // ── scenario 3: preinstalled row renders with a toggle switch ───────────────
 const toggle = panel.querySelectorAll('[data-toggle]')
-assert.equal(toggle.length, 2, 'two preinstalled plugin rows with toggles')
+assert.equal(toggle.length, 3, 'three preinstalled plugin rows with toggles')
 assert.equal(toggle[0].dataset.toggle, 'dsh-model-reasoning')
 assert.equal(toggle[1].dataset.toggle, 'dsh-kanban')
+assert.equal(toggle[2].dataset.toggle, 'dsh-turn-navigator')
 assert.ok(toggle[0].className.includes('dshc-switch'), 'the toggle is a switch, not a text button')
 assert.ok(!toggle[0].className.includes(' on'), 'switch starts off (plugin not enabled)')
 assert.ok(!toggle[1].className.includes(' on'), 'dsh-kanban switch starts off too')
+assert.ok(!toggle[2].className.includes(' on'), 'dsh-turn-navigator switch starts off too')
 
 // ── scenario 4: toggle posts enable (name not in bundles) then disable ──────
 toggle[0].click()

@@ -1,0 +1,81 @@
+{
+  "name": "dsh-turn-navigator",
+  "version": "0.1.1",
+  "description": "External DeepSeek Harness plugin: a turn-navigation drawer that lists every conversation turn (user message summary + timestamp), jumps to any turn's start, and highlights the current turn as you scroll.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/client.js",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-web-react",
+        "@deepseek-ai/dsh-api-remotes"
+      ],
+      "platform": "web"
+    }
+  },
+  "scripts": {
+    "bundle": "tsdown --config ./tsdown.config.ts",
+    "prepare": "tsdown --config ./tsdown.config.ts",
+    "prepublishOnly": "tsdown --config ./tsdown.config.ts"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "plugin",
+    "turn",
+    "navigation",
+    "conversation",
+    "outline"
+  ],
+  "author": "karoc",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/karoc/dsh-turn-nav.git"
+  },
+  "bugs": {
+    "url": "https://github.com/karoc/dsh-turn-nav/issues"
+  },
+  "homepage": "https://github.com/karoc/dsh-turn-nav",
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "~18.3.1",
+    "@types/react-dom": "^19.2.4",
+    "react": "^18.2.0",
+    "tsdown": "^0.22.0",
+    "typescript": "^5.6.0"
+  },
+  "peerDependencies": {
+    "react": "^18.2.0"
+  }
+}

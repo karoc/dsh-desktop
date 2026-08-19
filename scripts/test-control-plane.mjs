@@ -196,6 +196,15 @@ const kb = join(runtime, 'node_modules', 'dsh-kanban', 'package.json')
 assert.ok(existsSync(kb), 'dsh-kanban preinstalled bundle copied into runtime node_modules')
 const kbPkg = JSON.parse(readFileSync(kb, 'utf8'))
 assert.equal(kbPkg.name, 'dsh-kanban', 'copied dsh-kanban package keeps its real name')
+// dsh-turn-navigator ships alongside as a third preinstalled bundle.
+assert.ok(
+  Array.isArray(dshJson.preinstalled) && dshJson.preinstalled.includes('dsh-turn-navigator'),
+  'dsh.json records the dsh-turn-navigator preinstalled bundle',
+)
+const tn = join(runtime, 'node_modules', 'dsh-turn-navigator', 'package.json')
+assert.ok(existsSync(tn), 'dsh-turn-navigator preinstalled bundle copied into runtime node_modules')
+const tnPkg = JSON.parse(readFileSync(tn, 'utf8'))
+assert.equal(tnPkg.name, 'dsh-turn-navigator', 'copied dsh-turn-navigator package keeps its real name')
 
 // ── scenario 5 (P5): plugins-install routes through the dsh plugin CLI ───────
 send({ cmd: 'plugins-install', spec: 'some-plugin@1.2.3' })
@@ -226,6 +235,11 @@ assert.ok(kbEntry, 'preinstalled-updates also covers dsh-kanban')
 assert.equal(kbEntry.installed, bundledVersion('dsh-kanban'), 'dsh-kanban installed version read from the copied package')
 assert.equal(kbEntry.userUpdated, false, 'dsh-kanban not user-updated on a fresh runtime')
 assert.equal(kbEntry.updateAvailable, false, 'dsh-kanban not claimable as update without a registry')
+const tnEntry = pu.updates?.['dsh-turn-navigator']
+assert.ok(tnEntry, 'preinstalled-updates also covers dsh-turn-navigator')
+assert.equal(tnEntry.installed, bundledVersion('dsh-turn-navigator'), 'dsh-turn-navigator installed version read from the copied package')
+assert.equal(tnEntry.userUpdated, false, 'dsh-turn-navigator not user-updated on a fresh runtime')
+assert.equal(tnEntry.updateAvailable, false, 'dsh-turn-navigator not claimable as update without a registry')
 
 send({ cmd: 'preinstalled-update', name: 'dsh-model-reasoning' })
 const updStart = await waitFor((e) => e.t === 'op-status' && e.op === 'update-preinstalled' && e.done === false, 'update-preinstalled start')

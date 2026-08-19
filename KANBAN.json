@@ -87,6 +87,20 @@
       ],
       "createdAt": 1787032101064,
       "updatedAt": 1787032101064
+    },
+    {
+      "id": "card-b823cd1d-64c5-43d5-8f2e-d4f8e26bc02c",
+      "title": "预装 dsh-turn-navigator 插件（bundle + sync + PROTECTED + 测试）",
+      "description": "把 dsh-turn-nav 仓库（包名 dsh-turn-navigator v0.1.1，纯 client 会话轮次导航胶囊条）按 dsh-kanban 模式预装：plugins/preinstalled/dsh-turn-navigator bundle、sync-resources 列表、server-manager PROTECTED、test-control-plane / test-plugin-console 扩展。",
+      "sourceSessionId": "session-55bbd601-04e2-4288-a1c9-0696fdab1f4a",
+      "status": "done",
+      "tags": [
+        "preinstalled",
+        "plugins"
+      ],
+      "createdAt": 1787137916096,
+      "updatedAt": 1787137935693,
+      "summary": "dsh-turn-navigator@0.1.1（dsh-turn-nav 仓库 HEAD 构建，已在 workspace 重建并逐字节验证）按 dsh-kanban 模式预装：plugins/preinstalled/dsh-turn-navigator/（lib + cordis.patch.yml + 裁剪 package.json/README + LICENSE）；sync-resources 列表与 server-manager PROTECTED 均加 dsh-turn-navigator；sync:resources 已刷新 src-tauri/resources；test-control-plane 增加落盘/preinstalled-updates 断言、test-plugin-console fixture 扩为三行；六个测试脚本全部通过。"
     }
   ]
 }
