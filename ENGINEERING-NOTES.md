@@ -346,3 +346,13 @@ Windows 的 NSIS 安装行为、toast 渲染、AUMID、事件投递——Linux s
 - **测试**：test-launcher-settings.mjs 加载独立的 src/settings.js（vm + 最小 DOM + mock Tauri 桥），
   验证渲染（含同 host 归并标签）/保存/关闭按钮（5 场景）；test-plugin-console.mjs 断言控制台面板
   「代理设置」按钮点击 POST `/settings/open-proxy`。
+
+## 27. 预装卡片两行布局 + 测试桩 innerHTML 语义
+
+- 预装项卡片 = 一个统一容器 `.dshc-item`（背景/边框/圆角），内部两行右列：
+  第一行 `[↑升级箭头][开关]`（nowrap，不被左侧简介挤压），第二行 `[恢复默认]`。
+  `.dshc-row` 用 `align-items: stretch` 让左右等高（左边两行简介 vs 右边两列）。
+  关键：`.dshc-row > div:last-child` 通用 flex-wrap 在 item 内被覆盖为纵向 column。
+- 测试桩教训：桩的 innerHTML setter 原先"追加不清空"，而真实 DOM 是"替换"——连续两次
+  innerHTML 赋值会让子元素重复（同插件渲染两次）。修桩：set 时先 `children=[]` 再解析。
+  同时 client 侧改为**一次构建完整字符串**再赋值，避免依赖 setter 语义。

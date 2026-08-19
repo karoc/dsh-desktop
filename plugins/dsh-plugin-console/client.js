@@ -383,14 +383,20 @@ window.__ModuleLoader__.load({
   border-radius: var(--dshc-radius-row); padding: 11px 13px;
 }
 .dshc-item:hover { background: var(--dshc-surfaceHover); }
-/* 卡片内的行不再自带卡片视觉（背景/边框/圆角/外边距归卡片容器） */
+/* 卡片内的行不再自带卡片视觉，且左右等高对齐（stretch） */
 .dshc-item .dshc-row {
   margin: 0; padding: 0; background: transparent; border: none; border-radius: 0;
+  align-items: stretch;
 }
 .dshc-item .dshc-row:hover { background: transparent; }
-.dshc-reset {
-  display: block; margin: 8px 0 0 auto; font-size: 11px; padding: 4px 10px;
+/* 右边两行结构：第一行（箭头+开关）横向不换行，整体不被左边挤压 */
+.dshc-item .dshc-row > div:last-child {
+  display: flex; flex-direction: column; align-items: flex-end;
+  justify-content: center; gap: 8px; flex-shrink: 0; flex-wrap: nowrap;
 }
+.dshc-item-right { display: flex; flex-direction: column; align-items: flex-end; justify-content: center; gap: 8px; }
+.dshc-item-actions { display: flex; gap: 6px; white-space: nowrap; }
+.dshc-reset { font-size: 11px; padding: 4px 10px; }
 /* 语言切换按钮（头部，主题点左侧） */
 .dshc-lang { min-width: 44px; font-size: 11px; padding: 4px 8px; }
 .dshc-actions { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 6px; }
@@ -719,24 +725,46 @@ window.__ModuleLoader__.load({
         const on = bundles.includes(p.name)
         const info = pu[p.name] || {}
         let sub = descFor(p.name, p.description)
-        // 启停 = 开关本身；有新版时，开关前放一个绿色向上箭头（点击更新，
-        // 悬停 tips 显示短文案「更新到 vX」）。
-        let right = `<button class="dshc-switch${on ? ' on' : ''}" data-toggle="${p.name}" role="switch" aria-checked="${on}"><span class="dshc-switch-knob"></span></button>`
+        // 右边固定两行：第一行 = 升级箭头 + 开关（横向不换行），第二行 = 恢复默认。
+        // 左边（插件名+简介）与右边等高对齐，右边不被左边挤压。
+        const right = document.createElement('div')
+        right.className = 'dshc-item-right'
+        const actions = document.createElement('div')
+        actions.className = 'dshc-item-actions'
+        // 一次构建完整字符串再设 innerHTML（避免重复解析）。
+        let actionsHtml = `<button class="dshc-switch${on ? ' on' : ''}" data-toggle="${p.name}" role="switch" aria-checked="${on}"><span class="dshc-switch-knob"></span></button>`
         if (info.updateAvailable) {
           const tip = `${L.updateTo}${info.latest}`
-          right = `<button class="dshc-upd-arrow" data-upd-pre="${p.name}" aria-label="${tip}">↑</button>` + right
+          actionsHtml = `<button class="dshc-upd-arrow" data-upd-pre="${p.name}" aria-label="${tip}">↑</button>` + actionsHtml
         }
-        const wrap = document.createElement('div')
-        wrap.className = 'dshc-item'
-        wrap.appendChild(row(p.name, null, '', right, sub))
+        actions.innerHTML = actionsHtml
+        right.appendChild(actions)
         if (info.userUpdated) {
           if (!sub) sub = L.userUpdatedHint
           const resetBtn = document.createElement('button')
           resetBtn.className = 'dshc-btn2 dshc-reset'
           resetBtn.dataset.resetPre = p.name
           resetBtn.textContent = L.resetDefault
-          wrap.appendChild(resetBtn)
+          right.appendChild(resetBtn)
         }
+        // 手动组装行（row() 的 right 参数是字符串，这里需要自定义两行结构）。
+        const rowEl = document.createElement('div')
+        rowEl.className = 'dshc-row'
+        const left = document.createElement('div')
+        const nameEl = document.createElement('span')
+        nameEl.className = 'dshc-name'
+        nameEl.textContent = p.name
+        left.appendChild(nameEl)
+        if (sub) {
+          const s = el('div', sub, 'dshc-sub')
+          attachTooltip(s, sub)
+          left.appendChild(s)
+        }
+        rowEl.appendChild(left)
+        rowEl.appendChild(right)
+        const wrap = document.createElement('div')
+        wrap.className = 'dshc-item'
+        wrap.appendChild(rowEl)
         bodyEl.appendChild(wrap)
       }
       const checkPreBtn = document.createElement('button')

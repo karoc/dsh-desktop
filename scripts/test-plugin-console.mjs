@@ -74,7 +74,7 @@ function makeEl(tag) {
   })
   Object.defineProperty(el, 'innerHTML', {
     get() { return el._html },
-    set(v) { el._html = v; parseChildren(el, v) },
+    set(v) { el._html = v; el.children = []; parseChildren(el, v) }, // 真实 DOM 语义：替换，不是追加
   })
   return el
 }
