@@ -162,6 +162,12 @@ static UPDATE_TOAST_SHOWN: std::sync::atomic::AtomicBool = std::sync::atomic::At
 /// by the shell, not the page.
 static LAUNCHER_URL: Mutex<Option<String>> = Mutex::new(None);
 
+/// The live dsh web root URL (current random port). Used by the navigation
+/// guard to snap any user back/forward (or bfcache nav) away from stale ports
+/// back to the currently-running dsh instance. Prevents the "back to initial
+/// setup then refresh inaccessible" symptom after dsh web has cycled its port.
+static LIVE_DSH_URL: Mutex<Option<String>> = Mutex::new(None);
+
 /// Windows: register a PROCESS-LEVEL toast activator. The WinRT `Activated`
 /// event used by notify-rust only fires while the toast is visible on screen;
 /// once it lands in the Action Center the system routes clicks to the app's
@@ -1093,6 +1099,7 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
                     Some("url") => {
                         if let Some(url) = ev.get("url").and_then(|v| v.as_str()) {
                             let _ = handle.emit("server-url", url);
+                            *LIVE_DSH_URL.lock().unwrap() = Some(url.to_string());
                             // Reconnect: the launcher page's JS listener is gone
                             // once the webview is on the dsh page, so a dsh /
                             // manager restart (new random port) must be driven by
@@ -1209,6 +1216,7 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
         // UI and go back to the launcher page so it re-arms for the next boot
         // (a restart) or shows the error + retry (a crash).
         let _ = handle.emit("server-down", ());
+        *LIVE_DSH_URL.lock().unwrap() = None;
         // Back to the launcher so it re-arms for the next boot (a restart) or
         // shows the error + retry (a crash). Guard: only when we're actually on
         // a dsh loopback page, never away from a valid launcher URL.
@@ -1417,10 +1425,40 @@ pub fn run() {
         // Belt-and-suspenders for the taskbar icon: re-apply the bundled icon
         // on every page load (window existence/creation timing is not relied
         // on; see WindowConfig having no icon field in Tauri v2).
-        .on_page_load(|webview, _payload| {
+        .on_page_load(|webview, payload| {
             if let Some(w) = webview.app_handle().get_webview_window("main") {
                 if let Some(icon) = w.app_handle().default_window_icon() {
                     let _ = w.set_icon(icon.clone());
+                }
+                // 导航守卫（原 on_navigation 是 builder-only API，运行时窗口
+                // 不可用）。目标：用户 back/forward 或右键跳到旧 --port 0 的
+                // 死端口页时，把 webview 拉回当前 live 的 dsh 端口。Tauri 2
+                // 没有运行时导航拦截，用两条可用路径：
+                //  1) on_page_load：加载到 dsh 端口但 origin 不是 live → 跳回；
+                //  2) 注入 pageshow/popstate 监听：bfcache 恢复不触发
+                //     on_page_load，但一定触发 pageshow——覆盖"back 到死端口
+                //     且从 bfcache 恢复"（原症状的直接成因）。
+                // 判断按 origin（host+port），不影响 live 端口内的路由。
+                let live = LIVE_DSH_URL.lock().unwrap().clone();
+                let url = payload.url().to_string();
+                if let Some(live_url) = live {
+                    let is_dsh_like =
+                        url.starts_with("http://127.0.0.1:") || url.starts_with("http://localhost:");
+                    let same_origin = |u: &str| {
+                        tauri::Url::parse(u).ok().map(|x| x.origin().ascii_serialization())
+                    };
+                    if is_dsh_like && same_origin(&url) != same_origin(&live_url) {
+                        if let Ok(u) = tauri::Url::parse(&live_url) {
+                            let _ = w.navigate(u);
+                        }
+                    }
+                    // Bfcache 恢复兜底（Rust 侧 on_page_load 拦不到）：
+                    // 用 JSON 字面量安全注入，避免手拼字符串转义问题。
+                    let live_json = serde_json::to_string(&live_url).unwrap_or_else(|_| "\"\"".into());
+                    let js = format!(
+                        "(()=>{{const live=JSON.parse({live_json});const fix=()=>{{const h=location.hostname;if((h==='127.0.0.1'||h==='localhost')&&location.origin!==new URL(live).origin)location.replace(live)}};window.addEventListener('pageshow',fix);window.addEventListener('popstate',fix)}})()"
+                    );
+                    let _ = w.eval(&js);
                 }
             }
         })
