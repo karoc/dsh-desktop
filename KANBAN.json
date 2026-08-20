@@ -230,6 +230,20 @@
       ],
       "createdAt": 1787239670280,
       "updatedAt": 1787239670280
+    },
+    {
+      "id": "card-d6fcc0d4-5898-471d-877c-e8a6121eb5ac",
+      "title": "修复：dsh web 不再多开默认浏览器（--no-open）",
+      "description": "dsh web 每次启动会打开系统默认浏览器（桌面壳自己 webview 已导航到 URL）。launchDsh 加 --no-open。注意 dsh 启动器 flag 顺序坑：启动器在第一个不认识的 flag 处停止解析并把剩余透传给应用，--no-open 是应用 flag，必须放在 --patch 之后（否则报 unknown option '--patch'）。0.3.6 已推送+tag。坑已记入技能 §8。",
+      "sourceSessionId": "session-cbc11ff3-8490-410a-9642-003db8693f13",
+      "status": "done",
+      "tags": [
+        "bug-fix",
+        "launch",
+        "windows"
+      ],
+      "createdAt": 1787246827606,
+      "updatedAt": 1787246827606
     }
   ]
 }
