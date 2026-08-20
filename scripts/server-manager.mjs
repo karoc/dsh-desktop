@@ -930,8 +930,15 @@ async function launchDsh(runtimeDir, patchPath, cwd) {
   // up to <runtime>/node_modules so the injected plugin package resolves.
   // Ambient $DSH_HOME is deliberately NOT inherited, so the desktop app never
   // writes into the browser version's ~/.dsh. Pass --home to override.
+  // `--no-open`: dsh web would otherwise open the system default browser;
+  // the shell has its own webview that navigates to the reported URL.
   const dshHome = args.home ?? join(runtimeDir, 'dsh-home')
-  const child = spawn(process.execPath, [entry, 'web', '--patch', patchPath, '--host', '127.0.0.1', '--port', '0'], {
+  // `--patch` must come BEFORE any web-app flag: dsh's launcher consumes its
+  // own options until the first token it does not recognize, then passes
+  // everything after it to the booted app verbatim. `--no-open` is a web-app
+  // flag, so it must trail `--patch` or the patch overlay would be handed to
+  // the web app ("unknown option '--patch'").
+  const child = spawn(process.execPath, [entry, 'web', '--patch', patchPath, '--no-open', '--host', '127.0.0.1', '--port', '0'], {
     cwd,
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, DSH_HOME: dshHome },

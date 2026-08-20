@@ -90,3 +90,10 @@ node scripts/server-manager.mjs \
 - 只改"超时/检测"不解决根因：卡死检测能把"20 分钟静默"变"3 分钟报错"，但**装不上还是装不上**——要找到"为什么解析器挂起"并用能装的工具（pnpm）替换。
 - 在用户机器上反复让用户跑命令贴日志：先尝试 WSL 直读现场。
 - 把"勾选框/卸载器行为"当成自己的 bug 修：Tauri NSIS 模板的行为（如"删除应用数据"勾选框）是上游无条件默认，先用自定义 NSIS 模板评估成本再决定是否 fork，别默认是我们的问题。
+
+## 8. dsh 启动器 flag 顺序坑（--no-open 引发 unknown option '--patch'）
+
+`dsh web` 的启动器**解析到第一个它不认识的 flag 就停止**，把剩余参数原样透传给被启动的应用。
+所以**启动器自己的 flag（`--patch`、`--profile`）必须放在 web 应用的 flag（`--host`、`--port`、`--no-open`）之前**。
+否则 `dsh web --no-open --patch x.yml` 会让 `--patch` 被透传给 web 应用 → `error: unknown option '--patch'`。
+正确顺序：`dsh web --patch x.yml --no-open --host 127.0.0.1 --port 0`。这也是"桌面壳要用 `--no-open` 防止默认浏览器被打开一遍"时的必踩坑。
