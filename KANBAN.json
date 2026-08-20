@@ -135,7 +135,7 @@
     },
     {
       "id": "card-ec992325-540f-46bf-8344-b9301e941237",
-      "title": "发布 v0.3.2（CI release 已发布）",
+      "title": "发布 v0.3.3（pnpm 安装根因修复，CI 已发布）",
       "description": "v0.3.1 已提交推送（8bfd58f）+ tag v0.3.1 已推送；CI 的 release job 正在构建 Windows 安装包并发布到 GitHub Releases（用户也可本地 git pull && npm run bundle）。CI run 完成后把本卡标 done。",
       "sourceSessionId": "session-cbc11ff3-8490-410a-9642-003db8693f13",
       "status": "done",
@@ -144,8 +144,8 @@
         "bug-fix"
       ],
       "createdAt": 1787205100823,
-      "updatedAt": 1787208448742,
-      "summary": "v0.3.2 CI 全绿并已发布：GitHub Release v0.3.2 含 DSH.Desktop_0.3.2_x64-setup.exe + AppImage + deb（CI release 修复生效）。用户可本地 git pull && npm run bundle 或直接下载 Release 安装包。"
+      "updatedAt": 1787230789426,
+      "summary": "v0.3.3 CI 全绿并已发布：GitHub Release v0.3.3 含 DSH.Desktop_0.3.3_x64-setup.exe（pnpm 安装根因修复）。用户可下载或本地 git pull && npm run bundle。"
     },
     {
       "id": "card-6f642993-d0fe-4abd-af28-c041fe5a4135",
@@ -179,13 +179,28 @@
       "title": "发布 v0.3.3（pnpm 安装根因修复）",
       "description": "v0.3.3 已提交推送（8d0de7d）+ tag v0.3.3；CI 正在构建并发布 Windows 安装包到 GitHub Releases。用户可本地 git pull && npm run bundle 或等 CI 出包。CI 完成标 done。",
       "sourceSessionId": "session-cbc11ff3-8490-410a-9642-003db8693f13",
-      "status": "in_progress",
+      "status": "done",
       "tags": [
         "release",
         "bug-fix"
       ],
       "createdAt": 1787220491292,
-      "updatedAt": 1787220491292
+      "updatedAt": 1787230824755,
+      "summary": "v0.3.3 已发布（重复卡，归档）。"
+    },
+    {
+      "id": "card-e520f114-4dbc-4bd6-890e-fb6d3eec1f5b",
+      "title": "沉淀：Windows 安装排障技能 + 发版运行时冒烟门禁",
+      "description": "沉淀：技能 `.dsh/skills/windows-desktop-shell-debugging/SKILL.md`（项目级已提交 + 全局安装到 ~/.dsh/skills）；发版门禁 `scripts/smoke-windows.mjs` + build.yml windows job 的 Runtime smoke step（空 runtime 冷安装 dsh→报 URL，本地验证 9s PASS）；ENGINEERING-NOTES §28 记录根因/修复/发版检查清单/环境坑。",
+      "sourceSessionId": "session-cbc11ff3-8490-410a-9642-003db8693f13",
+      "status": "done",
+      "tags": [
+        "process",
+        "skill",
+        "release-gate"
+      ],
+      "createdAt": 1787230841135,
+      "updatedAt": 1787230841135
     }
   ]
 }
