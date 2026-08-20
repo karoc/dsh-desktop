@@ -132,6 +132,19 @@
       "updatedAt": 1787204067551,
       "summary": "根因：NSIS 卸载器「删除应用数据」清空 runtime → 冷安装 dsh(~500 包)，registry 连接悬挂时 npm 无限等待，manager 只有 600s 硬超时×2 镜像，用户看到“已进行 511 秒”像卡死。修复：npm 调用统一加 --fetch-timeout=30000 等（idle 超时，实测 EIDLETIMEOUT@30.2s）+ npm() 180s 无输出 stall 检测 + 失败自动切换镜像提示 + npmLineToDisplay 识别元数据 URL。新增 scripts/test-install-stall.mjs 回归测试（真实 manager + 假 registry 悬挂 tarball，32.9s 出错误）；test-control-plane / test-proxy 全部通过。",
       "rationale": "把“20 分钟静默悬挂”变成 ~30s 快失败 + 自动切换镜像 + 清晰报错。"
+    },
+    {
+      "id": "card-ec992325-540f-46bf-8344-b9301e941237",
+      "title": "发布 v0.3.1（冷安装卡死修复）",
+      "description": "v0.3.1 已提交推送（8bfd58f）+ tag v0.3.1 已推送；CI 的 release job 正在构建 Windows 安装包并发布到 GitHub Releases（用户也可本地 git pull && npm run bundle）。CI run 完成后把本卡标 done。",
+      "sourceSessionId": "session-cbc11ff3-8490-410a-9642-003db8693f13",
+      "status": "in_progress",
+      "tags": [
+        "release",
+        "bug-fix"
+      ],
+      "createdAt": 1787205100823,
+      "updatedAt": 1787205100823
     }
   ]
 }

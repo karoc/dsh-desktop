@@ -241,6 +241,21 @@ function installedVersion(runtimeDir) {
   }
 }
 
+/** The dsh launch entry the manager spawns (package.json `bin.dsh`). */
+function dshEntry(runtimeDir) {
+  return join(runtimeDir, 'node_modules', PACKAGE, 'lib', 'bin.js')
+}
+
+/**
+ * True only when dsh is FULLY installed: manifest present AND the launch entry
+ * exists. A half-extracted install (npm killed mid-reify writes package.json
+ * but not lib/bin.js) must NOT count as installed — otherwise the auto-install
+ * gate skips and the launcher fails with "not installed" forever.
+ */
+function dshInstalled(runtimeDir) {
+  return installedVersion(runtimeDir) !== null && existsSync(dshEntry(runtimeDir))
+}
+
 // ── update status ──────────────────────────────────────────────────────────
 let latestVersion = null
 // Shell manifest (<runtime>/dsh.json) snapshot: preinstalled list, devMode, …
@@ -290,13 +305,22 @@ async function checkDshUpdate({ frozen = false } = {}) {
  */
 async function installDshUpdate() {
   const current = installedVersion(args.runtimeDir)
+  const fullyInstalled = dshInstalled(args.runtimeDir)
   try {
     latestVersion = await latestRemoteVersion()
   } catch (err) {
     throw new Error(`无法查询最新版本：${err.message}`)
   }
   if (!latestVersion) throw new Error('无法获取最新版本')
-  if (current === latestVersion) {
+  // A half-extracted install (package.json written, lib/bin.js missing) must
+  // be REPAIRED even when the recorded version already matches latest — npm
+  // may consider the package current and skip re-extraction, leaving the
+  // launcher stuck on "not installed". Remove it so npm re-extracts fresh.
+  if (current !== null && !fullyInstalled) {
+    rmSync(join(args.runtimeDir, 'node_modules', PACKAGE), { recursive: true, force: true })
+    log(`dsh 安装不完整（缺启动入口），将重新安装`)
+  }
+  if (current === latestVersion && dshInstalled(args.runtimeDir)) {
     log(`dsh 已是最新 ${latestVersion}`)
     return false
   }
@@ -785,7 +809,7 @@ function setPendingTask(task) {
 }
 
 async function launchDsh(runtimeDir, patchPath, cwd) {
-  const entry = join(runtimeDir, 'node_modules', PACKAGE, 'lib', 'bin.js')
+  const entry = dshEntry(runtimeDir)
   if (!existsSync(entry)) throw new Error(`${PACKAGE} not installed at ${entry}`)
   // Desktop-owned DSH_HOME (default <runtime>/dsh-home): keeps data
   // self-contained and — crucially — makes the profile's module resolver walk
@@ -1144,11 +1168,12 @@ async function main() {
   } catch (err) {
     log(`forward proxy start failed (continuing without it): ${err.message}`)
   }
-  // Auto-install dsh when missing (fresh install, or the runtime copy was
-  // removed) — without this the launcher hangs on "dsh 服务已退出" forever.
-  if (!installedVersion(args.runtimeDir)) {
+  // Auto-install dsh when missing OR broken (fresh install, the runtime copy
+  // was removed, or a killed install left package.json without lib/bin.js) —
+  // without this the launcher hangs on "dsh 服务已退出" forever.
+  if (!dshInstalled(args.runtimeDir)) {
     try {
-      log('dsh missing — installing automatically')
+      log('dsh missing or broken — installing automatically')
       await installDshUpdate()
     } catch (err) {
       log(`auto-install dsh failed: ${err.message}`)
