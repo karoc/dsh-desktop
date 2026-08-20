@@ -101,6 +101,21 @@
       "createdAt": 1787137916096,
       "updatedAt": 1787137935693,
       "summary": "dsh-turn-navigator@0.1.1（dsh-turn-nav 仓库 HEAD 构建，已在 workspace 重建并逐字节验证）按 dsh-kanban 模式预装：plugins/preinstalled/dsh-turn-navigator/（lib + cordis.patch.yml + 裁剪 package.json/README + LICENSE）；sync-resources 列表与 server-manager PROTECTED 均加 dsh-turn-navigator；sync:resources 已刷新 src-tauri/resources；test-control-plane 增加落盘/preinstalled-updates 断言、test-plugin-console fixture 扩为三行；六个测试脚本全部通过。"
+    },
+    {
+      "id": "card-cfb9fb70-baa9-4ee6-8093-c5cf1515f111",
+      "title": "预装插件全量检查+同步，发布 v0.3.0",
+      "summary": "dsh-kanban bundle 同步到仓库 HEAD 0.1.2（含 0.1.2 发布功能 + 未发布的卡片操作行重设计）；model-reasoning 0.1.4 与 turn-navigator 0.1.1 已是最新无需改动；随后 bump 0.3.0、提交、推送 main + tag v0.3.0（CI 自动出包发布）。",
+      "rationale": "预装 bundle 跟踪源仓库提交态（非 npm 已发布版）；kanban 仓库有未提交的 0.1.3 WIP，明确不打包进壳。",
+      "sourceSessionId": "session-b07fc740-c633-402a-ad13-adca9d76e0b5",
+      "status": "done",
+      "tags": [
+        "preinstalled",
+        "plugins",
+        "release"
+      ],
+      "createdAt": 1787198596012,
+      "updatedAt": 1787198596012
     }
   ]
 }
