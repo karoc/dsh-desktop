@@ -1,6 +1,6 @@
 {
   "name": "dsh-kanban",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "External DeepSeek Harness plugin: a cross-session, workspace-scoped kanban board for plans and todos, persisted to a git-trackable KANBAN.json. Model-facing tools (board_list/board_add/board_update/board_remove) plus a sidebar '看板' entry with a full-screen three-column board page.",
   "type": "module",
   "main": "lib/index.js",

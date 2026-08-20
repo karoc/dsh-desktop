@@ -502,7 +502,9 @@ function present(title, kind, rawInput) {
 */
 const BOARD_GUIDANCE = `You have a persistent kanban board (the board_* tools) backed by KANBAN.json at the workspace root — it survives session switches and branches, and it is shared with the Web "看板" page. Use it to track plans and todos that should outlive the current turn: when the user states a multi-step plan or a list of tasks, record each step with board_add (title; status todo; tags for grouping). As work progresses, move cards with board_update (status in_progress → done); when a card is finished or superseded, mark it done or remove it. Prefer the board over todo_write for anything the user should still see after switching branches or opening a new session: todo_write is the transient in-turn task list, while the board is the durable cross-session record. Check board_list when resuming work in a workspace to pick up what was planned before.
 
-You also maintain Agent Notes (the note_add / note_list tools) at .agents/notes/implemented/<class>/<date>-<topic>.md, mirroring the DeepSeek Harness repository discipline. ${DEFAULT_NON_TRIVIAL_DEFINITION} After completing a non-trivial change, call note_add with: a class from {${DEFAULT_NOTE_CLASSES.join(", ")}}; a short kebab-case topic; the problem being solved; the decision made; what alternatives were rejected and why; and consequences. Keep it a few paragraphs, not a full essay.`;
+Close the loop at the end of every work session: when the user's request is done or reaches a clear stopping point, update the board to reflect reality — move completed cards to done, add any new follow-up as a todo card, and update summaries with what was actually done. Do not leave cards in stale states (e.g. in_progress with no work left); the board must be an honest hand-off for the next session, not a backlog that drifts. This wrap-up is what makes the board a durable memory across sessions.
+
+You also maintain Agent Notes (the note_add / note_list tools) at .agents/notes/implemented/<class>/<date>-<topic>.md, mirroring the DeepSeek Harness repository discipline. ${DEFAULT_NON_TRIVIAL_DEFINITION} After completing a non-trivial change, call note_add with: a class from {${DEFAULT_NOTE_CLASSES.join(", ")}}; a short kebab-case topic; the problem being solved; the decision made; what alternatives were rejected and why; and consequences. Write at DSH engineering depth: Decision states shipped reality in present tense with concrete names and negative guarantees (what is NOT done, boundaries, safety rules); Alternatives are real options that lost, each with why; Consequences records what the trade-off cost and bought. Keep it a few paragraphs, not a full essay.`;
 /**
 * Session-start board snapshot injected into every assembly (systemPrompt
 * context, sync — prompt assembly is synchronous). Reads the current agent's
@@ -844,7 +846,7 @@ function apply(ctx) {
 	}));
 	ctx.tools.register(defineTool({
 		name: "note_add",
-		description: "Write an Agent Note documenting a NON-TRIVIAL change, at .agents/notes/implemented/<class>/<date>-<topic>.md (mirrors the DeepSeek Harness repository discipline). A change is non-trivial when it changes behavior, architecture, cross-file/cross-package conventions, process or tooling, test strategy, storage/wire/config format, or makes a decision a maintainer could reasonably revisit. Call this AFTER completing such a change, alongside any board cards — the note records the why and what was rejected that the code cannot.",
+		description: "Write an Agent Note documenting a NON-TRIVIAL change, at .agents/notes/implemented/<class>/<date>-<topic>.md (mirrors the DeepSeek Harness repository discipline). A change is non-trivial when it changes behavior, architecture, cross-file/cross-package conventions, process or tooling, test strategy, storage/wire/config format, or makes a decision a maintainer could reasonably revisit. Call this AFTER completing such a change, alongside any board cards — the note records the why and what was rejected that the code cannot. Write at DSH engineering depth: the Decision states shipped reality in the present tense (concrete names, contracts, boundaries — not a summary); include negative guarantees and edge cases (what is NOT done, permission/ownership boundaries, safety rules); Alternatives must be REAL options that lost, each with why (never invented); Consequences records what the trade-off COST and BOUGHT; cross-link related notes by relative path when they exist under .agents/notes.",
 		parameters: {
 			class: {
 				type: "string",
@@ -860,20 +862,20 @@ function apply(ctx) {
 			problem: {
 				type: "string",
 				required: true,
-				description: "The problem being solved (one short paragraph)."
+				description: "The motivation, written to stand without the solution (one short paragraph)."
 			},
 			decision: {
 				type: "string",
 				required: true,
-				description: "The decision made (what was done and why; a few paragraphs)."
+				description: "Shipped reality in present tense: concrete implementation facts, names, contracts, boundaries, and negative guarantees (what is NOT done). A few paragraphs."
 			},
 			alternatives: {
 				type: "string",
-				description: "Optional: what alternatives were rejected and why."
+				description: "Real alternatives that were rejected, each with why it lost — one bold-led paragraph per alternative. Never invent alternatives."
 			},
 			consequences: {
 				type: "string",
-				description: "Optional: consequences and effects of the decision."
+				description: "What the trade-off cost AND bought: side effects, follow-up obligations, named coverage gaps."
 			}
 		},
 		output: NOTE_OUTPUT,
@@ -1012,6 +1014,34 @@ function registerWebApi(ctx) {
 			});
 		}
 	});
+	server.register({
+		kind: "prefix",
+		path: "/kanban/counts",
+		handler: (req, res) => {
+			handleCounts(req, res).catch((error) => {
+				if (!res.writableEnded) sendJson(res, 500, {
+					ok: false,
+					error: error instanceof Error ? error.message : String(error)
+				});
+			});
+		}
+	});
+	async function handleCounts(req, res) {
+		const cwd = new URL(req.url ?? "/", "http://localhost").searchParams.get("cwd");
+		if (cwd === null || cwd === "") {
+			sendJson(res, 400, {
+				ok: false,
+				error: "kanban: GET /kanban/counts requires a cwd query parameter"
+			});
+			return;
+		}
+		const open = (await readBoard(cwd)).cards.filter((card) => card.status === "todo" || card.status === "in_progress").length;
+		sendJson(res, 200, {
+			ok: true,
+			open,
+			cwd
+		});
+	}
 	async function handleSpec(req, res) {
 		const method = req.method ?? "GET";
 		if (method === "GET") {

@@ -7,6 +7,75 @@ window.__ModuleLoader__.load({
 		let react = require("react");
 		let _deepseek_ai_dsh_client_ui_primitives = require("@deepseek-ai/dsh-client-ui-primitives");
 		let react_jsx_runtime = require("react/jsx-runtime");
+		//#region src/client/board-counts.ts
+		/**
+		* Module-level open-item count for the sidebar badge, shared by the sidebar
+		* entry button. Polls the host `/kanban/counts` endpoint for one workspace and
+		* exposes a bare observable pair (subscribe/getSnapshot) for
+		* useSyncExternalStore — same pattern as board-state.ts.
+		*/
+		const listeners$1 = /* @__PURE__ */ new Set();
+		let counts = { open: 0 };
+		let pollTimer = null;
+		/** Subscribe to count changes; returns an unsubscribe. */
+		function subscribeCounts(fn) {
+			listeners$1.add(fn);
+			return () => {
+				listeners$1.delete(fn);
+			};
+		}
+		/** Current open-item count snapshot. */
+		function getCountsSnapshot() {
+			return counts;
+		}
+		/** Fetch the open-item count for one workspace and publish it. */
+		async function refreshCounts(cwd) {
+			try {
+				const response = await fetch(`/kanban/counts?cwd=${encodeURIComponent(cwd)}`);
+				const body = await response.json();
+				if (response.ok && body.ok === true && typeof body.open === "number") {
+					counts = { open: body.open };
+					for (const fn of listeners$1) fn();
+				}
+			} catch {}
+		}
+		/** The resolve function of the active poll (undefined before start). */
+		let latestResolveCwd;
+		/**
+		* Start polling. `resolveCwd` is called on each tick to find the current
+		* workspace (e.g. from the current session), so the badge follows the active
+		* workspace automatically. Refreshes immediately, then every interval.
+		* Returns a stop function.
+		*/
+		function startCountsPolling(resolveCwd, intervalMs = 3e4) {
+			if (pollTimer !== null) return () => stopCountsPolling();
+			latestResolveCwd = resolveCwd;
+			const tick = () => {
+				const cwd = latestResolveCwd?.();
+				if (cwd !== void 0 && cwd !== "") refreshCounts(cwd);
+			};
+			tick();
+			pollTimer = setInterval(tick, intervalMs);
+			return () => stopCountsPolling();
+		}
+		/**
+		* Immediately re-resolve and refresh the count (used when the workspace feed
+		* changes, so the badge appears as soon as data is ready instead of waiting
+		* for the next poll interval).
+		*/
+		function triggerCountsPoll() {
+			const cwd = latestResolveCwd?.();
+			if (cwd !== void 0 && cwd !== "") refreshCounts(cwd);
+		}
+		/** Stop polling; keeps the last published count. */
+		function stopCountsPolling() {
+			if (pollTimer !== null) {
+				clearInterval(pollTimer);
+				pollTimer = null;
+			}
+			latestResolveCwd = void 0;
+		}
+		//#endregion
 		//#region src/client/board-state.ts
 		/**
 		* Module-level board visibility state shared by the sidebar entry button and
@@ -105,6 +174,12 @@ window.__ModuleLoader__.load({
 			}, [api, cwd]);
 			(0, react.useEffect)(() => {
 				refresh();
+			}, [refresh]);
+			(0, react.useEffect)(() => {
+				const timer = setInterval(() => {
+					refresh();
+				}, 15e3);
+				return () => clearInterval(timer);
 			}, [refresh]);
 			const applyMutation = (0, react.useCallback)(async (body) => {
 				if (cwd === void 0) return;
@@ -549,7 +624,8 @@ window.__ModuleLoader__.load({
 				})
 			});
 		}
-		/** One card row: title, the what/why/rejected fields, tags, status Menu + delete. */
+		/** One card row: title, the what/why/rejected fields, tags, then an action row
+		* (source session + status + delete pinned right). */
 		function Card(props) {
 			const { card, t, onMove, onRemove, onOpenSession } = props;
 			const [statusOpen, setStatusOpen] = (0, react.useState)(false);
@@ -589,53 +665,56 @@ window.__ModuleLoader__.load({
 							]
 						}, label))
 					}),
-					card.sourceSessionId !== void 0 && onOpenSession !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-						className: "kb-card-meta",
-						children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "kb-source-btn",
-							onClick: () => onOpenSession(card.sourceSessionId),
-							children: t("sourceSession")
-						})
-					}),
-					card.tags.length > 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-						className: "kb-card-meta",
-						children: card.tags.map((tag) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Pill, {
-							active: true,
-							children: tag
-						}, tag))
-					}),
 					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 						className: "kb-card-actions",
-						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Menu, {
-							open: statusOpen,
-							onClose: () => {
-								setStatusOpen(false);
-							},
-							items: statusItems,
-							selectedId: card.status,
-							onSelect: (id) => {
-								onMove(card.id, id);
-								setStatusOpen(false);
-							},
-							align: "start",
-							portal: true,
-							anchor: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
-								variant: "outline",
-								size: "sm",
-								"aria-haspopup": "menu",
-								"aria-expanded": statusOpen,
-								onClick: () => {
-									setStatusOpen((v) => !v);
-								},
-								children: statusLabel(card.status, t)
-							})
-						}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
-							variant: "ghost",
-							size: "sm",
-							icon: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconTrashOutline16, {}),
-							"aria-label": t("remove"),
-							onClick: () => setConfirmDelete(true)
+						children: [card.tags.length > 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+							className: "kb-card-meta",
+							children: card.tags.map((tag) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Pill, {
+								active: true,
+								children: tag
+							}, tag))
+						}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+							className: "kb-card-row",
+							children: [
+								card.sourceSessionId !== void 0 && onOpenSession !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
+									type: "button",
+									className: "kb-source-btn",
+									onClick: () => onOpenSession(card.sourceSessionId),
+									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconQueueOutline14, {}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: t("sourceSession") })]
+								}),
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Menu, {
+									open: statusOpen,
+									onClose: () => {
+										setStatusOpen(false);
+									},
+									items: statusItems,
+									selectedId: card.status,
+									onSelect: (id) => {
+										onMove(card.id, id);
+										setStatusOpen(false);
+									},
+									align: "start",
+									portal: true,
+									anchor: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+										variant: "outline",
+										size: "sm",
+										"aria-haspopup": "menu",
+										"aria-expanded": statusOpen,
+										onClick: () => {
+											setStatusOpen((v) => !v);
+										},
+										children: statusLabel(card.status, t)
+									})
+								}),
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+									variant: "ghost",
+									size: "sm",
+									icon: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconTrashOutline16, {}),
+									"aria-label": t("remove"),
+									onClick: () => setConfirmDelete(true),
+									className: "kb-trash-btn"
+								})
+							]
 						})]
 					}),
 					/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Modal, {
@@ -711,19 +790,29 @@ window.__ModuleLoader__.load({
 		* Sidebar footer entry button: icon + label, left-aligned, styled exactly
 		* like the Settings trigger (34px compact row, 12px radius, 10px left pad)
 		* so it sits flush with the Settings entry below it. The rail (collapsed)
-		* state shows only the icon, like the other rail controls.
+		* state shows only the icon, like the other rail controls. Shows an open-item
+		* count badge when the current workspace has todo/in_progress cards.
 		*/
 		function SidebarKanbanButton(props) {
 			const wide = props.wide ?? true;
+			const { open } = (0, react.useSyncExternalStore)(subscribeCounts, getCountsSnapshot);
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
 				type: "button",
 				className: wide ? "kb-sidebar-trigger" : "kb-sidebar-trigger kb-sidebar-trigger-rail",
 				"aria-label": props.t(),
 				onClick: props.onClick,
-				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChecklistOutline14, { size: wide ? 16 : 18 }), wide && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-					className: "kb-sidebar-trigger-label",
-					children: props.t()
-				})]
+				children: [
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChecklistOutline14, { size: wide ? 16 : 18 }),
+					wide && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+						className: "kb-sidebar-trigger-label",
+						children: props.t()
+					}),
+					open > 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+						className: wide ? "kb-badge" : "kb-badge kb-badge-rail",
+						title: `${open} open`,
+						children: open > 99 ? "99+" : String(open)
+					})
+				]
 			});
 		}
 		/**
@@ -817,7 +906,7 @@ window.__ModuleLoader__.load({
 			specOverridesFile: "Stored at {path}",
 			specOverrideActive: "Custom overrides active.",
 			archivedNotice: "Archived {count} done card(s) to {path}",
-			sourceSession: "Open source session",
+			sourceSession: "Open handling session",
 			workspaceLabel: "Workspace",
 			workspaceChoose: "Choose a workspace…",
 			deleteTitle: "Delete card",
@@ -866,7 +955,7 @@ window.__ModuleLoader__.load({
 			specOverridesFile: "存储于 {path}",
 			specOverrideActive: "自定义覆盖生效中。",
 			archivedNotice: "已归档 {count} 张已完成卡片到 {path}",
-			sourceSession: "打开来源会话",
+			sourceSession: "打开处理会话",
 			workspaceLabel: "工作区",
 			workspaceChoose: "选择工作区…",
 			deleteTitle: "删除卡片",
@@ -926,6 +1015,25 @@ window.__ModuleLoader__.load({
   overflow: hidden;
   white-space: nowrap;
 }
+/* Open-item count badge on the sidebar entry (wide + rail states). */
+.kb-badge {
+  margin-left: auto;
+  min-width: 16px; height: 16px;
+  padding: 0 4px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 8px;
+  background: var(--dsw-alias-button-primary-fill);
+  color: var(--dsw-alias-bg-base);
+  font-size: 10px; line-height: 16px; font-weight: 600;
+}
+.kb-badge-rail {
+  position: absolute;
+  top: -2px; right: -2px;
+  min-width: 14px; height: 14px;
+  border-radius: 7px;
+  font-size: 9px; line-height: 14px;
+}
+.kb-sidebar-trigger-rail { position: relative; }
 .kb-overlay {
   position: fixed; inset: 0; z-index: 50;
   display: flex; flex-direction: column;
@@ -1009,15 +1117,21 @@ window.__ModuleLoader__.load({
 .kb-card-field { margin: 0; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); word-break: break-word; }
 .kb-card-field-label { color: var(--dsw-alias-label-tertiary); font-weight: 600; }
 .kb-card-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+/* Card footer: tags on their own line, then one action row holding
+   [source-session][status] ... [delete pinned right]. */
+.kb-card-actions { display: flex; flex-direction: column; gap: 6px; }
+.kb-card-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .kb-source-btn {
-  display: inline-flex; align-items: center;
-  height: 22px; padding: 0 8px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 6px;
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 28px; padding: 0 10px;
+  border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px;
   background: transparent; color: var(--dsw-alias-label-secondary);
-  font: inherit; font-size: 11px; line-height: 16px; cursor: pointer;
+  font: inherit; font-size: 12px; line-height: 18px;
+  cursor: pointer; white-space: nowrap;
 }
-.kb-source-btn:hover { background: var(--dsw-alias-interactive-bg-hover); }
-.kb-card-actions { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
-.kb-composer-field { flex: 1; min-width: 0; }
+.kb-source-btn:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+.kb-source-btn svg { flex: none; }
+.kb-trash-btn { margin-left: auto; }
 .kb-composer {
   display: flex; flex-direction: column; gap: 8px;
   border: 1px solid var(--dsw-alias-border-l2); border-radius: 12px;
@@ -1025,6 +1139,7 @@ window.__ModuleLoader__.load({
   background: var(--dsw-alias-bg-module-platform);
 }
 .kb-composer-row { display: flex; gap: 8px; align-items: center; }
+.kb-composer-field { flex: 1; min-width: 0; }
 /* The three "what/why/rejected" inputs: one row, three equal columns — the
    same rhythm as the board column headers above. */
 .kb-composer-fields {
@@ -1207,6 +1322,23 @@ window.__ModuleLoader__.load({
 			}), "dsh-kanban: copy dictionaries");
 			const api = createBoardApi();
 			const t = ctx.locale.bind(NS);
+			ctx.effect(() => {
+				const stop = startCountsPolling(() => {
+					const workspaces = ctx.get("workspaces");
+					try {
+						const state = workspaces?.list?.getSnapshot();
+						const items = state?.items ?? [];
+						return items.find((item) => item.workspaceId === state?.recentWorkspaceId)?.path ?? items[0]?.path;
+					} catch {
+						return;
+					}
+				});
+				const unsubscribe = ctx.get("workspaces")?.list?.subscribe(triggerCountsPoll);
+				return () => {
+					stop();
+					unsubscribe?.();
+				};
+			}, "dsh-kanban: counts polling");
 			ctx.slots.inject("sidebar.footer.action", () => ctx.slots.register({
 				name: "sidebar.footer.action",
 				id: "kanban",
