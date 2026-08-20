@@ -119,7 +119,18 @@ jobs:
             echo "deleting stale release for ${GITHUB_REF_NAME}"
             gh release delete "${GITHUB_REF_NAME}" --yes
           fi
-          gh release create "${GITHUB_REF_NAME}" dist-win/*.exe dist-linux/*.AppImage dist-linux/*.deb \
+          # upload-artifact@v4 nests multi-path artifacts under their least
+          # common ancestor directory (e.g. dist-linux/appimage/*.AppImage,
+          # dist-linux/deb/*.deb), while single-path artifacts stay flat
+          # (dist-win/*.exe). globstar + nullglob matches BOTH layouts so a
+          # layout change can never silently break the publish step again.
+          shopt -s nullglob globstar
+          FILES=(dist-win/**/*.exe dist-linux/**/*.AppImage dist-linux/**/*.deb)
+          if [ ${#FILES[@]} -eq 0 ]; then
+            echo "no installers found under dist-win/dist-linux — refusing to publish an empty release"
+            exit 1
+          fi
+          gh release create "${GITHUB_REF_NAME}" "${FILES[@]}" \
             --generate-notes --title "${GITHUB_REF_NAME}"
           gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets[].name'
 
