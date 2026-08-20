@@ -290,6 +290,18 @@ function dshInstalled(runtimeDir) {
   return installedVersion(runtimeDir) !== null && existsSync(dshEntry(runtimeDir))
 }
 
+/**
+ * 0.3.3 的 pnpm isolated 布局特征：node_modules 下有 .pnpm 虚拟仓库，且 dsh 的
+ * 内部包（dsh-base 等）没有提升到 node_modules 根。这种布局下复制到根目录的
+ * 预装插件（dsh-kanban 等）和 host bundle（dsh-base/dsh-web-app）import dsh
+ * 内部包时会 ERR_MODULE_NOT_FOUND → dsh web 启动崩溃 → 黑屏。hoisted 布局
+ * 把所有包提升到根，恢复解析。存在该布局时强制重装为 hoisted。
+ */
+function isIsolatedPnpmLayout(runtimeDir) {
+  const root = join(runtimeDir, 'node_modules')
+  return existsSync(join(root, '.pnpm')) && !existsSync(join(root, '@deepseek-ai', 'dsh-base'))
+}
+
 // ── update status ──────────────────────────────────────────────────────────
 let latestVersion = null
 // Shell manifest (<runtime>/dsh.json) snapshot: preinstalled list, devMode, …
@@ -337,7 +349,7 @@ async function checkDshUpdate({ frozen = false } = {}) {
  * replace. The caller kills dsh first (see `updateDshAndRestart`).
  * @returns true when a new version was installed.
  */
-async function installDshUpdate() {
+async function installDshUpdate({ force = false } = {}) {
   const current = installedVersion(args.runtimeDir)
   const fullyInstalled = dshInstalled(args.runtimeDir)
   try {
@@ -354,10 +366,11 @@ async function installDshUpdate() {
     rmSync(join(args.runtimeDir, 'node_modules', PACKAGE), { recursive: true, force: true })
     log(`dsh 安装不完整（缺启动入口），将重新安装`)
   }
-  if (current === latestVersion && dshInstalled(args.runtimeDir)) {
+  if (!force && current === latestVersion && dshInstalled(args.runtimeDir)) {
     log(`dsh 已是最新 ${latestVersion}`)
     return false
   }
+  if (force) log(`强制重装 dsh ${current ?? '(none)'} -> ${latestVersion}（布局迁移/修复）`)
   log(`updating ${PACKAGE} ${current ?? '(none)'} -> ${latestVersion}`)
   // Progress feedback for the launcher: explicit phase events + a heartbeat
   // so the user can tell "still working" from "stuck" during a long install.
@@ -406,7 +419,14 @@ async function installDshUpdate() {
     let lastErr = null
     for (const reg of [REGISTRY, fallback]) {
       try {
-        await pnpm(['install', `${PACKAGE}@${latestVersion}`, '--registry', reg, '--store-dir', pnpmStore],
+        // node-linker=hoisted: 让 runtime 的 node_modules 回到 npm 平铺兼容布局。
+        // pnpm 默认 isolated 布局只把直接依赖符号链接到根，dsh 的内部包
+        // （如 @deepseek-ai/dsh-tools）收在 .pnpm 里，导致复制到根目录的
+        // 预装插件（dsh-kanban 等）import '@deepseek-ai/dsh-tools' 时
+        // ERR_MODULE_NOT_FOUND → dsh web 启动崩溃 → 黑屏。hoisted 布局
+        // 把所有包提升到根，插件恢复可解析（等价旧 npm 布局）。
+        // 注意：pnpm 11.22 只在 CLI flag 上认 node-linker，放配置文件不生效。
+        await pnpm(['install', `${PACKAGE}@${latestVersion}`, '--registry', reg, '--store-dir', pnpmStore, '--node-linker=hoisted'],
           { cwd: args.runtimeDir, stream: true, timeoutMs: 600_000 })
         log(`updated to ${latestVersion}`)
         lastErr = null
@@ -1230,6 +1250,18 @@ async function main() {
       await installDshUpdate()
     } catch (err) {
       log(`auto-install dsh failed: ${err.message}`)
+    }
+  }
+  // 0.3.4 migration: 0.3.3 的 pnpm isolated 布局会让预装插件/host bundle 解析
+  // dsh 内部包失败（黑屏）。检测到该布局就删掉 node_modules 并全新安装为
+  // hoisted（warm store 下 ~6s；原地 re-link 反而慢且可能留半转换状态）。
+  if (dshInstalled(args.runtimeDir) && isIsolatedPnpmLayout(args.runtimeDir)) {
+    try {
+      log('检测到 pnpm isolated 布局（0.3.3）— 重建为 hoisted 布局以修复插件加载')
+      rmSync(join(args.runtimeDir, 'node_modules'), { recursive: true, force: true })
+      await installDshUpdate()
+    } catch (err) {
+      log(`isolated→hoisted 布局迁移失败：${err.message}`)
     }
   }
   // Launch dsh FIRST; the update check runs in the background (it must never
