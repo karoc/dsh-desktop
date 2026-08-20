@@ -74,7 +74,7 @@
   `ctx.sessions.open(id)`（dsh-client-runtime SessionRuntime 的公开方法）定位会话。
 - 会话列表项没有"最新内容"字段：toast 正文用 title → displayTitle → cwd 兜底。
 
-## 13. 日志留痕指南（排查入口）
+## 12. 日志留痕指南（排查入口）
 
 数据目录：`%APPDATA%\dev.dsh.desktop\`（Windows）/ `~/.config/dev.dsh.desktop`（Linux）。
 
@@ -88,7 +88,7 @@
 
 **排查套路**：没弹 → 看 session.log 有无 `client-ready (http)`（无=客户端没跑/桥断）→ 有则看对应 `notify-*`（无=客户端没检测到沿变，快照/订阅问题）→ 有再看看 `toast failed`（系统通知层）。
 
-## 15. CI 发布链路
+## 13. CI 发布链路
 
 - 每次 push：check（ubuntu cargo check）→ windows（NSIS 构建 + 7z 断言 node 在包内 + artifact）
   + linux（AppImage/deb）。`windows` job 从始至终绿灯，setup.exe 一直有产。
@@ -101,7 +101,7 @@
 
 Windows 的 NSIS 安装行为、toast 渲染、AUMID、事件投递——Linux smoke 覆盖不到，
 靠 error-visibility + manager.log + diagnose 把定位时间压到分钟级。
-## 12. "已完成/已结束"措辞审计（已核实源码）
+## 14. "已完成/已结束"措辞审计（已核实源码）
 
 - syncCompletedNotifications（dsh-client-runtime/lib/client.js 8540-8556）：`completed` 只在
   running true→false 且会话未选中时置真，**不区分停止/完成**——它不能当措辞依据。
@@ -110,7 +110,7 @@ Windows 的 NSIS 安装行为、toast 渲染、AUMID、事件投递——Linux s
 - 非聚焦 running→false 的成因：自然完成（选中/未选中）、浏览器同一页面停止（dsh web
   无单客户端限制，已搜索确认）、自动中止。统一报"已完成"（罕见误标可接受）。
 
-## 14. 图标刷新机制（任务栏不换的历史坑）
+## 15. 图标刷新机制（任务栏不换的历史坑）
 
 - 现象：托盘图标对（二进制实时读），任务栏旧。根因链：Windows 任务栏对设了
   AppUserModelID 的应用，按 AUMID 解析开始菜单 .lnk 的图标（NSIS 模板里
@@ -123,7 +123,7 @@ Windows 的 NSIS 安装行为、toast 渲染、AUMID、事件投递——Linux s
   CreateShortcut 显式写 icon 参数（NSIS 支持 icon-file/icon-index），与缓存语义解耦。
 - 教训：凡需要用户执行多步 PowerShell 的"修复"，都是产品缺陷信号——先找代码侧解法。
 
-## 15. 控制面（更新门控 + 重启语义）踩坑
+## 16. 控制面（更新门控 + 重启语义）踩坑
 
 - 坑：Tauri 2.11 的 `MenuItem::set_text` 只接受一个参数（text），**没有 app handle**
   参数——靠记忆写 `set_text(app, text)` 会 E0061。查 docs.rs 签名再落笔（延续 #8/#9 纪律）。
@@ -138,7 +138,7 @@ Windows 的 NSIS 安装行为、toast 渲染、AUMID、事件投递——Linux s
 - 语义：Windows 上运行中的 dsh 锁着 node-pty/koffi 等原生模块，npm 替换不了 →
   `update-dsh` 必须先杀 dsh 再装、装完再拉（监督循环的 pendingTask 就是这个顺序）。
 
-## 16. 更新门控（D2）设计落地
+## 17. 更新门控（D2）设计落地
 
 - manager 启动**只查不装**：`checkDshUpdate()` 发 `{t:'update-status',...}` 协议行，
   Rust 镜像到 `ServerState.update` + 托盘动态菜单项（"检查更新…" ⇄ "有更新 vX（点击更新）"）。
@@ -148,7 +148,7 @@ Windows 的 NSIS 安装行为、toast 渲染、AUMID、事件投递——Linux s
   常驻）进程级验证：更新门控 / 未知命令不崩 / restart-dsh 重启两次不同 pid / check-update
   重报 / SIGTERM 退出码 0。
 
-## 17. P2 插件管理：三处实测教训
+## 18. P2 插件管理：三处实测教训
 
 - **源目录名 ≠ 包名**：`plugins/dsh-client-notifications` 的包名是 `@dsh-desktop/client-notifications`。
   sync-resources 和 manager 的 ensurePlugin 必须读 package.json 的 `name` 决定目标路径，
@@ -166,13 +166,13 @@ Windows 的 NSIS 安装行为、toast 渲染、AUMID、事件投递——Linux s
 - **生产构建没有 HMR module-roots 入口**：`dsh web` 的 `cordis-plugin-hmr` 以 `root: []` 硬编码挂载，
   仅配置热更。Dev 模式不追求 host HMR，用 restart-dsh 快速回路（不查更新、不重装）即可秒级迭代。
 
-## 18. CheckMenuItem API（Tauri 2.11）
+## 19. CheckMenuItem API（Tauri 2.11）
 
 - `CheckMenuItem::with_id(manager, id, text, enabled, checked, accelerator)` —— **enabled 在 checked 前面**，
   6 参数。`is_checked()`/`set_checked(bool)` 都不需要 app handle（和 MenuItem::set_text 一致）。
 - setup 闭包里的 `app: &mut App`，调 `&AppHandle` 参数的函数要用 `app.handle()` 转换，直接传 `app` 会 E0308。
 
-## 19. P5 用户自装（方案 X：内置 pnpm + 复用 dsh plugin CLI）
+## 20. P5 用户自装（方案 X：内置 pnpm + 复用 dsh plugin CLI）
 
 - **`dsh plugin` 硬依赖 PATH 上的 `pnpm`**（`spawnSync('pnpm')`）：壳必须提供。
   方案 = 懒安装（首次插件操作时 `npm install pnpm --prefix <runtime>`）+ 在
@@ -191,7 +191,7 @@ Windows 的 NSIS 安装行为、toast 渲染、AUMID、事件投递——Linux s
 - **沙箱 npm cache 只读（EROFS）**：manager 的 npm() 用默认 cache，本环境跑不了真实
   pnpm 安装——控制面测试用预置 pnpm 桩验证 shim 与路由，真机安装留给用户环境。
 
-## 20. 用户体验修复轮（5 个真机问题）
+## 21. 用户体验修复轮（5 个真机问题）
 
 - **open_devtools 只在 release 炸**：被 `#[cfg(any(debug_assertions, feature="devtools"))]` 门控，
   `cargo check`（debug）看不出来。**教训：涉及 Tauri API 的改动必须跑 release check**
@@ -212,7 +212,7 @@ Windows 的 NSIS 安装行为、toast 渲染、AUMID、事件投递——Linux s
 - 全部由 test-plugin-console.mjs（9 场景）与 test-control-plane.mjs（7 场景）守护；测试桩
   补了 `classList` 与 `.class` 选择器支持。
 
-## 21. 预装插件更新机制（用户门控 / npm / 可恢复默认）
+## 22. 预装插件更新机制（用户门控 / npm / 可恢复默认）
 
 - **设计**：预装包非 profile 依赖，`dsh plugin` 管不到。更新 = manager `npm view` 对比 →
   临时目录 `npm install <pkg>@<latest> --prefix <tmp>` → 拷贝 node_modules/<pkg> 覆盖 runtime
@@ -227,7 +227,7 @@ Windows 的 NSIS 安装行为、toast 渲染、AUMID、事件投递——Linux s
   由 manager 在启动后台 + 手动检查时发出，Rust 镜像进 ServerState，/plugins/list 带出。
 - 控制台：预装卡片"有更新 vX → 更新到vX"徽标 + "恢复默认"（userUpdated 时）+ "检查预装插件更新"。
 
-## 22. 启动黑屏 5s + reg.exe 命令弹窗（另一会话代码，诊断未改）
+## 23. 启动黑屏 5s + reg.exe 命令弹窗（另一会话代码，诊断未改）
 
 - 两症状同一根因：另一会话 `register_toast_activator` 在 **setup 主线程同步** spawn 多个
   `reg.exe`（`Command::new("reg").status()`），且 reg.exe 是控制台程序、**未加
@@ -239,7 +239,7 @@ Windows 的 NSIS 安装行为、toast 渲染、AUMID、事件投递——Linux s
 - 我方已修：manager `killTree` 的 taskkill spawn 补 `windowsHide: true`（重启/退出时
   不再闪 cmd 窗——这也是我方代码里的同类问题）。
 
-## 23. 按钮换行 + 启动页按钮位置（用户体验微调）
+## 24. 按钮换行 + 启动页按钮位置（用户体验微调）
 
 - **按钮被挤成三行**：行内右侧按钮容器是普通 div（按钮 inline 排列），"更新到0.1.3"在窄容器里
   按字符换行。修复 = `.dshc-btn2 { white-space: nowrap }` + 行右侧容器
@@ -249,7 +249,7 @@ Windows 的 NSIS 安装行为、toast 渲染、AUMID、事件投递——Linux s
   弹一次**（`UPDATE_TOAST_SHOWN` 每进程一次，提醒用户点托盘更新）。启动页滚动日志里
   manager 的 "update available" 行仍在（信息不丢，只是不再有按钮）。
 
-## 24. 重启后连不上——重连必须由壳驱动，不能靠启动页
+## 25. 重启后连不上——重连必须由壳驱动，不能靠启动页
 
 - 现象：开启/关闭插件后点「立即重启」、或托盘点「重启」，dsh 重启后 WebView 停在旧端口死页，
   服务起不来（连不上）。
@@ -264,7 +264,7 @@ Windows 的 NSIS 安装行为、toast 渲染、AUMID、事件投递——Linux s
 - 教训：**"导航"职责不能绑在会被替换掉的页面上**。壳持有的 WebView 导航是唯一可靠重连路径。
 - `w.navigate()` 需要 `tauri::Url`（`tauri::Url::parse`），不是 `&str`；跨线程调用 OK（reload 已在桥线程用）。
 
-## 25. ensurePnpm 的 --prefix runtime prune 陷阱（预装描述消失的真凶）
+## 26. ensurePnpm 的 --prefix runtime prune 陷阱（预装描述消失的真凶）
 
 - 现象：第一次安装新插件时，预装插件的说明（乃至整个预装项）消失。
 - 根因：`ensurePnpm` 用 `npm install pnpm --prefix <runtime>` 装 pnpm——npm reify 整棵
@@ -277,7 +277,7 @@ Windows 的 NSIS 安装行为、toast 渲染、AUMID、事件投递——Linux s
 - 交互：自定义 tooltip 组件替代原生 title（描述两行省略，悬停显示完整，随鼠标定位、
   视口内钳制），附测试（mouseenter 触发 dshc-tip 出现）。
 
-## 26. 重启后残留提示——op-status 生命周期审计（"✓ 完成 — 重启后生效" 反复出现）
+## 27. 重启后残留提示——op-status 生命周期审计（"✓ 完成 — 重启后生效" 反复出现）
 
 - 现象：更新插件 → 立即重启后，提示还在，且随 5s 轮询反复刷新。
 - 根因（两处，同为"状态在重启后未清空"）：
@@ -295,7 +295,7 @@ Windows 的 NSIS 安装行为、toast 渲染、AUMID、事件投递——Linux s
   2. 清空方式会不会被误判？（`{op:null,done:false}` 撞 busy-guard → 用 null）
   3. 值传递链上每一环（manager→Rust→client）的重启语义一致吗？（全量/增量重启都要清）
 
-## 27. 壳内置正向代理（方案 B）的关键工程发现
+## 28. 壳内置正向代理（方案 B）的关键工程发现
 
 - **undici 不读 *PROXY 环境变量**，但 Node ≥24.0 设 `NODE_USE_ENV_PROXY=1` 后全局 fetch 会尊重
   HTTP_PROXY/HTTPS_PROXY/NO_PROXY（v24.18.0 实测生效，无告警输出）。dsh 的模型请求、web 搜索、
@@ -318,7 +318,7 @@ Windows 的 NSIS 安装行为、toast 渲染、AUMID、事件投递——Linux s
   src/settings.js + 最小 DOM 桩验证独立设置窗口；注意 vm 跨 realm 数组的 assert.deepEqual 因原型
   不同必失败，先 `[...arr]` 展开再比）。
 
-## 28. 代理设置的放置：启动页不是入口（独立窗口 + 控制台面板 + 托盘）
+## 29. 代理设置的放置：启动页不是入口（独立窗口 + 控制台面板 + 托盘）
 
 - **教训**：启动页只存在到 dsh 就绪（几秒），作为低频设置的主入口是错误放置——用户根本来不及，
   且 dsh 加载后没有入口。产品决策"放哪"必须先想清楚，而不是顺着"启动页能设置"就做。
@@ -347,7 +347,7 @@ Windows 的 NSIS 安装行为、toast 渲染、AUMID、事件投递——Linux s
   验证渲染（含同 host 归并标签）/保存/关闭按钮（5 场景）；test-plugin-console.mjs 断言控制台面板
   「代理设置」按钮点击 POST `/settings/open-proxy`。
 
-## 27. 预装卡片两行布局 + 测试桩 innerHTML 语义
+## 30. 预装卡片两行布局 + 测试桩 innerHTML 语义
 
 - 预装项卡片 = 一个统一容器 `.dshc-item`（背景/边框/圆角），内部两行右列：
   第一行 `[↑升级箭头][开关]`（nowrap，不被左侧简介挤压），第二行 `[恢复默认]`。
@@ -357,7 +357,7 @@ Windows 的 NSIS 安装行为、toast 渲染、AUMID、事件投递——Linux s
   innerHTML 赋值会让子元素重复（同插件渲染两次）。修桩：set 时先 `children=[]` 再解析。
   同时 client 侧改为**一次构建完整字符串**再赋值，避免依赖 setter 语义。
 
-## 28. 包管理器对 monorepo 依赖树挂起 + 发版必须做的 Windows 运行时冒烟（0.3.0→0.3.3 实战）
+## 31. 包管理器对 monorepo 依赖树挂起 + 发版必须做的 Windows 运行时冒烟（0.3.0→0.3.3 实战）
 
 ### 根因（终于实锤）
 - **`npm install @deepseek-ai/dsh` 在 npm 依赖解析（buildIdealTree/placeDep）阶段无限挂起**：
@@ -399,3 +399,27 @@ Windows 的 NSIS 安装行为、toast 渲染、AUMID、事件投递——Linux s
 - 在仓库子目录跑 `pnpm install` 会向上找到 `pnpm-workspace.yaml` 把整棵树装进仓库根 node_modules、
   改写 package.json/lockfile——测试目录自建 workspace 文件或删掉仓库根多余文件；
 - `cmd | tail` 的 `$?` 是 tail 的；`pkill -f` 会匹配自身命令行自杀——用精确 PID。
+
+## 32. 版本比较不能只比"不等"；dsh 启动器 flag 顺序；npm 预发布通道（0.3.5→0.3.7）
+
+### 版本比较坑（0.3.7 修复）：`current !== latest` 会在 next 用户上误报降级
+- 用户升到 `next` 预发布（0.1.0-rc.8，比 `latest` 的 rc.7 新）后，控制台误报「当前 rc.8 → rc.7 一键更新」——
+  `updateAvailable` 用 `current !== latest`（只比不同、不比新旧）导致。
+- **修法：任何"是否有更新"判断必须用语义化比较**（`versionGt(latest, current)`，只在新版严格新于当前时为真），
+  绝不能 `!==`。同理 `nextAvailable` 也要 `versionGt(next, current)`。
+- 可复用：版本字段一旦有预发布，`!==` 就是错；统一用一个 rc 感知的 `versionGt`。
+
+### dsh 启动器 flag 顺序坑（0.3.6）：`--no-open` 放错位置 → unknown option '--patch'
+- `dsh web` 的启动器**解析到第一个它不认识的 flag 就停止**，把剩余参数原样透传给被启动的应用。
+- 启动器自己的 flag（`--patch`、`--profile`）必须放在应用 flag（`--host`、`--port`、`--no-open`）**之前**。
+- 桌面壳场景：`dsh web --patch <file> --no-open --host ... --port 0`——`--no-open` 防止默认浏览器被
+  壳内 webview 之外再打开一遍。
+- 已记入技能 `.dsh/skills/.../SKILL.md` §8。
+
+### npm 预发布通道（0.3.5 特性）
+- dsh 团队常把新 rc 标在 `next` tag（如 0.1.0-rc.8）而 `latest` 停在稳定 rc——从 GitHub 安装不可行
+  （monorepo：根包是 dsh-root、git 依赖不支持子目录、apps/cli 有 71 个 workspace:* 依赖）。
+- manager 用 `npm view pkg dist-tags.latest dist-tags.next --json` 一次取两个 tag；**多字段返回的对象键带完整
+  路径**（`dist-tags.latest` / `dist-tags.next`），某 tag 不存在时折叠为纯字符串——解析要兼容。
+- 控制台在 `nextAvailable` 时显示「当前 → rc.8（预发布）」+ 带版本的一键升级（`/update-dsh` 传 version），
+  想升才升，默认仍用稳定 latest。

@@ -3,23 +3,24 @@
 > 状态：**实施中**（方案已与用户逐点确认）
 > 目标：在桌面壳内实现「更新门控 + 插件预装/管理 + 友好操作提示」，零上游 dsh 改动。
 
-## 实施状态（2025-08 更新）
+## 实施状态（2026-08 更新）
 
 | 阶段 | 状态 | 说明 |
 |---|---|---|
-| P0 控制面 | ✅ 完成 | manager stdin 命令通道（check-update/update-dsh/restart-dsh）+ 监督循环；Rust 桥端点（refresh/restart-dsh/restart/update-status/check-update/update-dsh/devtools）；`scripts/test-control-plane.mjs`（6 场景） |
-| P1 更新门控 | ✅ 完成 | manager 只查不装 + `{t:'update-status'}`；托盘动态项（检查更新⇄有更新）；启动页横幅 + 一键更新；测试覆盖 |
-| P2 预装+控制台 | ✅ 完成 | `ensurePreinstalled`（resources→runtime node_modules + dsh.json）；Rust `/plugins/list`、`/plugins/enable`、`/plugins/disable`（文件操作）；控制台 client 插件（悬浮面板，`scripts/test-plugin-console.mjs` 7 场景）；预装 `dsh-model-reasoning` 已进 resources |
+| P0 控制面 | ✅ 完成 | manager stdin 命令通道（check-update/update-dsh/restart-dsh）+ 监督循环；Rust 桥端点（refresh/restart-dsh/restart/update-status/check-update/update-dsh/devtools）；`scripts/test-control-plane.mjs`（10 场景） |
+| P1 更新门控 | ✅ 完成 | manager 只查不装 + `{t:'update-status'}`；托盘动态项（检查更新⇄有更新）；**更新入口在托盘 + 插件控制台「dsh 更新」区**（启动页无更新横幅）；一键更新 + 自动重启；**0.3.5 起支持预发布通道**（`next` tag，如 0.1.0-rc.8，控制台显示「（预发布）」可升，想升才升）；测试覆盖 |
+| P2 预装+控制台 | ✅ 完成 | `ensurePreinstalled`（resources→runtime node_modules + dsh.json）；Rust `/plugins/list`、`/plugins/enable`、`/plugins/disable`（文件操作）；控制台 client 插件（悬浮面板，`scripts/test-plugin-console.mjs` 17 场景）；预装 `dsh-model-reasoning`/`dsh-kanban`/`dsh-turn-navigator` 已进 resources |
 | P3 刷新/重启/Dev | ✅ 完成 | 托盘刷新页 + 重启dsh（快速）；Dev 模式 = dsh.json `devMode`（更新冻结 + devtools 门控 + 托盘复选框）；**HMR module-roots 生产不可用**（dsh 硬编码 `root: []`），host 迭代走 restart-dsh 快速回路 |
-| P4 预装集成 | 🔶 进行中 | 产物已入 resources + 拷贝验证通过；真机端到端（WebView 内启用→Settings 出现页面）待桌面环境验证 |
-| P5 用户自装 | ✅ 完成（方案 X） | manager `ensurePnpm`（懒安装内置 pnpm + PATH shim）→ 复用 `dsh plugin --profile web add/remove/update` CLI（含 reconcile）；Rust `/plugins/install|remove|update` 端点 + op-status 缓存；控制台安装输入框 + 用户插件卸载/更新 + 操作状态/nextAction；控制面测试 7 场景 + 控制台测试 9 场景 |
-| P5b 预装更新机制 | ✅ 完成 | **用户门控**（与 D2 一致）：控制台预装卡片"有更新 vX → 更新到 vX" + "恢复默认" + "检查预装插件更新"；manager 临时目录 npm install + 拷贝覆盖 runtime 拷贝（**不能用 `--prefix runtime`，会 prune 纯拷贝插件**）；dsh.json `updates` 记录 + `ensurePreinstalled` 尊重记录不被壳旧版覆盖；`{t:'preinstalled-updates'}` 事件 → Rust 镜像 → /plugins/list 带出；控制面 8 场景 + 控制台 12 场景 |
+| P4 预装集成 | ✅ 完成 | 产物入 resources + 拷贝验证 + 真机端到端验证（WebView 内启用 → 重启生效）；**0.3.4 起 dsh 安装用 pnpm `--node-linker=hoisted`**（isolated 布局会让预装插件解析不到 dsh 内部包 → 黑屏，已修复并加迁移） |
+| P5 用户自装 | ✅ 完成（方案 X） | manager `ensurePnpm`（懒安装内置 pnpm + PATH shim）→ 复用 `dsh plugin --profile web add/remove/update` CLI（含 reconcile）；Rust `/plugins/install|remove|update` 端点 + op-status 缓存；控制台安装输入框 + 用户插件卸载/更新 + 操作状态/nextAction；控制面测试 10 场景 + 控制台测试 17 场景 |
+| P5b 预装更新机制 | ✅ 完成 | **用户门控**（与 D2 一致）：控制台预装卡片"有更新 vX → 更新到 vX" + "恢复默认" + "检查预装插件更新"；manager 临时目录 npm install + 拷贝覆盖 runtime 拷贝（**不能用 `--prefix runtime`，会 prune 纯拷贝插件**）；dsh.json `updates` 记录 + `ensurePreinstalled` 尊重记录不被壳旧版覆盖；`{t:'preinstalled-updates'}` 事件 → Rust 镜像 → /plugins/list 带出 |
 
-**两处相对本计划的设计偏差（均已实现，记录备查）：**
+**设计偏差与后续演进（均已实现，记录备查）：**
 
 1. **控制台 UI 用悬浮面板而非 Settings tab**：Settings 的 slot 契约要求 React 组件，经典脚本插件拿不到 React（不暴露全局，无构建链）。悬浮面板（右下角「⚙ 插件」）与通知插件同款模式，零构建、零上游依赖。
 2. **插件开关由 Rust 直接做文件操作**（而非 manager stdin 往返）：`/plugins/enable|disable` 直接读写 `<runtime>/dsh-home/profiles/web/package.json`，无需请求/响应往返，更简单可靠。预装名白名单校验在 Rust 侧完成。
 3. **Dev 模式不含 host HMR**：核实 `dsh web` 生产构建无 module-roots 入口（`cordis-plugin-hmr` 以 `root: []` 挂载，仅配置热更）。host 代码迭代 = restart-dsh 快速回路（不查更新、不重装，秒级）。
+4. **代理设置不在控制台里**：入口只有**托盘「代理设置…」**（独立设置窗口）。控制台的代理设置按钮已移除（`test-plugin-console` 断言 `#dshc-proxy` 为 null）。
 
 ---
 
