@@ -105,7 +105,7 @@
     {
       "id": "card-cfb9fb70-baa9-4ee6-8093-c5cf1515f111",
       "title": "预装插件全量检查+同步，发布 v0.3.0",
-      "summary": "dsh-kanban bundle 同步到仓库 HEAD 0.1.2（含 0.1.2 发布功能 + 未发布的卡片操作行重设计）；model-reasoning 0.1.4 与 turn-navigator 0.1.1 已是最新无需改动；随后 bump 0.3.0、提交、推送 main + tag v0.3.0（CI 自动出包发布）。",
+      "summary": "dsh-kanban bundle 同步到仓库 HEAD 0.1.2（含 0.1.2 发布功能 + 未发布的卡片操作行重设计）；model-reasoning 0.1.4 与 turn-navigator 0.1.1 已是最新无需改动；随后 bump 0.3.0、提交、推送 main + tag v0.3.0（CI 自动出包发布）。注：v0.3.0 的 GitHub Release 实际因 upload-artifact LCA 嵌套的 glob 问题发布失败，后续在 0.3.2 修复。",
       "rationale": "预装 bundle 跟踪源仓库提交态（非 npm 已发布版）；kanban 仓库有未提交的 0.1.3 WIP，明确不打包进壳。",
       "sourceSessionId": "session-b07fc740-c633-402a-ad13-adca9d76e0b5",
       "status": "done",
@@ -115,11 +115,11 @@
         "release"
       ],
       "createdAt": 1787198596012,
-      "updatedAt": 1787198596012
+      "updatedAt": 1787208103638
     },
     {
       "id": "card-9b586fc1-345b-4a1a-95b1-8a61ecd877ba",
-      "title": "修复：升级选「删除本地数据」后 dsh 冷安装卡死（npm 卡住无输出）",
+      "title": "修复：半截安装（package.json 在但 lib/bin.js 缺）自动重装",
       "description": "Windows 0.2.0→0.3.0 升级时在 NSIS 卸载器勾选删除应用数据 → 清空 runtime → 冷安装 dsh(~500 包) 时 npm 请求悬挂，manager 只有 600s 硬超时×2 registry，用户看到“已进行 511 秒”卡住。修复：npm fetch idle 超时 + 无输出 stall 检测 + 失败切换提示。",
       "sourceSessionId": "session-cbc11ff3-8490-410a-9642-003db8693f13",
       "status": "done",
@@ -129,22 +129,36 @@
         "installer"
       ],
       "createdAt": 1787203257064,
-      "updatedAt": 1787204067551,
-      "summary": "根因：NSIS 卸载器「删除应用数据」清空 runtime → 冷安装 dsh(~500 包)，registry 连接悬挂时 npm 无限等待，manager 只有 600s 硬超时×2 镜像，用户看到“已进行 511 秒”像卡死。修复：npm 调用统一加 --fetch-timeout=30000 等（idle 超时，实测 EIDLETIMEOUT@30.2s）+ npm() 180s 无输出 stall 检测 + 失败自动切换镜像提示 + npmLineToDisplay 识别元数据 URL。新增 scripts/test-install-stall.mjs 回归测试（真实 manager + 假 registry 悬挂 tarball，32.9s 出错误）；test-control-plane / test-proxy 全部通过。",
+      "updatedAt": 1787208079626,
+      "summary": "二次修复（0.3.2）：broken-install 自动修复。根因：0.3.0 冷安装被强关留下半截安装（package.json 在、lib/bin.js 缺），installedVersion() 只看 package.json → 自动安装闸门被跳过 → launch failed: not installed。修复：dshInstalled()=manifest+入口双检，main() 闸门与 installDshUpdate 的“已最新”跳过都改用它；破损时 rmSync 整个 dsh 目录强制重装。新增 test-broken-install.mjs 端到端验证（自动修复→重装→正常启动）。0.3.1→0.3.2 已提交推送。",
       "rationale": "把“20 分钟静默悬挂”变成 ~30s 快失败 + 自动切换镜像 + 清晰报错。"
     },
     {
       "id": "card-ec992325-540f-46bf-8344-b9301e941237",
-      "title": "发布 v0.3.1（冷安装卡死修复）",
+      "title": "发布 v0.3.2（CI release 已发布）",
       "description": "v0.3.1 已提交推送（8bfd58f）+ tag v0.3.1 已推送；CI 的 release job 正在构建 Windows 安装包并发布到 GitHub Releases（用户也可本地 git pull && npm run bundle）。CI run 完成后把本卡标 done。",
       "sourceSessionId": "session-cbc11ff3-8490-410a-9642-003db8693f13",
-      "status": "in_progress",
+      "status": "done",
       "tags": [
         "release",
         "bug-fix"
       ],
       "createdAt": 1787205100823,
-      "updatedAt": 1787205100823
+      "updatedAt": 1787208448742,
+      "summary": "v0.3.2 CI 全绿并已发布：GitHub Release v0.3.2 含 DSH.Desktop_0.3.2_x64-setup.exe + AppImage + deb（CI release 修复生效）。用户可本地 git pull && npm run bundle 或直接下载 Release 安装包。"
+    },
+    {
+      "id": "card-6f642993-d0fe-4abd-af28-c041fe5a4135",
+      "title": "决策：NSIS「删除应用程序数据」勾选框 — 接受现状（方案 C）",
+      "description": "用户选定方案 C：不改安装器（不 fork Tauri NSIS 模板），接受「删除应用程序数据」勾选框为 Tauri 上游固定行为。已在 README 加「Windows 安装/升级须知」说明，决策记录在 .agents/notes/implemented/process/2026-08-20-nsis-delete-data-checkbox-accepted.md。",
+      "sourceSessionId": "session-cbc11ff3-8490-410a-9642-003db8693f13",
+      "status": "done",
+      "tags": [
+        "nsis",
+        "decision"
+      ],
+      "createdAt": 1787209789302,
+      "updatedAt": 1787209789302
     }
   ]
 }
