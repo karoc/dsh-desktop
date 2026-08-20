@@ -73,6 +73,17 @@ jobs:
           if (-not $hit) { throw "node.exe missing from installer resources — layout regression" }
           Write-Host "PASS: node runtime present in installer"
 
+      # Runtime smoke — release gate. Boots the REAL manager on an empty runtime,
+      # lets it cold-install @deepseek-ai/dsh via the bundled pnpm from a real
+      # registry, asserts dsh web reports a URL. Catches the 0.3.x bug class
+      # ("npm install hangs on the monorepo tree" / "launch failed: not
+      # installed") before a release ships. See scripts/smoke-windows.mjs.
+      - name: Runtime smoke — manager cold-installs dsh and serves URL
+        shell: pwsh
+        run: node scripts/smoke-windows.mjs
+        env:
+          DSH_SMOKE_REGISTRY: https://registry.npmjs.org
+
       - uses: actions/upload-artifact@v4
         with:
           name: dsh-desktop-windows

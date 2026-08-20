@@ -356,3 +356,46 @@ Windows 的 NSIS 安装行为、toast 渲染、AUMID、事件投递——Linux s
 - 测试桩教训：桩的 innerHTML setter 原先"追加不清空"，而真实 DOM 是"替换"——连续两次
   innerHTML 赋值会让子元素重复（同插件渲染两次）。修桩：set 时先 `children=[]` 再解析。
   同时 client 侧改为**一次构建完整字符串**再赋值，避免依赖 setter 语义。
+
+## 28. 包管理器对 monorepo 依赖树挂起 + 发版必须做的 Windows 运行时冒烟（0.3.0→0.3.3 实战）
+
+### 根因（终于实锤）
+- **`npm install @deepseek-ai/dsh` 在 npm 依赖解析（buildIdealTree/placeDep）阶段无限挂起**：
+  从最早的 0.0.1-rc.5 到 0.1.0-rc.7 全部复现；npm 10/11、Node 22/24、npmjs/npmmirror、
+  代理/直连全部复现；`npm install commander`（小树）419ms 正常。
+- 特征：npm 调试日志停在 `silly placeDep` 后**不再发任何网络请求**（`NODE_DEBUG=http` 确认
+  无新 outgoing message），CPU 空转、无输出，只有 kill。**`pnpm` 装同一个包 5.9s 完成**
+  （dsh 自己就是 pnpm monorepo：55-61 个互相依赖的 `@deepseek-ai/*` 包）。
+- 排障路径（可复用，已沉淀为技能 `.dsh/skills/windows-desktop-shell-debugging/SKILL.md`）：
+  用户开 WSL → 直接读 `/mnt/c/Users/<u>/AppData/Roaming/dev.dsh.desktop/runtime` 的
+  `manager.log`/`proxy.json`/`node_modules` 现场 → 受控实验逐个隔离变量（代理/镜像/工具/Node/npm 版本）
+  → npm 调试日志 + NODE_DEBUG → 换 pnpm 对照 → 根因落定 → 端到端验证。
+
+### 修复（0.3.3）
+- `scripts/server-manager.mjs`：dsh 安装从 npm 切到 **pnpm**。`npm()` 重构出通用 `runChild()`
+  （spawn 捆绑 node / 输出节流流式 / 600s 硬超时 / 180s 无输出卡死检测 / 单一 settle），
+  `npm()` 与新增 `pnpm()` 共用；`installDshUpdate` 走 `pnpm install ... --store-dir <runtime>/.pnpm-store`
+  （isolated 布局，已端到端验证 dsh 启动+插件注入+URL）；`ensurePnpmWorkspace()` 写
+  `<runtime>/pnpm-workspace.yaml` 的 `allowBuilds`（pnpm 11.22 的原生 postinstall 授权，替代 npm 11 的
+  `.npmrc allow-scripts`；NATIVE_BUILD_PKGS 共享）。npm 仍用于版本查询/npm 装 pnpm 引导/单包安装。
+- 0.3.1/0.3.2 的超时/卡死检测/registry 降级/半截安装修复全部保留。
+
+### 发版流程新增（"以后发版都得测"）
+- **CI 门禁**：`.github/workflows/build.yml` windows job 新增 **Runtime smoke**（`scripts/smoke-windows.mjs`）：
+  用捆绑 node 跑真实 manager 于空 runtime，从真实 registry 冷安装 dsh（pnpm），断言 dsh web 报 URL。
+  直接拦住"安装挂起/launch failed: not installed"这类回归，任何 tag 发布前必过。
+- **手工检查清单**（发版前真机过一遍）：
+  1. 全新安装（空机/删数据）→ 冷安装能完成、启动页进 dsh、插件注入可见（页面含
+     `__DSH_BOOT__` + 插件名）；
+  2. 普通升级（覆盖装、不勾「删除应用数据」）→ 数据保留、dsh 自动更新；
+  3. 半截安装恢复：手动删 `runtime/node_modules/@deepseek-ai/dsh` 的 `lib/` 后重启 → 自动重装；
+  4. 断网/镜像不可达 → 快速失败 + 自动切镜像 + 清晰报错（不是 20 分钟静默）；
+  5. 通知/托盘/关闭行为回归。
+- 排障工具：`scripts/diagnose.ps1`（Windows 一键诊断，**必须纯 ASCII**——PowerShell 5.1 把无 BOM
+  UTF-8 当 GBK 读会炸解析）、`scripts/smoke-windows.mjs`（冒烟）。
+
+### 环境坑（沙箱/测试）
+- 沙箱 HOME 只读 → npm/pnpm 报 EROFS cacache，先设 `HOME=<可写目录>`；
+- 在仓库子目录跑 `pnpm install` 会向上找到 `pnpm-workspace.yaml` 把整棵树装进仓库根 node_modules、
+  改写 package.json/lockfile——测试目录自建 workspace 文件或删掉仓库根多余文件；
+- `cmd | tail` 的 `$?` 是 tail 的；`pkill -f` 会匹配自身命令行自杀——用精确 PID。
