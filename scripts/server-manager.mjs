@@ -27,6 +27,17 @@ import { createForwardProxy, providerHostsFromSettings } from './proxy.mjs'
 
 const PACKAGE = '@deepseek-ai/dsh'
 
+// npm fetch 快失败策略：@npmcli/agent 把 fetch-timeout 映射为 socket 的
+// IDLE 超时（一段时间没收到任何字节就中止），所以慢速但持续流式的下载不受
+// 影响，而"连接挂着不出数据"（冷安装/升级时最常见的卡死形态）会在 ~30s 内
+// 报错并走 registry 降级，而不是让用户对着 10 分钟硬超时发呆。
+const NPM_FETCH_FLAGS = [
+  '--fetch-timeout=30000',
+  '--fetch-retries=2',
+  '--fetch-retry-mintimeout=2000',
+  '--fetch-retry-maxtimeout=10000',
+]
+
 // ── args ───────────────────────────────────────────────────────────────────
 function parseArgs(argv) {
   const out = { runtimeDir: null, resourceDir: null, patch: null, cwd: null, home: null, registry: undefined, bridgePort: null }
@@ -83,10 +94,17 @@ function npmLineToDisplay(raw) {
   if (!m) return null
   const url = m[1]
   let name = null
-  const pkgs = url.match(/\/packages\/((?:@[^/]+\/)?[^/]+)\//) // npmmirror
+  const pkgs = url.match(/\/packages\/((?:@[^/]+\/)?[^/]+)\//) // npmmirror tarball
   if (pkgs) name = pkgs[1]
   if (!name) {
-    const reg = url.match(/\/registry\.[^/]+\/((?:@[^/]+\/)?[^/]+)\/-\//) // npmjs
+    // 包元数据文档：<registry>/<name>（npmmirror 的 scoped 元数据是
+    // /@scope%2fname，npmjs 是 /@scope/name）。对 tarball URL 也能给出
+    // 带 scope 的名字（.../@scope/name/-/name-x.y.z.tgz）。
+    const meta = url.match(/\/\/[^/]+\/((?:@[^/]+%2f|@[^/]+\/)?[^/]+)/)
+    if (meta) name = meta[1]
+  }
+  if (!name) {
+    const reg = url.match(/\/registry\.[^/]+\/((?:@[^/]+\/)?[^/]+)\/-\//) // npmjs tarball
     if (reg) name = reg[1]
   }
   if (!name) {
@@ -101,7 +119,7 @@ function npmLineToDisplay(raw) {
 function npm(argsList, { timeoutMs = 600_000, stream = false, quiet = true } = {}) {
   return new Promise((resolvePromise, rejectPromise) => {
     const cmd = npmViaCli ? process.execPath : 'npm'
-    const cmdArgs = npmViaCli ? [npmCli, ...argsList] : argsList
+    const cmdArgs = npmViaCli ? [npmCli, ...argsList, ...NPM_FETCH_FLAGS] : [...argsList, ...NPM_FETCH_FLAGS]
     // Native deps (koffi, node-pty) run `node` from PATH during postinstall,
     // but the bundled Node is NOT on PATH — prepend its directory so
     // `sh -c node` resolves (Linux broke silently: "node: not found").
@@ -121,16 +139,44 @@ function npm(argsList, { timeoutMs = 600_000, stream = false, quiet = true } = {
     const flushPending = () => {
       if (pendingPack) { log(pendingPack); pendingPack = null }
     }
-    const timer = setTimeout(() => {
+    // 无输出卡死检测：`--loglevel=http` 下只要 npm 活着且在干活就会持续吐
+    // 下载行；连续 STALL_MS 没有任何输出 = 卡死（悬挂连接、cacache 锁、
+    // postinstall 挂起等 npm 自身超时管不到的情况）。中止并报清晰错误，
+    // 让 installDshUpdate 的 registry 降级链接上。阈值取 180s：远高于
+    // 磁盘慢时的静默解包期，又远低于 600s 硬超时。
+    const STALL_MS = 180_000
+    let lastOutputAt = Date.now()
+    // 单一落定路径：定时器/卡死检测/子进程错误/退出 四者只允许第一个触发。
+    const finish = (fn) => {
       if (settled) return
       settled = true
-      killTree(child.pid)
-      const e = new Error('npm 操作超时（可设 DSH_DESKTOP_REGISTRY 切换镜像加速）')
-      e.stderr = stderr
-      e.stdout = stdout
-      rejectPromise(e)
+      clearTimeout(timer)
+      clearInterval(stallTimer)
+      fn()
+    }
+    const timer = setTimeout(() => {
+      finish(() => {
+        killTree(child.pid)
+        const e = new Error('npm 操作超时（可设 DSH_DESKTOP_REGISTRY 切换镜像加速）')
+        e.stderr = stderr
+        e.stdout = stdout
+        rejectPromise(e)
+      })
     }, timeoutMs)
+    const stallTimer = setInterval(() => {
+      if (settled) return
+      if (Date.now() - lastOutputAt >= STALL_MS) {
+        finish(() => {
+          killTree(child.pid)
+          const e = new Error(`npm 已 ${Math.round(STALL_MS / 1000)} 秒无任何输出（疑似网络或安装卡住），已中止`)
+          e.stderr = stderr
+          e.stdout = stdout
+          rejectPromise(e)
+        })
+      }
+    }, 5000)
     const pump = (buf, isErr) => {
+      lastOutputAt = Date.now()
       const text = String(buf)
       if (isErr) stderr += text
       else stdout += text
@@ -159,24 +205,22 @@ function npm(argsList, { timeoutMs = 600_000, stream = false, quiet = true } = {
     child.stdout.on('data', (b) => pump(b, false))
     child.stderr.on('data', (b) => pump(b, true))
     child.on('error', (e) => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      flushPending()
-      rejectPromise(e)
+      finish(() => {
+        flushPending()
+        rejectPromise(e)
+      })
     })
     child.on('exit', (code) => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      flushPending()
-      if (code === 0) resolvePromise(stdout)
-      else {
-        const e = new Error(`npm 退出码 ${code}: ${stderr.trim().split('\n').pop() ?? ''}`)
-        e.stderr = stderr
-        e.stdout = stdout
-        rejectPromise(e)
-      }
+      finish(() => {
+        flushPending()
+        if (code === 0) resolvePromise(stdout)
+        else {
+          const e = new Error(`npm 退出码 ${code}: ${stderr.trim().split('\n').pop() ?? ''}`)
+          e.stderr = stderr
+          e.stdout = stdout
+          rejectPromise(e)
+        }
+      })
     })
   })
 }
@@ -301,7 +345,8 @@ async function installDshUpdate() {
         break
       } catch (err) {
         lastErr = err
-        log(`registry ${reg} 安装失败：${err.message}`)
+        // 明说下一步：失败会自动切到另一个默认镜像重试，用户不用干等。
+        log(`registry ${reg} 安装失败：${err.message} — 正在切换备用镜像 ${fallback} 重试`)
       }
     }
     // Restore the protected plugins (whatever npm pruned comes back as-is,

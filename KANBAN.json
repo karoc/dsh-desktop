@@ -116,6 +116,22 @@
       ],
       "createdAt": 1787198596012,
       "updatedAt": 1787198596012
+    },
+    {
+      "id": "card-9b586fc1-345b-4a1a-95b1-8a61ecd877ba",
+      "title": "修复：升级选「删除本地数据」后 dsh 冷安装卡死（npm 卡住无输出）",
+      "description": "Windows 0.2.0→0.3.0 升级时在 NSIS 卸载器勾选删除应用数据 → 清空 runtime → 冷安装 dsh(~500 包) 时 npm 请求悬挂，manager 只有 600s 硬超时×2 registry，用户看到“已进行 511 秒”卡住。修复：npm fetch idle 超时 + 无输出 stall 检测 + 失败切换提示。",
+      "sourceSessionId": "session-cbc11ff3-8490-410a-9642-003db8693f13",
+      "status": "done",
+      "tags": [
+        "bug-fix",
+        "windows",
+        "installer"
+      ],
+      "createdAt": 1787203257064,
+      "updatedAt": 1787204067551,
+      "summary": "根因：NSIS 卸载器「删除应用数据」清空 runtime → 冷安装 dsh(~500 包)，registry 连接悬挂时 npm 无限等待，manager 只有 600s 硬超时×2 镜像，用户看到“已进行 511 秒”像卡死。修复：npm 调用统一加 --fetch-timeout=30000 等（idle 超时，实测 EIDLETIMEOUT@30.2s）+ npm() 180s 无输出 stall 检测 + 失败自动切换镜像提示 + npmLineToDisplay 识别元数据 URL。新增 scripts/test-install-stall.mjs 回归测试（真实 manager + 假 registry 悬挂 tarball，32.9s 出错误）；test-control-plane / test-proxy 全部通过。",
+      "rationale": "把“20 分钟静默悬挂”变成 ~30s 快失败 + 自动切换镜像 + 清晰报错。"
     }
   ]
 }

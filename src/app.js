@@ -179,7 +179,7 @@ if (tauri && tauri.event) {
       resetSweep(); // 新一轮安装：光辉重新从 200/700 起步
       clearTimeout(installStallTimer);
       installStallTimer = setTimeout(() => {
-        setState('安装仍在进行 — 若长时间无进展，可点击「重试」中断后重新安装');
+        setState('安装仍在进行 — 网络较慢时可能需要几分钟；卡住会自动切换镜像重试，或点击「重试」手动中断');
       }, INSTALL_STALL_MS);
     } else if (p.phase === 'running') {
       installProgress.hidden = false;
