@@ -334,6 +334,24 @@ writeCfg({
     { name: 'llm-pi-ai/multi', host: 'api1.example' },
     { name: 'llm-pi-ai/multi', host: 'api2.example' },
   ], 'trailing comma stripped; comma-separated list yields one host per candidate')
+  // baseURL BEFORE displayName (the real settings.yaml key order) must still
+  // yield the displayName — the reader is order-independent.
+  writeFileSync(settingsPath, [
+    'llm-pi-ai:',
+    '  providers:',
+    '    ark:',
+    '      baseURL: https://ark.cn-beijing.volces.com',
+    '      displayName: 方舟 Ark',
+    '    token-plan:',
+    '      baseURL: https://token-plan.cn-beijing.maas.aliyuncs.com',
+    '      displayName: Token Plan',
+    '',
+  ].join('\n'))
+  const reordered = providerHostsFromSettings(settingsPath)
+  assert.deepEqual(reordered, [
+    { name: 'llm-pi-ai/ark', displayName: '方舟 Ark', host: 'ark.cn-beijing.volces.com' },
+    { name: 'llm-pi-ai/token-plan', displayName: 'Token Plan', host: 'token-plan.cn-beijing.maas.aliyuncs.com' },
+  ], 'displayName extracted even when baseURL precedes it (order-independent)')
 }
 
 // ── scenario 12: SOCKS5 upstream ────────────────────────────────────────────

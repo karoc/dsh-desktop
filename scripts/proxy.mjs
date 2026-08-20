@@ -215,52 +215,80 @@ export function providerHostsFromSettings(settingsPath) {
   } catch {
     return out
   }
-  const push = (baseUrl, name, displayName) => {
+  const push = (current) => {
     // baseURL may carry a trailing comma or be a comma-separated fallback list
     // (e.g. "https://api.xxx.com," or "a,b"). Node's URL parser would swallow
     // the comma INTO the hostname ("api.xxx.com,"), which then never matches
     // the real CONNECT target and silently breaks proxying — split and parse
     // each candidate instead.
-    for (const candidate of String(baseUrl).split(',').map((s) => s.trim()).filter(Boolean)) {
-      try {
-        const host = new URL(candidate).hostname
-        if (host) out.push({ name, ...(displayName ? { displayName } : {}), host })
-      } catch { /* malformed candidate — skip */ }
+    const name = current.provider ? `${current.ns}/${current.provider}` : current.ns
+    const displayName = current.displayName || (current.ns === 'llm-deepseek' ? 'DeepSeek' : null)
+    for (const baseUrl of current.baseUrls) {
+      for (const candidate of String(baseUrl).split(',').map((s) => s.trim()).filter(Boolean)) {
+        try {
+          const host = new URL(candidate).hostname
+          if (host) out.push({ name, ...(displayName ? { displayName } : {}), host })
+        } catch { /* malformed candidate — skip */ }
+      }
     }
   }
-  // Lightweight two-level walk: a 2-space `providers:` key opens the provider
-  // map (llm-pi-ai), whose entries sit at 4 spaces (with an optional
-  // `displayName` at 6 spaces); other llm-* namespaces put baseURL directly
-  // at 2 spaces (llm-deepseek).
+  // Collect each provider block (baseURL list + displayName) and emit it as a
+  // whole — ORDER-INDEPENDENT, because a real settings.yaml may list baseURL
+  // BEFORE displayName and a naive sequential reader would miss the name.
+  // Structure: llm-pi-ai → `providers:` (2sp) → provider key (4sp) → fields
+  // (baseURL/displayName at any indent ≥2). Other llm-* namespaces (e.g.
+  // llm-deepseek) put baseURL directly under the namespace (2sp).
   let ns = null
   let inProviders = false
-  let provider = null
-  let displayName = null
+  let current = null // { ns, provider, displayName, baseUrls: [] }
+  const flush = () => {
+    if (current && current.baseUrls.length) push(current)
+    current = null
+  }
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.replace(/#.*$/, '').replace(/\s+$/, '')
     const top = line.match(/^([A-Za-z0-9_.-]+):\s*$/)
-    if (top) { ns = top[1]; inProviders = false; provider = null; displayName = null; continue }
-    if (!ns?.startsWith('llm-')) continue
-    const two = line.match(/^\s{2}([A-Za-z0-9_.-]+):\s*$/)
-    if (two) {
-      inProviders = two[1] === 'providers'
-      provider = inProviders ? null : two[1]
-      displayName = null
+    if (top) {
+      flush()
+      ns = top[1]
+      inProviders = false
       continue
     }
-    if (inProviders) {
-      const four = line.match(/^\s{4}([A-Za-z0-9_.-]+):\s*$/)
-      if (four) { provider = four[1]; displayName = null; continue }
-      const dn = line.match(/^\s{6}displayName:\s*(.+)$/)
-      if (dn) displayName = String(dn[1]).trim().replace(/^['"]|['"]$/g, '')
+    if (!ns?.startsWith('llm-')) continue
+    const two = line.match(/^ {2}([A-Za-z0-9_.-]+):\s*$/)
+    if (two) {
+      flush()
+      inProviders = two[1] === 'providers'
+      current = inProviders ? null : { ns, provider: two[1], displayName: null, baseUrls: [] }
+      continue
     }
-    const b = line.match(/^\s*baseURL:\s*(.+)$/)
-    if (b) {
-      const name = provider ? `${ns}/${provider}` : ns
-      const disp = displayName || (ns === 'llm-deepseek' ? 'DeepSeek' : null)
-      push(b[1], name, disp)
+    const four = line.match(/^ {4}([A-Za-z0-9_.-]+):\s*$/)
+    if (four && inProviders) {
+      flush()
+      current = { ns, provider: four[1], displayName: null, baseUrls: [] }
+      continue
+    }
+    if (current) {
+      const dn = line.match(/^ {2,}displayName:\s*(.+)$/)
+      if (dn) {
+        current.displayName = String(dn[1]).trim().replace(/^['"]|['"]$/g, '')
+        continue
+      }
+      const b = line.match(/^ {2,}baseURL:\s*(.+)$/)
+      if (b) {
+        current.baseUrls.push(b[1])
+        continue
+      }
+    } else if (!inProviders) {
+      // Non-provider llm-* namespaces (e.g. llm-deepseek) put baseURL directly
+      // under the namespace at 2 spaces — collect it as a provider-less unit.
+      const b = line.match(/^ {2}baseURL:\s*(.+)$/)
+      if (b) {
+        current = { ns, provider: null, displayName: null, baseUrls: [b[1]] }
+      }
     }
   }
+  flush()
   return out
 }
 
