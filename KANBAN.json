@@ -216,6 +216,20 @@
       ],
       "createdAt": 1787236016581,
       "updatedAt": 1787236016581
+    },
+    {
+      "id": "card-bde6de49-9bb9-4551-b2d8-29443e3a2db1",
+      "title": "预发布通道：控制台提示可升 next 版（rc.8），想升才升",
+      "description": "npm 有 rc.8 但标在 next tag（latest 仍 rc.7），从 GitHub 安装不可行（monorepo 结构）。实现预发布通道：manager 解析 latest+next，update-status 带 nextAvailable；插件控制台显示\"当前→rc.8（预发布）\"升级按钮，点击才装指定版本，默认稳定 latest。0.3.5 已推送+tag，CI 出包中。",
+      "sourceSessionId": "session-cbc11ff3-8490-410a-9642-003db8693f13",
+      "status": "done",
+      "tags": [
+        "feature",
+        "console",
+        "update"
+      ],
+      "createdAt": 1787239670280,
+      "updatedAt": 1787239670280
     }
   ]
 }
