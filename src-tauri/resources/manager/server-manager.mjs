@@ -346,7 +346,9 @@ function emitUpdateStatus(updateAvailable) {
     t: 'update-status',
     current,
     latest: latestVersion,
-    updateAvailable: updateAvailable ?? (latestVersion !== null && current !== latestVersion),
+    // 只在 latest 严格新于当前时才算"有更新"——用户在 next 预发布（如 rc.8）
+    // 上时 latest（rc.7）反而更旧，绝不能提示降级。
+    updateAvailable: updateAvailable ?? (latestVersion !== null && versionGt(latestVersion, current)),
     next: nextVersion,
     nextAvailable: nextVersion !== null && nextVersion !== latestVersion && current !== nextVersion && versionGt(nextVersion, current),
   })
@@ -374,7 +376,7 @@ async function checkDshUpdate({ frozen = false } = {}) {
     log(`update check failed (offline?): ${err.message}`)
     return
   }
-  const available = latestVersion !== null && current !== latestVersion
+  const available = latestVersion !== null && versionGt(latestVersion, current)
   emitUpdateStatus(available)
   if (available) log(`update available: ${current ?? '(none)'} -> ${latestVersion} (user decides)`)
   else if (nextVersion && nextVersion !== latestVersion && current !== nextVersion && versionGt(nextVersion, current)) {
