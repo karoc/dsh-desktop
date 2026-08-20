@@ -201,6 +201,21 @@
       ],
       "createdAt": 1787230841135,
       "updatedAt": 1787230841135
+    },
+    {
+      "id": "card-0eb19fb4-44e1-4743-9eb3-937a343b9c5e",
+      "title": "修复：启用预装插件后重启黑屏（pnpm 布局回归 → hoisted）",
+      "description": "黑屏根因：0.3.3 pnpm isolated 布局把 dsh 内部包收进 .pnpm，预装插件与 host bundle 解析不到（ERR_MODULE_NOT_FOUND）→ dsh web 崩溃。修复 0.3.4：pnpm 安装加 --node-linker=hoisted（布局回到 npm 平铺兼容）+ isIsolatedPnpmLayout 检测存量 isolated runtime → 删 node_modules 全新 hoisted 安装（~6s 自动迁移）。端到端验证：新装 hoisted + 启用 dsh-kanban → URL 正常；isolated 迁移 → URL 正常；smoke PASS。",
+      "sourceSessionId": "session-cbc11ff3-8490-410a-9642-003db8693f13",
+      "status": "done",
+      "tags": [
+        "bug-fix",
+        "windows",
+        "plugins",
+        "install"
+      ],
+      "createdAt": 1787236016581,
+      "updatedAt": 1787236016581
     }
   ]
 }
