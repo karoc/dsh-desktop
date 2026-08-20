@@ -56,6 +56,9 @@ struct UpdateStatus {
     current: Option<String>,
     latest: Option<String>,
     update_available: bool,
+    /// Pre-release channel (npm `next` tag), e.g. 0.1.0-rc.8 when latest is rc.7.
+    next: Option<String>,
+    next_available: bool,
 }
 
 /// Latest plugin operation status, mirrored from the manager's `op-status`
@@ -737,6 +740,8 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
                 "current": s.current,
                 "latest": s.latest,
                 "updateAvailable": s.update_available,
+                "next": s.next,
+                "nextAvailable": s.next_available,
             })
             .to_string();
             ("200 OK", body)
@@ -749,10 +754,17 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
             ("200 OK", String::new())
         }
         ("POST", "/update-dsh") => {
-            send_manager(
-                &mut app.state::<ServerState>().stdin.lock().unwrap(),
-                "update-dsh",
-            );
+            // Optional target version (e.g. a pre-release from the `next` tag);
+            // without it the manager installs `dist-tags.latest`.
+            let version = serde_json::from_str::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|v| v.get("version").and_then(|v| v.as_str()).map(String::from));
+            let line = if let Some(v) = version {
+                serde_json::json!({ "cmd": "update-dsh", "version": v }).to_string()
+            } else {
+                serde_json::json!({ "cmd": "update-dsh" }).to_string()
+            };
+            send_line(&mut app.state::<ServerState>().stdin.lock().unwrap(), &line);
             ("200 OK", String::new())
         }
         ("POST", "/restart-dsh") => {
@@ -798,6 +810,8 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
                     "current": upd.current,
                     "latest": upd.latest,
                     "updateAvailable": upd.update_available,
+                    "next": upd.next,
+                    "nextAvailable": upd.next_available,
                 },
                 "op": {
                     "op": op.op,
@@ -1140,12 +1154,16 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
                         let current = ev.get("current").and_then(|v| v.as_str()).map(String::from);
                         let latest = ev.get("latest").and_then(|v| v.as_str()).map(String::from);
                         let available = ev.get("updateAvailable").and_then(|v| v.as_bool()).unwrap_or(false);
+                        let next = ev.get("next").and_then(|v| v.as_str()).map(String::from);
+                        let next_available = ev.get("nextAvailable").and_then(|v| v.as_bool()).unwrap_or(false);
                         let state = handle.state::<ServerState>();
                         {
                             let mut upd = state.update.lock().unwrap();
                             upd.current = current.clone();
                             upd.latest = latest.clone();
                             upd.update_available = available;
+                            upd.next = next.clone();
+                            upd.next_available = next_available;
                         }
                         // Flip the tray item between "检查更新…" and "有更新 vX（点击更新）".
                         let guard = state.update_item.lock().unwrap();
@@ -1507,6 +1525,8 @@ fn get_update_status(state: State<'_, ServerState>) -> serde_json::Value {
         "current": s.current,
         "latest": s.latest,
         "updateAvailable": s.update_available,
+        "next": s.next,
+        "nextAvailable": s.next_available,
     })
 }
 

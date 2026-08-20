@@ -53,6 +53,7 @@ window.__ModuleLoader__.load({
       upToDate: '已是最新版本',
       updateNow: '一键更新',
       updating: '正在更新并重启…',
+      prerelease: '预发布',
       unknown: '未知',
       current: '当前',
       actions: '操作',
@@ -103,6 +104,7 @@ window.__ModuleLoader__.load({
       upToDate: 'Up to date',
       updateNow: 'Update now',
       updating: 'Updating & restarting…',
+      prerelease: 'pre-release',
       unknown: 'unknown',
       current: 'current',
       actions: 'Actions',
@@ -791,8 +793,12 @@ window.__ModuleLoader__.load({
       const current = u.current || L.unknown
       const latest = u.latest || L.unknown
       if (u.updateAvailable) {
-        const btn = `<button class="dshc-btn2 primary" id="dshc-update">${L.updateNow}</button>`
+        const btn = `<button class="dshc-btn2 primary" id="dshc-update" data-version="${latest}">${L.updateNow}</button>`
         bodyEl.appendChild(row(`${L.update}：${L.current} ${current} → ${latest}`, null, null, btn, ''))
+      } else if (u.nextAvailable && u.next) {
+        // 有非 latest 的新版本（npm next tag，如 0.1.0-rc.8）：提示可升级，用户自选。
+        const btn = `<button class="dshc-btn2 primary" id="dshc-update" data-version="${u.next}">${L.updateNow}</button>`
+        bodyEl.appendChild(row(`${L.update}：${L.current} ${current} → ${u.next}（${L.prerelease}）`, null, null, btn, ''))
       } else {
         bodyEl.appendChild(el('div', `${L.update}：${L.current} ${current}（${L.upToDate}）`, 'dshc-hint'))
       }
@@ -903,7 +909,7 @@ window.__ModuleLoader__.load({
         updateBtn.addEventListener('click', async () => {
           updateBtn.disabled = true
           updateBtn.textContent = L.updating
-          const res = await bridge('/update-dsh', { method: 'POST' })
+          const res = await bridge('/update-dsh', { method: 'POST', body: updateBtn.dataset.version ? { version: updateBtn.dataset.version } : {} })
           if (res === null) status(L.failed, 'err')
           else showOverlay(L.updating)
         })

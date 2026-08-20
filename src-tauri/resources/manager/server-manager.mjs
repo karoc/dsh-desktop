@@ -27,6 +27,27 @@ import { createForwardProxy, providerHostsFromSettings } from './proxy.mjs'
 
 const PACKAGE = '@deepseek-ai/dsh'
 
+// npm fetch 快失败策略：@npmcli/agent 把 fetch-timeout 映射为 socket 的
+// IDLE 超时（一段时间没收到任何字节就中止），所以慢速但持续流式的下载不受
+// 影响，而"连接挂着不出数据"（冷安装/升级时最常见的卡死形态）会在 ~30s 内
+// 报错并走 registry 降级，而不是让用户对着 10 分钟硬超时发呆。
+const NPM_FETCH_FLAGS = [
+  '--fetch-timeout=30000',
+  '--fetch-retries=2',
+  '--fetch-retry-mintimeout=2000',
+  '--fetch-retry-maxtimeout=10000',
+]
+
+// dsh 的原生依赖：postinstall 需要跑构建/下载二进制。npm 11 用 .npmrc
+// allow-scripts 放行；pnpm 11.22 用 pnpm-workspace.yaml 的 allowBuilds 放行。
+const NATIVE_BUILD_PKGS = [
+  '@deepseek-ai/dsh-subprocess-local',
+  'koffi',
+  'node-pty',
+  '@google/genai',
+  'protobufjs',
+]
+
 // ── args ───────────────────────────────────────────────────────────────────
 function parseArgs(argv) {
   const out = { runtimeDir: null, resourceDir: null, patch: null, cwd: null, home: null, registry: undefined, bridgePort: null }
@@ -83,10 +104,17 @@ function npmLineToDisplay(raw) {
   if (!m) return null
   const url = m[1]
   let name = null
-  const pkgs = url.match(/\/packages\/((?:@[^/]+\/)?[^/]+)\//) // npmmirror
+  const pkgs = url.match(/\/packages\/((?:@[^/]+\/)?[^/]+)\//) // npmmirror tarball
   if (pkgs) name = pkgs[1]
   if (!name) {
-    const reg = url.match(/\/registry\.[^/]+\/((?:@[^/]+\/)?[^/]+)\/-\//) // npmjs
+    // 包元数据文档：<registry>/<name>（npmmirror 的 scoped 元数据是
+    // /@scope%2fname，npmjs 是 /@scope/name）。对 tarball URL 也能给出
+    // 带 scope 的名字（.../@scope/name/-/name-x.y.z.tgz）。
+    const meta = url.match(/\/\/[^/]+\/((?:@[^/]+%2f|@[^/]+\/)?[^/]+)/)
+    if (meta) name = meta[1]
+  }
+  if (!name) {
+    const reg = url.match(/\/registry\.[^/]+\/((?:@[^/]+\/)?[^/]+)\/-\//) // npmjs tarball
     if (reg) name = reg[1]
   }
   if (!name) {
@@ -98,10 +126,17 @@ function npmLineToDisplay(raw) {
   return `⬇ 下载 ${name}`
 }
 
-function npm(argsList, { timeoutMs = 600_000, stream = false, quiet = true } = {}) {
+/**
+ * Run a Node CLI child (npm / pnpm) under the bundled Node, with output
+ * streaming (throttled for the launcher marquee), a hard timeout and a
+ * no-output stall detector. All settle paths funnel through a single
+ * `finish` so the promise resolves/rejects exactly once.
+ * @param {string[]} cmdArgs args for `process.execPath` (e.g. [npmCli, ...])
+ * @param {{cwd?: string, timeoutMs?: number, stream?: boolean,
+ *          throttleAll?: boolean, tool?: string}} opts
+ */
+function runChild(cmdArgs, { cwd, timeoutMs = 600_000, stream = false, throttleAll = false, tool = 'npm' } = {}) {
   return new Promise((resolvePromise, rejectPromise) => {
-    const cmd = npmViaCli ? process.execPath : 'npm'
-    const cmdArgs = npmViaCli ? [npmCli, ...argsList] : argsList
     // Native deps (koffi, node-pty) run `node` from PATH during postinstall,
     // but the bundled Node is NOT on PATH — prepend its directory so
     // `sh -c node` resolves (Linux broke silently: "node: not found").
@@ -109,7 +144,7 @@ function npm(argsList, { timeoutMs = 600_000, stream = false, quiet = true } = {
       ...process.env,
       PATH: `${dirname(process.execPath)}${process.env.PATH ? pathDelimiter + process.env.PATH : ''}`,
     }
-    const child = spawn(cmd, cmdArgs, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env })
+    const child = spawn(process.execPath, cmdArgs, { cwd, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env })
     let stdout = ''
     let stderr = ''
     let settled = false
@@ -121,16 +156,43 @@ function npm(argsList, { timeoutMs = 600_000, stream = false, quiet = true } = {
     const flushPending = () => {
       if (pendingPack) { log(pendingPack); pendingPack = null }
     }
-    const timer = setTimeout(() => {
+    // 无输出卡死检测：只要子进程活着且在干活就会持续吐输出；连续 STALL_MS
+    // 没有任何输出 = 卡死（悬挂连接、cacache 锁、postinstall 挂起等）。
+    // 中止并报清晰错误，让 installDshUpdate 的 registry 降级链接上。阈值取
+    // 180s：远高于磁盘慢时的静默解包期，又远低于 600s 硬超时。
+    const STALL_MS = 180_000
+    let lastOutputAt = Date.now()
+    // 单一落定路径：定时器/卡死检测/子进程错误/退出 四者只允许第一个触发。
+    const finish = (fn) => {
       if (settled) return
       settled = true
-      killTree(child.pid)
-      const e = new Error('npm 操作超时（可设 DSH_DESKTOP_REGISTRY 切换镜像加速）')
-      e.stderr = stderr
-      e.stdout = stdout
-      rejectPromise(e)
+      clearTimeout(timer)
+      clearInterval(stallTimer)
+      fn()
+    }
+    const timer = setTimeout(() => {
+      finish(() => {
+        killTree(child.pid)
+        const e = new Error(`${tool} 操作超时（可设 DSH_DESKTOP_REGISTRY 切换镜像加速）`)
+        e.stderr = stderr
+        e.stdout = stdout
+        rejectPromise(e)
+      })
     }, timeoutMs)
+    const stallTimer = setInterval(() => {
+      if (settled) return
+      if (Date.now() - lastOutputAt >= STALL_MS) {
+        finish(() => {
+          killTree(child.pid)
+          const e = new Error(`${tool} 已 ${Math.round(STALL_MS / 1000)} 秒无任何输出（疑似网络或安装卡住），已中止`)
+          e.stderr = stderr
+          e.stdout = stdout
+          rejectPromise(e)
+        })
+      }
+    }, 5000)
     const pump = (buf, isErr) => {
+      lastOutputAt = Date.now()
       const text = String(buf)
       if (isErr) stderr += text
       else stdout += text
@@ -138,20 +200,21 @@ function npm(argsList, { timeoutMs = 600_000, stream = false, quiet = true } = {
         for (const line of text.split(/\r?\n/)) {
           const t = line.replace(/^\s+|\s+$/g, '')
           if (!t || /^npm (warn )/i.test(t)) continue
-          const display = npmLineToDisplay(t)
-          if (display) {
-            const now = Date.now()
-            if (now - lastPackAt >= PACK_LOG_MS) {
-              flushPending()
-              log(display)
-              lastPackAt = now
-            } else {
-              pendingPack = display
-            }
+          const now = Date.now()
+          if (throttleAll) {
+            // pnpm：没有可提炼的包名，所有行统一走节流（最新一条优先）。
+            if (now - lastPackAt >= PACK_LOG_MS) { flushPending(); log(t.slice(0, 500)); lastPackAt = now }
+            else pendingPack = t
           } else {
-            // 非下载行（summary、错误等）即时输出，不节流。
-            flushPending()
-            log(t.slice(0, 500))
+            const display = npmLineToDisplay(t)
+            if (display) {
+              if (now - lastPackAt >= PACK_LOG_MS) { flushPending(); log(display); lastPackAt = now }
+              else pendingPack = display
+            } else {
+              // 非下载行（summary、错误等）即时输出，不节流。
+              flushPending()
+              log(t.slice(0, 500))
+            }
           }
         }
       }
@@ -159,32 +222,78 @@ function npm(argsList, { timeoutMs = 600_000, stream = false, quiet = true } = {
     child.stdout.on('data', (b) => pump(b, false))
     child.stderr.on('data', (b) => pump(b, true))
     child.on('error', (e) => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      flushPending()
-      rejectPromise(e)
+      finish(() => {
+        flushPending()
+        rejectPromise(e)
+      })
     })
     child.on('exit', (code) => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      flushPending()
-      if (code === 0) resolvePromise(stdout)
-      else {
-        const e = new Error(`npm 退出码 ${code}: ${stderr.trim().split('\n').pop() ?? ''}`)
-        e.stderr = stderr
-        e.stdout = stdout
-        rejectPromise(e)
-      }
+      finish(() => {
+        flushPending()
+        if (code === 0) resolvePromise(stdout)
+        else {
+          const e = new Error(`${tool} 退出码 ${code}: ${stderr.trim().split('\n').pop() ?? ''}`)
+          e.stderr = stderr
+          e.stdout = stdout
+          rejectPromise(e)
+        }
+      })
     })
   })
 }
 
-async function latestRemoteVersion() {
-  const out = await npm(['view', PACKAGE, 'dist-tags.latest', '--json', '--registry', REGISTRY], { timeoutMs: 60_000 })
-  const parsed = JSON.parse(out)
-  return typeof parsed === 'string' ? parsed : parsed?.latest ?? null
+function npm(argsList, { timeoutMs = 600_000, stream = false, quiet = true } = {}) {
+  const cmdArgs = npmViaCli ? [npmCli, ...argsList, ...NPM_FETCH_FLAGS] : [...argsList, ...NPM_FETCH_FLAGS]
+  return runChild(cmdArgs, { timeoutMs, stream, tool: 'npm' })
+}
+
+/**
+ * Run the bundled pnpm (installed into the runtime by ensurePnpm) with the
+ * given cwd. Used for the dsh install: npm's dependency resolver hangs on the
+ * @deepseek-ai monorepo-shaped tree (hundreds of interdependent packages),
+ * while pnpm — which dsh itself is developed with — installs it fine.
+ */
+function pnpm(argsList, { cwd, timeoutMs = 600_000, stream = false } = {}) {
+  const entry = pnpmEntry(args.runtimeDir)
+  const cmdArgs = [entry, ...argsList, '--reporter=append-only']
+  return runChild(cmdArgs, { cwd, timeoutMs, stream, throttleAll: true, tool: 'pnpm' })
+}
+
+/**
+ * 查询远端版本：`latest`（稳定 tag）与 `next`（预发布 tag，如 0.1.0-rc.8）。
+ * dsh 团队常把新 rc 标在 next 而非 latest——只读 latest 会让用户看不到更新。
+ * 两值都存入模块级 latestVersion / nextVersion，UI 据此展示"有预发布可升"。
+ */
+async function resolveRemoteVersions() {
+  const out = await npm(['view', PACKAGE, 'dist-tags.latest', 'dist-tags.next', '--json', '--registry', REGISTRY], { timeoutMs: 60_000 })
+  let parsed = null
+  try { parsed = JSON.parse(out) } catch { parsed = null }
+  // npm view 多字段返回的对象键带完整路径（dist-tags.latest / dist-tags.next）；
+  // 若某 tag 不存在则折叠为纯字符串（只剩 latest）。
+  if (typeof parsed === 'string') {
+    latestVersion = parsed
+    nextVersion = null
+  } else if (parsed && typeof parsed === 'object') {
+    latestVersion = parsed['dist-tags.latest'] ?? parsed.latest ?? null
+    nextVersion = parsed['dist-tags.next'] ?? parsed.next ?? null
+  } else {
+    latestVersion = null
+    nextVersion = null
+  }
+}
+
+/** 极简预发布感知比较：0.1.0-rc.8 > 0.1.0-rc.7；正式版（无 -rc）> 任何 rc。 */
+function versionGt(a, b) {
+  const pa = String(a).split('-')[0].split('.').map(Number)
+  const pb = String(b).split('-')[0].split('.').map(Number)
+  for (let i = 0; i < 3; i++) {
+    if ((pa[i] ?? 0) !== (pb[i] ?? 0)) return (pa[i] ?? 0) > (pb[i] ?? 0)
+  }
+  const ra = /rc\.(\d+)/.exec(String(a))
+  const rb = /rc\.(\d+)/.exec(String(b))
+  const na = ra ? Number(ra[1]) : Infinity
+  const nb = rb ? Number(rb[1]) : Infinity
+  return na > nb
 }
 
 function installedVersion(runtimeDir) {
@@ -197,18 +306,49 @@ function installedVersion(runtimeDir) {
   }
 }
 
+/** The dsh launch entry the manager spawns (package.json `bin.dsh`). */
+function dshEntry(runtimeDir) {
+  return join(runtimeDir, 'node_modules', PACKAGE, 'lib', 'bin.js')
+}
+
+/**
+ * True only when dsh is FULLY installed: manifest present AND the launch entry
+ * exists. A half-extracted install (npm killed mid-reify writes package.json
+ * but not lib/bin.js) must NOT count as installed — otherwise the auto-install
+ * gate skips and the launcher fails with "not installed" forever.
+ */
+function dshInstalled(runtimeDir) {
+  return installedVersion(runtimeDir) !== null && existsSync(dshEntry(runtimeDir))
+}
+
+/**
+ * 0.3.3 的 pnpm isolated 布局特征：node_modules 下有 .pnpm 虚拟仓库，且 dsh 的
+ * 内部包（dsh-base 等）没有提升到 node_modules 根。这种布局下复制到根目录的
+ * 预装插件（dsh-kanban 等）和 host bundle（dsh-base/dsh-web-app）import dsh
+ * 内部包时会 ERR_MODULE_NOT_FOUND → dsh web 启动崩溃 → 黑屏。hoisted 布局
+ * 把所有包提升到根，恢复解析。存在该布局时强制重装为 hoisted。
+ */
+function isIsolatedPnpmLayout(runtimeDir) {
+  const root = join(runtimeDir, 'node_modules')
+  return existsSync(join(root, '.pnpm')) && !existsSync(join(root, '@deepseek-ai', 'dsh-base'))
+}
+
 // ── update status ──────────────────────────────────────────────────────────
 let latestVersion = null
+let nextVersion = null
 // Shell manifest (<runtime>/dsh.json) snapshot: preinstalled list, devMode, …
 let shellManifest = {}
 
 /** Emit the current update status to the shell (Rust mirrors it to the tray). */
 function emitUpdateStatus(updateAvailable) {
+  const current = installedVersion(args.runtimeDir)
   emit({
     t: 'update-status',
-    current: installedVersion(args.runtimeDir),
+    current,
     latest: latestVersion,
-    updateAvailable: updateAvailable ?? (latestVersion !== null && installedVersion(args.runtimeDir) !== latestVersion),
+    updateAvailable: updateAvailable ?? (latestVersion !== null && current !== latestVersion),
+    next: nextVersion,
+    nextAvailable: nextVersion !== null && nextVersion !== latestVersion && current !== nextVersion && versionGt(nextVersion, current),
   })
 }
 
@@ -226,16 +366,20 @@ async function checkDshUpdate({ frozen = false } = {}) {
     return
   }
   try {
-    latestVersion = await latestRemoteVersion()
-    log(`npm latest ${PACKAGE}: ${latestVersion ?? 'unknown'}`)
+    await resolveRemoteVersions()
+    log(`npm latest ${PACKAGE}: ${latestVersion ?? 'unknown'}${nextVersion ? ` (next ${nextVersion})` : ''}`)
   } catch (err) {
     latestVersion = null
+    nextVersion = null
     log(`update check failed (offline?): ${err.message}`)
     return
   }
   const available = latestVersion !== null && current !== latestVersion
   emitUpdateStatus(available)
   if (available) log(`update available: ${current ?? '(none)'} -> ${latestVersion} (user decides)`)
+  else if (nextVersion && nextVersion !== latestVersion && current !== nextVersion && versionGt(nextVersion, current)) {
+    log(`pre-release update available: ${current ?? '(none)'} -> ${nextVersion} (next tag, user decides)`)
+  }
 }
 
 /**
@@ -244,22 +388,34 @@ async function checkDshUpdate({ frozen = false } = {}) {
  * replace. The caller kills dsh first (see `updateDshAndRestart`).
  * @returns true when a new version was installed.
  */
-async function installDshUpdate() {
+async function installDshUpdate({ force = false, version } = {}) {
   const current = installedVersion(args.runtimeDir)
+  const fullyInstalled = dshInstalled(args.runtimeDir)
   try {
-    latestVersion = await latestRemoteVersion()
+    await resolveRemoteVersions()
   } catch (err) {
     throw new Error(`无法查询最新版本：${err.message}`)
   }
-  if (!latestVersion) throw new Error('无法获取最新版本')
-  if (current === latestVersion) {
-    log(`dsh 已是最新 ${latestVersion}`)
+  // 目标版本：显式指定（用户从控制台点"预发布更新"传 rc8 等）> latest tag。
+  const target = version ?? latestVersion
+  if (!target) throw new Error('无法获取最新版本')
+  // A half-extracted install (package.json written, lib/bin.js missing) must
+  // be REPAIRED even when the recorded version already matches latest — npm
+  // may consider the package current and skip re-extraction, leaving the
+  // launcher stuck on "not installed". Remove it so npm re-extracts fresh.
+  if (current !== null && !fullyInstalled) {
+    rmSync(join(args.runtimeDir, 'node_modules', PACKAGE), { recursive: true, force: true })
+    log(`dsh 安装不完整（缺启动入口），将重新安装`)
+  }
+  if (!force && current === target && dshInstalled(args.runtimeDir)) {
+    log(`dsh 已是最新 ${target}`)
     return false
   }
-  log(`updating ${PACKAGE} ${current ?? '(none)'} -> ${latestVersion}`)
+  if (force) log(`强制重装 dsh ${current ?? '(none)'} -> ${target}（布局迁移/修复）`)
+  log(`updating ${PACKAGE} ${current ?? '(none)'} -> ${target}`)
   // Progress feedback for the launcher: explicit phase events + a heartbeat
   // so the user can tell "still working" from "stuck" during a long install.
-  emit({ t: 'install-status', phase: 'start', version: latestVersion })
+  emit({ t: 'install-status', phase: 'start', version: target })
   const startedAt = Date.now()
   const heartbeat = setInterval(() => {
     emit({ t: 'install-status', phase: 'running', seconds: Math.round((Date.now() - startedAt) / 1000) })
@@ -287,21 +443,39 @@ async function installDshUpdate() {
   }
   let installError = null
   try {
+    // npm's dependency resolver HANGS on the @deepseek-ai monorepo-shaped tree
+    // (hundreds of interdependent packages) — reproducible across npm 10/11,
+    // Node 22/24, both registries, proxy or direct. dsh itself is developed
+    // with pnpm, which installs the same package fine. So the dsh install runs
+    // through the bundled pnpm (node-linker isolated, verified end-to-end:
+    // launch + injected plugins + URL all work with the pnpm layout).
+    ensurePnpmWorkspace(args.runtimeDir)
+    await ensurePnpm(args.runtimeDir)
     // Registry fallback chain: mirrors can lag on freshly-published deps, so
     // retry with the other default if the primary install fails.
     const fallback = REGISTRY === 'https://registry.npmjs.org/'
       ? 'https://registry.npmmirror.com'
       : 'https://registry.npmjs.org/'
+    const pnpmStore = join(args.runtimeDir, '.pnpm-store')
     let lastErr = null
     for (const reg of [REGISTRY, fallback]) {
       try {
-        await npm(['install', `${PACKAGE}@${latestVersion}`, '--prefix', args.runtimeDir, '--no-audit', '--no-fund', '--no-progress', '--loglevel=http', '--registry', reg], { stream: true, timeoutMs: 600_000 })
-        log(`updated to ${latestVersion}`)
+        // node-linker=hoisted: 让 runtime 的 node_modules 回到 npm 平铺兼容布局。
+        // pnpm 默认 isolated 布局只把直接依赖符号链接到根，dsh 的内部包
+        // （如 @deepseek-ai/dsh-tools）收在 .pnpm 里，导致复制到根目录的
+        // 预装插件（dsh-kanban 等）import '@deepseek-ai/dsh-tools' 时
+        // ERR_MODULE_NOT_FOUND → dsh web 启动崩溃 → 黑屏。hoisted 布局
+        // 把所有包提升到根，插件恢复可解析（等价旧 npm 布局）。
+        // 注意：pnpm 11.22 只在 CLI flag 上认 node-linker，放配置文件不生效。
+        await pnpm(['install', `${PACKAGE}@${target}`, '--registry', reg, '--store-dir', pnpmStore, '--node-linker=hoisted'],
+          { cwd: args.runtimeDir, stream: true, timeoutMs: 600_000 })
+        log(`updated to ${target}`)
         lastErr = null
         break
       } catch (err) {
         lastErr = err
-        log(`registry ${reg} 安装失败：${err.message}`)
+        // 明说下一步：失败会自动切到另一个默认镜像重试，用户不用干等。
+        log(`registry ${reg} 安装失败：${err.message} — 正在切换备用镜像 ${fallback} 重试`)
       }
     }
     // Restore the protected plugins (whatever npm pruned comes back as-is,
@@ -328,7 +502,7 @@ async function installDshUpdate() {
     emit({
       t: 'install-status',
       phase: installError ? 'error' : 'done',
-      version: latestVersion,
+      version: target,
       error: installError ? installError.message : undefined,
     })
   }
@@ -425,15 +599,24 @@ function ensureRuntimeDir(runtimeDir) {
   // dsh runtime would be missing node-pty / koffi / the spawn helper on Windows.
   const npmrcPath = join(runtimeDir, '.npmrc')
   if (!existsSync(npmrcPath)) {
-    const allow = [
-      '@deepseek-ai/dsh-subprocess-local',
-      'koffi',
-      'node-pty',
-      '@google/genai',
-      'protobufjs',
-    ].map((p) => `allow-scripts[]=${p}`).join('\n')
+    const allow = NATIVE_BUILD_PKGS.map((p) => `allow-scripts[]=${p}`).join('\n')
     writeFileSync(npmrcPath, allow + '\n')
   }
+}
+
+/**
+ * pnpm 11.22 gates postinstall scripts behind pnpm-workspace.yaml `allowBuilds`
+ * (npm's allow-scripts equivalent). Without this file the native deps
+ * (koffi/node-pty/dsh-subprocess-local) would be skipped and dsh would fail to
+ * load them at runtime. The runtime dir acts as a small pnpm workspace root,
+ * so pnpm installs into <runtime>/node_modules with an isolated .pnpm store.
+ */
+function ensurePnpmWorkspace(runtimeDir) {
+  const wsPath = join(runtimeDir, 'pnpm-workspace.yaml')
+  if (existsSync(wsPath)) return
+  const lines = ['allowBuilds:']
+  for (const p of NATIVE_BUILD_PKGS) lines.push(`  ${JSON.stringify(p)}: true`)
+  writeFileSync(wsPath, lines.join('\n') + '\n')
 }
 
 function ensurePlugin(runtimeDir, resourceDir) {
@@ -740,7 +923,7 @@ function setPendingTask(task) {
 }
 
 async function launchDsh(runtimeDir, patchPath, cwd) {
-  const entry = join(runtimeDir, 'node_modules', PACKAGE, 'lib', 'bin.js')
+  const entry = dshEntry(runtimeDir)
   if (!existsSync(entry)) throw new Error(`${PACKAGE} not installed at ${entry}`)
   // Desktop-owned DSH_HOME (default <runtime>/dsh-home): keeps data
   // self-contained and — crucially — makes the profile's module resolver walk
@@ -800,13 +983,13 @@ async function supervise(runtimeDir, patchPath, cwd) {
 }
 
 // ── command channel (Rust shell → manager) ──────────────────────────────────
-async function updateDshAndRestart() {
-  log('update requested by user')
+async function updateDshAndRestart(version) {
+  log(`update requested by user${version ? ` -> ${version}` : ''}`)
   // Stop dsh first: a live dsh locks native modules npm must replace.
   requestRestart()
   const task = (async () => {
     try {
-      const updated = await installDshUpdate()
+      const updated = await installDshUpdate({ version })
       if (updated) {
         // `npm install @deepseek-ai/dsh --prefix <runtime>` reifies the runtime
         // tree and prunes the copied-only packages (@dsh-desktop/* plugins and
@@ -829,7 +1012,7 @@ async function updateDshAndRestart() {
 function handleCommand(cmd) {
   switch (cmd?.cmd) {
     case 'check-update': void checkDshUpdate({ frozen: shellManifest.devMode === true }); break
-    case 'update-dsh': void updateDshAndRestart(); break
+    case 'update-dsh': void updateDshAndRestart(cmd?.version); break
     case 'restart-dsh': log('restart-dsh requested'); requestRestart(); break
     case 'plugins-install':
       if (cmd.spec) {
@@ -1099,14 +1282,27 @@ async function main() {
   } catch (err) {
     log(`forward proxy start failed (continuing without it): ${err.message}`)
   }
-  // Auto-install dsh when missing (fresh install, or the runtime copy was
-  // removed) — without this the launcher hangs on "dsh 服务已退出" forever.
-  if (!installedVersion(args.runtimeDir)) {
+  // Auto-install dsh when missing OR broken (fresh install, the runtime copy
+  // was removed, or a killed install left package.json without lib/bin.js) —
+  // without this the launcher hangs on "dsh 服务已退出" forever.
+  if (!dshInstalled(args.runtimeDir)) {
     try {
-      log('dsh missing — installing automatically')
+      log('dsh missing or broken — installing automatically')
       await installDshUpdate()
     } catch (err) {
       log(`auto-install dsh failed: ${err.message}`)
+    }
+  }
+  // 0.3.4 migration: 0.3.3 的 pnpm isolated 布局会让预装插件/host bundle 解析
+  // dsh 内部包失败（黑屏）。检测到该布局就删掉 node_modules 并全新安装为
+  // hoisted（warm store 下 ~6s；原地 re-link 反而慢且可能留半转换状态）。
+  if (dshInstalled(args.runtimeDir) && isIsolatedPnpmLayout(args.runtimeDir)) {
+    try {
+      log('检测到 pnpm isolated 布局（0.3.3）— 重建为 hoisted 布局以修复插件加载')
+      rmSync(join(args.runtimeDir, 'node_modules'), { recursive: true, force: true })
+      await installDshUpdate()
+    } catch (err) {
+      log(`isolated→hoisted 布局迁移失败：${err.message}`)
     }
   }
   // Launch dsh FIRST; the update check runs in the background (it must never

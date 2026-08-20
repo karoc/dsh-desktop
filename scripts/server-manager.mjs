@@ -259,10 +259,41 @@ function pnpm(argsList, { cwd, timeoutMs = 600_000, stream = false } = {}) {
   return runChild(cmdArgs, { cwd, timeoutMs, stream, throttleAll: true, tool: 'pnpm' })
 }
 
-async function latestRemoteVersion() {
-  const out = await npm(['view', PACKAGE, 'dist-tags.latest', '--json', '--registry', REGISTRY], { timeoutMs: 60_000 })
-  const parsed = JSON.parse(out)
-  return typeof parsed === 'string' ? parsed : parsed?.latest ?? null
+/**
+ * 查询远端版本：`latest`（稳定 tag）与 `next`（预发布 tag，如 0.1.0-rc.8）。
+ * dsh 团队常把新 rc 标在 next 而非 latest——只读 latest 会让用户看不到更新。
+ * 两值都存入模块级 latestVersion / nextVersion，UI 据此展示"有预发布可升"。
+ */
+async function resolveRemoteVersions() {
+  const out = await npm(['view', PACKAGE, 'dist-tags.latest', 'dist-tags.next', '--json', '--registry', REGISTRY], { timeoutMs: 60_000 })
+  let parsed = null
+  try { parsed = JSON.parse(out) } catch { parsed = null }
+  // npm view 多字段返回的对象键带完整路径（dist-tags.latest / dist-tags.next）；
+  // 若某 tag 不存在则折叠为纯字符串（只剩 latest）。
+  if (typeof parsed === 'string') {
+    latestVersion = parsed
+    nextVersion = null
+  } else if (parsed && typeof parsed === 'object') {
+    latestVersion = parsed['dist-tags.latest'] ?? parsed.latest ?? null
+    nextVersion = parsed['dist-tags.next'] ?? parsed.next ?? null
+  } else {
+    latestVersion = null
+    nextVersion = null
+  }
+}
+
+/** 极简预发布感知比较：0.1.0-rc.8 > 0.1.0-rc.7；正式版（无 -rc）> 任何 rc。 */
+function versionGt(a, b) {
+  const pa = String(a).split('-')[0].split('.').map(Number)
+  const pb = String(b).split('-')[0].split('.').map(Number)
+  for (let i = 0; i < 3; i++) {
+    if ((pa[i] ?? 0) !== (pb[i] ?? 0)) return (pa[i] ?? 0) > (pb[i] ?? 0)
+  }
+  const ra = /rc\.(\d+)/.exec(String(a))
+  const rb = /rc\.(\d+)/.exec(String(b))
+  const na = ra ? Number(ra[1]) : Infinity
+  const nb = rb ? Number(rb[1]) : Infinity
+  return na > nb
 }
 
 function installedVersion(runtimeDir) {
@@ -304,16 +335,20 @@ function isIsolatedPnpmLayout(runtimeDir) {
 
 // ── update status ──────────────────────────────────────────────────────────
 let latestVersion = null
+let nextVersion = null
 // Shell manifest (<runtime>/dsh.json) snapshot: preinstalled list, devMode, …
 let shellManifest = {}
 
 /** Emit the current update status to the shell (Rust mirrors it to the tray). */
 function emitUpdateStatus(updateAvailable) {
+  const current = installedVersion(args.runtimeDir)
   emit({
     t: 'update-status',
-    current: installedVersion(args.runtimeDir),
+    current,
     latest: latestVersion,
-    updateAvailable: updateAvailable ?? (latestVersion !== null && installedVersion(args.runtimeDir) !== latestVersion),
+    updateAvailable: updateAvailable ?? (latestVersion !== null && current !== latestVersion),
+    next: nextVersion,
+    nextAvailable: nextVersion !== null && nextVersion !== latestVersion && current !== nextVersion && versionGt(nextVersion, current),
   })
 }
 
@@ -331,16 +366,20 @@ async function checkDshUpdate({ frozen = false } = {}) {
     return
   }
   try {
-    latestVersion = await latestRemoteVersion()
-    log(`npm latest ${PACKAGE}: ${latestVersion ?? 'unknown'}`)
+    await resolveRemoteVersions()
+    log(`npm latest ${PACKAGE}: ${latestVersion ?? 'unknown'}${nextVersion ? ` (next ${nextVersion})` : ''}`)
   } catch (err) {
     latestVersion = null
+    nextVersion = null
     log(`update check failed (offline?): ${err.message}`)
     return
   }
   const available = latestVersion !== null && current !== latestVersion
   emitUpdateStatus(available)
   if (available) log(`update available: ${current ?? '(none)'} -> ${latestVersion} (user decides)`)
+  else if (nextVersion && nextVersion !== latestVersion && current !== nextVersion && versionGt(nextVersion, current)) {
+    log(`pre-release update available: ${current ?? '(none)'} -> ${nextVersion} (next tag, user decides)`)
+  }
 }
 
 /**
@@ -349,15 +388,17 @@ async function checkDshUpdate({ frozen = false } = {}) {
  * replace. The caller kills dsh first (see `updateDshAndRestart`).
  * @returns true when a new version was installed.
  */
-async function installDshUpdate({ force = false } = {}) {
+async function installDshUpdate({ force = false, version } = {}) {
   const current = installedVersion(args.runtimeDir)
   const fullyInstalled = dshInstalled(args.runtimeDir)
   try {
-    latestVersion = await latestRemoteVersion()
+    await resolveRemoteVersions()
   } catch (err) {
     throw new Error(`无法查询最新版本：${err.message}`)
   }
-  if (!latestVersion) throw new Error('无法获取最新版本')
+  // 目标版本：显式指定（用户从控制台点"预发布更新"传 rc8 等）> latest tag。
+  const target = version ?? latestVersion
+  if (!target) throw new Error('无法获取最新版本')
   // A half-extracted install (package.json written, lib/bin.js missing) must
   // be REPAIRED even when the recorded version already matches latest — npm
   // may consider the package current and skip re-extraction, leaving the
@@ -366,15 +407,15 @@ async function installDshUpdate({ force = false } = {}) {
     rmSync(join(args.runtimeDir, 'node_modules', PACKAGE), { recursive: true, force: true })
     log(`dsh 安装不完整（缺启动入口），将重新安装`)
   }
-  if (!force && current === latestVersion && dshInstalled(args.runtimeDir)) {
-    log(`dsh 已是最新 ${latestVersion}`)
+  if (!force && current === target && dshInstalled(args.runtimeDir)) {
+    log(`dsh 已是最新 ${target}`)
     return false
   }
-  if (force) log(`强制重装 dsh ${current ?? '(none)'} -> ${latestVersion}（布局迁移/修复）`)
-  log(`updating ${PACKAGE} ${current ?? '(none)'} -> ${latestVersion}`)
+  if (force) log(`强制重装 dsh ${current ?? '(none)'} -> ${target}（布局迁移/修复）`)
+  log(`updating ${PACKAGE} ${current ?? '(none)'} -> ${target}`)
   // Progress feedback for the launcher: explicit phase events + a heartbeat
   // so the user can tell "still working" from "stuck" during a long install.
-  emit({ t: 'install-status', phase: 'start', version: latestVersion })
+  emit({ t: 'install-status', phase: 'start', version: target })
   const startedAt = Date.now()
   const heartbeat = setInterval(() => {
     emit({ t: 'install-status', phase: 'running', seconds: Math.round((Date.now() - startedAt) / 1000) })
@@ -426,9 +467,9 @@ async function installDshUpdate({ force = false } = {}) {
         // ERR_MODULE_NOT_FOUND → dsh web 启动崩溃 → 黑屏。hoisted 布局
         // 把所有包提升到根，插件恢复可解析（等价旧 npm 布局）。
         // 注意：pnpm 11.22 只在 CLI flag 上认 node-linker，放配置文件不生效。
-        await pnpm(['install', `${PACKAGE}@${latestVersion}`, '--registry', reg, '--store-dir', pnpmStore, '--node-linker=hoisted'],
+        await pnpm(['install', `${PACKAGE}@${target}`, '--registry', reg, '--store-dir', pnpmStore, '--node-linker=hoisted'],
           { cwd: args.runtimeDir, stream: true, timeoutMs: 600_000 })
-        log(`updated to ${latestVersion}`)
+        log(`updated to ${target}`)
         lastErr = null
         break
       } catch (err) {
@@ -461,7 +502,7 @@ async function installDshUpdate({ force = false } = {}) {
     emit({
       t: 'install-status',
       phase: installError ? 'error' : 'done',
-      version: latestVersion,
+      version: target,
       error: installError ? installError.message : undefined,
     })
   }
@@ -942,13 +983,13 @@ async function supervise(runtimeDir, patchPath, cwd) {
 }
 
 // ── command channel (Rust shell → manager) ──────────────────────────────────
-async function updateDshAndRestart() {
-  log('update requested by user')
+async function updateDshAndRestart(version) {
+  log(`update requested by user${version ? ` -> ${version}` : ''}`)
   // Stop dsh first: a live dsh locks native modules npm must replace.
   requestRestart()
   const task = (async () => {
     try {
-      const updated = await installDshUpdate()
+      const updated = await installDshUpdate({ version })
       if (updated) {
         // `npm install @deepseek-ai/dsh --prefix <runtime>` reifies the runtime
         // tree and prunes the copied-only packages (@dsh-desktop/* plugins and
@@ -971,7 +1012,7 @@ async function updateDshAndRestart() {
 function handleCommand(cmd) {
   switch (cmd?.cmd) {
     case 'check-update': void checkDshUpdate({ frozen: shellManifest.devMode === true }); break
-    case 'update-dsh': void updateDshAndRestart(); break
+    case 'update-dsh': void updateDshAndRestart(cmd?.version); break
     case 'restart-dsh': log('restart-dsh requested'); requestRestart(); break
     case 'plugins-install':
       if (cmd.spec) {

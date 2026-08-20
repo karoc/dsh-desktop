@@ -230,6 +230,24 @@ const updateCall = calls.find((c) => c[0] === '/update-dsh')
 assert.ok(updateCall, 'update button POSTs /update-dsh')
 assert.equal(updateCall[1], 'POST')
 
+// ── scenario 5b: pre-release (next tag) update option ───────────────────────
+// When only a pre-release is newer (latest tag is current), the console offers
+// upgrading to it via a versioned /update-dsh call.
+calls.length = 0
+listPayload.update = { current: '0.1.0-rc.7', latest: '0.1.0-rc.7', updateAvailable: false, next: '0.1.0-rc.8', nextAvailable: true }
+btn.click() // close
+await new Promise((r) => setTimeout(r, 10))
+btn.click() // reopen -> refresh() re-fetches /plugins/list and re-renders
+await new Promise((r) => setTimeout(r, 10))
+const preBtn = panel.querySelector('#dshc-update')
+assert.ok(preBtn, 'pre-release update button shown when only next is newer')
+assert.equal(preBtn.dataset.version, '0.1.0-rc.8', 'pre-release button carries the target version')
+preBtn.click()
+const preCall = calls.find((c) => c[0] === '/update-dsh')
+assert.ok(preCall, 'pre-release update POSTs /update-dsh')
+assert.equal(preCall[1], 'POST')
+assert.deepEqual(preCall[2], { version: '0.1.0-rc.8' }, 'pre-release update passes the target version')
+
 // ── scenario 6: action buttons map to the right endpoints ───────────────────
 calls.length = 0
 btn.click()
@@ -409,5 +427,5 @@ window.__handoff.factory().apply({})
 body2.children.find((c) => c.className === 'dshc-btn')?.click()
 assert.equal(calls.length, 0, 'unbaked bridge port must not fire fetches')
 
-console.log('PASS — plugin console behavioral test (16 scenarios)')
+console.log('PASS — plugin console behavioral test (17 scenarios)')
 process.exit(0)
