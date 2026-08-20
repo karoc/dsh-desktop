@@ -244,6 +244,20 @@
       ],
       "createdAt": 1787246827606,
       "updatedAt": 1787246827606
+    },
+    {
+      "id": "card-269b53f2-51d5-4996-9f78-99f3754f6e41",
+      "title": "修复：next 预发布用户被误报降级更新（rc.8→rc.7）",
+      "description": "0.3.5 的 updateAvailable 判断只用 current!==latest（不比新旧），导致在 rc.8（next）用户误报\"当前 rc.8 → rc.7\"降级提示。改为 versionGt(latest,current)。已推送 0.3.7。另：浏览器多开问题在 0.3.6 已修（--no-open），用户当时在 0.3.5。",
+      "sourceSessionId": "session-cbc11ff3-8490-410a-9642-003db8693f13",
+      "status": "done",
+      "tags": [
+        "bug-fix",
+        "update",
+        "console"
+      ],
+      "createdAt": 1787247420110,
+      "updatedAt": 1787247420110
     }
   ]
 }
