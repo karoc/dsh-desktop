@@ -38,6 +38,16 @@ const NPM_FETCH_FLAGS = [
   '--fetch-retry-maxtimeout=10000',
 ]
 
+// dsh 的原生依赖：postinstall 需要跑构建/下载二进制。npm 11 用 .npmrc
+// allow-scripts 放行；pnpm 11.22 用 pnpm-workspace.yaml 的 allowBuilds 放行。
+const NATIVE_BUILD_PKGS = [
+  '@deepseek-ai/dsh-subprocess-local',
+  'koffi',
+  'node-pty',
+  '@google/genai',
+  'protobufjs',
+]
+
 // ── args ───────────────────────────────────────────────────────────────────
 function parseArgs(argv) {
   const out = { runtimeDir: null, resourceDir: null, patch: null, cwd: null, home: null, registry: undefined, bridgePort: null }
@@ -116,10 +126,17 @@ function npmLineToDisplay(raw) {
   return `⬇ 下载 ${name}`
 }
 
-function npm(argsList, { timeoutMs = 600_000, stream = false, quiet = true } = {}) {
+/**
+ * Run a Node CLI child (npm / pnpm) under the bundled Node, with output
+ * streaming (throttled for the launcher marquee), a hard timeout and a
+ * no-output stall detector. All settle paths funnel through a single
+ * `finish` so the promise resolves/rejects exactly once.
+ * @param {string[]} cmdArgs args for `process.execPath` (e.g. [npmCli, ...])
+ * @param {{cwd?: string, timeoutMs?: number, stream?: boolean,
+ *          throttleAll?: boolean, tool?: string}} opts
+ */
+function runChild(cmdArgs, { cwd, timeoutMs = 600_000, stream = false, throttleAll = false, tool = 'npm' } = {}) {
   return new Promise((resolvePromise, rejectPromise) => {
-    const cmd = npmViaCli ? process.execPath : 'npm'
-    const cmdArgs = npmViaCli ? [npmCli, ...argsList, ...NPM_FETCH_FLAGS] : [...argsList, ...NPM_FETCH_FLAGS]
     // Native deps (koffi, node-pty) run `node` from PATH during postinstall,
     // but the bundled Node is NOT on PATH — prepend its directory so
     // `sh -c node` resolves (Linux broke silently: "node: not found").
@@ -127,7 +144,7 @@ function npm(argsList, { timeoutMs = 600_000, stream = false, quiet = true } = {
       ...process.env,
       PATH: `${dirname(process.execPath)}${process.env.PATH ? pathDelimiter + process.env.PATH : ''}`,
     }
-    const child = spawn(cmd, cmdArgs, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env })
+    const child = spawn(process.execPath, cmdArgs, { cwd, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env })
     let stdout = ''
     let stderr = ''
     let settled = false
@@ -139,11 +156,10 @@ function npm(argsList, { timeoutMs = 600_000, stream = false, quiet = true } = {
     const flushPending = () => {
       if (pendingPack) { log(pendingPack); pendingPack = null }
     }
-    // 无输出卡死检测：`--loglevel=http` 下只要 npm 活着且在干活就会持续吐
-    // 下载行；连续 STALL_MS 没有任何输出 = 卡死（悬挂连接、cacache 锁、
-    // postinstall 挂起等 npm 自身超时管不到的情况）。中止并报清晰错误，
-    // 让 installDshUpdate 的 registry 降级链接上。阈值取 180s：远高于
-    // 磁盘慢时的静默解包期，又远低于 600s 硬超时。
+    // 无输出卡死检测：只要子进程活着且在干活就会持续吐输出；连续 STALL_MS
+    // 没有任何输出 = 卡死（悬挂连接、cacache 锁、postinstall 挂起等）。
+    // 中止并报清晰错误，让 installDshUpdate 的 registry 降级链接上。阈值取
+    // 180s：远高于磁盘慢时的静默解包期，又远低于 600s 硬超时。
     const STALL_MS = 180_000
     let lastOutputAt = Date.now()
     // 单一落定路径：定时器/卡死检测/子进程错误/退出 四者只允许第一个触发。
@@ -157,7 +173,7 @@ function npm(argsList, { timeoutMs = 600_000, stream = false, quiet = true } = {
     const timer = setTimeout(() => {
       finish(() => {
         killTree(child.pid)
-        const e = new Error('npm 操作超时（可设 DSH_DESKTOP_REGISTRY 切换镜像加速）')
+        const e = new Error(`${tool} 操作超时（可设 DSH_DESKTOP_REGISTRY 切换镜像加速）`)
         e.stderr = stderr
         e.stdout = stdout
         rejectPromise(e)
@@ -168,7 +184,7 @@ function npm(argsList, { timeoutMs = 600_000, stream = false, quiet = true } = {
       if (Date.now() - lastOutputAt >= STALL_MS) {
         finish(() => {
           killTree(child.pid)
-          const e = new Error(`npm 已 ${Math.round(STALL_MS / 1000)} 秒无任何输出（疑似网络或安装卡住），已中止`)
+          const e = new Error(`${tool} 已 ${Math.round(STALL_MS / 1000)} 秒无任何输出（疑似网络或安装卡住），已中止`)
           e.stderr = stderr
           e.stdout = stdout
           rejectPromise(e)
@@ -184,20 +200,21 @@ function npm(argsList, { timeoutMs = 600_000, stream = false, quiet = true } = {
         for (const line of text.split(/\r?\n/)) {
           const t = line.replace(/^\s+|\s+$/g, '')
           if (!t || /^npm (warn )/i.test(t)) continue
-          const display = npmLineToDisplay(t)
-          if (display) {
-            const now = Date.now()
-            if (now - lastPackAt >= PACK_LOG_MS) {
-              flushPending()
-              log(display)
-              lastPackAt = now
-            } else {
-              pendingPack = display
-            }
+          const now = Date.now()
+          if (throttleAll) {
+            // pnpm：没有可提炼的包名，所有行统一走节流（最新一条优先）。
+            if (now - lastPackAt >= PACK_LOG_MS) { flushPending(); log(t.slice(0, 500)); lastPackAt = now }
+            else pendingPack = t
           } else {
-            // 非下载行（summary、错误等）即时输出，不节流。
-            flushPending()
-            log(t.slice(0, 500))
+            const display = npmLineToDisplay(t)
+            if (display) {
+              if (now - lastPackAt >= PACK_LOG_MS) { flushPending(); log(display); lastPackAt = now }
+              else pendingPack = display
+            } else {
+              // 非下载行（summary、错误等）即时输出，不节流。
+              flushPending()
+              log(t.slice(0, 500))
+            }
           }
         }
       }
@@ -215,7 +232,7 @@ function npm(argsList, { timeoutMs = 600_000, stream = false, quiet = true } = {
         flushPending()
         if (code === 0) resolvePromise(stdout)
         else {
-          const e = new Error(`npm 退出码 ${code}: ${stderr.trim().split('\n').pop() ?? ''}`)
+          const e = new Error(`${tool} 退出码 ${code}: ${stderr.trim().split('\n').pop() ?? ''}`)
           e.stderr = stderr
           e.stdout = stdout
           rejectPromise(e)
@@ -223,6 +240,23 @@ function npm(argsList, { timeoutMs = 600_000, stream = false, quiet = true } = {
       })
     })
   })
+}
+
+function npm(argsList, { timeoutMs = 600_000, stream = false, quiet = true } = {}) {
+  const cmdArgs = npmViaCli ? [npmCli, ...argsList, ...NPM_FETCH_FLAGS] : [...argsList, ...NPM_FETCH_FLAGS]
+  return runChild(cmdArgs, { timeoutMs, stream, tool: 'npm' })
+}
+
+/**
+ * Run the bundled pnpm (installed into the runtime by ensurePnpm) with the
+ * given cwd. Used for the dsh install: npm's dependency resolver hangs on the
+ * @deepseek-ai monorepo-shaped tree (hundreds of interdependent packages),
+ * while pnpm — which dsh itself is developed with — installs it fine.
+ */
+function pnpm(argsList, { cwd, timeoutMs = 600_000, stream = false } = {}) {
+  const entry = pnpmEntry(args.runtimeDir)
+  const cmdArgs = [entry, ...argsList, '--reporter=append-only']
+  return runChild(cmdArgs, { cwd, timeoutMs, stream, throttleAll: true, tool: 'pnpm' })
 }
 
 async function latestRemoteVersion() {
@@ -355,15 +389,25 @@ async function installDshUpdate() {
   }
   let installError = null
   try {
+    // npm's dependency resolver HANGS on the @deepseek-ai monorepo-shaped tree
+    // (hundreds of interdependent packages) — reproducible across npm 10/11,
+    // Node 22/24, both registries, proxy or direct. dsh itself is developed
+    // with pnpm, which installs the same package fine. So the dsh install runs
+    // through the bundled pnpm (node-linker isolated, verified end-to-end:
+    // launch + injected plugins + URL all work with the pnpm layout).
+    ensurePnpmWorkspace(args.runtimeDir)
+    await ensurePnpm(args.runtimeDir)
     // Registry fallback chain: mirrors can lag on freshly-published deps, so
     // retry with the other default if the primary install fails.
     const fallback = REGISTRY === 'https://registry.npmjs.org/'
       ? 'https://registry.npmmirror.com'
       : 'https://registry.npmjs.org/'
+    const pnpmStore = join(args.runtimeDir, '.pnpm-store')
     let lastErr = null
     for (const reg of [REGISTRY, fallback]) {
       try {
-        await npm(['install', `${PACKAGE}@${latestVersion}`, '--prefix', args.runtimeDir, '--no-audit', '--no-fund', '--no-progress', '--loglevel=http', '--registry', reg], { stream: true, timeoutMs: 600_000 })
+        await pnpm(['install', `${PACKAGE}@${latestVersion}`, '--registry', reg, '--store-dir', pnpmStore],
+          { cwd: args.runtimeDir, stream: true, timeoutMs: 600_000 })
         log(`updated to ${latestVersion}`)
         lastErr = null
         break
@@ -494,15 +538,24 @@ function ensureRuntimeDir(runtimeDir) {
   // dsh runtime would be missing node-pty / koffi / the spawn helper on Windows.
   const npmrcPath = join(runtimeDir, '.npmrc')
   if (!existsSync(npmrcPath)) {
-    const allow = [
-      '@deepseek-ai/dsh-subprocess-local',
-      'koffi',
-      'node-pty',
-      '@google/genai',
-      'protobufjs',
-    ].map((p) => `allow-scripts[]=${p}`).join('\n')
+    const allow = NATIVE_BUILD_PKGS.map((p) => `allow-scripts[]=${p}`).join('\n')
     writeFileSync(npmrcPath, allow + '\n')
   }
+}
+
+/**
+ * pnpm 11.22 gates postinstall scripts behind pnpm-workspace.yaml `allowBuilds`
+ * (npm's allow-scripts equivalent). Without this file the native deps
+ * (koffi/node-pty/dsh-subprocess-local) would be skipped and dsh would fail to
+ * load them at runtime. The runtime dir acts as a small pnpm workspace root,
+ * so pnpm installs into <runtime>/node_modules with an isolated .pnpm store.
+ */
+function ensurePnpmWorkspace(runtimeDir) {
+  const wsPath = join(runtimeDir, 'pnpm-workspace.yaml')
+  if (existsSync(wsPath)) return
+  const lines = ['allowBuilds:']
+  for (const p of NATIVE_BUILD_PKGS) lines.push(`  ${JSON.stringify(p)}: true`)
+  writeFileSync(wsPath, lines.join('\n') + '\n')
 }
 
 function ensurePlugin(runtimeDir, resourceDir) {
