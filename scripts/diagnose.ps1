@@ -1,23 +1,27 @@
-# dsh Desktop 一键诊断（Windows）。收集关键信息 + 以无更新模式跑一次 manager，
-# 把输出发给开发者即可完成定位。
+# dsh Desktop one-shot diagnostic (Windows). Collects key state, then runs the
+# manager in no-update mode. Paste the whole output to the developer.
+# NOTE: keep this file ASCII-only - Windows PowerShell 5.1 misreads UTF-8
+# without BOM as ANSI and Chinese text breaks parsing. English only.
 $ErrorActionPreference = 'Continue'
 
-Write-Host "== dsh Desktop 诊断 ==" -ForegroundColor Cyan
+Write-Host "== dsh Desktop diagnostic ==" -ForegroundColor Cyan
 
-# 定位安装目录
+# Locate the install directory
 $app = $null
 foreach ($base in @("$env:LOCALAPPDATA", "$env:LOCALAPPDATA\Programs", 'C:\Program Files', 'C:\Program Files (x86)')) {
   $hit = Get-ChildItem $base -Recurse -Filter "dsh Desktop.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
   if ($hit) { $app = $hit.DirectoryName; break }
 }
-if (-not $app) { Write-Host "!! 未找到 dsh Desktop 安装目录" -ForegroundColor Red; exit 1 }
-Write-Host "安装目录: $app"
+if (-not $app) { Write-Host "!! dsh Desktop install dir not found" -ForegroundColor Red; exit 1 }
+Write-Host "install dir: $app"
 
-# 已安装的壳版本（注册表 DisplayVersion；缺失则回退读 exe 文件版本）
-$ver = (Get-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue |
-        Where-Object DisplayName -eq 'DSH Desktop' | Select-Object -First 1).DisplayVersion
+# Installed shell version (registry DisplayVersion; fall back to exe version)
+$verItem = Get-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue |
+  Where-Object { $_.DisplayName -eq 'DSH Desktop' } | Select-Object -First 1
+$ver = $null
+if ($verItem) { $ver = $verItem.DisplayVersion }
 if (-not $ver) { $ver = (Get-Item "$app\dsh Desktop.exe").VersionInfo.ProductVersion }
-Write-Host "已安装版本: $ver  （0.3.2 及以上才有 broken-install 自动修复）"
+Write-Host "installed version: $ver  (auto-repair of broken dsh installs exists only in 0.3.2+)"
 
 $res = Join-Path $app 'resources'
 foreach ($f in @(
@@ -31,38 +35,40 @@ foreach ($f in @(
 }
 
 $rt = Join-Path $env:APPDATA 'dev.dsh.desktop\runtime'
-Write-Host "`n运行时目录: $rt"
+Write-Host "`nruntime dir: $rt"
 $dshPkg = Join-Path $rt 'node_modules\@deepseek-ai\dsh\package.json'
 $dshBin = Join-Path $rt 'node_modules\@deepseek-ai\dsh\lib\bin.js'
 if (-not (Test-Path $dshPkg)) {
-  Write-Host "  dsh 状态: 未安装（package.json 不存在）"
+  Write-Host "  dsh state: NOT installed (package.json missing)"
 } elseif (-not (Test-Path $dshBin)) {
-  Write-Host "  dsh 状态: 半截安装（package.json 在，但 lib/bin.js 缺失）——0.3.2 起应自动修复"
+  Write-Host "  dsh state: HALF-INSTALLED (package.json present, lib/bin.js missing) - 0.3.2 should auto-repair"
 } else {
   $v = (Get-Content $dshPkg -Raw | ConvertFrom-Json).version
-  Write-Host "  dsh 状态: 已装 $v（入口正常）"
+  Write-Host "  dsh state: installed $v (entry OK)"
 }
 
 $log = Join-Path $rt 'manager.log'
 if (Test-Path $log) {
-  Write-Host "  manager.log 末尾:"
+  Write-Host "  manager.log tail:"
   Get-Content $log -Tail 30 | ForEach-Object { "    $_" }
-  Write-Host "  manager.log 关键标记:"
+  Write-Host "  manager.log key markers:"
+  # ASCII-only substrings that actually appear in manager.log (the script
+  # itself must stay ASCII; the manager's own messages are a zh/en mix).
   $markers = @(
-    'missing or broken', '安装不完整', 'auto-install dsh failed',
-    '安装失败', 'registry http', '切换备用镜像', 'npm 退出码',
-    'EIDLETIMEOUT', 'ETIMEDOUT', 'ENOTFOUND', 'ECONNREFUSED', '超时', 'not installed'
+    'missing or broken', 'auto-install dsh failed',
+    'registry http', 'npm error', 'DSH_DESKTOP_REGISTRY',
+    'EIDLETIMEOUT', 'ETIMEDOUT', 'ENOTFOUND', 'ECONNREFUSED', 'not installed'
   )
   foreach ($m in $markers) {
     $hit = Select-String -Path $log -Pattern $m -SimpleMatch | Select-Object -Last 1
     if ($hit) { Write-Host "    [$m] $($hit.Line.Trim())" }
   }
 } else {
-  Write-Host "  manager.log 不存在"
+  Write-Host "  manager.log missing"
 }
 
-Write-Host "`n== 无更新模式跑一次 manager（30 秒，Ctrl+C 可提前结束） ==" -ForegroundColor Cyan
+Write-Host "`n== run manager in no-update mode (30s; Ctrl+C to abort) ==" -ForegroundColor Cyan
 $node = "$res\node\win32-x64\node.exe"
 $mgr = "$res\manager\server-manager.mjs"
 & $node $mgr --runtime-dir $rt --resource-dir $res --patch "$res\patch\dsh-desktop.patch.yml" --cwd $env:USERPROFILE --registry https://registry.npmmirror.com
-Write-Host "`n诊断结束。把以上输出发给开发者。"
+Write-Host "`ndiagnostic done. Paste the output above to the developer."
