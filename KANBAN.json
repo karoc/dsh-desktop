@@ -159,6 +159,33 @@
       ],
       "createdAt": 1787209789302,
       "updatedAt": 1787209789302
+    },
+    {
+      "id": "card-975f74b7-6bb6-4cf0-b705-67bc9f56857f",
+      "title": "根因修复：dsh 安装改 pnpm（npm 对 dsh 依赖树挂起）",
+      "description": "根因：npm 解析器对 @deepseek-ai/dsh 的 monorepo 型依赖树（55-61 个互依包）在 buildIdealTree/placeDep 阶段无限挂起（npm 10/11、Node 22/24、npmjs/npmmirror、代理/直连全复现；npm 无任何网络请求）。修复：dsh 安装改用 pnpm（5.9s 装完真实 dsh，端到端验证启动+插件+URL）。manager 重构 runChild() 供 npm/pnpm 共用。测试全绿。0.3.3 已提交推送+tag。",
+      "sourceSessionId": "session-cbc11ff3-8490-410a-9642-003db8693f13",
+      "status": "done",
+      "tags": [
+        "bug-fix",
+        "windows",
+        "install"
+      ],
+      "createdAt": 1787220483541,
+      "updatedAt": 1787220483541
+    },
+    {
+      "id": "card-d9fb1b2b-748d-4e99-ad30-f6f4d7007f79",
+      "title": "发布 v0.3.3（pnpm 安装根因修复）",
+      "description": "v0.3.3 已提交推送（8d0de7d）+ tag v0.3.3；CI 正在构建并发布 Windows 安装包到 GitHub Releases。用户可本地 git pull && npm run bundle 或等 CI 出包。CI 完成标 done。",
+      "sourceSessionId": "session-cbc11ff3-8490-410a-9642-003db8693f13",
+      "status": "in_progress",
+      "tags": [
+        "release",
+        "bug-fix"
+      ],
+      "createdAt": 1787220491292,
+      "updatedAt": 1787220491292
     }
   ]
 }
