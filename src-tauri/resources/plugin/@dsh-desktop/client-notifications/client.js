@@ -161,6 +161,20 @@ window.__ModuleLoader__.load({
             const item = shaped.byId[id]
             if (!item) continue
             alive.add(id)
+            // Subagent rows are nested working sessions: dsh keeps one list row
+            // per child (lineage), each with its own `running`/`completed`, but
+            // a child's lifecycle is a segment of its parent's. Announcing
+            // completions for them too would pop one toast per child — often
+            // with the same body (child title falls back to the shared cwd) —
+            // so a task that spawns subagents fires several identical
+            // "任务完成" toasts. ONLY actual subagent rows are covered by the
+            // parent's notification: `origin: 'subagent'` is the single host
+            // origin value (fork children carry no origin and complete on
+            // their own). Interaction waits, by contrast, are tracked per row
+            // with no parent relay — dsh keys approval/question frames by the
+            // requesting agent's session — so a subagent asking the user must
+            // still raise 「需要你」 (pending branch below fires for every row).
+            const isSubagentRow = item.origin === 'subagent'
             const before = seen.get(id)
             const pending = item.pendingInteraction
             // Completion signal: dsh's `completed` only means "finished while
@@ -180,6 +194,21 @@ window.__ModuleLoader__.load({
                 // finish (or a rare external/browser stop; `completed` only
                 // records "ended while unselected", never stop-vs-finish).
                 // Wording is therefore always 已完成.
+                if (isSubagentRow) {
+                  logEvent('notify-complete-suppressed', item, 'subagent row (parent turn covers it)')
+                  seen.set(id, { pending: pending ?? undefined, running, completed, ended: true })
+                  continue
+                }
+                if (pending) {
+                  // A turn that ends to ASK the user something is not a
+                  // completion: the needs-you announcement above is the only
+                  // toast. Without this, one turn-end would pop both
+                  // "dsh 任务完成" and "dsh 需要你" (the pending branch has no
+                  // continue and the edges coalesce into one snapshot).
+                  logEvent('notify-complete-suppressed', item, 'turn ended awaiting interaction')
+                  seen.set(id, { pending: pending ?? undefined, running, completed, ended: true })
+                  continue
+                }
                 logEvent('notify-complete', item, completed ? 'completed-flag' : 'running-edge')
                 show('dsh 任务完成', `「${titleOf(item)}」已完成`, item)
                 seen.set(id, { pending: pending ?? undefined, running, completed, ended: true })
@@ -188,7 +217,9 @@ window.__ModuleLoader__.load({
               // Fallback: the running edge was missed (very fast task, or a
               // snapshot coalesced true→false between ticks). `completed`
               // appearing false→true on an un-ended episode is the evidence.
-              if (!before.ended && !before.running && !before.completed && completed && !running) {
+              // A pending interaction or a subagent row in the same episode
+              // suppresses the completion here too.
+              if (!isSubagentRow && !before.ended && !before.running && !before.completed && completed && !running && !pending) {
                 logEvent('notify-complete-fallback', item, 'completed transition')
                 show('dsh 任务完成', `「${titleOf(item)}」已完成`, item)
                 seen.set(id, { pending: pending ?? undefined, running, completed, ended: true })

@@ -423,3 +423,43 @@ Windows 的 NSIS 安装行为、toast 渲染、AUMID、事件投递——Linux s
   路径**（`dist-tags.latest` / `dist-tags.next`），某 tag 不存在时折叠为纯字符串——解析要兼容。
 - 控制台在 `nextAvailable` 时显示「当前 → rc.8（预发布）」+ 带版本的一键升级（`/update-dsh` 传 version），
   想升才升，默认仍用稳定 latest。
+
+## 33. 通知 toast 弹两次：根因在 client.js scan() 的边沿互斥，不在 Rust/双实例（0.3.x 修复）
+
+### 用户现象
+Windows 桌面壳里系统通知 toast「每次都会弹两次」。三方独立审计 + `scripts/repro-double-notify.mjs` 实测确认：
+**不是** Rust 双弹、**不是**插件双加载（dsh 加载链每层去重/loud error，单页只 apply 一次）、**不是** Web 内部 toast
+（InputBar/ModelSelect 无双通道）。
+
+### 根因（都在 `plugins/dsh-client-notifications/client.js` 的 scan()）
+1. **完成边沿与 pending 边沿不互斥**：dsh 客户端 runtime 的 Notifier 把多次 mutation 合并成"最新快照"一次回调；
+   任务收尾 + question/approval/plan-review 帧同 flush 时，一次 scan() 里 pending 分支（无 continue）又落进
+   running true→false 完成分支 → 一个回合结束发两条 POST（"dsh 需要你" + "dsh 任务完成"）。
+2. **父 + 子（subagent）会话双行各完成**：lineage 投影里子会话占独立一行（`running`/`completed` 各自独立），
+   子行完成也发"任务完成"，且子行标题回退到共享 cwd → 同一任务弹多条文案相同的 toast。
+
+### 修法（确定性、零时序副作用；两轮独立审查后修订）
+- **规则A（完成通知仅限非 subagent 行）**：`const isSubagentRow = item.origin === 'subagent'`；
+  完成类分支（主路径 + completed fallback）在子代理行上静默（`notify-complete-suppressed`，`ended:true`）。
+  判根用 **origin** 而非 parentId 字段：`origin?: 'subagent'` 是 host 唯一 origin 值（api/sessions.ts:204），
+  fork 子会话（parentId 存在但 origin 为空）是用户亲手驱动的独立任务，其完成必须照常弹——第一版
+  `!parentSessionId && !parentId` 的判根把 fork/孤儿子行完成也静默了（审查 SE2/SE3），改为 origin 语义后恢复。
+- **规则B（完成与 pending 互斥，同快照）**：完成边沿若本行 `pending` 为真 → 不发"任务完成"（只发"需要你"），
+  并置 `ended: true` + continue（防 completed fallback 误补发）；fallback 分支同样 `&& !pending`。
+- **规则C（pending 全行通知）**：pending 分支**不**受 subagent 限制——dsh 的 approval/question 帧按请求方
+  会话记账（api-proxy.ts:1417 `sessionId: req.agent.session.id`），客户端无父级中继，子代理提问只落子行；
+  第一版把子行整行跳过导致"子代理在等你批准/回答"完全静默（审查 SE1，原注释"waits arrive on the root row
+  too"为假），修订后保留子代理交互的「需要你」。
+- 测试：`scripts/test-client-notifications.mjs` 12→19 场景（13 同快照互斥、14 父+子代理单发、15 子代理
+  pending 单发、16 干净完成、17 回答后完成、18 fork 子会话完成单发、19 子代理行完成静默）；
+  `scripts/repro-double-notify.mjs` 断言修复后单发与子代理需要你不丢失。`npm run test:plugin` 全绿。
+- 残留：① 分快照交付（running→false 与 pending 分帧，间隔>1 flush）时完成 toast 先弹、需要你后弹——
+  生产 Notifier 将同 tick mutation 合并为一次 microtask flush（notifier.ts:37-42），同批帧即同快照，已覆盖
+  主场景；若真分帧可加 ~1s settle 窗口（延迟完成 toast）。② 双页面实例（webview 之外浏览器 tab 开同一 dsh
+  URL）各自 POST，完全相同的 toast 双弹——client 内无法去重，需 Rust /notify 桥短窗口去重或关闭多余 tab。
+
+### 日志区分（用户侧验证）
+`%APPDATA%\dev.dsh.desktop\dsh-desktop-session.log`：同一事件若 `client/log notify-complete` + `notify-pending`
+各一行 → 机制 1（本修复已堵）；若 `notification:` 行成对且 `notify-complete` 一行而 `notification:` 两行 →
+壳层重复；若 `notify-*` 决策行成对 → 双页面实例（webview 之外还有浏览器 tab 开着同一 dsh URL，各自一个插件
+实例各自 POST /notify），需关掉多余 tab/实例。

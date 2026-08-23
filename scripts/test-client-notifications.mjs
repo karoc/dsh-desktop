@@ -222,5 +222,76 @@ assert.equal(calls.length, 1, 'items-shaped snapshot must notify too')
 assert.equal(calls[0][1].sessionId, 'sess-H')
 dispose4()
 
-console.log('PASS — notification plugin behavioral test (12 scenarios)')
+// ── scenarios 13-17: double-toast regressions (fixed in the same scan) ──────
+// eslint-disable-next-line no-eval
+eval(clientJs)
+const pluginB = windowStub.__handoff.factory()
+const disposeB = pluginB.apply(ctx)
+
+// ── scenario 13: completion + pending in the SAME snapshot → ONE toast ───────
+// A turn that ends asking the user (question/approval/plan-review) must NOT
+// announce BOTH "任务完成" and "需要你" for the same episode.
+introduce('sess-I', { running: true, title: '带问题结束' })
+calls = []
+mutate({ ids: ['sess-I'], byId: { 'sess-I': session('sess-I', { running: false, pendingInteraction: 'question', title: '带问题结束' }) } })
+assert.equal(calls.length, 1, 'completion+pending same snapshot notifies once')
+assert.deepEqual(calls[0][1], { title: 'dsh 需要你', body: '有一个问题需要你回答', sessionId: 'sess-I' })
+// The suppressed episode must not re-toast as completed on later snapshots.
+mutate({ ids: ['sess-I'], byId: { 'sess-I': session('sess-I', { running: false, completed: true, title: '带问题结束' }) } })
+assert.equal(calls.length, 1, 'suppressed episode must not fire a later completion')
+
+// ── scenario 14: parent + subagent child both finish → ONE toast (child is an
+// origin:'subagent' row; its completion is covered by the parent) ─────────────
+introduce('sess-P', { running: true, title: '主任务' })
+mutate({ ids: ['sess-P', 'sess-C'], byId: { 'sess-P': session('sess-P', { running: true, title: '主任务' }), 'sess-C': session('sess-C', { running: true, origin: 'subagent', parentId: 'sess-P', cwd: '/work' }) } })
+calls = []
+mutate({ ids: ['sess-P', 'sess-C'], byId: { 'sess-P': session('sess-P', { running: false, completed: true, title: '主任务' }), 'sess-C': session('sess-C', { running: false, origin: 'subagent', parentId: 'sess-P', cwd: '/work' }) } })
+assert.equal(calls.length, 1, 'parent+subagent-child completion notifies once')
+assert.equal(calls[0][1].sessionId, 'sess-P', 'the toast belongs to the root session')
+
+// ── scenario 15: subagent child interaction wait → ITS OWN needs-you toast ───
+// Pending is tracked per row with no parent relay (dsh keys approval/question
+// frames by the requesting agent's session), so a subagent asking the user
+// must still raise 「需要你」even though its completion is silent.
+calls = []
+mutate({ ids: ['sess-C'], byId: { 'sess-C': session('sess-C', { running: false, pendingInteraction: 'approval', origin: 'subagent', parentId: 'sess-P', cwd: '/work' }) } })
+assert.equal(calls.length, 1, 'subagent child pending notifies once')
+assert.equal(calls[0][1].title, 'dsh 需要你', 'subagent interaction raises needs-you')
+assert.equal(calls[0][1].sessionId, 'sess-C')
+
+// ── scenario 16: clean root completion still fires (no over-suppression) ────
+introduce('sess-J', { running: true, title: '干净任务' })
+calls = []
+mutate({ ids: ['sess-J'], byId: { 'sess-J': session('sess-J', { running: false, completed: true, title: '干净任务' }) } })
+assert.equal(calls.length, 1, 'clean completion still notifies once')
+assert.deepEqual(calls[0][1], { title: 'dsh 任务完成', body: '「干净任务」已完成', sessionId: 'sess-J' })
+
+// ── scenario 17: answered-then-finished (pending cleared + running ends in
+// the same snapshot) still notifies completion once ───────────────────────────
+introduce('sess-K', { running: true, pendingInteraction: 'question', title: '回答后完成' })
+calls = []
+mutate({ ids: ['sess-K'], byId: { 'sess-K': session('sess-K', { running: false, pendingInteraction: undefined, title: '回答后完成' }) } })
+assert.equal(calls.length, 1, 'answered-then-finished notifies completion once')
+assert.equal(calls[0][1].title, 'dsh 任务完成')
+
+// ── scenario 18: fork child (parentId, no origin) completes → its own toast ──
+// Fork children are independent tasks the user drove; only rows with the host
+// origin 'subagent' are covered by a parent notification.
+introduce('sess-F', { running: true, title: '原会话' })
+mutate({ ids: ['sess-F', 'sess-FK'], byId: { 'sess-F': session('sess-F', { running: false, completed: true, title: '原会话' }), 'sess-FK': session('sess-FK', { running: true, parentId: 'sess-F', title: '分支任务' }) } })
+calls = []
+mutate({ ids: ['sess-F', 'sess-FK'], byId: { 'sess-F': session('sess-F', { running: false, completed: true, title: '原会话' }), 'sess-FK': session('sess-FK', { running: false, completed: true, parentId: 'sess-F', title: '分支任务' }) } })
+assert.equal(calls.length, 1, 'fork child completion notifies once (its own toast)')
+assert.equal(calls[0][1].sessionId, 'sess-FK', 'fork row is an independent task')
+
+// ── scenario 19: subagent child alone completes (parent absent) → silent ─────
+introduce('sess-G2')
+mutate({ ids: ['sess-G2'], byId: { 'sess-G2': session('sess-G2', { running: true, origin: 'subagent', parentId: 'gone', cwd: '/work' }) } })
+calls = []
+mutate({ ids: ['sess-G2'], byId: { 'sess-G2': session('sess-G2', { running: false, completed: true, origin: 'subagent', parentId: 'gone', cwd: '/work' }) } })
+assert.equal(calls.length, 0, 'subagent row completion is always silent (parent covers it)')
+
+disposeB()
+
+console.log('PASS — notification plugin behavioral test (19 scenarios)')
 process.exit(0)
