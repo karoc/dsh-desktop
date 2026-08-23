@@ -258,6 +258,23 @@
       ],
       "createdAt": 1787247420110,
       "updatedAt": 1787247420110
+    },
+    {
+      "id": "card-6fc58082-7b7c-4acb-8487-5d749dbdf28b",
+      "title": "排查：通知消息弹两次（根因 + 多方认证方案）",
+      "description": "用户在 Web GUI 反馈通知消息会弹两次。需要：1) 定位通知的生产/消费链路（DSH web 内部 + 桌面壳桥接）；2) 找出重复弹出的根因（重复订阅/HMR/双通道等）；3) 给出无副作用、经多方独立验证的修复方案。",
+      "sourceSessionId": "session-236329ea-90c9-4e4c-b4fd-0782af341326",
+      "status": "done",
+      "tags": [
+        "bug-fix",
+        "notification",
+        "investigate"
+      ],
+      "createdAt": 1787463403592,
+      "updatedAt": 1787465473700,
+      "summary": "根因定位并已修复（修订版）：双弹来自 client.js scan()——①完成边沿与 pending 边沿同快照不互斥（一次 scan 发「任务完成」+「需要你」）；②父+子代理会话各占一行各发一条相同 toast。3 个独立分析子代理 + 实测复现交叉验证；排除 Rust 双弹/插件双加载/Web 内部双弹。修复（经 2 轮独立审查修订）：规则A 完成通知仅限非 subagent 行（origin:'subagent' 判根，fork 完成照常弹）；规则B 完成与同快照 pending 互斥；规则C pending 全行通知（子代理需要你不丢失）。测试 12→19 场景 + 前后对照 harness 验证全绿；文档 ENGINEERING-NOTES §33 + Agent Note 已记；残余（分离交付与双页面实例）与日志区分法已记录。",
+      "rationale": "用户要求\"多方认证可行的无副作用方案\"，故用 3 个独立子代理定位根因 + 2 个独立子代理审查修复，并以可运行测试/复现脚本实证。修复落地在插件源并同步 resources，含 ENGINEERING-NOTES §33 与 Agent Note。",
+      "rejected": "拒绝引入时序副作用方案：notify-rust/tauri 双弹与插件双加载假设被证伪；settle 窗口（~1s 延迟完成 toast）作为可选加固记录但未默认实施。"
     }
   ]
 }
