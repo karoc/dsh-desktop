@@ -424,7 +424,7 @@ Windows 的 NSIS 安装行为、toast 渲染、AUMID、事件投递——Linux s
 - 控制台在 `nextAvailable` 时显示「当前 → rc.8（预发布）」+ 带版本的一键升级（`/update-dsh` 传 version），
   想升才升，默认仍用稳定 latest。
 
-## 33. 通知 toast 弹两次：根因在 client.js scan() 的边沿互斥，不在 Rust/双实例（0.3.x 修复）
+## 33. 通知 toast 弹两次：根因在 client.js scan() 的边沿互斥，不在 Rust/双实例（0.3.8 修复）
 
 ### 用户现象
 Windows 桌面壳里系统通知 toast「每次都会弹两次」。三方独立审计 + `scripts/repro-double-notify.mjs` 实测确认：

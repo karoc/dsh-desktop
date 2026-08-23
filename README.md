@@ -194,8 +194,8 @@ Windows 安装包由 GitHub Actions（`.github/workflows/build.yml`）在 `windo
 **打 `v*` tag 即自动发布**：
 
 ```bash
-git tag v0.3.7
-git push origin v0.3.7
+git tag v0.3.8
+git push origin v0.3.8
 ```
 
 发布完成后在 GitHub Releases 页下载 `DSH Desktop_<版本>_x64-setup.exe`，无需本地构建。
