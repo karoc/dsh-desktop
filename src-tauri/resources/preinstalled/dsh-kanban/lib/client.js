@@ -144,12 +144,46 @@ window.__ModuleLoader__.load({
 			if (status === "in_progress") return t("statusInProgress");
 			return t("statusDone");
 		}
+		/** Compact local timestamp (YYYY-MM-DD HH:mm) for card meta lines. */
+		function formatTime(epochMs) {
+			const date = new Date(epochMs);
+			const pad = (n) => String(n).padStart(2, "0");
+			return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+		}
+		/**
+		* Which of the three what/why/rejected fields a card is missing — a local
+		* mirror of the host's missingCardFields (kept here so the client bundle never
+		* imports the node-side board-core): every card needs rationale (why); a done
+		* card must carry all three so the next session can pick it up without asking.
+		*/
+		function missingCardFields(card) {
+			const missing = [];
+			if (card.rationale === void 0 || card.rationale.trim() === "") missing.push("rationale");
+			if (card.status === "done") {
+				if (card.summary === void 0 || card.summary.trim() === "") missing.push("summary");
+				if (card.rejected === void 0 || card.rejected.trim() === "") missing.push("rejected");
+			}
+			return missing;
+		}
+		/** Localized field label for a quality-field name. */
+		function qualityFieldLabel(field, t) {
+			if (field === "summary") return t("fieldSummary");
+			if (field === "rationale") return t("fieldRationale");
+			return t("fieldRejected");
+		}
+		/** Second-resolution timestamp for the header's live auto-refresh indicator. */
+		function formatTimeWithSeconds(epochMs) {
+			const date = new Date(epochMs);
+			const pad = (n) => String(n).padStart(2, "0");
+			return `${formatTime(epochMs)}:${pad(date.getSeconds())}`;
+		}
 		/** The board page component (rendered inside the shell.overlay seat). */
 		function BoardPage({ api, workspace, workspaces, onClose, t, openSession }) {
 			const [cards, setCards] = (0, react.useState)([]);
 			const [path, setPath] = (0, react.useState)(void 0);
 			const [loading, setLoading] = (0, react.useState)(true);
 			const [error, setError] = (0, react.useState)(void 0);
+			const [lastUpdated, setLastUpdated] = (0, react.useState)(void 0);
 			const [draftTitle, setDraftTitle] = (0, react.useState)("");
 			const [draftSummary, setDraftSummary] = (0, react.useState)("");
 			const [draftRationale, setDraftRationale] = (0, react.useState)("");
@@ -157,19 +191,28 @@ window.__ModuleLoader__.load({
 			const [archivedNotice, setArchivedNotice] = (0, react.useState)(void 0);
 			const [workspacePickerOpen, setWorkspacePickerOpen] = (0, react.useState)(false);
 			const [selectedWorkspace, setSelectedWorkspace] = (0, react.useState)(workspace);
+			const lastSignature = (0, react.useRef)(null);
 			const cwd = selectedWorkspace?.cwd;
-			const refresh = (0, react.useCallback)(async () => {
+			const refresh = (0, react.useCallback)(async (opts) => {
 				if (cwd === void 0) return;
-				setLoading(true);
-				setError(void 0);
+				const silent = opts?.silent ?? false;
+				if (!silent) {
+					setLoading(true);
+					setError(void 0);
+				}
 				try {
 					const board = await api.get(cwd);
-					setCards(sortCards(board.cards));
+					const sorted = sortCards(board.cards);
+					const signature = JSON.stringify(sorted);
+					setLastUpdated(Date.now());
+					if (silent && lastSignature.current === signature) return;
+					lastSignature.current = signature;
+					setCards(sorted);
 					setPath(board.path);
 				} catch (cause) {
-					setError(cause instanceof Error ? cause.message : String(cause));
+					if (!silent) setError(cause instanceof Error ? cause.message : String(cause));
 				} finally {
-					setLoading(false);
+					if (!silent) setLoading(false);
 				}
 			}, [api, cwd]);
 			(0, react.useEffect)(() => {
@@ -177,7 +220,7 @@ window.__ModuleLoader__.load({
 			}, [refresh]);
 			(0, react.useEffect)(() => {
 				const timer = setInterval(() => {
-					refresh();
+					refresh({ silent: true });
 				}, 15e3);
 				return () => clearInterval(timer);
 			}, [refresh]);
@@ -270,6 +313,7 @@ window.__ModuleLoader__.load({
 					onClose,
 					t,
 					path,
+					lastUpdated,
 					onRefresh: () => {
 						refresh();
 					}
@@ -625,11 +669,14 @@ window.__ModuleLoader__.load({
 			});
 		}
 		/** One card row: title, the what/why/rejected fields, tags, then an action row
-		* (source session + status + delete pinned right). */
-		function Card(props) {
+		* (source session + status + delete pinned right). The title + description +
+		* the three what/why/rejected fields form the clickable region that opens the
+		* detail dialog; the action row is deliberately outside it. */
+		const Card = (0, react.memo)(function Card(props) {
 			const { card, t, onMove, onRemove, onOpenSession } = props;
 			const [statusOpen, setStatusOpen] = (0, react.useState)(false);
 			const [confirmDelete, setConfirmDelete] = (0, react.useState)(false);
+			const [detailOpen, setDetailOpen] = (0, react.useState)(false);
 			const statusItems = STATUSES.map((status) => ({
 				id: status,
 				label: statusLabel(status, t)
@@ -639,31 +686,56 @@ window.__ModuleLoader__.load({
 				[t("fieldRationale"), card.rationale],
 				[t("fieldRejected"), card.rejected]
 			];
+			const missing = missingCardFields(card);
+			const openDetail = (0, react.useCallback)(() => setDetailOpen(true), []);
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("article", {
 				className: "kb-card",
 				"data-card-id": card.id,
 				children: [
-					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("h4", {
-						className: "kb-card-title",
-						children: card.title
-					}),
-					card.description !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
-						className: "kb-card-desc",
-						children: card.description
-					}),
-					fields.some(([, value]) => value !== void 0) && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-						className: "kb-card-fields",
-						children: fields.map(([label, value]) => value !== void 0 && value !== "" && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("p", {
-							className: "kb-card-field",
-							children: [
-								/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
-									className: "kb-card-field-label",
-									children: [label, ":"]
-								}),
-								" ",
-								value
-							]
-						}, label))
+					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						role: "button",
+						tabIndex: 0,
+						"aria-label": t("detailHint"),
+						"aria-haspopup": "dialog",
+						className: "kb-card-hit",
+						onClick: openDetail,
+						onKeyDown: (event) => {
+							if (event.key === "Enter" || event.key === " ") {
+								event.preventDefault();
+								openDetail();
+							}
+						},
+						children: [
+							/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("h4", {
+								className: "kb-card-title",
+								children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+									className: "kb-card-title-text",
+									children: card.title
+								}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconInspectOutline12, { className: "kb-card-detail-icon" })]
+							}),
+							card.description !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+								className: "kb-card-desc",
+								children: card.description
+							}),
+							fields.some(([, value]) => value !== void 0) && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+								className: "kb-card-fields",
+								children: fields.map(([label, value]) => value !== void 0 && value !== "" && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("p", {
+									className: "kb-card-field",
+									children: [
+										/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+											className: "kb-card-field-label",
+											children: [label, ":"]
+										}),
+										" ",
+										value
+									]
+								}, label))
+							}),
+							missing.length > 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("p", {
+								className: "kb-card-missing",
+								children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconWarningOutline16, {}), t("missingFields", { fields: missing.map((field) => qualityFieldLabel(field, t)).join("、") })]
+							})
+						]
 					}),
 					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 						className: "kb-card-actions",
@@ -738,8 +810,119 @@ window.__ModuleLoader__.load({
 							},
 							children: t("deleteConfirmAction")
 						})] })
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)(CardDetail, {
+						card,
+						t,
+						open: detailOpen,
+						onClose: () => setDetailOpen(false),
+						onOpenSession
 					})
 				]
+			});
+		});
+		/**
+		* The card detail dialog: a reading-friendly, pre-formatted view of one card.
+		* Shows the title with status/tags, then the description and each of the three
+		* what/why/rejected fields as labeled sections with full (newline-preserving)
+		* content, plus the source session and created/updated times. Headless modal —
+		* the plugin owns its header chrome so the body can scroll independently.
+		*/
+		function CardDetail(props) {
+			const { card, t, open, onClose, onOpenSession } = props;
+			const present = [
+				{
+					label: t("fieldSummary"),
+					value: card.summary,
+					icon: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconGoalOutline16, {})
+				},
+				{
+					label: t("fieldRationale"),
+					value: card.rationale,
+					icon: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconThinkOutline16, {})
+				},
+				{
+					label: t("fieldRejected"),
+					value: card.rejected,
+					icon: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconWarningOutline16, {})
+				}
+			].filter((section) => section.value !== void 0 && section.value !== "");
+			const hasDescription = card.description !== void 0 && card.description !== "";
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Modal, {
+				open,
+				onClose,
+				title: card.title,
+				closeLabel: t("close"),
+				headless: true,
+				className: "kb-detail-modal",
+				children: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+					className: "kb-detail",
+					children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						className: "kb-detail-head",
+						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+							className: "kb-detail-head-text",
+							children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("h2", {
+								className: "kb-detail-title",
+								children: card.title
+							}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+								className: "kb-detail-meta",
+								children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+									className: "kb-detail-status",
+									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { className: `kb-dot kb-dot-${card.status}` }), statusLabel(card.status, t)]
+								}), card.tags.map((tag) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Pill, {
+									active: true,
+									children: tag
+								}, tag))]
+							})]
+						}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "kb-detail-close",
+							"aria-label": t("close"),
+							onClick: onClose,
+							children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCloseOutline16, { size: 14 })
+						})]
+					}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						className: "kb-detail-scroll",
+						children: [
+							hasDescription && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("section", {
+								className: "kb-detail-block",
+								children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+									className: "kb-detail-block-label",
+									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconListPenOutline16, {}), t("fieldDescription")]
+								}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+									className: "kb-detail-block-body",
+									children: card.description
+								})]
+							}),
+							present.map((section) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("section", {
+								className: "kb-detail-block",
+								children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+									className: "kb-detail-block-label",
+									children: [section.icon, section.label]
+								}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+									className: "kb-detail-block-body",
+									children: section.value
+								})]
+							}, section.label)),
+							!hasDescription && present.length === 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+								className: "kb-detail-empty",
+								children: t("detailEmpty")
+							}),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+								className: "kb-detail-foot",
+								children: [card.sourceSessionId !== void 0 && onOpenSession !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
+									type: "button",
+									className: "kb-source-btn",
+									onClick: () => onOpenSession(card.sourceSessionId),
+									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconQueueOutline14, {}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: t("sourceSession") })]
+								}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+									className: "kb-detail-times",
+									children: [t("detailCreated", { time: formatTime(card.createdAt) }), card.updatedAt !== card.createdAt && ` · ${t("detailUpdated", { time: formatTime(card.updatedAt) })}`]
+								})]
+							})
+						]
+					})]
+				})
 			});
 		}
 		/** Shared header strip of the overlay (native DSH ghost buttons). */
@@ -755,7 +938,8 @@ window.__ModuleLoader__.load({
 						children: [
 							props.t("pathLabel"),
 							": ",
-							props.path
+							props.path,
+							props.lastUpdated !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [" · ", props.t("autoUpdatedAt", { time: formatTimeWithSeconds(props.lastUpdated) })] })
 						]
 					})] }),
 					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", { className: "kb-header-spacer" }),
@@ -912,7 +1096,14 @@ window.__ModuleLoader__.load({
 			deleteTitle: "Delete card",
 			deleteConfirm: "Delete \"{title}\"? This removes the card from KANBAN.json permanently. This cannot be undone.",
 			deleteCancel: "Cancel",
-			deleteConfirmAction: "Delete"
+			deleteConfirmAction: "Delete",
+			fieldDescription: "Description",
+			detailHint: "View details",
+			detailCreated: "Created {time}",
+			detailUpdated: "Updated {time}",
+			detailEmpty: "No further details on this card.",
+			autoUpdatedAt: "auto-refreshed {time}",
+			missingFields: "missing: {fields}"
 		};
 		/** Chinese strings (same keys as {@link en}). */
 		const zh = {
@@ -961,7 +1152,14 @@ window.__ModuleLoader__.load({
 			deleteTitle: "删除卡片",
 			deleteConfirm: "确定删除「{title}」吗？这会把卡片从 KANBAN.json 永久移除，无法撤销。",
 			deleteCancel: "取消",
-			deleteConfirmAction: "删除"
+			deleteConfirmAction: "删除",
+			fieldDescription: "描述",
+			detailHint: "查看详情",
+			detailCreated: "创建于 {time}",
+			detailUpdated: "更新于 {time}",
+			detailEmpty: "这张卡片没有更多详情。",
+			autoUpdatedAt: "自动更新于 {time}",
+			missingFields: "缺字段：{fields}"
 		};
 		//#endregion
 		//#region src/client/styles.ts
@@ -1111,11 +1309,59 @@ window.__ModuleLoader__.load({
   padding: 10px 12px;
   background: var(--dsw-alias-bg-base);
 }
-.kb-card-title { margin: 0; font-size: 13px; line-height: 18px; word-break: break-word; }
+/* The clickable content region (title + description + the three what/why/
+   rejected fields) that opens the detail dialog: pointer cursor, hover tint,
+   and a subtle "inspect" affordance beside the title. Keyboard reachable
+   (role=button). The action row below is outside this region. */
+.kb-card-hit {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 2px; margin: -2px;
+  border-radius: 8px;
+  cursor: pointer;
+  outline: none;
+  transition: background 120ms ease;
+}
+.kb-card-hit:hover,
+.kb-card-hit:focus-visible {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+.kb-card-title {
+  margin: 0; font-size: 13px; line-height: 18px;
+  display: flex; align-items: baseline; gap: 6px;
+}
+.kb-card-title-text { flex: 1; min-width: 0; word-break: break-word; }
+.kb-card-detail-icon {
+  flex: none; align-self: center;
+  color: var(--dsw-alias-label-tertiary);
+  transition: color 120ms ease;
+}
+.kb-card-hit:hover .kb-card-detail-icon,
+.kb-card-hit:focus-visible .kb-card-detail-icon {
+  color: var(--dsw-alias-label-primary);
+}
 .kb-card-desc { margin: 0; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); word-break: break-word; }
 .kb-card-fields { display: flex; flex-direction: column; gap: 4px; }
-.kb-card-field { margin: 0; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); word-break: break-word; }
+/* Each what/why/rejected field is clamped to at most two lines with an
+   ellipsis (webkit-line-clamp); the full text lives in the detail dialog. */
+.kb-card-field {
+  margin: 0; font-size: 12px; line-height: 18px;
+  color: var(--dsw-alias-label-secondary); word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 .kb-card-field-label { color: var(--dsw-alias-label-tertiary); font-weight: 600; }
+/* Incomplete-card hint: a card missing rationale (or a done card missing any
+   of the three what/why/rejected fields) shows a warning line under the
+   fields — same rule as the host's missingCardFields, so the Web page and the
+   model-facing surfaces agree on what "incomplete" means. */
+.kb-card-missing {
+  margin: 0; font-size: 12px; line-height: 18px;
+  display: flex; align-items: center; gap: 5px;
+  color: var(--dsw-alias-state-warn-primary);
+}
+.kb-card-missing svg { flex: none; color: var(--dsw-alias-state-warn-primary); }
 .kb-card-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 /* Card footer: tags on their own line, then one action row holding
    [source-session][status] ... [delete pinned right]. */
@@ -1212,6 +1458,87 @@ window.__ModuleLoader__.load({
   border: 1px solid var(--dsw-alias-border-l3); border-radius: 8px;
   background: var(--dsw-alias-bg-module);
   word-break: break-all;
+}
+/* Card detail dialog (headless Modal): wider than the 380px default, with a
+   fixed head (title + status/tags + close) over an independently scrolling,
+   pre-formatted body. Portaled to document.body, so scope under body. */
+body .kb-detail-modal { width: min(560px, 100%); }
+.kb-detail { display: flex; flex-direction: column; width: 100%; }
+.kb-detail-head {
+  display: flex; align-items: flex-start; gap: 12px;
+  padding: 22px 14px 14px 24px;
+  flex: none;
+}
+.kb-detail-head-text {
+  flex: 1; min-width: 0;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.kb-detail-title {
+  margin: 0; font-size: 17px; line-height: 26px; font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+  word-break: break-word; white-space: pre-wrap;
+}
+.kb-detail-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.kb-detail-status {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 20px; padding: 0 8px;
+  border: 1px solid var(--dsw-alias-border-l2); border-radius: 10px;
+  background: var(--dsw-alias-bg-module-platform);
+  font-size: 12px; line-height: 18px;
+  color: var(--dsw-alias-label-secondary);
+  white-space: nowrap;
+}
+.kb-detail-close {
+  flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px;
+  border: none; border-radius: 8px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+}
+.kb-detail-close:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+.kb-detail-scroll {
+  display: flex; flex-direction: column; gap: 16px;
+  overflow-y: auto;
+  max-height: min(56vh, 520px);
+  padding: 0 24px 8px;
+}
+.kb-detail-block { display: flex; flex-direction: column; gap: 6px; }
+.kb-detail-block-label {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; line-height: 18px; font-weight: 600;
+  color: var(--dsw-alias-label-tertiary);
+}
+.kb-detail-block-label svg { flex: none; color: var(--dsw-alias-label-secondary); }
+/* Full text with preserved line breaks, on a soft panel for comfortable
+   reading; taller line-height than the card preview. */
+.kb-detail-block-body {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--dsw-alias-border-l2); border-radius: 10px;
+  background: var(--dsw-alias-bg-module);
+  font-size: 13px; line-height: 22px;
+  color: var(--dsw-alias-label-primary);
+  white-space: pre-wrap; word-break: break-word;
+}
+.kb-detail-empty {
+  margin: 0; padding: 20px; text-align: center;
+  font-size: 12px; line-height: 18px;
+  color: var(--dsw-alias-label-tertiary);
+  border: 1px dashed var(--dsw-alias-border-l3); border-radius: 10px;
+}
+.kb-detail-foot {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  margin-top: 2px; padding-top: 12px;
+  border-top: 1px solid var(--dsw-alias-border-l2);
+}
+.kb-detail-times {
+  font-size: 11px; line-height: 16px;
+  color: var(--dsw-alias-label-tertiary);
 }
 `;
 		/**
@@ -1324,6 +1651,13 @@ window.__ModuleLoader__.load({
 			const t = ctx.locale.bind(NS);
 			ctx.effect(() => {
 				const stop = startCountsPolling(() => {
+					const sessions = ctx.get("sessions");
+					try {
+						const sessionState = sessions?.list?.getSnapshot();
+						const currentId = sessionState?.current;
+						const currentCwd = currentId === void 0 ? void 0 : sessionState?.byId?.[currentId]?.cwd;
+						if (currentCwd !== void 0 && currentCwd !== "") return currentCwd;
+					} catch {}
 					const workspaces = ctx.get("workspaces");
 					try {
 						const state = workspaces?.list?.getSnapshot();
@@ -1333,10 +1667,14 @@ window.__ModuleLoader__.load({
 						return;
 					}
 				});
-				const unsubscribe = ctx.get("workspaces")?.list?.subscribe(triggerCountsPoll);
+				const sessions = ctx.get("sessions");
+				const workspaces = ctx.get("workspaces");
+				const unsubscribeSessions = sessions?.list?.subscribe(triggerCountsPoll);
+				const unsubscribeWorkspaces = workspaces?.list?.subscribe(triggerCountsPoll);
 				return () => {
 					stop();
-					unsubscribe?.();
+					unsubscribeSessions?.();
+					unsubscribeWorkspaces?.();
 				};
 			}, "dsh-kanban: counts polling");
 			ctx.slots.inject("sidebar.footer.action", () => ctx.slots.register({

@@ -1,7 +1,7 @@
 {
   "name": "dsh-model-reasoning",
-  "version": "0.1.4",
-  "description": "External DeepSeek Harness web client plugin: a Settings page to configure per-model reasoning efforts (thinking levels) for third-party (pi-ai) providers, written into llm-pi-ai.providers.*.models[].reasoningEfforts.",
+  "version": "0.2.1",
+  "description": "External DeepSeek Harness web client plugin: a Settings page managing llm-pi-ai provider-route parameters (retry & backoff, timeouts, transport, caching, budgets, capacities) plus per-model reasoning efforts.",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -16,7 +16,10 @@
   "files": [
     "lib/index.js",
     "lib/client.js",
-    "cordis.patch.yml"
+    "cordis.patch.yml",
+    "README.zh.md",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md"
   ],
   "dsh": {
     "bundle": {
@@ -37,7 +40,11 @@
   "scripts": {
     "bundle": "tsdown --config ./tsdown.config.ts",
     "prepare": "tsdown --config ./tsdown.config.ts",
-    "prepublishOnly": "tsdown --config ./tsdown.config.ts"
+    "test": "node --test tests/*.test.ts",
+    "release:check": "node scripts/release-check.mjs",
+    "prepack": "node scripts/release-check.mjs",
+    "prepublishOnly": "node scripts/release-check.mjs && tsdown --config ./tsdown.config.ts",
+    "postpublish": "node scripts/post-publish-check.mjs"
   },
   "engines": {
     "node": ">=18"

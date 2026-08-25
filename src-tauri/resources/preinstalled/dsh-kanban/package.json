@@ -1,6 +1,6 @@
 {
   "name": "dsh-kanban",
-  "version": "0.1.2",
+  "version": "0.2.1",
   "description": "External DeepSeek Harness plugin: a cross-session, workspace-scoped kanban board for plans and todos, persisted to a git-trackable KANBAN.json. Model-facing tools (board_list/board_add/board_update/board_remove) plus a sidebar '看板' entry with a full-screen three-column board page.",
   "type": "module",
   "main": "lib/index.js",
@@ -16,7 +16,14 @@
   "files": [
     "lib/index.js",
     "lib/client.js",
-    "cordis.patch.yml"
+    "cordis.patch.yml",
+    "README.md",
+    "README.zh.md",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "LICENSE",
+    "skills/kanban-use/SKILL.md",
+    "scripts/install-skill.mjs"
   ],
   "dsh": {
     "bundle": {
@@ -39,7 +46,19 @@
   "scripts": {
     "bundle": "tsdown --config ./tsdown.config.ts",
     "prepare": "tsdown --config ./tsdown.config.ts",
-    "prepublishOnly": "tsdown --config ./tsdown.config.ts"
+    "typecheck": "tsc --noEmit",
+    "test": "tsc --noEmit && node --test scripts/board-core.spec.mjs && node scripts/check-card-discipline.mjs && node scripts/verify-tools.mjs && node scripts/verify-spec.mjs && node scripts/verify-context.mjs && node scripts/verify-skill-sync.mjs",
+    "check:spec": "node scripts/check-note-spec.mjs",
+    "check:cards": "node scripts/check-card-discipline.mjs",
+    "audit:cards": "node scripts/audit-cards.mjs",
+    "install:skill": "node scripts/install-skill.mjs",
+    "verify": "node scripts/verify-tools.mjs",
+    "verify:ui": "node scripts/verify-completeness-ui.mjs",
+    "accept": "node scripts/accept-gui.mjs",
+    "release:check": "node scripts/release-check.mjs",
+    "prepack": "node scripts/release-check.mjs",
+    "prepublishOnly": "node scripts/release-check.mjs && tsdown --config ./tsdown.config.ts",
+    "postpublish": "node scripts/post-publish-check.mjs"
   },
   "engines": {
     "node": ">=18"

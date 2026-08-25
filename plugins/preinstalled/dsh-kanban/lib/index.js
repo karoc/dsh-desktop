@@ -1,9 +1,10 @@
 import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join } from "node:path";
-import { URL } from "node:url";
+import { URL, fileURLToPath } from "node:url";
 import { defineTool } from "@deepseek-ai/dsh-tools";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
 //#region src/board-core.ts
 /**
 * Core kanban domain: a workspace-scoped KANBAN.json file with card CRUD.
@@ -56,6 +57,38 @@ function isBoardCard(value) {
 	if (card.rationale !== void 0 && typeof card.rationale !== "string") return false;
 	if (card.rejected !== void 0 && typeof card.rejected !== "string") return false;
 	return card.sourceSessionId === void 0 || typeof card.sourceSessionId === "string";
+}
+/**
+* Short labels for the what/why/rejected fields, used by model-visible render
+* (tool output, `/kanban` command, session-start snapshot). Chinese matches
+* the Web board page's zh copy for the three fields.
+*/
+const CARD_FIELD_LABELS = {
+	summary: "做了什么",
+	rationale: "为什么",
+	rejected: "放弃了什么"
+};
+/**
+* Which of the three what/why/rejected fields a card is missing under the
+* card-completeness discipline:
+*   - every card must carry rationale (why it exists and why now) — a
+*     title-only card is incomplete;
+*   - a done card must be self-explanatory for the next session: summary +
+*     rationale + rejected all present.
+* Open cards may legitimately lack summary (nothing done yet) and rejected
+* (no alternative decision made yet), so only rationale is required while
+* open. Returns missing field names in fixed order (rationale, summary,
+* rejected). Shared by the tool render, the session-start snapshot, and the
+* completeness audit so every surface applies the same rule.
+*/
+function missingCardFields(card) {
+	const missing = [];
+	if (card.rationale === void 0 || card.rationale.trim() === "") missing.push("rationale");
+	if (card.status === "done") {
+		if (card.summary === void 0 || card.summary.trim() === "") missing.push("summary");
+		if (card.rejected === void 0 || card.rejected.trim() === "") missing.push("rejected");
+	}
+	return missing;
 }
 /**
 * Read the board document for one workspace. A missing file yields the empty
@@ -267,6 +300,96 @@ async function removeCard(cwd, id) {
 	await writeBoard(cwd, board);
 	return viewOf$1(cwd, board, archived);
 }
+//#endregion
+//#region src/skill-sync.ts
+/**
+* kanban-use skill self-heal installation (host half).
+*
+* The skill ships inside the npm package (files: skills/kanban-use/SKILL.md),
+* so `dsh plugin add/update dsh-kanban` puts the file on disk automatically.
+* But the AGENT skills directory (~/.agents/skills) is a per-machine local
+* asset that npm does NOT touch — so every dsh web start, this module makes
+* sure the skill is present there, mirroring the plugin's copy.
+*
+* Sync policy (four states, driven by the `skill-version` fingerprint in the
+* SKILL.md frontmatter — bump it whenever the skill CONTENT changes):
+*
+*   - target missing                      → copy the shipped SKILL.md in
+*   - target identical to package copy    → no-op (fast path, every start)
+*   - target has the SAME (or HIGHER)
+*     skill-version but differs in content → KEEP the local file and warn —
+*     that is a user edit of the current version (never clobber edits)
+*   - target has an OLDER/DIFFERENT (or
+*     absent pre-fingerprint) version      → sync the shipped copy over it —
+*     that is stale package content from a previous install, NOT a user edit
+*
+* Copy-based (NOT symlink): pnpm lays out node_modules/.pnpm/<pkg>@<version>
+* per version, so a symlink into the package would break on the next update;
+* content copy + version check self-heals across updates via the restart
+* that plugin installs require anyway. The check runs at plugin load only
+* (once per dsh web start), never per request.
+*
+* The manual dev command remains `pnpm install:skill` (repo checkout) or
+* `node scripts/install-skill.mjs --copy` (anywhere, incl. inside the
+* installed package — the script is shipped too).
+*
+* ⚠️ Tree-shaking: this module is KEPT in the bundle because the self-heal
+* runs as a module top-level side effect below, and src/index.ts imports it
+* as a side-effect import ('./skill-sync.ts'). A plain "call inside apply()"
+* was rolled out entirely by rolldown (same trap as §5 styles); do not move
+* the self-heal call into a function that only apply() references.
+*/
+/** Absolute path of the shipped skill file inside this package (lib/../skills). */
+function skillSourceFile() {
+	return join(dirname(fileURLToPath(import.meta.url)), "..", "skills", "kanban-use", "SKILL.md");
+}
+/** Absolute path of the installed skill file under the local agent skills dir. */
+function skillTargetFile(home = homedir()) {
+	return join(home, ".agents", "skills", "kanban-use", "SKILL.md");
+}
+/** Parse the numeric skill-version from the frontmatter head (0 when absent). */
+function skillVersionOf(text) {
+	const match = text.slice(0, 400).match(/^skill-version:\s*(\d+)\s*$/m);
+	return match === null ? 0 : Number(match[1]);
+}
+/**
+* Ensure the kanban-use skill is installed under the agent skills directory.
+* Never throws: the plugin must keep loading even if the user home is
+* read-only — failures warn and fall through to the manual installer.
+*/
+async function ensureSkillInstalled(home = homedir()) {
+	const source = skillSourceFile();
+	let sourceText;
+	try {
+		sourceText = await readFile(source, "utf8");
+	} catch (error) {
+		console.warn(`[dsh-kanban] shipped skill not found at ${source} (${error.message}) — skill auto-install skipped`);
+		return;
+	}
+	const target = skillTargetFile(home);
+	let targetText;
+	try {
+		targetText = await readFile(target, "utf8");
+	} catch {}
+	if (targetText === sourceText) return;
+	const sourceVersion = skillVersionOf(sourceText);
+	const manualSyncHint = "node " + JSON.stringify(join(dirname(skillSourceFile()), "..", "scripts", "install-skill.mjs")) + " --copy";
+	if (targetText !== void 0) {
+		if (skillVersionOf(targetText) >= sourceVersion) {
+			console.warn(`[dsh-kanban] ~/.agents/skills/kanban-use/SKILL.md differs from the shipped v${sourceVersion} skill — your local copy is kept (same or newer skill-version: it is your own edit). Forced sync: ` + manualSyncHint + ". If you customize this skill, keep its frontmatter skill-version bumped so plugin updates never clobber your version.");
+			return;
+		}
+	}
+	try {
+		await mkdir(dirname(target), { recursive: true });
+		await writeFile(target, sourceText, "utf8");
+		const action = targetText === void 0 ? "installed" : `updated to v${sourceVersion}`;
+		console.log(`[dsh-kanban] kanban-use skill ${action} at ${target} (new sessions pick it up)`);
+	} catch (error) {
+		console.warn(`[dsh-kanban] could not auto-install the kanban-use skill (${error.message}) — run install-skill.mjs manually`);
+	}
+}
+ensureSkillInstalled();
 /** The closed set of Agent Note classes (mirrors DSH's classification gate). */
 const DEFAULT_NOTE_CLASSES = [
 	"feature",
@@ -470,15 +593,23 @@ const BOARD_OUTPUT = {
 			}
 		}
 	},
-	render: (_args, value) => [{
-		type: "text",
-		text: [
-			`Board at ${value.path}`,
-			...value.cards.map((card) => `- [${card.status}] ${card.title}${card.tags.length > 0 ? ` ${card.tags.map((t) => `#${t}`).join(" ")}` : ""}`),
-			...value.cards.length === 0 ? ["(no cards yet)"] : [],
-			...value.archived !== void 0 ? [`Archived ${value.archived.count} done card(s) to ${value.archived.path}`] : []
-		].join("\n")
-	}]
+	render: (_args, value) => {
+		const incomplete = value.cards.filter((card) => missingCardFields(card).length > 0).length;
+		return [{
+			type: "text",
+			text: [
+				`Board at ${value.path}`,
+				...value.cards.map((card) => {
+					const missing = missingCardFields(card);
+					const mark = missing.length > 0 ? ` ⚠️缺:${missing.map((field) => CARD_FIELD_LABELS[field]).join(",")}` : "";
+					return `- [${card.status}] ${card.title}${card.tags.length > 0 ? ` ${card.tags.map((t) => `#${t}`).join(" ")}` : ""}${mark}`;
+				}),
+				...value.cards.length === 0 ? ["(no cards yet)"] : [],
+				...incomplete > 0 ? [`⚠️ ${incomplete} card(s) missing fields — fill the flagged 为什么 (why), and for done cards 做了什么 (what) + 放弃了什么 (rejected), when you can.`] : [],
+				...value.archived !== void 0 ? [`Archived ${value.archived.count} done card(s) to ${value.archived.path}`] : []
+			].join("\n")
+		}];
+	}
 };
 /** Resolve the workspace root for a tool call: the owning session's cwd. */
 function workspaceOf(cwd) {
@@ -497,12 +628,25 @@ function present(title, kind, rawInput) {
 * The system-prompt guidance that tells the model to actually USE the board
 * and to keep Agent Notes for non-trivial changes. This is what makes it an
 * active maintenance habit instead of a passive tool: record plans as they
-* appear, move cards as work progresses, close them when done — across
-* sessions — and write a durable decision note for every non-trivial change.
+* appear with complete cards, move cards as work progresses, close them with
+* the full what/why/rejected story when done — across sessions — and write a
+* durable decision note for every non-trivial change.
+*
+* Card completeness is part of the contract, not a bonus: every card needs a
+* rationale (why) at creation, rejected alternatives when a decision was made,
+* and a done card must carry summary + rationale + rejected so the next
+* session can pick the work up without asking. Tool outputs and the
+* session-start snapshot flag cards missing fields (缺), giving the model an
+* immediate feedback loop; the deep card-writing manual lives in the
+* kanban-use skill, which this section points at when available.
 */
-const BOARD_GUIDANCE = `You have a persistent kanban board (the board_* tools) backed by KANBAN.json at the workspace root — it survives session switches and branches, and it is shared with the Web "看板" page. Use it to track plans and todos that should outlive the current turn: when the user states a multi-step plan or a list of tasks, record each step with board_add (title; status todo; tags for grouping). As work progresses, move cards with board_update (status in_progress → done); when a card is finished or superseded, mark it done or remove it. Prefer the board over todo_write for anything the user should still see after switching branches or opening a new session: todo_write is the transient in-turn task list, while the board is the durable cross-session record. Check board_list when resuming work in a workspace to pick up what was planned before.
+const BOARD_GUIDANCE = `You have a persistent kanban board (the board_* tools) backed by KANBAN.json at the workspace root — it survives session switches and branches, and it is shared with the Web "看板" page. Use it to track plans and todos that should outlive the current turn. Record each step with board_add (title + rationale (为什么 — why this task exists and why now); rejected (放弃了什么) when a decision ruled out an alternative; tags for grouping; summary (做了什么) is filled when the work is done). Write complete cards, not just titles: a title-only card is an incomplete card, because the next session must understand why it exists and what was decided against without asking. Cards missing fields are flagged (缺) in tool outputs and in the session-start snapshot — fill them when you can.
 
-Close the loop at the end of every work session: when the user's request is done or reaches a clear stopping point, update the board to reflect reality — move completed cards to done, add any new follow-up as a todo card, and update summaries with what was actually done. Do not leave cards in stale states (e.g. in_progress with no work left); the board must be an honest hand-off for the next session, not a backlog that drifts. This wrap-up is what makes the board a durable memory across sessions.
+As work progresses, move cards with board_update (status in_progress → done), adding rationale/rejected information as decisions are made; when a card is finished or superseded, mark it done or remove it. Prefer the board over todo_write for anything the user should still see after switching branches or opening a new session: todo_write is the transient in-turn task list, while the board is the durable cross-session record. Check board_list when resuming work in a workspace to pick up what was planned before.
+
+Close the loop at the end of every work session: when the user's request is done or reaches a clear stopping point, update the board to reflect reality — move completed cards to done, add any new follow-up as a todo card, and make every done card self-explanatory with all three fields: summary (做了什么 — what was actually done), rationale (为什么 — why it was done), and rejected (放弃了什么 — what was tried or considered and given up, with why). Do not leave cards in stale states (e.g. in_progress with no work left) and do not close a card without its three fields — the board must be an honest hand-off for the next session, not a backlog that drifts. This wrap-up is what makes the board a durable memory across sessions.
+
+The full card-writing discipline (field semantics, examples, good/bad cards, templates) lives in the kanban-use skill — load it when it is available.
 
 You also maintain Agent Notes (the note_add / note_list tools) at .agents/notes/implemented/<class>/<date>-<topic>.md, mirroring the DeepSeek Harness repository discipline. ${DEFAULT_NON_TRIVIAL_DEFINITION} After completing a non-trivial change, call note_add with: a class from {${DEFAULT_NOTE_CLASSES.join(", ")}}; a short kebab-case topic; the problem being solved; the decision made; what alternatives were rejected and why; and consequences. Write at DSH engineering depth: Decision states shipped reality in present tense with concrete names and negative guarantees (what is NOT done, boundaries, safety rules); Alternatives are real options that lost, each with why; Consequences records what the trade-off cost and bought. Keep it a few paragraphs, not a full essay.`;
 /**
@@ -527,11 +671,16 @@ function boardSnapshotText(context) {
 	}
 	const open = board.cards.filter((card) => card.status === "todo" || card.status === "in_progress");
 	if (open.length === 0) return "";
-	return "Current workspace board (KANBAN.json) — open items:\n" + open.map((card) => {
+	const lines = open.map((card) => {
 		const tags = card.tags.length > 0 ? ` [${card.tags.join(", ")}]` : "";
 		const status = card.status === "in_progress" ? " (in progress)" : "";
-		return `- [${card.status}] ${card.title}${status}${tags}`;
-	}).join("\n");
+		const missing = missingCardFields(card);
+		const missingNote = missing.length > 0 ? ` (缺:${missing.map((field) => CARD_FIELD_LABELS[field]).join(",")})` : "";
+		return `- [${card.status}] ${card.title}${status}${tags}${missingNote}`;
+	});
+	const incomplete = open.filter((card) => missingCardFields(card).length > 0).length;
+	const tail = incomplete > 0 ? ["", `${incomplete} open card(s) are missing fields (缺) — fill the flagged 为什么 (and other fields) when you pick the work up.`] : [];
+	return "Current workspace board (KANBAN.json) — open items:\n" + [...lines, ...tail].join("\n");
 }
 /** Execute the human `/kanban` command against the receiving agent's workspace. */
 async function executeBoardCommand(ctx, invocation) {
@@ -591,7 +740,11 @@ function renderBoardResult(heading, view) {
 		text: [
 			...heading !== void 0 ? [heading] : [],
 			`Board at ${view.path}`,
-			...view.cards.map((card) => `- [${card.status}] ${card.title}${card.tags.length > 0 ? ` ${card.tags.map((t) => `#${t}`).join(" ")}` : ""}`),
+			...view.cards.map((card) => {
+				const missing = missingCardFields(card);
+				const mark = missing.length > 0 ? ` ⚠️缺:${missing.map((field) => CARD_FIELD_LABELS[field]).join(",")}` : "";
+				return `- [${card.status}] ${card.title}${card.tags.length > 0 ? ` ${card.tags.map((t) => `#${t}`).join(" ")}` : ""}${mark}`;
+			}),
 			...view.cards.length === 0 ? ["(no cards yet)"] : []
 		].join("\n")
 	};
@@ -682,6 +835,7 @@ async function listAgentNotes(cwd) {
 }
 /** Register the four model-facing board tools. */
 function apply(ctx) {
+	ensureSkillInstalled();
 	ctx.systemPrompt.section({
 		name: "tool:board",
 		order: 113,
@@ -726,7 +880,7 @@ function apply(ctx) {
 	}));
 	ctx.tools.register(defineTool({
 		name: "board_add",
-		description: "Add a card to the current workspace kanban board. Use it to persist a plan step or todo so it survives session switches and shows up on the Web board page. When the user states a multi-step plan or a list of tasks, record each concrete step here. The board lives at KANBAN.json in the workspace root.",
+		description: "Add a card to the current workspace kanban board. Use it to persist a plan step or todo so it survives session switches and shows up on the Web board page. When the user states a multi-step plan or a list of tasks, record each concrete step here. Every card needs a rationale (为什么 — why it exists and why now) at creation — a title-only card is incomplete and is flagged as 缺 in the output; record rejected alternatives (放弃了什么) when a decision ruled one out. The board lives at KANBAN.json in the workspace root.",
 		parameters: {
 			title: {
 				type: "string",
@@ -739,15 +893,15 @@ function apply(ctx) {
 			},
 			summary: {
 				type: "string",
-				description: "Optional: what was done (Agent-Note style)."
+				description: "What was done — fill when the work is complete (Agent-Note style \"what\"; 做了什么)."
 			},
 			rationale: {
 				type: "string",
-				description: "Optional: why it was done (Agent-Note style)."
+				description: "Why this card exists and why now — expected on every card (Agent-Note style \"why\"; 为什么)."
 			},
 			rejected: {
 				type: "string",
-				description: "Optional: what was rejected or given up (Agent-Note style)."
+				description: "What was tried or considered and given up, with why — write when a decision ruled out an alternative (Agent-Note style \"rejected\"; 放弃了什么)."
 			},
 			status: {
 				type: "string",
@@ -777,7 +931,7 @@ function apply(ctx) {
 	}));
 	ctx.tools.register(defineTool({
 		name: "board_update",
-		description: "Update one card on the current workspace kanban board by its exact id. Use it to move a card between todo / in_progress / done, or to edit its title, description, or tags. Call board_list first to get the id.",
+		description: "Update one card on the current workspace kanban board by its exact id. Use it to move a card between todo / in_progress / done, or to edit its title, description, or tags. When moving a card to done, make it self-explanatory with all three fields: summary (做了什么) + rationale (为什么) + rejected (放弃了什么). A done card missing fields is flagged as 缺 in the output. Call board_list first to get the id.",
 		parameters: {
 			id: {
 				type: "string",
@@ -1166,4 +1320,4 @@ function registerWebApi(ctx) {
 	}
 }
 //#endregion
-export { NOTE_CLASSES, apply, inject, name };
+export { NOTE_CLASSES, apply, ensureSkillInstalled, inject, name, skillSourceFile, skillTargetFile };

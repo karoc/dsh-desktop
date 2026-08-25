@@ -4,63 +4,92 @@
 [![npm downloads](https://img.shields.io/npm/dm/dsh-model-reasoning.svg)](https://www.npmjs.com/package/dsh-model-reasoning)
 [![license MIT](https://img.shields.io/npm/l/dsh-model-reasoning.svg)](LICENSE)
 
-An **external** DeepSeek Harness web client plugin: a Settings page that configures
-**per-model thinking levels (reasoning efforts)** for third-party (pi-ai)
-providers. It writes the same `llm-pi-ai.providers.<route>.models[].reasoningEfforts`
-(and route-level `reasoning`) fields the `llm-pi-ai` adapter reads, so the
-composer's 「推理等级」 picker and route defaults pick the values up with no other
-change.
+An **external** DeepSeek Harness web client plugin: a Settings page that manages
+the provider-route parameters the built-in **Models** page deliberately does not
+expose — retry & backoff policy, timeouts, transport, caching, thinking budgets,
+capacities, request image budgets — plus **per-model thinking levels (reasoning
+efforts)** for third-party (pi-ai) providers. It writes the exact
+`llm-pi-ai.providers.<route>.*` fields the adapter reads, so changes take effect
+with no other configuration.
 
-Why an external plugin: the built-in **Models** settings form deliberately does
-not expose reasoning effort (it is a per-model capability), and adding a field
-to the built-in `ui-settings-models` package would be overwritten by the next
-official release. This package ships as an installable **bundle** that never
-touches repository source, so official updates cannot clobber it.
+Why an external plugin: adding fields to the built-in `ui-settings-models`
+package would be overwritten by the next official release. This package ships as
+an installable **bundle** that never touches repository source, so official
+updates cannot clobber it.
 
-## What it adds
+## What it manages
 
-A new Settings section, **「模型思考等级 / Model reasoning」**, placed after the
-built-in **Models** page. For each third-party provider that carries an explicit
-`models` list you can:
+A new Settings section, **「提供方参数 / Provider parameters」**, placed after the
+built-in Models page. Pick any provider route — every entry in the `llm-pi-ai`
+`providers` dict is editable here, catalog routes included — and manage it in
+five parameter groups:
 
-- set the **route default thinking level** (`providers.<route>.reasoning`), and
-- per model, choose **inherit / non-reasoning (`false`) / reasoning with a level
-  set** (`reasoningEfforts`), ticking the canonical levels
-  `off minimal low medium high xhigh max`.
+- **Per model** — for routes carrying an explicit `models` list, edit the
+  SELECTED model's own declaration: input modalities (`text`/`image`, so a
+  text-only model stays text-only beside its vision siblings), context and
+  output caps (`contextWindow`, `maxTokens`), and thinking levels
+  (`reasoningEfforts`: inherit / non-reasoning / a level set over `off minimal
+  low medium high xhigh max`) with custom wire spelling per level. The picker
+  fuses search into the dropdown itself — open it and type to narrow long model
+  lists by name / id (display-only; stored order and write path untouched).
+  **Apply to all models** copies only
+  the CHECKED dimensions from the editor to every model on the route, plus the
+  route default thinking level (`providers.<route>.reasoning`) that unset
+  models inherit.
+- **Retry & backoff**: `retryPolicy.mode` (`normal` bounded transient retries vs
+  `always` unbounded retries), `maxRetries`, `retryableCodes` (the five stable
+  preset codes plus custom entries), and the shared exponential backoff
+  (`initialDelayMs`, `maxDelayMs`, `jitterRatio`). Unset values fall back to the
+  adapter defaults (5 retries, 500 ms initial, 10 s ceiling, 10% jitter).
+- **Timeouts & transport**: `timeoutMs`, `websocketConnectTimeoutMs`,
+  `streamIdleTimeoutMs` (default 300 000 ms), and `transport`
+  (`auto/sse/websocket/websocket-cached`).
+- **Caching & thinking budgets**: `cacheRetention`
+  (`none/short/long`) and `thinkingBudgets` token budgets per level
+  (`minimal/low/medium/high`).
+- **Capacities & budgets**: `defaultContextWindow`,
+  `defaultMaxTokens`, `defaultInput` modalities (`text/image`) — these three
+  are FALLBACKS read only by models that declare nothing of their own (set the
+  real values per model in the **Per model** tab) — plus the per-request image
+  payload caps (`maxRequestImageBytes`,
+  `requestImagePixelBudget`, `requestImageMaxBytes`).
 
-The three mode choices sit side by side with hover explanations (tooltips), and
-an **Apply to all models** button copies the current model's thinking
-declaration (levels + wire spellings) to every model on the route at once.
-Empty states guide you when there is no provider yet, no editable provider, or
-a provider with no models. A **model search filter** above the model selector
-narrows a long provider model list by name / id as you type — display-only, so
-the stored declaration order and the write path are never touched.
+Every group's panel opens with a **scope badge**: 「按模型 / Per model」 writes
+into the selected model's own declaration, and a dimension you leave unset
+inherits the route fallback or catalog value; the four other groups are 「整条
+路由 / Whole route」 — those fields exist ONLY at route level in the llm-pi-ai
+schema, so one shared value is the whole truth (the badge's hover tooltip says
+so; no duplicate text sits beside it).
+
+Every field shows the effective adapter default as its placeholder while unset;
+clearing a field removes the override instead of writing an echo of the default.
+Local validation mirrors the host's own resolution rules, so most mistakes are
+caught before the write; anything the host still refuses surfaces verbatim from
+`settings.mutate`. The write path uses revision fencing, so a concurrent change
+is refused rather than silently overwritten. An **Apply to all models** action
+copies the current model's reasoning declaration to every model on the route at
+once.
 
 ### Custom wire spelling (adapt to any upstream vocabulary)
 
-Each selected level has a **wire-spelling** field (defaults to the level name).
-Change it to remap what that level sends — e.g. `max → ultra` for a model that
-calls its top level Ultra, or `high → turbo`. `off` can either send nothing
-(default) or a custom value of its own. This is the supported way to adapt a
-model's thinking vocabulary **without waiting for an adapter update**.
+Each selected reasoning level has a **wire-spelling** field (defaults to the
+level name). Change it to remap what that level sends — e.g. `max → ultra` for a
+model that calls its top level Ultra, or `high → turbo`. `off` can either send
+nothing (default) or a custom value of its own.
 
 > ⚠️ DSH does **not** support inventing new level names. The pi-ai schema pins
-> `reasoningEfforts` keys to the seven levels above (`z.dict(..., z.union(levels))`)
-> and resolution only reads those keys, so a bare `ultra:` key is rejected at
-> write and ignored at request time. "Ultra" is expressed by remapping an
-> existing level's wire spelling (`max: ultra`), not by adding an `ultra` key.
+> `reasoningEfforts` keys to the seven canonical levels and resolution only reads
+> those keys, so a bare `ultra:` key is rejected at write time. "Ultra" is
+> expressed by remapping an existing level's wire spelling (`max: ultra`).
 
 ### Empty state
 
-When no third-party provider is configured yet, the page shows a friendly
-placeholder card (instead of a dead empty dropdown) prompting you to add a
-custom provider first, pointing at **Settings → Models → Add a custom
-provider**. It distinguishes "no providers at all" from "providers without a
-custom models list", and shows loading / unavailable hints while the settings
-document loads.
-
-The write path uses the official `settings.mutate` RPC with revision fencing, so
-a concurrent change is refused rather than silently overwritten.
+With no third-party provider configured the page shows a friendly placeholder
+pointing at **Settings → Models → Add a custom provider**. Selecting a catalog
+route (no explicit `models` list) explains that its MODELS stay read-only here —
+catalog reasoning levels remain selectable in the composer — while the route's
+parameter groups above stay fully editable. Loading / unavailable states are
+hinted while the settings document loads.
 
 ## Install
 
@@ -74,7 +103,7 @@ The package is published to npm as `dsh-model-reasoning`:
 dsh plugin --profile web add dsh-model-reasoning
 ```
 
-This installs the prebuilt bundle and appends it to the `web` profile. Then **restart `dsh web`** and open **Settings → 模型思考等级 / Model reasoning**.
+This installs the prebuilt bundle and appends it to the `web` profile. Then **restart `dsh web`** and open **Settings → 提供方参数 / Provider parameters**.
 
 ### From git
 
@@ -106,24 +135,28 @@ This removes both the dependency and its bundle layer from the `web` profile. Re
 ## Layout
 
 ```
-cordis.patch.yml      # bundle layer: mounts the row that the client-modules
-                      # service discovers (dsh.client manifest)
-package.json          # dsh.bundle (patch) + dsh.client (web) + exports["./client"]
-tsdown.config.ts      # self-contained build: node half + module-table client bundle
-src/index.ts          # host apply (no-op)
-src/client/index.ts   # client apply: settingsScope.bind(llm-pi-ai) + register settings.section
-src/client/ReasoningSection.tsx  # the settings page (route → model → effort editor)
-src/client/styles.ts   # design-token styles (--dsw-alias-*) + injection
-src/client/locales.ts # en/zh copy
+cordis.patch.yml                # bundle layer: mounts the row that the client-modules
+                                # service discovers (dsh.client manifest)
+package.json                    # dsh.bundle (patch) + dsh.client (web) + exports["./client"]
+tsdown.config.ts                # self-contained build: node half + module-table client bundle
+src/index.ts                    # host apply (no-op)
+src/client/index.ts             # client apply: settingsScope.bind(llm-pi-ai) + register settings.section
+src/client/ProviderParamsSection.tsx  # the settings page (route → group tabs → editors)
+src/client/params.ts            # managed-field registry: domains, defaults, host-mirroring
+                                # validators, draft model, minimal-op diff engine
+src/client/styles.ts            # design-token styles (--dsw-alias-*) + injection
+src/client/locales.ts           # en/zh copy
+tests/params.test.ts            # unit tests for the pure registry logic
 ```
 
-## Build
+## Build & test
 
 ```sh
-pnpm install
-pnpm bundle          # emits lib/index.js + lib/client.js
+npm install
+npm run bundle       # emits lib/index.js + lib/client.js
+npm test             # unit tests for params.ts (node:test runs TypeScript directly)
 pnpm release:check   # release gate: docs/changelog/tag/tree/build/registry must all pass
-pnpm publish         # runs the gate (prepack/prepublishOnly), then postpublish verifies the live release
+npm publish          # runs the gate (prepack/prepublishOnly), then postpublish verifies the live release
 ```
 
 The bundle leaves the platform packages (`react`, `@deepseek-ai/cordis`,
@@ -132,19 +165,22 @@ module table; everything else is inlined.
 
 ## Notes / limitations
 
-- Only routes that carry an explicit `models` list are enumerable here (the
-  installed catalog is not reachable from the client). Catalog-only providers
-  keep their levels from the installed catalog and use the composer picker.
+- Only routes carrying an explicit `models` list expose per-MODEL editors here
+  (the installed catalog is not reachable from the client); every route's
+  route-level parameter groups are always editable. Catalog-only per-model
+  customization via `modelOverrides` is future work.
+- Credential management (`apiKeyEnv`), `displayName`, `baseURL`, protocol
+  (`api`), and the models list structure stay on the built-in **Models** page;
+  this plugin does not duplicate them.
 - Wire spellings default to the level name; to rename a level on the wire (e.g.
   `max: ultra`) edit `settings.yaml` for that model.
+- Legacy profile keys removed upstream (`provider`, `maxRetries`,
+  `maxRetryDelayMs` at route level) are never written by this plugin.
 - **Section nav icon is shell-assigned, not plugin-assigned.** The built-in
-  `ui-settings-general` `SettingsRoot.tsx` `navIcon(id)` maps known ids
-  (`models`, `agent-presets`, `plugins`) and falls back to a gear for every
-  other id — including this section's `model-reasoning`. The `settings.section`
-  registration has no icon field, so an external plugin cannot set it without
-  patching the shell. When DSH exposes a per-section icon (e.g. an icon option
-  on the registration), use `IconThinkOutline16` from `dsh-client-ui-primitives`
-  for this section.
+  `ui-settings-general` `SettingsRoot.tsx` `navIcon(id)` maps known ids and
+  falls back to a gear for every other id — including this section's
+  `provider-params`. When DSH exposes a per-section icon, use
+  `IconThinkOutline16` from `dsh-client-ui-primitives` for this section.
 
 ## License
 
@@ -154,4 +190,3 @@ module table; everything else is inlined.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) (development + release checklist) and
 [CHANGELOG.md](CHANGELOG.md) for version history.
-

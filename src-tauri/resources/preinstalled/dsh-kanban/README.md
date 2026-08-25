@@ -60,9 +60,12 @@ dsh's **system prompt** and visible to the user:
 
 **The full "make the model use it" mechanism:**
 1. **Board usage guidance** (`ctx.systemPrompt.section`): what the board is,
-   when to record, how it differs from `todo_write`.
+   when to record, how it differs from `todo_write`, and the
+   **card-completeness contract** — every card needs a rationale (why at
+   creation); a done card must carry all three what/why/rejected fields.
 2. **Session-start auto-injection** (`ctx.systemPrompt.context`): open items
-   are pushed into the model's context (see above).
+   are pushed into the model's context (see above); cards missing fields are
+   flagged `(缺:…)` so the model fills them when it picks the work up.
 3. **Wrap-up discipline**: the guidance requires that at the end of every work
    session the model moves completed cards to done, adds follow-ups as todos,
    updates summaries, and **never leaves stale `in_progress` cards** — the
@@ -86,7 +89,7 @@ your **workspace directory** (git-trackable, hand-editable).
 | Tool | Purpose |
 |---|---|
 | `board_list` | Read the current workspace board (all cards with status, tags, timestamps). Call it before any update to get real ids. |
-| `board_add` | Add a card (title required; optional summary/what, rationale/why, rejected/gave-up, description, status, tags). |
+| `board_add` | Add a card (title + **rationale/why expected on every card** — a title-only card is incomplete and flagged 缺; rejected/gave-up when a decision was made; summary/what filled at completion; optional description, status, tags). |
 | `board_update` | Update a card by id (status / title / summary / rationale / rejected / description / tags). |
 | `board_remove` | Remove a card by id. |
 | `note_add` | Write an Agent Note (full replication of the DSH repo discipline) to `.agents/notes/implemented/<class>/<date>-<topic>.md`. |
@@ -156,10 +159,21 @@ shipped, not part of the user-facing `test` chain).
   confirmation Modal** (no accidental one-click loss); cards show the
   what/why/rejected fields the model filled, and model-created cards carry an
   "Open source session" button (jump to the handling session);
+- **Two-line clamped previews**: each of the three what/why/rejected fields on
+  a card shows at most two lines, with an ellipsis (`...`) for the rest — cards
+  stay compact and scannable;
+- **Detail dialog**: clicking the card's title + what/why/rejected region
+  (including the description) opens a detail Modal where the full content is
+  laid out in labeled sections (icon + label + newline-preserving body), plus
+  status, tags, source session and created/updated times — a comfortable
+  reading view;
 - An add form at the bottom: title + the three what/why/rejected inputs laid
   out in one row of three columns;
-- **Auto-refresh**: while open, the page refreshes every 15s so
-  model/other-session writes appear without a manual refresh;
+- **Silent auto-refresh**: while open, the page polls every 15s and diffs by a
+  content signature — when nothing changed it leaves the card DOM completely
+  untouched, so it never interrupts reading or drops the scroll position; the
+  header shows "auto-refreshed at HH:mm:ss" so the poll's liveness is visible;
+  a failed poll keeps the current view (no error flash);
 - The page reads/writes the same `KANBAN.json` through the host-registered
   `/kanban/api` and `/kanban/counts` webServer routes (GET read, POST
   add/update/remove) — independent of built-in dsh RPC, so official upgrades
@@ -222,20 +236,46 @@ dsh plugin --profile web remove dsh-kanban   # removes dependency + bundle layer
 3. Open 「看板」 anytime for the three-column view; mark done / move / add / delete directly on the page.
 4. After switching branches or opening new sessions the board is still there — it's just a file in the workspace.
 
+## Card completeness & the kanban-use skill
+
+Cards are the board's cross-session memory: the next session reads them **without asking you**. The plugin therefore enforces a completeness contract on every surface the model sees (same rule everywhere, `missingCardFields` in `board-core.ts`):
+
+- **Every card needs `rationale` (为什么)** — why it exists and why now. A title-only card is incomplete and is flagged:
+  - in **tool outputs** (`⚠️缺:…` after the card line, plus a summary line when any card is incomplete),
+  - in the **session-start snapshot** (`(缺:…)` on open items, so a resuming session can fill them),
+  - on the **Web board page** (a warning line `缺字段：…` under the card fields — humans see it too).
+- **A `done` card must be self-explanatory**: `summary` (做了什么) + `rationale` + `rejected` (放弃了什么) all present, so the completed work is an honest hand-off.
+
+**The kanban-use skill** (`skills/kanban-use/SKILL.md`) is the deep manual for this discipline — field semantics, good/bad card examples, the create → advance → close flow, a close checklist, and templates. The system-prompt guidance points the model at it. **Installation and upgrades are automatic**: the skill ships inside the npm package (the tarball includes `skills/kanban-use/SKILL.md` and `scripts/install-skill.mjs`), and the plugin's host half checks `~/.agents/skills/kanban-use/SKILL.md` on every `dsh web` start. A `skill-version` fingerprint in the skill's frontmatter (bumped on content changes) drives the sync policy: missing → copies the shipped file in; identical → no-op; **same version but different content → your local copy is kept** (that is your own edit of the current version) with a hint; **older/different version → synced over** (that is stale package content from a previous install — the upgrade path). So `dsh plugin add/update dsh-kanban` + the required restart is all it takes, on any machine. The manual commands still exist for repo checkouts and forced syncs:
+
+```sh
+pnpm install:skill            # symlinks skills/kanban-use → ~/.agents/skills/kanban-use
+node scripts/install-skill.mjs --copy   # materialize/overwrite a copy (works inside the installed package too)
+```
+
+The skill is **maintained in this repository alongside the plugin** — the release/dev gates (`pnpm check:cards` → `scripts/check-card-discipline.mjs`) assert that the skill's field semantics and tool names stay consistent with the plugin's schema, and `scripts/audit-cards.mjs <workspace> [--fail]` reports incomplete cards in any workspace's `KANBAN.json`.
+
 ## Directory layout
 
 ```
 cordis.patch.yml        # bundle layer: mounts this package (host tools + client half)
 package.json            # dsh.bundle (patch) + dsh.client (web) + exports["./client"]
 tsdown.config.ts        # self-contained build: node half + module-table client bundle
-src/board-core.ts       # KANBAN.json domain: read/write, validation, card CRUD (shared)
+src/board-core.ts       # KANBAN.json domain: read/write, validation, card CRUD,
+                        #   missingCardFields completeness rule (shared)
 src/index.ts            # host half: 4 model tools + /kanban/api webServer route
 src/client/index.ts     # client apply: sidebar entry + full-screen board page
-src/client/BoardPage.tsx       # three-column board component
+src/client/BoardPage.tsx       # three-column board component (+ missing-field hints)
 src/client/KanbanSurface.tsx   # sidebar button + overlay wrapper
 src/client/board-state.ts      # module-level page visibility observable
 src/client/locales.ts          # zh/en copy
 src/client/styles.ts           # --dsw-alias-* design-token styles
+src/skill-sync.ts              # host half: kanban-use skill self-heal install (on dsh web start)
+skills/kanban-use/SKILL.md     # the kanban-use skill (ships in the npm tarball; auto-installed)
+scripts/check-card-discipline.mjs # dev gate: guidance/schema/skill agree on completeness
+scripts/audit-cards.mjs          # KANBAN.json completeness audit ([workspace] [--fail])
+scripts/install-skill.mjs        # symlink/copy the skill into ~/.agents/skills (shipped too)
+scripts/verify-skill-sync.mjs    # skill self-heal three-state verification (part of pnpm test)
 ```
 
 ## Why an external plugin
