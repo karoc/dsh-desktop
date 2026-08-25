@@ -308,6 +308,23 @@
       "updatedAt": 1787643922075,
       "summary": "以 npm latest tarball 为基准核查并同步三个预装插件：dsh-model-reasoning 0.1.4→0.2.1、dsh-kanban 0.1.2→0.2.1（并追加随包技能资产 skills/kanban-use/SKILL.md + scripts/install-skill.mjs）、dsh-turn-navigator 0.1.1 已最新未动。写入 plugins/preinstalled/ 并经 sync-resources.mjs 同步 src-tauri/resources/preinstalled/；验证 node --check、bundle 内含 skill-sync 字符串、两处目录 diff -r 完全一致。",
       "rejected": "按源仓库 HEAD 同步（历史惯例）——本次改用 npm 已发布 tarball，因仓库现干净停在发布 tag 且与 tarball 逐字节一致，两者收敛；保持最小精简不带 kanban 技能资产——被拒绝，0.2.x host 半区功能上随包分发技能，精简会致桌面端每次启动告警且兜底命令失效。"
+    },
+    {
+      "id": "card-7ed38a64-d60d-487a-84ec-1649c47d466d",
+      "title": "沉淀预装插件同步 Skill + audit 脚本（.dsh/skills 真源 + 全局 symlink）",
+      "description": "将「预装插件版本核查与同步」流程沉淀为可复用技能：真源在 .dsh/skills/dsh-preinstalled-plugin-sync/SKILL.md（随仓库版本控制，与 windows-desktop-shell-debugging 同款），全局 symlink ~/.agents/skills/dsh-preinstalled-plugin-sync 双通道接入；配套 scripts/audit-preinstalled.mjs 只读核查脚本（bundled vs npm latest，fetch 直查 registry）。技能含核查/更新/验证/提交/维护全流程与常见坑。",
+      "rationale": "预装插件同步是周期性维护任务且每次都有可复现的坑（沙箱 EROFS、npm view E404、精简约定、kanban 技能资产），沉淀成技能+脚本让下次一行命令核查、照手册更新，避免重复踩坑并保证流程一致。",
+      "rejected": "只放 ~/.agents/skills/ 全局目录——放弃：技能是 dsh-desktop 专属，仓库 .dsh/skills/ 是既有工作区约定，放仓库才能随 clone/版本控制走；只放 .dsh/skills/——放弃：本会话技能目录未含 windows-desktop-shell-debugging，无法保证新会话可见，故加全局 symlink 双通道。",
+      "sourceSessionId": "session-20b0d857-9ac9-489e-9ad6-bd3b7bcbfbae",
+      "status": "done",
+      "tags": [
+        "process",
+        "skill",
+        "preinstalled"
+      ],
+      "createdAt": 1787644611950,
+      "updatedAt": 1787644634599,
+      "summary": "已沉淀技能：真源 .dsh/skills/dsh-preinstalled-plugin-sync/SKILL.md（随仓库版本控制）+ 全局 symlink ~/.agents/skills/dsh-preinstalled-plugin-sync 双通道接入；配套只读核查脚本 scripts/audit-preinstalled.mjs（bundled vs npm latest，fetch 直查，语义化输出）；技能含架构/核查/更新/验证/提交/维护全流程与常见坑速查；验证 audit 脚本可运行、symlink 可读、resources 幂等。"
     }
   ]
 }
