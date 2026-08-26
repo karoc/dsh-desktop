@@ -280,18 +280,18 @@
       "id": "card-b362564c-9797-4e66-af97-294d560d2e83",
       "title": "复现核查：v0.3.8 发布后通知仍双弹（需日志定位）",
       "description": "用户在 v0.3.8 发布后报告\"刚才又复现了，推送了两次\"。需要区分：①是否已升级到 v0.3.8（修复是否生效）；②双弹形态：两条文案相同（双页面实例）vs 不同（分离交付残余/旧机制）；③查 %APPDATA%\\dev.dsh.desktop\\dsh-desktop-session.log 的 notify-* 决策行与 notification: 行。",
-      "rationale": "v0.3.8 修复已发布，但用户报告仍复现双弹——若在旧版本上复现属预期（修复未生效）；若在 v0.3.8 上复现则是残余机制（分离交付 M1b 或双页面实例），需日志定位并决定是否补 settle 窗口/Rust 桥去重。这是交付闭环的一部分。",
-      "rejected": "暂不直接改代码：先确定复现版本与日志形态再对症下药，避免盲目加固引入时序副作用。",
+      "rationale": "用户报告 v0.3.8 后仍双弹，需日志定位是否修复生效。用 windows-desktop-shell-debugging 技能 WSL 直读现场（dsh-desktop-session.log + manager.log + 会话 zstd 事件），确认修复版已生效、根因是「错误转边被误报完成 + 自动重试二次弹窗」，推翻了此前 M1b 快照竞态假设。",
+      "rejected": "M1b「分离交付快照竞态 + settle 窗口」假设——日志证实无紧邻双 toast（全日志最近 51s），且客户端决策自洽，双弹是同一会话 51-134s 内的两次 running→false（错误+重试），非快照竞态；settle 窗口无法覆盖 134s 间隔且修不了误导文案。仅加冷却期去重——能压双弹但误伤合法快速重跑且不修「错误报完成」文案，弃。",
       "sourceSessionId": "session-236329ea-90c9-4e4c-b4fd-0782af341326",
-      "status": "in_progress",
+      "status": "done",
       "tags": [
         "bug-fix",
         "notification",
         "verify"
       ],
       "createdAt": 1787544335476,
-      "updatedAt": 1787544634028,
-      "summary": "用户确认：v0.3.8 修复版仍复现双弹；无浏览器 tab。已排除：npm @deepseek-ai/dsh latest=0.1.1-rc.2 与本地源码一致（版本差异排除）、双 tab 实例（用户只开桌面应用）。最强嫌疑：分离交付 M1b——dsh mux 帧按 WebSocket 消息到达，running→false 与 pending 帧分属两条消息即产生两个快照，同快照互斥（规则B）在生产上可能常失效。预备方案：settle 窗口（完成 toast 延迟 ~1s，窗口内出现 pending 则取消）。下一步：用户提供 dsh-desktop-session.log 复现段确认 notify-* 决策行形态，再实施 settle 并多方复核。"
+      "updatedAt": 1787736865001,
+      "summary": "WSL 直读 Windows 宿主机完成核查，根因确凿：dsh 的 session running 标志在 turn/end（含 error）时翻 false，通知插件把每个 running→false 都当「任务完成」弹 toast。会话事件证实：11:43:39 turn4 因 network_error 终止→弹「完成」（误报）→11:44:15 自动重试 turn5→11:44:30 再次 network_error→再弹。12:05/12:07 同模式（turn6 错误→弹、turn7 重试真正完成→再弹）。全会话 11 次 turn/end 中 3 次 error 都被误报「已完成」。已排除：客户端双弹（120 决策=45 抑制+75 toast 自洽）、desktop-notification 事件（无 producer，死代码）、Rust 双路径（/notify 单请求单 toast，其余 show_toast 为更新/开发模式标题）、双进程实例。运行时 client.js 与 v0.3.8 修复版逐字节一致（仅 CRLF+桥端口 54822）——修复已生效但未覆盖「错误转边」。SessionSummary 无 error/结束原因字段，修复需走 sessions.history RPC 读 turn/end reason。"
     },
     {
       "id": "card-5752c3b5-e075-4765-b430-0556db9ef2fe",
@@ -325,6 +325,37 @@
       "createdAt": 1787644611950,
       "updatedAt": 1787644634599,
       "summary": "已沉淀技能：真源 .dsh/skills/dsh-preinstalled-plugin-sync/SKILL.md（随仓库版本控制）+ 全局 symlink ~/.agents/skills/dsh-preinstalled-plugin-sync 双通道接入；配套只读核查脚本 scripts/audit-preinstalled.mjs（bundled vs npm latest，fetch 直查，语义化输出）；技能含架构/核查/更新/验证/提交/维护全流程与常见坑速查；验证 audit 脚本可运行、symlink 可读、resources 幂等。"
+    },
+    {
+      "id": "card-c3f6f049-7eed-42c3-b460-ea32a3fd1878",
+      "title": "发布 v0.3.9（预装插件同步至最新，CI 自动出包）",
+      "description": "版本 0.3.8→0.3.9：预装插件同步至最新（model-reasoning 0.2.1、kanban 0.2.1 + 技能资产、turn-navigator 0.1.1 不变），附带修复 Cargo.lock 根包版本陈旧（0.3.7）。已 bump package.json/tauri.conf.json/Cargo.toml/Cargo.lock/README，提交 e13d9f0，push main，打 tag v0.3.9 推送，CI（build.yml）按 v* tag 自动构建 Windows NSIS + Linux AppImage/deb 并建 GitHub Release。",
+      "rationale": "预装插件内容升级（0.2.x 带来 provider 参数管理与卡片完整性契约等新能力）需要随壳发版才能交付给用户；仓库发布机制 = git tag v* 触发 CI 自动出包。",
+      "rejected": "0.4.0（minor）——放弃：壳自身 Rust/JS 代码无改动，预装插件内容升级按仓库惯例走 patch；等待通知双弹核查后再发——放弃：该问题需用户日志定位（阻塞在用户侧），与本次插件内容发布无关，不阻塞发版。",
+      "sourceSessionId": "session-20b0d857-9ac9-489e-9ad6-bd3b7bcbfbae",
+      "status": "in_progress",
+      "tags": [
+        "release",
+        "preinstalled"
+      ],
+      "createdAt": 1787732177669,
+      "updatedAt": 1787732177669
+    },
+    {
+      "id": "card-554332f3-3b70-4985-a84f-176a4f14f80f",
+      "title": "修复通知双弹：turn/end 分类 + 3 分钟错误冷却（client.js + 测试）",
+      "description": "按核查确认的根因实施修复：通知插件 client.js 在 running→false 时经 ctx.get('connection').api.sessions.history 读最近 turn/end 的 reason.kind 分类——completed→「任务完成」、error→「任务出错：<provider message>」、aborted/blocked/max-tokens/interrupted→「任务已停止/被阻止/达上限/中断」（不再误报已完成）；仅对 error toast 做每会话 3 分钟冷却（压掉自动重试的二次弹窗），completed 不设冷却（不误伤合法快速重跑）；RPC 不可用/失败回退旧行为。扩展 test-client-notifications.mjs 至 23 场景（新增错误分类、重试冷却、完成不被冷却、冷却过期恢复），全部通过；重跑 sync-resources 同步 resources 拷贝。",
+      "rationale": "根因已用 Windows 宿主日志确凿定位（turn/end error 转边被误报「已完成」+ 自动重试二次弹窗），方案经审计确认（RPC 契约、reason 取值、connection 注入、测试可异步化），实施后下次发版生效。",
+      "rejected": "仅改文案不做冷却——压不住「一个任务推两次」；仅冷却不分类——修不了误导文案；对所有转边做冷却——误伤合法快速重跑；settle 窗口——无法覆盖 51-134s 重试间隔。定稿：分类 + 仅 error 冷却。",
+      "sourceSessionId": "session-20b0d857-9ac9-489e-9ad6-bd3b7bcbfbae",
+      "status": "in_progress",
+      "tags": [
+        "bug-fix",
+        "notification",
+        "verify"
+      ],
+      "createdAt": 1787738446480,
+      "updatedAt": 1787738446480
     }
   ]
 }

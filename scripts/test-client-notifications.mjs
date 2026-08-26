@@ -44,7 +44,7 @@ assert.ok(windowStub.__handoff, '__ModuleLoader__.load must be called')
 assert.equal(windowStub.__handoff.id, '@dsh-desktop/client-notifications')
 
 const plugin = windowStub.__handoff.factory()
-assert.deepEqual(plugin.inject, ['sessions'])
+assert.deepEqual(plugin.inject, ['sessions', 'connection'])
 assert.equal(typeof plugin.apply, 'function')
 
 // ── sessions list store stub (mirrors SnapshotStore<SessionListState>) ──────
@@ -54,7 +54,31 @@ const list = {
   getSnapshot: () => state,
   subscribe: (fn) => { listeners.add(fn); return () => listeners.delete(fn) },
 }
-const ctx = { sessions: { list } }
+// Turn/end reason probe (api.sessions.history) stub: the classification path
+// is async, so completion assertions below `await flush()` after the mutation.
+let historyReason = 'completed' // kind the last turn/end carries
+let historyErrorMsg = ''
+const historyCalls = [] // sessionIds probed via sessions.history
+const ctx = {
+  sessions: { list },
+  connection: {
+    api: {
+      sessions: {
+        history: async ({ sessionId }) => {
+          historyCalls.push(sessionId)
+          const reason = historyReason === 'error'
+            ? { kind: 'error', error: { message: historyErrorMsg, code: 'PI_AI_ERROR' } }
+            : { kind: historyReason }
+          return {
+            events: [{ event: { type: 'turn/end', seq: 1, data: { turn: 1, reason } } }],
+            hasMore: false,
+          }
+        },
+      },
+    },
+  },
+}
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0))
 
 function mutate(patch) {
   state = { ...state, ...patch }
@@ -105,6 +129,7 @@ calls = []
 mutate({ ids: ['sess-A'], byId: { 'sess-A': session('sess-A', { running: true }) } })
 assert.equal(calls.length, 0, 'starting a run must not notify')
 mutate({ ids: ['sess-A'], byId: { 'sess-A': session('sess-A', { running: false, completed: true, title: '写周报' }) } })
+await flush()
 assert.equal(calls.length, 1, 'running→done transition must notify once')
 assert.deepEqual(calls[0][1], { title: 'dsh 任务完成', body: '「写周报」已完成', sessionId: 'sess-A' })
 
@@ -115,6 +140,7 @@ introduce('sess-A2')
 calls = []
 mutate({ ids: ['sess-A2'], byId: { 'sess-A2': session('sess-A2', { running: true, title: '清理' }) } })
 mutate({ ids: ['sess-A2'], byId: { 'sess-A2': session('sess-A2', { running: false, completed: false, title: '清理' }) } })
+await flush()
 assert.equal(calls.length, 1, 'running edge fires even when completed stays false (selected session)')
 assert.deepEqual(calls[0][1], { title: 'dsh 任务完成', body: '「清理」已完成', sessionId: 'sess-A2' })
 
@@ -164,6 +190,7 @@ assert.ok(allPosts.some((e) => e[0].includes('/alive')), 'canary re-posted on re
 introduce('sess-E')
 mutate({ ids: ['sess-E'], byId: { 'sess-E': session('sess-E', { running: true }) } })
 mutate({ ids: ['sess-E'], byId: { 'sess-E': session('sess-E', { running: false, completed: true, title: '部署' }) } })
+await flush()
 assert.equal(calls.length, 1, 'bridge path works after remount')
 assert.deepEqual(calls[0][1], { title: 'dsh 任务完成', body: '「部署」已完成', sessionId: 'sess-E' })
 dispose3()
@@ -179,6 +206,7 @@ const disposeA = pluginA.apply(ctx)
 introduce('sess-F') // baseline: running false, completed false
 calls = []
 mutate({ ids: ['sess-F'], byId: { 'sess-F': session('sess-F', { running: false, completed: true, title: '快任务' }) } })
+await flush()
 assert.equal(calls.length, 1, 'completed-appearing fallback must notify')
 assert.deepEqual(calls[0][1], { title: 'dsh 任务完成', body: '「快任务」已完成', sessionId: 'sess-F' })
 
@@ -192,6 +220,7 @@ introduce('sess-G') // baseline
 calls = []
 mutate({ ids: ['sess-G'], byId: { 'sess-G': session('sess-G', { running: true, title: '停止后' }) } })
 mutate({ ids: ['sess-G'], byId: { 'sess-G': session('sess-G', { running: false, completed: false, title: '停止后' }) } })
+await flush()
 assert.equal(calls.length, 1, '已完成 toasted on the running edge')
 assert.equal(calls[0][1].title, 'dsh 任务完成')
 mutate({ ids: ['sess-G'], byId: { 'sess-G': session('sess-G', { running: false, completed: true, title: '停止后' }) } })
@@ -218,6 +247,7 @@ eval(clientJs)
 const dispose4 = windowStub.__handoff.factory().apply(ctx2)
 setState({ items: [ { sessionId: 'sess-H', id: 'sess-H', title: 'UI投影', running: true, completed: false } ] })
 setState({ items: [ { sessionId: 'sess-H', id: 'sess-H', title: 'UI投影', running: false, completed: true } ] })
+await flush()
 assert.equal(calls.length, 1, 'items-shaped snapshot must notify too')
 assert.equal(calls[0][1].sessionId, 'sess-H')
 dispose4()
@@ -246,6 +276,7 @@ introduce('sess-P', { running: true, title: '主任务' })
 mutate({ ids: ['sess-P', 'sess-C'], byId: { 'sess-P': session('sess-P', { running: true, title: '主任务' }), 'sess-C': session('sess-C', { running: true, origin: 'subagent', parentId: 'sess-P', cwd: '/work' }) } })
 calls = []
 mutate({ ids: ['sess-P', 'sess-C'], byId: { 'sess-P': session('sess-P', { running: false, completed: true, title: '主任务' }), 'sess-C': session('sess-C', { running: false, origin: 'subagent', parentId: 'sess-P', cwd: '/work' }) } })
+await flush()
 assert.equal(calls.length, 1, 'parent+subagent-child completion notifies once')
 assert.equal(calls[0][1].sessionId, 'sess-P', 'the toast belongs to the root session')
 
@@ -263,6 +294,7 @@ assert.equal(calls[0][1].sessionId, 'sess-C')
 introduce('sess-J', { running: true, title: '干净任务' })
 calls = []
 mutate({ ids: ['sess-J'], byId: { 'sess-J': session('sess-J', { running: false, completed: true, title: '干净任务' }) } })
+await flush()
 assert.equal(calls.length, 1, 'clean completion still notifies once')
 assert.deepEqual(calls[0][1], { title: 'dsh 任务完成', body: '「干净任务」已完成', sessionId: 'sess-J' })
 
@@ -271,6 +303,7 @@ assert.deepEqual(calls[0][1], { title: 'dsh 任务完成', body: '「干净任�
 introduce('sess-K', { running: true, pendingInteraction: 'question', title: '回答后完成' })
 calls = []
 mutate({ ids: ['sess-K'], byId: { 'sess-K': session('sess-K', { running: false, pendingInteraction: undefined, title: '回答后完成' }) } })
+await flush()
 assert.equal(calls.length, 1, 'answered-then-finished notifies completion once')
 assert.equal(calls[0][1].title, 'dsh 任务完成')
 
@@ -279,8 +312,10 @@ assert.equal(calls[0][1].title, 'dsh 任务完成')
 // origin 'subagent' are covered by a parent notification.
 introduce('sess-F', { running: true, title: '原会话' })
 mutate({ ids: ['sess-F', 'sess-FK'], byId: { 'sess-F': session('sess-F', { running: false, completed: true, title: '原会话' }), 'sess-FK': session('sess-FK', { running: true, parentId: 'sess-F', title: '分支任务' }) } })
+await flush() // let sess-F's async classification land before resetting the counter
 calls = []
 mutate({ ids: ['sess-F', 'sess-FK'], byId: { 'sess-F': session('sess-F', { running: false, completed: true, title: '原会话' }), 'sess-FK': session('sess-FK', { running: false, completed: true, parentId: 'sess-F', title: '分支任务' }) } })
+await flush()
 assert.equal(calls.length, 1, 'fork child completion notifies once (its own toast)')
 assert.equal(calls[0][1].sessionId, 'sess-FK', 'fork row is an independent task')
 
@@ -291,7 +326,66 @@ calls = []
 mutate({ ids: ['sess-G2'], byId: { 'sess-G2': session('sess-G2', { running: false, completed: true, origin: 'subagent', parentId: 'gone', cwd: '/work' }) } })
 assert.equal(calls.length, 0, 'subagent row completion is always silent (parent covers it)')
 
+// ── scenarios 20-23: turn/end reason classification + error-retry cooldown ──
+// Root cause being covered: dsh flips session `running` to false on EVERY
+// turn/end, including turn/end with reason error — the old code announced a
+// provider network failure as 「任务完成」, and the auto-retry turn that also
+// failed re-popped the same toast ~a minute later ("推送了两次").
+
+// ── scenario 20: reason error → 「任务出错」with the provider message ────────
+introduce('sess-Err', { running: true, title: '网络波动任务' })
+historyReason = 'error'
+historyErrorMsg = 'Provider finish_reason: network_error'
+historyCalls.length = 0
+calls = []
+mutate({ ids: ['sess-Err'], byId: { 'sess-Err': session('sess-Err', { running: false, completed: false, title: '网络波动任务' }) } })
+await flush()
+assert.equal(calls.length, 1, 'error turn/end notifies once')
+assert.equal(calls[0][1].title, 'dsh 任务出错', 'error turn is announced as 出错, never 已完成')
+assert.ok(calls[0][1].body.includes('出错了'), 'body says 出错了')
+assert.ok(calls[0][1].body.includes('network_error'), 'body carries the provider message')
+assert.deepEqual(historyCalls, ['sess-Err'], 'classification probed the session tail')
+
+// ── scenario 21: auto-retry burst error within cooldown → suppressed ─────────
+// Same session re-runs and errors again ~60s later (dsh auto-retry after a
+// failed turn): this is the "double push". The second ERROR toast is dropped.
+calls = []
+mutate({ ids: ['sess-Err'], byId: { 'sess-Err': session('sess-Err', { running: true, title: '网络波动任务' }) } })
+mutate({ ids: ['sess-Err'], byId: { 'sess-Err': session('sess-Err', { running: false, completed: false, title: '网络波动任务' }) } })
+await flush()
+assert.equal(calls.length, 0, 'retry burst error toast suppressed by cooldown')
+
+// ── scenario 22: completed edge right after an error → STILL notifies ────────
+// A retry that genuinely finishes must not be swallowed by the error cooldown.
+historyReason = 'completed'
+calls = []
+mutate({ ids: ['sess-Err'], byId: { 'sess-Err': session('sess-Err', { running: true, title: '网络波动任务' }) } })
+mutate({ ids: ['sess-Err'], byId: { 'sess-Err': session('sess-Err', { running: false, completed: true, title: '网络波动任务' }) } })
+await flush()
+assert.equal(calls.length, 1, 'completed edge after error still notifies (no over-suppression)')
+assert.equal(calls[0][1].title, 'dsh 任务完成')
+
+// ── scenario 23: error again after cooldown expiry (3+ min) → notifies again ─
+// The cooldown must not silence a genuinely later failure.
+const realNow = Date.now
+let fakeNow = realNow()
+Date.now = () => fakeNow
+try {
+  historyReason = 'error'
+  historyErrorMsg = 'Provider finish_reason: network_error'
+  fakeNow += 4 * 60 * 1000 // jump 4 min past the last error toast
+  calls = []
+  mutate({ ids: ['sess-Err'], byId: { 'sess-Err': session('sess-Err', { running: true, title: '网络波动任务' }) } })
+  mutate({ ids: ['sess-Err'], byId: { 'sess-Err': session('sess-Err', { running: false, completed: false, title: '网络波动任务' }) } })
+  await flush()
+  assert.equal(calls.length, 1, 'error after cooldown expiry notifies again')
+  assert.equal(calls[0][1].title, 'dsh 任务出错')
+} finally {
+  Date.now = realNow
+  historyReason = 'completed'
+}
+
 disposeB()
 
-console.log('PASS — notification plugin behavioral test (19 scenarios)')
+console.log('PASS — notification plugin behavioral test (23 scenarios)')
 process.exit(0)

@@ -22,6 +22,28 @@ window.__ModuleLoader__.load({
       approval: '有一个操作正在等待你批准',
       'plan-review': '有一份计划正在等你审阅',
     }
+    // Turn-end reason kinds (from @deepseek-ai/dsh-session TurnEndReasonMap) →
+    // toast label. `completed` is the only "finished as asked" verdict; every
+    // other kind is a non-completion (error / aborted / blocked / max-tokens /
+    // interrupted) and must NOT be announced as 已完成 — that misleading
+    // wording is what turned provider network errors into "任务完成" toasts.
+    const END_KINDS = {
+      completed: { title: 'dsh 任务完成', body: '已完成' },
+      error: { title: 'dsh 任务出错', body: '出错了' },
+      aborted: { title: 'dsh 任务已停止', body: '已停止' },
+      blocked: { title: 'dsh 任务被阻止', body: '被阻止' },
+      'max-tokens': { title: 'dsh 任务达上限', body: '已达输出上限' },
+      interrupted: { title: 'dsh 任务中断', body: '已中断' },
+    }
+    // After an ERROR toast, a retry burst (dsh auto-retries a failed turn) can
+    // error again within seconds-to-minutes — the "double push" users saw.
+    // Suppress a second ERROR toast for the same session within this window;
+    // COMPLETED toasts are never cooldown-suppressed (a genuine quick re-run
+    // that finishes is still worth announcing).
+    const ERROR_COOLDOWN_MS = 3 * 60 * 1000
+    // Tail page size for the turn/end reason probe — a few messages is enough,
+    // generous so the last turn/end is always inside the returned window.
+    const HISTORY_TAIL = 40
     // Manager replaces the literal token with the live bridge port.
     const BRIDGE_PORT = globalThis.__DSH_BRIDGE_PORT__ || '__DSH_BRIDGE_PORT__'
 
@@ -82,6 +104,62 @@ window.__ModuleLoader__.load({
     // The desktop shell remembers the last notifying session; when the user
     // activates the app (toast click), it exposes that session via
     // /pending-open and we open it here — the only side that can drive dsh.
+    // ── turn/end reason classification (async) ────────────────────────────────
+    // dsh's session-list `running` flips false on EVERY turn/end, including
+    // turn/end with reason error/aborted/blocked/max-tokens/interrupted — not
+    // just on a real completion. The list row exposes no end reason, so on a
+    // completion edge we read the session tail via sessions.history and label
+    // the toast by the last turn/end reason.kind:
+    //   completed                -> 任务完成
+    //   error                    -> 任务出错: <message>  (with per-session
+    //                               3-min cooldown so an auto-retry burst does
+    //                               not re-pop)
+    //   aborted/blocked/...      -> 任务已停止 / 任务被阻止 / ... (never 已完成)
+    //   RPC unavailable/failed   -> fall back to 任务完成 (previous behavior)
+    // Never throws: the notification must still fire even if classification
+    // cannot run. The /notify post itself is subject to the window-focus
+    // suppression inside show().
+    const lastErrorToastAt = new Map() // sessionId -> ts of last ERROR toast
+    async function classifyAndNotify(ctx, item) {
+      let kind = 'completed'
+      let errMsg = ''
+      try {
+        const conn = ctx.connection ?? (typeof ctx.get === 'function' ? ctx.get('connection') : undefined)
+        const api = conn && conn.api
+        if (api && api.sessions && typeof api.sessions.history === 'function') {
+          const res = await api.sessions.history({ sessionId: idOf(item), maxMessages: HISTORY_TAIL })
+          const entries = (res && res.events) || []
+          for (let i = entries.length - 1; i >= 0; i--) {
+            const ev = entries[i] && entries[i].event
+            if (ev && ev.type === 'turn/end' && ev.data && ev.data.reason && ev.data.reason.kind) {
+              kind = ev.data.reason.kind
+              if (ev.data.reason.error && ev.data.reason.error.message) {
+                errMsg = String(ev.data.reason.error.message)
+              }
+              break
+            }
+          }
+        }
+      } catch (e) {
+        // Classification is best-effort; keep the old happy-path wording.
+        logEvent('notify-classify-error', item, String((e && e.message) || e))
+      }
+      logEvent('notify-classified', item, kind)
+      if (kind === 'error') {
+        const now = Date.now()
+        const last = lastErrorToastAt.get(idOf(item))
+        if (last !== undefined && now - last < ERROR_COOLDOWN_MS) {
+          logEvent('notify-error-cooldown', item, 'retry burst suppressed')
+          return
+        }
+        lastErrorToastAt.set(idOf(item), now)
+        const brief = errMsg ? `：${errMsg.slice(0, 120)}` : ''
+        show('dsh 任务出错', `「${titleOf(item)}」出错了${brief}`, item)
+        return
+      }
+      const label = END_KINDS[kind] || { title: 'dsh 任务结束', body: '已结束' }
+      show(label.title, `「${titleOf(item)}」${label.body}`, item)
+    }
     let polling = false
     function pollPendingOpen(ctx) {
       if (polling) return
@@ -119,7 +197,7 @@ window.__ModuleLoader__.load({
 
     return {
       name: 'desktop-notifications',
-      inject: ['sessions'],
+      inject: ['sessions', 'connection'],
       apply(ctx) {
         const seen = new Map() // sessionId -> { pending?, running, completed, ended }
         // Defensive: the sessions store's canonical shape is { ids, byId }
@@ -193,7 +271,8 @@ window.__ModuleLoader__.load({
                 // toasts are suppressed — so an unfocused edge is a real
                 // finish (or a rare external/browser stop; `completed` only
                 // records "ended while unselected", never stop-vs-finish).
-                // Wording is therefore always 已完成.
+                // The wording is decided by classifyAndNotify from the turn/end
+                // reason (completed → 已完成; error → 出错了; others → 已结束),
                 if (isSubagentRow) {
                   logEvent('notify-complete-suppressed', item, 'subagent row (parent turn covers it)')
                   seen.set(id, { pending: pending ?? undefined, running, completed, ended: true })
@@ -210,8 +289,8 @@ window.__ModuleLoader__.load({
                   continue
                 }
                 logEvent('notify-complete', item, completed ? 'completed-flag' : 'running-edge')
-                show('dsh 任务完成', `「${titleOf(item)}」已完成`, item)
                 seen.set(id, { pending: pending ?? undefined, running, completed, ended: true })
+                void classifyAndNotify(ctx, item)
                 continue
               }
               // Fallback: the running edge was missed (very fast task, or a
@@ -221,8 +300,8 @@ window.__ModuleLoader__.load({
               // suppresses the completion here too.
               if (!isSubagentRow && !before.ended && !before.running && !before.completed && completed && !running && !pending) {
                 logEvent('notify-complete-fallback', item, 'completed transition')
-                show('dsh 任务完成', `「${titleOf(item)}」已完成`, item)
                 seen.set(id, { pending: pending ?? undefined, running, completed, ended: true })
+                void classifyAndNotify(ctx, item)
                 continue
               }
             }
@@ -230,7 +309,10 @@ window.__ModuleLoader__.load({
             seen.set(id, { pending: pending ?? undefined, running, completed, ended: running ? false : (before ? before.ended : false) })
           }
           for (const id of [...seen.keys()]) {
-            if (!alive.has(id)) seen.delete(id)
+            if (!alive.has(id)) {
+              seen.delete(id)
+              lastErrorToastAt.delete(id)
+            }
           }
         }
         const list = ctx.sessions.list
