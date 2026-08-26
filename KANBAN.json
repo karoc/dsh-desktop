@@ -345,17 +345,18 @@
       "id": "card-554332f3-3b70-4985-a84f-176a4f14f80f",
       "title": "修复通知双弹：turn/end 分类 + 3 分钟错误冷却（client.js + 测试）",
       "description": "按核查确认的根因实施修复：通知插件 client.js 在 running→false 时经 ctx.get('connection').api.sessions.history 读最近 turn/end 的 reason.kind 分类——completed→「任务完成」、error→「任务出错：<provider message>」、aborted/blocked/max-tokens/interrupted→「任务已停止/被阻止/达上限/中断」（不再误报已完成）；仅对 error toast 做每会话 3 分钟冷却（压掉自动重试的二次弹窗），completed 不设冷却（不误伤合法快速重跑）；RPC 不可用/失败回退旧行为。扩展 test-client-notifications.mjs 至 23 场景（新增错误分类、重试冷却、完成不被冷却、冷却过期恢复），全部通过；重跑 sync-resources 同步 resources 拷贝。",
-      "rationale": "根因已用 Windows 宿主日志确凿定位（turn/end error 转边被误报「已完成」+ 自动重试二次弹窗），方案经审计确认（RPC 契约、reason 取值、connection 注入、测试可异步化），实施后下次发版生效。",
-      "rejected": "仅改文案不做冷却——压不住「一个任务推两次」；仅冷却不分类——修不了误导文案；对所有转边做冷却——误伤合法快速重跑；settle 窗口——无法覆盖 51-134s 重试间隔。定稿：分类 + 仅 error 冷却。",
+      "rationale": "根因已由 Windows 宿主日志确凿定位（error 转边误报完成 + 重试二次弹窗），方案经审计确认可行（RPC 契约、reason 取值、connection 注入、测试异步化），实施并测试后随下次发版修复用户报告的「推送了两次」。",
+      "rejected": "仅改文案（不压重试次数）；仅冷却（不修误导文案）；对所有转边冷却（误伤合法快速重跑）；settle 窗口（覆盖不了 51-134s 重试间隔）。定稿：分类 + 仅 error 冷却，RPC 失败回退旧行为保证通知必达。",
       "sourceSessionId": "session-20b0d857-9ac9-489e-9ad6-bd3b7bcbfbae",
-      "status": "in_progress",
+      "status": "done",
       "tags": [
         "bug-fix",
         "notification",
         "verify"
       ],
       "createdAt": 1787738446480,
-      "updatedAt": 1787738446480
+      "updatedAt": 1787738520441,
+      "summary": "按审计确认的方案实施：plugins/dsh-client-notifications/client.js 在 running→false 时经 api.sessions.history（inject 加 'connection'）读最近 turn/end reason.kind 分类——completed→「任务完成」、error→「任务出错：<msg>」、aborted/blocked/max-tokens/interrupted→对应中性文案、RPC 失败回退旧行为；仅 error toast 做每会话 3 分钟冷却（压掉自动重试二次弹窗），completed 不设冷却。测试扩至 23 场景全绿（错误分类、重试冷却、错误后完成不被吞、Date.now mock 验冷却过期恢复；完成边断言前 await flush 修异步竞态）；sync-resources 重跑并 diff 验证 resources 拷贝一致；提交 2673179 已推送。"
     }
   ]
 }
