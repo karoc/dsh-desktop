@@ -330,16 +330,17 @@
       "id": "card-c3f6f049-7eed-42c3-b460-ea32a3fd1878",
       "title": "发布 v0.3.9（预装插件同步至最新，CI 自动出包）",
       "description": "版本 0.3.8→0.3.9：预装插件同步至最新（model-reasoning 0.2.1、kanban 0.2.1 + 技能资产、turn-navigator 0.1.1 不变），附带修复 Cargo.lock 根包版本陈旧（0.3.7）。已 bump package.json/tauri.conf.json/Cargo.toml/Cargo.lock/README，提交 e13d9f0，push main，打 tag v0.3.9 推送，CI（build.yml）按 v* tag 自动构建 Windows NSIS + Linux AppImage/deb 并建 GitHub Release。",
-      "rationale": "预装插件内容升级（0.2.x 带来 provider 参数管理与卡片完整性契约等新能力）需要随壳发版才能交付给用户；仓库发布机制 = git tag v* 触发 CI 自动出包。",
-      "rejected": "0.4.0（minor）——放弃：壳自身 Rust/JS 代码无改动，预装插件内容升级按仓库惯例走 patch；等待通知双弹核查后再发——放弃：该问题需用户日志定位（阻塞在用户侧），与本次插件内容发布无关，不阻塞发版。",
+      "rationale": "预装插件内容升级（model-reasoning 0.2.1 / kanban 0.2.1 + 技能资产）需要随壳发版交付用户；CI 已完成出包。",
+      "rejected": "未并入通知修复（当时修复未实施）——由 v0.3.10 单独承载。",
       "sourceSessionId": "session-20b0d857-9ac9-489e-9ad6-bd3b7bcbfbae",
-      "status": "in_progress",
+      "status": "done",
       "tags": [
         "release",
         "preinstalled"
       ],
       "createdAt": 1787732177669,
-      "updatedAt": 1787732177669
+      "updatedAt": 1787738773115,
+      "summary": "v0.3.9（e13d9f0）bump 5 处版本 + 打 tag v0.3.9 推送，CI 按 v* tag 自动构建并建 GitHub Release，已 completed success 出包。"
     },
     {
       "id": "card-554332f3-3b70-4985-a84f-176a4f14f80f",
@@ -357,6 +358,22 @@
       "createdAt": 1787738446480,
       "updatedAt": 1787738520441,
       "summary": "按审计确认的方案实施：plugins/dsh-client-notifications/client.js 在 running→false 时经 api.sessions.history（inject 加 'connection'）读最近 turn/end reason.kind 分类——completed→「任务完成」、error→「任务出错：<msg>」、aborted/blocked/max-tokens/interrupted→对应中性文案、RPC 失败回退旧行为；仅 error toast 做每会话 3 分钟冷却（压掉自动重试二次弹窗），completed 不设冷却。测试扩至 23 场景全绿（错误分类、重试冷却、错误后完成不被吞、Date.now mock 验冷却过期恢复；完成边断言前 await flush 修异步竞态）；sync-resources 重跑并 diff 验证 resources 拷贝一致；提交 2673179 已推送。"
+    },
+    {
+      "id": "card-1a03dd6a-bfb4-4cc8-9b05-caeb93000b6b",
+      "title": "发布 v0.3.10（通知双弹修复，CI 自动出包）",
+      "description": "版本 0.3.9→0.3.10：承载通知双弹修复（2673179，turn/end reason 分类：error→「任务出错」、completed→「任务完成」、其余中性；仅 error 3 分钟冷却压重试双弹；测试 19→23 场景全绿）。bump 5 处版本 + 看板更新，提交 8b28ce1，push main，打 tag v0.3.10 推送，CI 按 v* tag 自动构建 Windows NSIS + Linux AppImage/deb 并建 GitHub Release。",
+      "rationale": "通知双弹根因已确凿定位并修复（错误转边误报「已完成」+ 自动重试二次弹窗），需随壳发版交付给用户；仓库发布机制 = git tag v* 触发 CI 自动出包。",
+      "rejected": "等 v0.3.9 真机复核后再发——用户明确要求直接发下一版；v0.3.9 已出包（含预装插件升级），v0.3.10 独立承载通知修复。",
+      "sourceSessionId": "session-20b0d857-9ac9-489e-9ad6-bd3b7bcbfbae",
+      "status": "in_progress",
+      "tags": [
+        "release",
+        "bug-fix",
+        "notification"
+      ],
+      "createdAt": 1787738781292,
+      "updatedAt": 1787738781292
     }
   ]
 }
