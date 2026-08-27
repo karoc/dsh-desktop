@@ -374,6 +374,22 @@
       ],
       "createdAt": 1787738781292,
       "updatedAt": 1787738781292
+    },
+    {
+      "id": "card-d9185f47-f039-4854-84fc-7b321a73b2bd",
+      "title": "自定义壳顶栏：无边框主窗口 + 壳菜单栏（DSH Desktop 图标左侧起，菜单依次向右）",
+      "rationale": "用户要求自定义壳顶栏（最小化/最大化/关闭）并把代理设置等壳级功能收进顶栏左侧「DSH Desktop」图标后的可见菜单栏，作为后续壳独有菜单定义点。Windows 上 Tauri 2 Menu 不渲染窗口菜单栏，远程 dsh 页无 __TAURI__，故采用注入式自绘顶栏 + 环回桥双通道。",
+      "rejected": "放弃 Tauri 原生窗口菜单（Windows 不渲染）；放弃子 webview 标题栏（多 webview 布局/命中测试跨平台复杂）；放弃全部收进图标下拉（用户确认可见性不足，改通用范式：应用菜单+可见顶级条目向右排）；放弃 CSS app-region 拖动（与 mousedown 桥拖动互斥、平台支持不一，统一走 /window/drag→start_dragging）；放弃 chrome 运行时读 resource 文件（改 include_str! 编译期内嵌）。",
+      "sourceSessionId": "session-2022bc96-7d1e-49fd-8ada-307acaff05a9",
+      "status": "done",
+      "tags": [
+        "shell",
+        "ui",
+        "feature"
+      ],
+      "createdAt": 1787833765826,
+      "updatedAt": 1787835034225,
+      "summary": "主窗口无边框（decorations:false+shadow:true），新增 src-tauri/resources/ui/shell-chrome.js（SHELL_MENUS 定义点：DSH Desktop 应用菜单 + 代理设置…直开 + 视图/帮助下拉 + 窗口三键），lib.rs include_str! 内嵌并在 on_page_load 注入 main webview；新增 window_control/get_shell_state/toggle_dev_mode/open_settings/show_about 命令与 10 个桥端点（/window/*、/shell/*）；scripts/test-shell-chrome.mjs 契约测试接入 npm test（全量 7 套通过）；README 更新架构图与「壳菜单栏」小节；Agent Note 已写（.agents/notes/implemented/feature/2026-08-27-shell-menu-bar.md）。"
     }
   ]
 }
