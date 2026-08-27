@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# dsh-desktop 项目专用 gh 包装：自动使用项目 token（~/.config/gh-dsh-desktop/token），
+# 按项目隔离，不污染全局 ~/.config/gh/hosts.yml。
+#
+# 用法：./scripts/gh <gh 参数>   （等价于 gh，但带项目 token）
+# token 文件格式：注释行（# 开头）忽略，其余内容去掉空白后作为 GH_TOKEN。
+# 进入项目目录时 direnv 也会自动注入（.envrc，见 CONTRIBUTING.md「gh token」）。
+set -euo pipefail
+if [ -f "$HOME/.config/gh-dsh-desktop/token" ]; then
+  TOKEN="$(grep -v '^#' "$HOME/.config/gh-dsh-desktop/token" | tr -d '[:space:]')"
+  if [ -n "$TOKEN" ]; then
+    export GH_TOKEN="$TOKEN"
+  fi
+fi
+exec gh "$@"

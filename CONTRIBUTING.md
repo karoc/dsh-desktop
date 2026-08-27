@@ -45,6 +45,16 @@ CI 分层：PR 只跑快层（check + test，~5min）；main/tag 跑全量（win
 开发版只本地构建（`D:\Dev\dsh-desktop-dev`，`npm run bundle:dev`），**不上 GitHub Actions**，
 GitHub 只承载正式版。详见 README「开发版」小节与 `dsh-desktop-shell-dev` Skill。
 
+## gh token（按项目隔离）
+
+gh CLI 默认读全局 `~/.config/gh/hosts.yml`。本项目使用**项目专用 fine-grained PAT**
+（仅授权 karoc/dsh-desktop，Permissions：Pull requests / Administration / Actions → write）：
+
+1. 创建 token 后粘贴到 `~/.config/gh-dsh-desktop/token`（权限 600；`#` 注释行自动忽略）。
+2. 进入项目目录时 direnv 自动 `export GH_TOKEN`（`.envrc`，已 gitignore，首次需 `direnv allow`）；
+   或显式用包装命令 `./scripts/gh <args>`（不依赖 direnv）。
+3. git push 走 SSH，不受 token 影响；CI 用 `secrets.GITHUB_TOKEN`，与个人 token 无关。
+
 ## 知识沉淀
 
 - 改壳功能/新踩坑 → 更新 `.dsh/skills/dsh-desktop-shell-dev/SKILL.md`（加菜单、桥端点同步契约测试）
