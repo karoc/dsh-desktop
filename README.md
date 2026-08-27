@@ -118,6 +118,7 @@ npm run bundle:dev        # = tauri build --config src-tauri/tauri.dev.conf.json
 - 调试入口：顶栏「DSH Desktop」→ 开发者模式（devtools）；`DSH_DESKTOP_REGISTRY` 等环境变量照常生效。
 - 卸载开发版只清开发版自己的数据（卸载器「删除应用程序数据」只作用于 dev 目录）。
 - 开发版版本号与正式版相同（tauri 要求 tauri.conf.json 与 Cargo.toml 版本一致，dev 配置不覆盖 version），以名称区分。
+- **构建流程约定**：开发版只在本地构建（固定目录 `D:\Dev\dsh-desktop-dev`），**不上 GitHub Actions**；GitHub 仓库与 Release 只承载正式版（正式版构建 = `npm run bundle`，CI 与本地一致）。
 
 ## 本地验证（Linux 可跑的部分）
 

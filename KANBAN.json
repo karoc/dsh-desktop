@@ -394,18 +394,34 @@
     {
       "id": "card-c57d06fb-b9c6-408a-9d3e-a3ce04c7d6a6",
       "title": "独立开发版：tauri.dev.conf.json 覆盖 identity，与正式版同机并存",
-      "summary": "新增 src-tauri/tauri.dev.conf.json（深合并覆盖 productName=\"DSH Desktop Dev\"、identifier=\"dev.dsh.desktop.dev\"）+ npm run bundle:dev；lib.rs 将 toast 激活参数化：AUMID 用 config().identifier、CLSID 用 toast_clsid()（正式版保持原固定 GUID，其它 identifier 用 FNV-1a 派生稳定 GUID）、开始菜单快捷方式名按 productName 查找；窗口标题/托盘 tooltip/设置窗口标题/关于 toast 用 package_info().name，开发版加「（开发版）」标识；chrome 注入 __DSH_PRODUCT_NAME__ 驱动应用菜单标签；契约测试新增 dev identity 断言；README「开发版」小节。",
-      "rationale": "用户在 Windows 上已装正式版，覆盖安装会动到工作数据，需要同机并存的独立开发版用于调试。Tauri 的 identity（identifier/productName）决定安装目录、应用数据目录、单实例互斥、AUMID 等全部隔离维度，只需一个 dev 配置覆盖 + toast 激活参数化即可实现完整隔离。",
-      "rejected": "放弃用环境变量/feature 分支切换身份（编译期不确定、易误用）；放弃单独 Cargo feature + 双配置维护（过度复杂）；dev 配置不覆盖 version（tauri 要求与 Cargo.toml 一致），以名称区分版本。",
+      "summary": "新增 src-tauri/tauri.dev.conf.json（深合并覆盖 productName=\"DSH Desktop Dev\"、identifier=\"dev.dsh.desktop.dev\"）+ `npm run bundle:dev`；lib.rs toast 激活参数化（AUMID=config().identifier、CLSID=toast_clsid() FNV-1a 派生、快捷方式按 productName 查找）；窗口标题/托盘 tooltip/设置窗口标题/关于 toast 用 package_info().name 并加「（开发版）」标识；chrome 注入 __DSH_PRODUCT_NAME__；契约测试新增 dev identity 断言；README「开发版」小节。CI 全绿（check/windows/linux；linux-smoke 为 main 既有失败不阻塞）。",
+      "rationale": "用户 Windows 已装正式版，覆盖安装会动到工作数据；需要同机并存的独立开发版安装包用于调试。Tauri identity（identifier/productName）天然决定安装目录/应用数据/单实例互斥/AUMID 等全部隔离维度，dev 配置覆盖 + toast 激活参数化即可完整隔离。",
+      "rejected": "放弃环境变量/编译开关切换身份（易误产出正式包）；放弃单独 Cargo feature + 完整双配置（维护面翻倍）；dev 配置不覆盖 version（tauri-cli 强制与 Cargo.toml 一致）；CLSID 派生不引入 uuid crate（FNV-1a×2 足够，正式版保持原固定 GUID 不变）。",
       "sourceSessionId": "session-2022bc96-7d1e-49fd-8ada-307acaff05a9",
-      "status": "todo",
+      "status": "done",
       "tags": [
         "dev-build",
         "windows",
         "feature"
       ],
       "createdAt": 1787836681548,
-      "updatedAt": 1787836681548
+      "updatedAt": 1787837867847
+    },
+    {
+      "id": "card-61582c12-bd82-48e5-8eb7-b447b163031a",
+      "title": "流程约定：开发版本地构建（D:\\Dev\\dsh-desktop-dev），不上 GitHub Actions",
+      "summary": "首次部署+编译已完成：Windows 侧 git clone（https，公开仓库）→ D:\\Dev\\dsh-desktop-dev，检出 feat/shell-menu-bar（bd349c8），npm install + npm run bundle:dev 成功，产物 D:\\Dev\\dsh-desktop-dev\\src-tauri\\target\\release\\bundle\\nsis\\DSH Desktop Dev_0.3.10_x64-setup.exe（27.9MB）。README「开发版」小节已写入构建流程约定；后续出开发版照此执行（WSL 侧 /mnt/d 为 9p 只读，部署/编译一律走 Windows interop powershell）。",
+      "rationale": "用户明确流程约定：开发版不上 GitHub Actions、GitHub 只放正式版；开发版固定在本机 D:\\Dev\\dsh-desktop-dev 部署并编译后告知。首次执行已验证整条链路可用。",
+      "rejected": "放弃在 GitHub 加 dev 构建 workflow（用户明确不要）；放弃从 WSL 直接写 /mnt/d（该环境 9p 只读挂载，改走 Windows interop 以 Windows 身份写入 D:\\）；放弃 WSL 侧编译（Linux 宿主无法出 NSIS 包，必须 Windows 侧）。",
+      "sourceSessionId": "session-2022bc96-7d1e-49fd-8ada-307acaff05a9",
+      "status": "done",
+      "tags": [
+        "dev-build",
+        "process",
+        "convention"
+      ],
+      "createdAt": 1787839111529,
+      "updatedAt": 1787839327670
     }
   ]
 }
