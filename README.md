@@ -29,6 +29,8 @@
 │   /notify → tauri-plugin-notification 弹系统通知           │
 │   /pending-open → 点通知后的"待打开会话"                    │
 │   /log /alive → 决策日志 + 心跳（排查用）                   │
+│ 自绘顶栏（decorations:false）：窗口三键 + 壳菜单栏           │
+│   注入 shell-chrome.js（SHELL_MENUS 定义点，IPC/桥双通道）   │
 │ 托盘：显示窗口 / 重启服务 / 打开数据目录 / 退出              │
 │ single-instance：toast 点击/二次启动 → 聚焦已有窗口          │
 └────────────────────────┬──────────────────────────────────┘
@@ -43,9 +45,10 @@
 ```
 src/                      Tauri 前端加载页（纯静态，无打包器）
   index.html / app.js      启动页：等 dsh 就绪 → 跳转；安装进度 + 滚动日志
-  settings.html / settings.js  独立代理设置窗口（托盘打开）
+  settings.html / settings.js  独立代理设置窗口（顶栏菜单栏 / 托盘打开）
 src-tauri/                Tauri 2 壳：
-  src/lib.rs               窗口/托盘/单实例/通知桥/服务生命周期/代理桥
+  src/lib.rs               窗口/托盘/单实例/通知桥/服务生命周期/代理桥/壳顶栏注入
+  resources/ui/shell-chrome.js  壳顶栏（窗口三键 + 菜单栏；SHELL_MENUS 定义点，编译期内嵌）
   capabilities/            权限（launcher + remote-notifications）
   resources/patch/         --patch 注入文件（dsh-desktop.patch.yml）
   resources/manager/       同步后的 server-manager.mjs + proxy.mjs
@@ -88,15 +91,45 @@ AppImage/deb，方便 Linux 桌面验证）。
 `tauri build` 前（`beforeBuildCommand`）会自动下载 Node 24 运行时并校验
 SHA-256，再同步 manager/plugin/patch 等资源。
 
+## 开发版（与正式版同机并存调试）
+
+Windows 上已装正式版时，覆盖安装会动到工作数据。项目支持打一个**独立身份的开发版**，
+与正式版互不干扰、可同时运行：
+
+```bash
+npm run bundle:dev        # = tauri build --config src-tauri/tauri.dev.conf.json --bundles nsis
+```
+
+`src-tauri/tauri.dev.conf.json` 只覆盖两个顶层字段（深合并到 tauri.conf.json，其余
+配置原样继承）：`productName: "DSH Desktop Dev"`、`identifier: "dev.dsh.desktop.dev"`。
+由此带来的隔离：
+
+| 维度 | 正式版 | 开发版 |
+|---|---|---|
+| 安装目录 / 开始菜单 / 卸载项 | `%LOCALAPPDATA%\DSH Desktop` | `%LOCALAPPDATA%\DSH Desktop Dev` |
+| 应用数据（runtime、dsh 本体、`DSH_HOME`、proxy.json） | `%APPDATA%\dev.dsh.desktop` | `%APPDATA%\dev.dsh.desktop.dev` |
+| 单实例互斥 / 任务栏 AUMID | `dev.dsh.desktop-sim` | `dev.dsh.desktop.dev-sim` |
+| toast 激活 CLSID（随 identifier 派生） | 固定 GUID | 独立派生 GUID |
+| dsh web 端口 / 通知桥端口 | 随机 | 随机（互不冲突） |
+
+- 两个版本可**同时运行**（各自单实例、各自 runtime、各自端口）。
+- 开发版首次启动用自己的 runtime 冷安装一份 dsh（视网络 1~3 分钟），不动正式版数据。
+- 顶栏应用菜单、托盘 tooltip、任务栏标题、关于 toast 均显示 "DSH Desktop Dev（开发版）"，不会认错。
+- 调试入口：顶栏「DSH Desktop」→ 开发者模式（devtools）；`DSH_DESKTOP_REGISTRY` 等环境变量照常生效。
+- 卸载开发版只清开发版自己的数据（卸载器「删除应用程序数据」只作用于 dev 目录）。
+- 开发版版本号与正式版相同（tauri 要求 tauri.conf.json 与 Cargo.toml 版本一致，dev 配置不覆盖 version），以名称区分。
+- **构建流程约定**：开发版只在本地构建（固定目录 `D:\Dev\dsh-desktop-dev`），**不上 GitHub Actions**；GitHub 仓库与 Release 只承载正式版（正式版构建 = `npm run bundle`，CI 与本地一致）。
+
 ## 本地验证（Linux 可跑的部分）
 
 ```bash
-npm test                 # 全量：通知插件 / 控制面 / 插件控制台 / 代理 / 代理e2e / 启动页设置
+npm test                 # 全量：通知插件 / 控制面 / 插件控制台 / 代理 / 代理e2e / 启动页设置 / 壳顶栏契约
 npm run test:plugin      # 通知插件行为测试（纯 Node，无浏览器）
 npm run test:control     # manager 控制面（10 场景）
 npm run test:console     # 插件控制台行为（17 场景）
 npm run test:proxy       # 内置正向代理（12 场景）
 npm run test:launcher-settings  # 代理设置窗口（6 场景）
+npm run test:shell-chrome       # 壳顶栏契约（菜单 id ↔ ACTIONS ↔ lib.rs 桥/命令）
 npm run fetch:node       # 下载并校验内置 Node 24（win/linux/darwin）
 npm run sync:resources   # 同步 manager/plugin/patch 进 src-tauri/resources
 ```
@@ -130,8 +163,27 @@ node scripts/server-manager.mjs \
 - 首次启动：用内置 pnpm 冷安装 dsh + 注入插件（视网络 1~3 分钟，之后走 pnpm 缓存秒开）；再启动会快速检测更新（稳定版 + 预发布）。
 - 更新失败（离线等）：保留现有版本继续启动，不阻塞；registry 会失败自动切换镜像并给出清晰报错。
 - 服务异常退出：加载页显示日志，"重试"按钮 → `restart_server`。
-- 关窗 → 隐藏到托盘；托盘"退出" → 杀掉整棵服务进程树并退出。
+- 关窗（含顶栏关闭键）→ 隐藏到托盘；顶栏/托盘"退出" → 杀掉整棵服务进程树并退出。
 - 点系统通知 → 窗口回到前台并打开对应会话（不重复启动第二个实例）。
+
+## 壳菜单栏（自绘顶栏）
+
+主窗口无系统标题栏（`decorations: false`），壳在每次页面加载时注入一条 36px 顶栏
+（`src-tauri/resources/ui/shell-chrome.js`，编译期内嵌，启动页与 dsh 页面都生效）：
+
+- 左上角 **DSH Desktop** 应用菜单：检查更新…（有更新时翻转为「有更新 vX（点击更新）」）、
+  开发者模式、退出；
+- 其后**可见顶级条目一字向右**：**代理设置…**（点击直开设置窗口）、**视图**（刷新页面 /
+  重启服务）、**帮助**（打开数据目录 / 关于）；
+- 右上角窗口三键：最小化 / 最大化(还原) / 关闭（关闭=隐藏到托盘，语义不变）；
+- 空白区拖动窗口、双击切换最大化；dsh 页面内路由切换不丢失（MutationObserver 自愈）。
+
+**后续壳独有的菜单就在 `SHELL_MENUS` 数组里定义**（该文件顶部），每个条目映射到
+`ACTIONS` 的双通道动作：本地页走 IPC 命令，远程 dsh 页走环回桥（`/window/*`、
+`/shell/*`，远程页没有 `__TAURI__`，tauri#11934）。契约由 `scripts/test-shell-chrome.mjs`
+守护：菜单 id ↔ ACTIONS ↔ lib.rs 桥端点/命令注册三方不漂移。
+（Tauri 2 的 `Menu` 在 Windows 不渲染窗口菜单栏，故为自绘注入；托盘菜单保留为窗口
+隐藏时的持久入口。）
 
 ## 插件（预装 + 用户自装）
 
@@ -140,7 +192,7 @@ dsh 页面右下角有「插件」控制台面板，统一管理：
 - **预装插件（默认关闭，随壳自带）**：`dsh-kanban`（看板）、`dsh-model-reasoning`（按模型推理档位）、`dsh-turn-navigator`（会话轮次导航）。在控制台打开开关后**重启服务生效**；控制台里可一键检查/升级预装插件、恢复默认版本。
 - **用户自装插件**：控制台输入 GitHub 地址或包名安装、卸载、更新（经内置 pnpm + `dsh plugin` CLI）。
 - **dsh 更新**：控制台「dsh 更新」区显示当前/可升版本。稳定版（`latest` tag）随时可一键升；若 npm 有更新的**预发布**（`next` tag，如 0.1.0-rc.8）也会提示「（预发布）」可升，想升才升，不点就保持稳定版。
-- 代理设置入口不在控制台里，在**托盘「代理设置…」**（独立设置窗口）。
+- 代理设置入口不在控制台里，在**顶栏菜单「代理设置…」**（独立设置窗口，托盘菜单同样可达）。
 
 ## 环境变量（可选）
 
