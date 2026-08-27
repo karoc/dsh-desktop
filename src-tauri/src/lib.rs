@@ -18,6 +18,13 @@ use std::sync::Mutex;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem};
 use tauri::{AppHandle, Emitter, Listener, Manager, State};
 
+/// The shell chrome (custom title bar + menu bar), injected into the MAIN
+/// webview on every page load. Embedded at compile time (include_str! is a
+/// cargo rebuild dependency): the menu definition point is the `SHELL_MENUS`
+/// array at the top of the file — adding a shell menu never touches Rust.
+/// See scripts/test-shell-chrome.mjs for the chrome↔shell contract test.
+const SHELL_CHROME: &str = include_str!("../resources/ui/shell-chrome.js");
+
 /// The spawned `server-manager` child (owns the dsh service tree) plus the
 /// control plane the shell needs to talk to it.
 struct ServerState {
@@ -171,7 +178,47 @@ static LAUNCHER_URL: Mutex<Option<String>> = Mutex::new(None);
 /// setup then refresh inaccessible" symptom after dsh web has cycled its port.
 static LIVE_DSH_URL: Mutex<Option<String>> = Mutex::new(None);
 
-/// Windows: register a PROCESS-LEVEL toast activator. The WinRT `Activated`
+/// Deterministic 64-bit FNV-1a — used to derive a per-build-identity toast
+/// activator CLSID without pulling in a hash/uuid crate.
+#[cfg(target_os = "windows")]
+fn fnv1a(seed: u64, data: &[u8]) -> u64 {
+    let mut h = seed;
+    for &b in data {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
+}
+
+/// Toast activator CLSID for a build identity. The official identifier keeps
+/// its long-standing stable GUID; any other identifier (e.g. the side-by-side
+/// dev build `dev.dsh.desktop.dev`) gets a deterministic RFC-4122-shaped GUID
+/// derived from it — two installs never clobber each other's toast
+/// registration, and the value is stable across launches/upgrades.
+#[cfg(target_os = "windows")]
+fn toast_clsid(identifier: &str) -> String {
+    if identifier == "dev.dsh.desktop" {
+        return "{7C2F4B1A-9D3E-4A8F-B6C0-5E1D2A3B4C5D}".to_string();
+    }
+    let a = fnv1a(0xcbf2_9ce4_8422_2325, identifier.as_bytes());
+    let b = fnv1a(0x9e37_79b9_7f4a_7c15, identifier.as_bytes());
+    let mut bytes = [0u8; 16];
+    bytes[..8].copy_from_slice(&a.to_le_bytes());
+    bytes[8..].copy_from_slice(&b.to_le_bytes());
+    bytes[6] = (bytes[6] & 0x0f) | 0x40; // RFC 4122 version 4
+    bytes[8] = (bytes[8] & 0x3f) | 0x80; // RFC 4122 variant
+    let hex: String = bytes.iter().map(|b| format!("{b:02X}")).collect();
+    format!(
+        "{{{}-{}-{}-{}-{}}}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..32]
+    )
+}
+
+/// Windows only: register a PROCESS-LEVEL toast activator. The WinRT `Activated`
 /// event used by notify-rust only fires while the toast is visible on screen;
 /// once it lands in the Action Center the system routes clicks to the app's
 /// COM activator instead. Registering our exe as the activator (the two
@@ -183,11 +230,11 @@ static LIVE_DSH_URL: Mutex<Option<String>> = Mutex::new(None);
 /// the last notified session. No INotificationActivationCallback COM object
 /// is needed — the relaunch IS the callback.
 #[cfg(target_os = "windows")]
-fn register_toast_activator(app_id: &str) -> Result<(), String> {
+fn register_toast_activator(app_id: &str, product_name: &str) -> Result<(), String> {
     use std::process::Command;
-    // Stable CLSID for our activator; only the registry hook that makes
-    // Windows launch this exe on toast click.
-    const CLSID: &str = "{7C2F4B1A-9D3E-4A8F-B6C0-5E1D2A3B4C5D}";
+    // Stable per-identity CLSID for our activator; only the registry hook that
+    // makes Windows launch this exe on toast click.
+    let clsid = toast_clsid(app_id);
     let exe = std::env::current_exe()
         .map_err(|e| format!("current_exe: {e}"))?
         .to_string_lossy()
@@ -206,7 +253,7 @@ fn register_toast_activator(app_id: &str) -> Result<(), String> {
     // HKCU\Software\Classes\CLSID\{GUID}\LocalServer32  (default = quoted exe)
     let _ = run(&[
         "add",
-        &format!(r"HKCU\Software\Classes\CLSID\{CLSID}\LocalServer32"),
+        &format!(r"HKCU\Software\Classes\CLSID\{clsid}\LocalServer32"),
         "/ve",
         "/d",
         &exe_quoted,
@@ -228,11 +275,11 @@ fn register_toast_activator(app_id: &str) -> Result<(), String> {
         &format!(r"HKCU\Software\Classes\AppUserModelId\{app_id}\CustomActivator"),
         "/ve",
         "/d",
-        CLSID,
+        &clsid,
         "/f",
     ])
     .map_err(|e| format!("reg add CustomActivator: {e}"))?;
-    ensure_shortcut_toast_activator(CLSID)?;
+    ensure_shortcut_toast_activator(&clsid, product_name)?;
     Ok(())
 }
 
@@ -242,7 +289,7 @@ fn register_toast_activator(app_id: &str) -> Result<(), String> {
 /// silently dropped until this property was set). Set it (self-healing: runs
 /// on every launch, so reinstall/shortcut-recreate is covered).
 #[cfg(target_os = "windows")]
-fn ensure_shortcut_toast_activator(clsid: &str) -> Result<(), String> {
+fn ensure_shortcut_toast_activator(clsid: &str, product_name: &str) -> Result<(), String> {
     use windows::core::{GUID, HSTRING, Interface, PWSTR};
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CoTaskMemAlloc, CoUninitialize, CLSCTX_INPROC_SERVER,
@@ -263,7 +310,15 @@ fn ensure_shortcut_toast_activator(clsid: &str) -> Result<(), String> {
         .join("Start Menu")
         .join("Programs");
     let mut lnk = None;
-    for name in ["DSH Desktop.lnk", "dsh Desktop.lnk"] {
+    // NSIS shortcut name = productName (Windows paths are case-insensitive,
+    // so the lowercase-first-letter spelling hits the same file).
+    let mut candidates = vec![format!("{product_name}.lnk")];
+    if let Some(first) = product_name.chars().next() {
+        let mut lower = product_name.to_string();
+        lower.replace_range(..first.len_utf8(), &first.to_lowercase().to_string());
+        candidates.push(lower);
+    }
+    for name in candidates {
         let p = base.join(name);
         if p.is_file() {
             lnk = Some(p);
@@ -364,7 +419,7 @@ fn show_toast(app: &AppHandle, title: String, body: String) {
     let mut n = notify_rust::Notification::new();
     n.summary(&title);
     #[cfg(target_os = "windows")]
-    n.app_id("dev.dsh.desktop");
+    n.app_id(app.config().identifier.as_str());
     if !body.is_empty() {
         n.body(&body);
     }
@@ -787,7 +842,7 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
         ("POST", "/devtools") => {
             if dev_mode(&runtime_dir(app)) {
                 if let Some(w) = app.get_webview_window("main") {
-                    let _ = w.open_devtools();
+                    w.open_devtools();
                 }
                 ("200 OK", String::new())
             } else {
@@ -945,6 +1000,106 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
                 send_line(&mut app.state::<ServerState>().stdin.lock().unwrap(), &line);
                 ("202 Accepted", serde_json::json!({ "ok": true }).to_string())
             }
+        }
+        // ── shell chrome (custom title bar + menu bar; remote dsh page has
+        // no __TAURI__, so window/menu actions ride the bridge) ────────────
+        ("POST", "/window/minimize") => {
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.minimize();
+            }
+            ("200 OK", serde_json::json!({ "ok": true }).to_string())
+        }
+        ("POST", "/window/toggle-maximize") => {
+            let maximized = app
+                .get_webview_window("main")
+                .and_then(|w| w.is_maximized().ok())
+                .unwrap_or(false);
+            if let Some(w) = app.get_webview_window("main") {
+                if maximized {
+                    let _ = w.unmaximize();
+                } else {
+                    let _ = w.maximize();
+                }
+            }
+            ("200 OK", serde_json::json!({ "ok": true, "maximized": !maximized }).to_string())
+        }
+        ("POST", "/window/close") => {
+            // Same semantics as the native close button: CloseRequested →
+            // prevent + hide to tray (menu bar 退出 is the real quit).
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.close();
+            }
+            ("200 OK", serde_json::json!({ "ok": true }).to_string())
+        }
+        ("POST", "/window/drag") => {
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.start_dragging();
+            }
+            ("200 OK", serde_json::json!({ "ok": true }).to_string())
+        }
+        ("GET", "/window/state") => {
+            let maximized = app
+                .get_webview_window("main")
+                .and_then(|w| w.is_maximized().ok())
+                .unwrap_or(false);
+            ("200 OK", serde_json::json!({ "ok": true, "maximized": maximized }).to_string())
+        }
+        ("POST", "/shell/open-settings") => {
+            open_settings_window(app);
+            ("200 OK", serde_json::json!({ "ok": true }).to_string())
+        }
+        ("POST", "/shell/dev-mode-toggle") => match toggle_dev_mode_impl(app) {
+            Ok(v) => ("200 OK", v.to_string()),
+            Err(e) => (
+                "500 Internal Server Error",
+                serde_json::json!({ "ok": false, "error": e }).to_string(),
+            ),
+        },
+        ("POST", "/shell/open-data-dir") => {
+            let _ = open_data_dir(app.clone());
+            ("200 OK", serde_json::json!({ "ok": true }).to_string())
+        }
+        ("POST", "/shell/about") => {
+            let current = app
+                .state::<ServerState>()
+                .update
+                .lock()
+                .unwrap()
+                .current
+                .clone()
+                .unwrap_or_else(|| "?".into());
+            let dev = if is_dev_build(app) { "（开发版）" } else { "" };
+            show_toast(
+                app,
+                app.package_info().name.clone(),
+                format!("版本 {} · dsh 当前 {}{}", env!("CARGO_PKG_VERSION"), current, dev),
+            );
+            ("200 OK", serde_json::json!({ "ok": true }).to_string())
+        }
+        ("POST", "/shell/quit") => {
+            let _ = quit_app(app.clone(), app.state::<ServerState>());
+            ("200 OK", serde_json::json!({ "ok": true }).to_string())
+        }
+        ("GET", "/shell/state") => {
+            // Bind the State first: the lock guard borrows it, so an inline
+            // app.state() temporary would be dropped while still borrowed.
+            let state = app.state::<ServerState>();
+            let upd = state.update.lock().unwrap();
+            (
+                "200 OK",
+                serde_json::json!({
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "devMode": dev_mode(&runtime_dir(app)),
+                    "update": {
+                        "current": upd.current,
+                        "latest": upd.latest,
+                        "updateAvailable": upd.update_available,
+                        "next": upd.next,
+                        "nextAvailable": upd.next_available,
+                    },
+                })
+                .to_string(),
+            )
         }
         _ => ("404 Not Found", "not found".into()),
     };
@@ -1106,7 +1261,7 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
     let handle = app.clone();
     let lines = BufReader::new(stdout).lines();
     std::thread::spawn(move || {
-        for line in lines.flatten() {
+        for line in lines.map_while(Result::ok) {
             let trimmed = line.trim();
             if trimmed.is_empty() {
                 continue;
@@ -1266,7 +1421,7 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
     if let Some(err) = child.stderr.take() {
         let handle = app.clone();
         std::thread::spawn(move || {
-            for line in BufReader::new(err).lines().flatten() {
+            for line in BufReader::new(err).lines().map_while(Result::ok) {
                 let _ = handle.emit("server-log", line.clone());
                 eprintln!("[dsh-desktop manager] {line}");
             }
@@ -1365,11 +1520,36 @@ fn open_settings_window(app: &AppHandle) {
         return;
     }
     let _ = tauri::WebviewWindowBuilder::new(app, "settings", tauri::WebviewUrl::App("settings.html".into()))
-        .title("DSH Desktop — 代理设置")
+        .title(format!("{} — 代理设置", app.package_info().name))
         .inner_size(640.0, 720.0)
         .min_inner_size(480.0, 560.0)
         .resizable(true)
         .build();
+}
+
+/// Inject the shell chrome (custom title bar + menu bar) into the MAIN
+/// webview on every page load. Works on both the launcher page
+/// (tauri://localhost, has __TAURI__) and the remote dsh page
+/// (http://127.0.0.1:*, no __TAURI__ — the chrome falls back to the loopback
+/// bridge). Skipped for the settings window, which keeps its native frame.
+/// The preamble bakes in the shell version and the bridge port (the bridge is
+/// started in setup before any page can load, but port 0 is tolerated — the
+/// launcher page uses IPC anyway).
+fn inject_shell_chrome(app: &AppHandle) {
+    let Some(w) = app.get_webview_window("main") else {
+        return;
+    };
+    let mut prefix = format!(
+        "window.__DSH_SHELL_VERSION__={};window.__DSH_PRODUCT_NAME__={}",
+        serde_json::to_string(env!("CARGO_PKG_VERSION")).unwrap_or_else(|_| "\"\"".into()),
+        serde_json::to_string(app.package_info().name.as_str())
+            .unwrap_or_else(|_| "\"DSH Desktop\"".into())
+    );
+    let port = BRIDGE_PORT.load(std::sync::atomic::Ordering::SeqCst);
+    if port > 0 {
+        prefix.push_str(&format!(";window.__DSH_BRIDGE_PORT__={port}"));
+    }
+    let _ = w.eval(format!("(()=>{{{prefix};{SHELL_CHROME}}})()"));
 }
 
 // ── proxy connection test (settings window "测试连接") ────────────────────────
@@ -1560,6 +1740,123 @@ fn restart_dsh(state: State<'_, ServerState>) -> Result<(), String> {
     Ok(())
 }
 
+/// Flip dsh.json devMode, mirroring the tray checkbox, with a toast
+/// confirming the change. Shared by the tray, the IPC command, and the bridge
+/// endpoint so the three surfaces never drift.
+fn toggle_dev_mode_impl(app: &AppHandle) -> Result<serde_json::Value, String> {
+    let runtime = runtime_dir(app);
+    let on = dev_mode(&runtime);
+    set_dev_mode(&runtime, !on)?;
+    if let Some(item) = app.state::<ServerState>().dev_item.lock().unwrap().as_ref() {
+        let _ = item.set_checked(!on);
+    }
+    show_toast(
+        app,
+        "开发者模式".into(),
+        if !on {
+            "已开启（dsh 更新冻结、devtools 可用），重启服务后生效".into()
+        } else {
+            "已关闭，重启服务后生效".into()
+        },
+    );
+    Ok(serde_json::json!({ "devMode": !on }))
+}
+
+/// Window control for the custom (frameless) title bar: minimize /
+/// toggle-maximize / close / state / drag. `close` keeps the existing
+/// close-to-tray semantics (CloseRequested → prevent + hide).
+#[tauri::command]
+fn window_control(app: AppHandle, action: String) -> Result<serde_json::Value, String> {
+    let w = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?;
+    let is_max = || w.is_maximized().unwrap_or(false);
+    match action.as_str() {
+        "minimize" => {
+            w.minimize().map_err(|e| e.to_string())?;
+            Ok(serde_json::json!({ "ok": true }))
+        }
+        "toggle-maximize" => {
+            let on = is_max();
+            if on {
+                w.unmaximize().map_err(|e| e.to_string())?;
+            } else {
+                w.maximize().map_err(|e| e.to_string())?;
+            }
+            Ok(serde_json::json!({ "ok": true, "maximized": !on }))
+        }
+        "close" => {
+            w.close().map_err(|e| e.to_string())?;
+            Ok(serde_json::json!({ "ok": true }))
+        }
+        "state" => Ok(serde_json::json!({ "ok": true, "maximized": is_max() })),
+        "drag" => {
+            w.start_dragging().map_err(|e| e.to_string())?;
+            Ok(serde_json::json!({ "ok": true }))
+        }
+        other => Err(format!("unknown window action: {other}")),
+    }
+}
+
+/// Shell state for the chrome menu bar: shell version, dev mode, and the dsh
+/// update status mirrored from the manager.
+#[tauri::command]
+fn get_shell_state(app: AppHandle, state: State<'_, ServerState>) -> serde_json::Value {
+    let upd = state.update.lock().unwrap();
+    serde_json::json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "devMode": dev_mode(&runtime_dir(&app)),
+        "update": {
+            "current": upd.current,
+            "latest": upd.latest,
+            "updateAvailable": upd.update_available,
+            "next": upd.next,
+            "nextAvailable": upd.next_available,
+        },
+    })
+}
+
+/// Chrome menu bar checkbox: toggle dev mode (see toggle_dev_mode_impl).
+#[tauri::command]
+fn toggle_dev_mode(app: AppHandle) -> Result<serde_json::Value, String> {
+    toggle_dev_mode_impl(&app)
+}
+
+/// Chrome menu bar entry: open (or focus) the proxy settings window.
+#[tauri::command]
+fn open_settings(app: AppHandle) -> Result<(), String> {
+    open_settings_window(&app);
+    Ok(())
+}
+
+/// True for any build whose bundle identifier differs from the official one
+/// (the side-by-side dev build from tauri.dev.conf.json). Used to label the
+/// dev variant in user-visible strings so it can't be mistaken for the
+/// official install.
+fn is_dev_build(app: &AppHandle) -> bool {
+    app.config().identifier != "dev.dsh.desktop"
+}
+
+/// Chrome menu bar entry: "关于 DSH Desktop" — native toast with the shell
+/// version and the current dsh version.
+#[tauri::command]
+fn show_about(app: AppHandle, state: State<'_, ServerState>) -> Result<(), String> {
+    let current = state
+        .update
+        .lock()
+        .unwrap()
+        .current
+        .clone()
+        .unwrap_or_else(|| "?".into());
+    let dev = if is_dev_build(&app) { "（开发版）" } else { "" };
+    show_toast(
+        &app,
+        app.package_info().name.clone(),
+        format!("版本 {} · dsh 当前 {}{}", env!("CARGO_PKG_VERSION"), current, dev),
+    );
+    Ok(())
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
@@ -1591,6 +1888,9 @@ pub fn run() {
         // on every page load (window existence/creation timing is not relied
         // on; see WindowConfig having no icon field in Tauri v2).
         .on_page_load(|webview, payload| {
+            if webview.label() == "main" {
+                inject_shell_chrome(webview.app_handle());
+            }
             if let Some(w) = webview.app_handle().get_webview_window("main") {
                 if let Some(icon) = w.app_handle().default_window_icon() {
                     let _ = w.set_icon(icon.clone());
@@ -1642,7 +1942,11 @@ pub fn run() {
                 // 阻塞了 WebView 首帧（启动黑屏几秒）且闪 cmd 窗。注册必须在
                 // 第一次 toast 前完成即可——后台线程毫秒级跑完，远早于用户
                 // 触发任何通知。
-                std::thread::spawn(move || match register_toast_activator("dev.dsh.desktop") {
+                // identifier/productName 来自（合并后的）tauri.conf：开发版
+                // （tauri.dev.conf.json）有独立 identity，与正式版互不抢注册。
+                let identifier = app.config().identifier.clone();
+                let product_name = app.package_info().name.clone();
+                std::thread::spawn(move || match register_toast_activator(&identifier, &product_name) {
                     Ok(()) => {
                         log_line(&data, "activator registered");
                         eprintln!("[dsh-desktop] activator registered");
@@ -1659,6 +1963,8 @@ pub fn run() {
                 if let Some(icon) = app.default_window_icon() {
                     let _ = w.set_icon(icon.clone());
                 }
+                // 任务栏/Alt-Tab 标题跟随 productName（开发版区别于正式版）。
+                let _ = w.set_title(app.package_info().name.as_str());
                 // Capture the launcher URL for post-restart reconnection (the
                 // page itself is replaced by the dsh page on the first boot).
                 if let Ok(u) = w.url() {
@@ -1687,7 +1993,7 @@ pub fn run() {
 
             let _tray = tauri::tray::TrayIconBuilder::with_id("dsh-tray")
                 .icon(app.default_window_icon().expect("app icon").clone())
-                .tooltip("DSH Desktop")
+                .tooltip(app.package_info().name.clone())
                 .menu(&menu)
                 // Left click shows no menu (only right-click does); left
                 // double-click restores the window below.
@@ -1736,26 +2042,8 @@ pub fn run() {
                         );
                     }
                     "dev-mode" => {
-                        let runtime = runtime_dir(app);
-                        let on = dev_mode(&runtime);
-                        match set_dev_mode(&runtime, !on) {
-                            Ok(()) => {
-                                if let Some(item) = app.state::<ServerState>().dev_item.lock().unwrap().as_ref() {
-                                    let _ = item.set_checked(!on);
-                                }
-                                show_toast(
-                                    app,
-                                    "开发者模式".into(),
-                                    if !on {
-                                        "已开启（dsh 更新冻结、devtools 可用），重启服务后生效".into()
-                                    } else {
-                                        "已关闭，重启服务后生效".into()
-                                    },
-                                );
-                            }
-                            Err(e) => {
-                                show_toast(app, "开发者模式".into(), format!("切换失败：{e}"));
-                            }
+                        if let Err(e) = toggle_dev_mode_impl(app) {
+                            show_toast(app, "开发者模式".into(), format!("切换失败：{e}"));
                         }
                     }
                     "data" => {
@@ -1871,7 +2159,12 @@ pub fn run() {
             restart_dsh,
             get_proxy_config,
             set_proxy_config,
-            test_proxy
+            test_proxy,
+            window_control,
+            get_shell_state,
+            toggle_dev_mode,
+            open_settings,
+            show_about
         ])
         .run(tauri::generate_context!())
         .expect("error while running DSH Desktop");

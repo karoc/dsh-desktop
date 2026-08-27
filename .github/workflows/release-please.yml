@@ -1,0 +1,25 @@
+# Release automation: Conventional Commits → version bump (all three version
+# files) → CHANGELOG.md → release PR → auto tag vX.Y.Z on merge.
+#
+# The v* tag then triggers the existing build.yml full gate + release job,
+# which attaches the CI-built installers to the GitHub Release. No manual
+# version bumping or tagging needed anymore.
+name: release-please
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: write
+  pull-requests: write
+concurrency:
+  group: release-please-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json

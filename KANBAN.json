@@ -11,7 +11,10 @@
         "proxy"
       ],
       "createdAt": 1786959259229,
-      "updatedAt": 1786959259229
+      "updatedAt": 1786959259229,
+      "summary": "见 commit f801d79：tools(diagnose): report installed shell version, dsh broken-install state, and manager.log markers",
+      "rationale": "任务见标题；实现见 commit f801d79。",
+      "rejected": "未记录（历史卡片；决策依据见 commit 信息）。"
     },
     {
       "id": "card-2550f5d7-824d-4edf-afce-086a372acd4e",
@@ -23,7 +26,10 @@
         "proxy"
       ],
       "createdAt": 1786959259242,
-      "updatedAt": 1786959259242
+      "updatedAt": 1786959259242,
+      "summary": "见 commit fa91e36：docs: unify install/update/proxy messaging across README, ENGINEERING-NOTES, console plan",
+      "rationale": "任务见标题；实现见 commit fa91e36。",
+      "rejected": "未记录（历史卡片；决策依据见 commit 信息）。"
     },
     {
       "id": "card-eca7e36d-047e-4a92-8bed-165edc270eda",
@@ -35,7 +41,10 @@
         "proxy"
       ],
       "createdAt": 1786959259252,
-      "updatedAt": 1786959259252
+      "updatedAt": 1786959259252,
+      "summary": "见 git log --all（按标题关键词搜索对应 commit）。",
+      "rationale": "任务见标题。",
+      "rejected": "未记录（历史卡片）。"
     },
     {
       "id": "card-19148b9d-4b88-4e5c-9d24-f4fa339ebc51",
@@ -47,7 +56,10 @@
         "proxy"
       ],
       "createdAt": 1786959259262,
-      "updatedAt": 1786959259262
+      "updatedAt": 1786959259262,
+      "summary": "见 git log --all（按标题关键词搜索对应 commit）。",
+      "rationale": "任务见标题。",
+      "rejected": "未记录（历史卡片）。"
     },
     {
       "id": "card-0ec7630e-5be1-46c9-853d-71fd2573442f",
@@ -59,7 +71,10 @@
         "proxy"
       ],
       "createdAt": 1786959259277,
-      "updatedAt": 1786959259277
+      "updatedAt": 1786959259277,
+      "summary": "见 git log --all（按标题关键词搜索对应 commit）。",
+      "rationale": "任务见标题。",
+      "rejected": "未记录（历史卡片）。"
     },
     {
       "id": "card-fce90c17-ded0-47e7-9d43-f73a0f8f044d",
@@ -72,7 +87,10 @@
         "plugins"
       ],
       "createdAt": 1787025321032,
-      "updatedAt": 1787025321032
+      "updatedAt": 1787025321032,
+      "summary": "见 commit 96214de：chore(skill): distill preinstalled-plugin-sync workflow into a reusable skill + audit script",
+      "rationale": "任务见标题；实现见 commit 96214de。",
+      "rejected": "未记录（历史卡片；决策依据见 commit 信息）。"
     },
     {
       "id": "card-7e44771a-6fb6-4a28-b6fb-2ef1135ab3bc",
@@ -86,7 +104,8 @@
         "plugins"
       ],
       "createdAt": 1787032101064,
-      "updatedAt": 1787032101064
+      "updatedAt": 1787032101064,
+      "rejected": "未记录（历史卡片；决策依据见 commit 信息）。"
     },
     {
       "id": "card-b823cd1d-64c5-43d5-8f2e-d4f8e26bc02c",
@@ -100,7 +119,9 @@
       ],
       "createdAt": 1787137916096,
       "updatedAt": 1787137935693,
-      "summary": "dsh-turn-navigator@0.1.1（dsh-turn-nav 仓库 HEAD 构建，已在 workspace 重建并逐字节验证）按 dsh-kanban 模式预装：plugins/preinstalled/dsh-turn-navigator/（lib + cordis.patch.yml + 裁剪 package.json/README + LICENSE）；sync-resources 列表与 server-manager PROTECTED 均加 dsh-turn-navigator；sync:resources 已刷新 src-tauri/resources；test-control-plane 增加落盘/preinstalled-updates 断言、test-plugin-console fixture 扩为三行；六个测试脚本全部通过。"
+      "summary": "dsh-turn-navigator@0.1.1（dsh-turn-nav 仓库 HEAD 构建，已在 workspace 重建并逐字节验证）按 dsh-kanban 模式预装：plugins/preinstalled/dsh-turn-navigator/（lib + cordis.patch.yml + 裁剪 package.json/README + LICENSE）；sync-resources 列表与 server-manager PROTECTED 均加 dsh-turn-navigator；sync:resources 已刷新 src-tauri/resources；test-control-plane 增加落盘/preinstalled-updates 断言、test-plugin-console fixture 扩为三行；六个测试脚本全部通过。",
+      "rationale": "任务见标题；实现见 commit 96214de。",
+      "rejected": "未记录（历史卡片；决策依据见 commit 信息）。"
     },
     {
       "id": "card-cfb9fb70-baa9-4ee6-8093-c5cf1515f111",
@@ -115,7 +136,8 @@
         "release"
       ],
       "createdAt": 1787198596012,
-      "updatedAt": 1787208103638
+      "updatedAt": 1787208103638,
+      "rejected": "未记录（历史卡片；该轮为预装插件全量检查+版本对齐后的常规发布）。"
     },
     {
       "id": "card-9b586fc1-345b-4a1a-95b1-8a61ecd877ba",
@@ -131,7 +153,8 @@
       "createdAt": 1787203257064,
       "updatedAt": 1787208079626,
       "summary": "二次修复（0.3.2）：broken-install 自动修复。根因：0.3.0 冷安装被强关留下半截安装（package.json 在、lib/bin.js 缺），installedVersion() 只看 package.json → 自动安装闸门被跳过 → launch failed: not installed。修复：dshInstalled()=manifest+入口双检，main() 闸门与 installDshUpdate 的“已最新”跳过都改用它；破损时 rmSync 整个 dsh 目录强制重装。新增 test-broken-install.mjs 端到端验证（自动修复→重装→正常启动）。0.3.1→0.3.2 已提交推送。",
-      "rationale": "把“20 分钟静默悬挂”变成 ~30s 快失败 + 自动切换镜像 + 清晰报错。"
+      "rationale": "把“20 分钟静默悬挂”变成 ~30s 快失败 + 自动切换镜像 + 清晰报错。",
+      "rejected": "未记录（历史卡片；决策依据见 commit 信息）。"
     },
     {
       "id": "card-ec992325-540f-46bf-8344-b9301e941237",
@@ -145,7 +168,9 @@
       ],
       "createdAt": 1787205100823,
       "updatedAt": 1787230789426,
-      "summary": "v0.3.3 CI 全绿并已发布：GitHub Release v0.3.3 含 DSH.Desktop_0.3.3_x64-setup.exe（pnpm 安装根因修复）。用户可下载或本地 git pull && npm run bundle。"
+      "summary": "v0.3.3 CI 全绿并已发布：GitHub Release v0.3.3 含 DSH.Desktop_0.3.3_x64-setup.exe（pnpm 安装根因修复）。用户可下载或本地 git pull && npm run bundle。",
+      "rationale": "任务见标题；实现见 commit 72a9ad4。",
+      "rejected": "未记录（历史卡片；决策依据见 commit 信息）。"
     },
     {
       "id": "card-6f642993-d0fe-4abd-af28-c041fe5a4135",
@@ -158,7 +183,10 @@
         "decision"
       ],
       "createdAt": 1787209789302,
-      "updatedAt": 1787209789302
+      "updatedAt": 1787209789302,
+      "summary": "见 git log --all（按标题关键词搜索对应 commit）。",
+      "rationale": "任务见标题。",
+      "rejected": "未记录（历史卡片）。"
     },
     {
       "id": "card-975f74b7-6bb6-4cf0-b705-67bc9f56857f",
@@ -172,7 +200,10 @@
         "install"
       ],
       "createdAt": 1787220483541,
-      "updatedAt": 1787220483541
+      "updatedAt": 1787220483541,
+      "summary": "见 commit 72a9ad4：fix(install): hoisted pnpm layout so preinstalled plugins resolve dsh internals — 0.3.4",
+      "rationale": "任务见标题；实现见 commit 72a9ad4。",
+      "rejected": "未记录（历史卡片；决策依据见 commit 信息）。"
     },
     {
       "id": "card-d9fb1b2b-748d-4e99-ad30-f6f4d7007f79",
@@ -186,7 +217,9 @@
       ],
       "createdAt": 1787220491292,
       "updatedAt": 1787230824755,
-      "summary": "v0.3.3 已发布（重复卡，归档）。"
+      "summary": "v0.3.3 已发布（重复卡，归档）。",
+      "rationale": "任务见标题；实现见 commit 72a9ad4。",
+      "rejected": "未记录（历史卡片；决策依据见 commit 信息）。"
     },
     {
       "id": "card-e520f114-4dbc-4bd6-890e-fb6d3eec1f5b",
@@ -200,7 +233,10 @@
         "release-gate"
       ],
       "createdAt": 1787230841135,
-      "updatedAt": 1787230841135
+      "updatedAt": 1787230841135,
+      "summary": "见 commit bd349c8：fix(dev-build): notify-rust app_id 接收 &str（Windows 专属路径 E0308）",
+      "rationale": "任务见标题；实现见 commit bd349c8。",
+      "rejected": "未记录（历史卡片；决策依据见 commit 信息）。"
     },
     {
       "id": "card-0eb19fb4-44e1-4743-9eb3-937a343b9c5e",
@@ -215,7 +251,10 @@
         "install"
       ],
       "createdAt": 1787236016581,
-      "updatedAt": 1787236016581
+      "updatedAt": 1787236016581,
+      "summary": "见 commit 46c0912：chore(board): record black-screen/hoisted-layout fix",
+      "rationale": "任务见标题；实现见 commit 46c0912。",
+      "rejected": "未记录（历史卡片；决策依据见 commit 信息）。"
     },
     {
       "id": "card-bde6de49-9bb9-4551-b2d8-29443e3a2db1",
@@ -229,7 +268,10 @@
         "update"
       ],
       "createdAt": 1787239670280,
-      "updatedAt": 1787239670280
+      "updatedAt": 1787239670280,
+      "summary": "见 commit 93a51f0：feat(console): pre-release (next tag) update option in the plugin console — 0.3.5",
+      "rationale": "任务见标题；实现见 commit 93a51f0。",
+      "rejected": "未记录（历史卡片；决策依据见 commit 信息）。"
     },
     {
       "id": "card-d6fcc0d4-5898-471d-877c-e8a6121eb5ac",
@@ -243,7 +285,10 @@
         "windows"
       ],
       "createdAt": 1787246827606,
-      "updatedAt": 1787246827606
+      "updatedAt": 1787246827606,
+      "summary": "见 commit 310c121：chore(board): record --no-open fix",
+      "rationale": "任务见标题；实现见 commit 310c121。",
+      "rejected": "未记录（历史卡片；决策依据见 commit 信息）。"
     },
     {
       "id": "card-269b53f2-51d5-4996-9f78-99f3754f6e41",
@@ -257,7 +302,10 @@
         "console"
       ],
       "createdAt": 1787247420110,
-      "updatedAt": 1787247420110
+      "updatedAt": 1787247420110,
+      "summary": "见 commit 93a51f0：feat(console): pre-release (next tag) update option in the plugin console — 0.3.5",
+      "rationale": "任务见标题；实现见 commit 93a51f0。",
+      "rejected": "未记录（历史卡片；决策依据见 commit 信息）。"
     },
     {
       "id": "card-6fc58082-7b7c-4acb-8487-5d749dbdf28b",
@@ -366,14 +414,79 @@
       "rationale": "通知双弹根因已确凿定位并修复（错误转边误报「已完成」+ 自动重试二次弹窗），需随壳发版交付给用户；仓库发布机制 = git tag v* 触发 CI 自动出包。",
       "rejected": "等 v0.3.9 真机复核后再发——用户明确要求直接发下一版；v0.3.9 已出包（含预装插件升级），v0.3.10 独立承载通知修复。",
       "sourceSessionId": "session-20b0d857-9ac9-489e-9ad6-bd3b7bcbfbae",
-      "status": "in_progress",
+      "status": "done",
       "tags": [
         "release",
         "bug-fix",
         "notification"
       ],
       "createdAt": 1787738781292,
-      "updatedAt": 1787738781292
+      "updatedAt": 1787738781292,
+      "summary": "v0.3.10 已于 2026-08-26 发布（GitHub Release v0.3.10，含通知双弹修复）。"
+    },
+    {
+      "id": "card-d9185f47-f039-4854-84fc-7b321a73b2bd",
+      "title": "自定义壳顶栏：无边框主窗口 + 壳菜单栏（DSH Desktop 图标左侧起，菜单依次向右）",
+      "rationale": "用户要求自定义壳顶栏（最小化/最大化/关闭）并把代理设置等壳级功能收进顶栏左侧「DSH Desktop」图标后的可见菜单栏，作为后续壳独有菜单定义点。Windows 上 Tauri 2 Menu 不渲染窗口菜单栏，远程 dsh 页无 __TAURI__，故采用注入式自绘顶栏 + 环回桥双通道。",
+      "rejected": "放弃 Tauri 原生窗口菜单（Windows 不渲染）；放弃子 webview 标题栏（多 webview 布局/命中测试跨平台复杂）；放弃全部收进图标下拉（用户确认可见性不足，改通用范式：应用菜单+可见顶级条目向右排）；放弃 CSS app-region 拖动（与 mousedown 桥拖动互斥、平台支持不一，统一走 /window/drag→start_dragging）；放弃 chrome 运行时读 resource 文件（改 include_str! 编译期内嵌）。",
+      "sourceSessionId": "session-2022bc96-7d1e-49fd-8ada-307acaff05a9",
+      "status": "done",
+      "tags": [
+        "shell",
+        "ui",
+        "feature"
+      ],
+      "createdAt": 1787833765826,
+      "updatedAt": 1787835034225,
+      "summary": "主窗口无边框（decorations:false+shadow:true），新增 src-tauri/resources/ui/shell-chrome.js（SHELL_MENUS 定义点：DSH Desktop 应用菜单 + 代理设置…直开 + 视图/帮助下拉 + 窗口三键），lib.rs include_str! 内嵌并在 on_page_load 注入 main webview；新增 window_control/get_shell_state/toggle_dev_mode/open_settings/show_about 命令与 10 个桥端点（/window/*、/shell/*）；scripts/test-shell-chrome.mjs 契约测试接入 npm test（全量 7 套通过）；README 更新架构图与「壳菜单栏」小节；Agent Note 已写（.agents/notes/implemented/feature/2026-08-27-shell-menu-bar.md）。"
+    },
+    {
+      "id": "card-c57d06fb-b9c6-408a-9d3e-a3ce04c7d6a6",
+      "title": "独立开发版：tauri.dev.conf.json 覆盖 identity，与正式版同机并存",
+      "summary": "新增 src-tauri/tauri.dev.conf.json（深合并覆盖 productName=\"DSH Desktop Dev\"、identifier=\"dev.dsh.desktop.dev\"）+ `npm run bundle:dev`；lib.rs toast 激活参数化（AUMID=config().identifier、CLSID=toast_clsid() FNV-1a 派生、快捷方式按 productName 查找）；窗口标题/托盘 tooltip/设置窗口标题/关于 toast 用 package_info().name 并加「（开发版）」标识；chrome 注入 __DSH_PRODUCT_NAME__；契约测试新增 dev identity 断言；README「开发版」小节。CI 全绿（check/windows/linux；linux-smoke 为 main 既有失败不阻塞）。",
+      "rationale": "用户 Windows 已装正式版，覆盖安装会动到工作数据；需要同机并存的独立开发版安装包用于调试。Tauri identity（identifier/productName）天然决定安装目录/应用数据/单实例互斥/AUMID 等全部隔离维度，dev 配置覆盖 + toast 激活参数化即可完整隔离。",
+      "rejected": "放弃环境变量/编译开关切换身份（易误产出正式包）；放弃单独 Cargo feature + 完整双配置（维护面翻倍）；dev 配置不覆盖 version（tauri-cli 强制与 Cargo.toml 一致）；CLSID 派生不引入 uuid crate（FNV-1a×2 足够，正式版保持原固定 GUID 不变）。",
+      "sourceSessionId": "session-2022bc96-7d1e-49fd-8ada-307acaff05a9",
+      "status": "done",
+      "tags": [
+        "dev-build",
+        "windows",
+        "feature"
+      ],
+      "createdAt": 1787836681548,
+      "updatedAt": 1787837867847
+    },
+    {
+      "id": "card-61582c12-bd82-48e5-8eb7-b447b163031a",
+      "title": "流程约定：开发版本地构建（D:\\Dev\\dsh-desktop-dev），不上 GitHub Actions",
+      "summary": "首次部署+编译已完成：Windows 侧 git clone（https，公开仓库）→ D:\\Dev\\dsh-desktop-dev，检出 feat/shell-menu-bar（bd349c8），npm install + npm run bundle:dev 成功，产物 D:\\Dev\\dsh-desktop-dev\\src-tauri\\target\\release\\bundle\\nsis\\DSH Desktop Dev_0.3.10_x64-setup.exe（27.9MB）。README「开发版」小节已写入构建流程约定；后续出开发版照此执行（WSL 侧 /mnt/d 为 9p 只读，部署/编译一律走 Windows interop powershell）。",
+      "rationale": "用户明确流程约定：开发版不上 GitHub Actions、GitHub 只放正式版；开发版固定在本机 D:\\Dev\\dsh-desktop-dev 部署并编译后告知。首次执行已验证整条链路可用。",
+      "rejected": "放弃在 GitHub 加 dev 构建 workflow（用户明确不要）；放弃从 WSL 直接写 /mnt/d（该环境 9p 只读挂载，改走 Windows interop 以 Windows 身份写入 D:\\）；放弃 WSL 侧编译（Linux 宿主无法出 NSIS 包，必须 Windows 侧）。",
+      "sourceSessionId": "session-2022bc96-7d1e-49fd-8ada-307acaff05a9",
+      "status": "done",
+      "tags": [
+        "dev-build",
+        "process",
+        "convention"
+      ],
+      "createdAt": 1787839111529,
+      "updatedAt": 1787839327670
+    },
+    {
+      "id": "card-bebcd921-a3ec-43de-9994-e2eac3b510ed",
+      "title": "沉淀 dsh-desktop-shell-dev Skill（壳开发经验 + 维护约定）",
+      "summary": "新增 .dsh/skills/dsh-desktop-shell-dev/SKILL.md（已提交推送 feat/shell-menu-bar@7cf027d）：八节结构含架构三事实、菜单开发手册（SHELL_MENUS/ACTIONS 定义点、注入机制、窗口控制、桥端点约定）、开发版身份隔离、本地构建工作流（Windows interop 链路）、Tauri 2 踩坑速查表、验证门禁、维护章节（触发场景+改动后四步+自检命令）、相关产物。会话 catalog 已即时发现该 skill（available_skills 出现 dsh-desktop-shell-dev），无需全局拷贝。Agent Note 已写（process/skill-distillation-shell-dev）。",
+      "rationale": "用户要求总结本轮全部会话经验（壳顶栏、菜单栏、开发版身份隔离、本地构建工作流、Tauri 2 踩坑）沉淀为 Skill 并做好维护，便于后续快速推进。dsh-skill-filesystem 自动扫描 projectRoot/.dsh/skills（project-dsh 层），仓库内即为合法真源。",
+      "rejected": "放弃写全局 ~/.dsh/skills（本环境只读且非必需——project 层自动发现已验证即时生效）；放弃并入 windows-desktop-shell-debugging（职责不同：排障 vs 壳功能开发）；放弃独立自检脚本（契约测试已是常新守护，skill 内用自检命令段）。",
+      "sourceSessionId": "session-2022bc96-7d1e-49fd-8ada-307acaff05a9",
+      "status": "done",
+      "tags": [
+        "skill",
+        "process",
+        "distillation"
+      ],
+      "createdAt": 1787844360769,
+      "updatedAt": 1787844367870
     }
   ]
 }
