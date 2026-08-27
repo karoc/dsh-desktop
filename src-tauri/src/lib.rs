@@ -842,7 +842,7 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
         ("POST", "/devtools") => {
             if dev_mode(&runtime_dir(app)) {
                 if let Some(w) = app.get_webview_window("main") {
-                    let _ = w.open_devtools();
+                    w.open_devtools();
                 }
                 ("200 OK", String::new())
             } else {
@@ -1045,10 +1045,10 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
             ("200 OK", serde_json::json!({ "ok": true, "maximized": maximized }).to_string())
         }
         ("POST", "/shell/open-settings") => {
-            open_settings_window(&app);
+            open_settings_window(app);
             ("200 OK", serde_json::json!({ "ok": true }).to_string())
         }
-        ("POST", "/shell/dev-mode-toggle") => match toggle_dev_mode_impl(&app) {
+        ("POST", "/shell/dev-mode-toggle") => match toggle_dev_mode_impl(app) {
             Ok(v) => ("200 OK", v.to_string()),
             Err(e) => (
                 "500 Internal Server Error",
@@ -1068,9 +1068,9 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
                 .current
                 .clone()
                 .unwrap_or_else(|| "?".into());
-            let dev = if is_dev_build(&app) { "（开发版）" } else { "" };
+            let dev = if is_dev_build(app) { "（开发版）" } else { "" };
             show_toast(
-                &app,
+                app,
                 app.package_info().name.clone(),
                 format!("版本 {} · dsh 当前 {}{}", env!("CARGO_PKG_VERSION"), current, dev),
             );
@@ -1089,7 +1089,7 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
                 "200 OK",
                 serde_json::json!({
                     "version": env!("CARGO_PKG_VERSION"),
-                    "devMode": dev_mode(&runtime_dir(&app)),
+                    "devMode": dev_mode(&runtime_dir(app)),
                     "update": {
                         "current": upd.current,
                         "latest": upd.latest,
@@ -1261,7 +1261,7 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
     let handle = app.clone();
     let lines = BufReader::new(stdout).lines();
     std::thread::spawn(move || {
-        for line in lines.flatten() {
+        for line in lines.map_while(Result::ok) {
             let trimmed = line.trim();
             if trimmed.is_empty() {
                 continue;
@@ -1421,7 +1421,7 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
     if let Some(err) = child.stderr.take() {
         let handle = app.clone();
         std::thread::spawn(move || {
-            for line in BufReader::new(err).lines().flatten() {
+            for line in BufReader::new(err).lines().map_while(Result::ok) {
                 let _ = handle.emit("server-log", line.clone());
                 eprintln!("[dsh-desktop manager] {line}");
             }
@@ -1549,7 +1549,7 @@ fn inject_shell_chrome(app: &AppHandle) {
     if port > 0 {
         prefix.push_str(&format!(";window.__DSH_BRIDGE_PORT__={port}"));
     }
-    let _ = w.eval(&format!("(()=>{{{prefix};{SHELL_CHROME}}})()"));
+    let _ = w.eval(format!("(()=>{{{prefix};{SHELL_CHROME}}})()"));
 }
 
 // ── proxy connection test (settings window "测试连接") ────────────────────────
