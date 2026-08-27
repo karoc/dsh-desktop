@@ -487,6 +487,23 @@
       ],
       "createdAt": 1787844360769,
       "updatedAt": 1787844367870
+    },
+    {
+      "id": "card-e86f3b44-4005-4ac9-a44d-eb7729f515b0",
+      "title": "开发流程规范化：GitHub Flow + CI 分层门禁 + release-please 自动发布",
+      "summary": "全链路落地并实测通过：PR #1-3（feat 合并 / release-please jsonpath 修复 / workflow_dispatch）squash 进 main；main 保护已设（需 check+test，禁 force push）；CI 分层（PR 快层 ~5min / main 全量）+ clippy -D warnings（修 9 处存量 lint）+ fmt 暂缓（注释恢复条件）；release-please 首次成功创建 release PR #4（0.4.0：三处版本+CHANGELOG 正确）；仓库 can_approve_pull_request_reviews=true；main 全量 CI 绿；项目专用 gh token 机制（token 文件 + .envrc + scripts/gh）验证通过；KANBAN 清理完成（v0.3.10 done、字段补齐）。Agent Note 已写（process/dev-process-standardization）。",
+      "rationale": "用户要求开发流程规范化（实践检验+未来趋势+贴合项目）。落地 GitHub Flow、CI 分层、质量门禁、release-please 自动发布、token 按项目隔离，并全程用真实 PR 演练闭环。",
+      "rejected": "放弃手动 tag+校验脚本（选 release-please 全自动）；放弃 fmt 门禁立即启用（60 处存量漂移，待格式化 PR 后恢复）；放弃改全局 token（改项目专用 PAT 目录隔离）；release-please 兼容旧字段 toml-path（17.x 已统一 jsonpath，实测确认）。",
+      "sourceSessionId": "session-2022bc96-7d1e-49fd-8ada-307acaff05a9",
+      "status": "done",
+      "tags": [
+        "process",
+        "ci",
+        "release",
+        "github-flow"
+      ],
+      "createdAt": 1787865885502,
+      "updatedAt": 1787865893560
     }
   ]
 }
