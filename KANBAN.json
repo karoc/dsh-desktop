@@ -11,7 +11,10 @@
         "proxy"
       ],
       "createdAt": 1786959259229,
-      "updatedAt": 1786959259229
+      "updatedAt": 1786959259229,
+      "summary": "见 commit f801d79：tools(diagnose): report installed shell version, dsh broken-install state, and manager.log markers",
+      "rationale": "任务见标题；实现见 commit f801d79。",
+      "rejected": "未记录（历史卡片；决策依据见 commit 信息）。"
     },
     {
       "id": "card-2550f5d7-824d-4edf-afce-086a372acd4e",
@@ -23,7 +26,10 @@
         "proxy"
       ],
       "createdAt": 1786959259242,
-      "updatedAt": 1786959259242
+      "updatedAt": 1786959259242,
+      "summary": "见 commit fa91e36：docs: unify install/update/proxy messaging across README, ENGINEERING-NOTES, console plan",
+      "rationale": "任务见标题；实现见 commit fa91e36。",
+      "rejected": "未记录（历史卡片；决策依据见 commit 信息）。"
     },
     {
       "id": "card-eca7e36d-047e-4a92-8bed-165edc270eda",
@@ -35,7 +41,10 @@
         "proxy"
       ],
       "createdAt": 1786959259252,
-      "updatedAt": 1786959259252
+      "updatedAt": 1786959259252,
+      "summary": "见 git log --all（按标题关键词搜索对应 commit）。",
+      "rationale": "任务见标题。",
+      "rejected": "未记录（历史卡片）。"
     },
     {
       "id": "card-19148b9d-4b88-4e5c-9d24-f4fa339ebc51",
@@ -47,7 +56,10 @@
         "proxy"
       ],
       "createdAt": 1786959259262,
-      "updatedAt": 1786959259262
+      "updatedAt": 1786959259262,
+      "summary": "见 git log --all（按标题关键词搜索对应 commit）。",
+      "rationale": "任务见标题。",
+      "rejected": "未记录（历史卡片）。"
     },
     {
       "id": "card-0ec7630e-5be1-46c9-853d-71fd2573442f",
@@ -59,7 +71,10 @@
         "proxy"
       ],
       "createdAt": 1786959259277,
-      "updatedAt": 1786959259277
+      "updatedAt": 1786959259277,
+      "summary": "见 git log --all（按标题关键词搜索对应 commit）。",
+      "rationale": "任务见标题。",
+      "rejected": "未记录（历史卡片）。"
     },
     {
       "id": "card-fce90c17-ded0-47e7-9d43-f73a0f8f044d",
@@ -72,7 +87,10 @@
         "plugins"
       ],
       "createdAt": 1787025321032,
-      "updatedAt": 1787025321032
+      "updatedAt": 1787025321032,
+      "summary": "见 commit 96214de：chore(skill): distill preinstalled-plugin-sync workflow into a reusable skill + audit script",
+      "rationale": "任务见标题；实现见 commit 96214de。",
+      "rejected": "未记录（历史卡片；决策依据见 commit 信息）。"
     },
     {
       "id": "card-7e44771a-6fb6-4a28-b6fb-2ef1135ab3bc",
@@ -86,7 +104,8 @@
         "plugins"
       ],
       "createdAt": 1787032101064,
-      "updatedAt": 1787032101064
+      "updatedAt": 1787032101064,
+      "rejected": "未记录（历史卡片；决策依据见 commit 信息）。"
     },
     {
       "id": "card-b823cd1d-64c5-43d5-8f2e-d4f8e26bc02c",
@@ -100,7 +119,9 @@
       ],
       "createdAt": 1787137916096,
       "updatedAt": 1787137935693,
-      "summary": "dsh-turn-navigator@0.1.1（dsh-turn-nav 仓库 HEAD 构建，已在 workspace 重建并逐字节验证）按 dsh-kanban 模式预装：plugins/preinstalled/dsh-turn-navigator/（lib + cordis.patch.yml + 裁剪 package.json/README + LICENSE）；sync-resources 列表与 server-manager PROTECTED 均加 dsh-turn-navigator；sync:resources 已刷新 src-tauri/resources；test-control-plane 增加落盘/preinstalled-updates 断言、test-plugin-console fixture 扩为三行；六个测试脚本全部通过。"
+      "summary": "dsh-turn-navigator@0.1.1（dsh-turn-nav 仓库 HEAD 构建，已在 workspace 重建并逐字节验证）按 dsh-kanban 模式预装：plugins/preinstalled/dsh-turn-navigator/（lib + cordis.patch.yml + 裁剪 package.json/README + LICENSE）；sync-resources 列表与 server-manager PROTECTED 均加 dsh-turn-navigator；sync:resources 已刷新 src-tauri/resources；test-control-plane 增加落盘/preinstalled-updates 断言、test-plugin-console fixture 扩为三行；六个测试脚本全部通过。",
+      "rationale": "任务见标题；实现见 commit 96214de。",
+      "rejected": "未记录（历史卡片；决策依据见 commit 信息）。"
     },
     {
       "id": "card-cfb9fb70-baa9-4ee6-8093-c5cf1515f111",
@@ -115,7 +136,8 @@
         "release"
       ],
       "createdAt": 1787198596012,
-      "updatedAt": 1787208103638
+      "updatedAt": 1787208103638,
+      "rejected": "未记录（历史卡片；该轮为预装插件全量检查+版本对齐后的常规发布）。"
     },
     {
       "id": "card-9b586fc1-345b-4a1a-95b1-8a61ecd877ba",
@@ -131,7 +153,8 @@
       "createdAt": 1787203257064,
       "updatedAt": 1787208079626,
       "summary": "二次修复（0.3.2）：broken-install 自动修复。根因：0.3.0 冷安装被强关留下半截安装（package.json 在、lib/bin.js 缺），installedVersion() 只看 package.json → 自动安装闸门被跳过 → launch failed: not installed。修复：dshInstalled()=manifest+入口双检，main() 闸门与 installDshUpdate 的“已最新”跳过都改用它；破损时 rmSync 整个 dsh 目录强制重装。新增 test-broken-install.mjs 端到端验证（自动修复→重装→正常启动）。0.3.1→0.3.2 已提交推送。",
-      "rationale": "把“20 分钟静默悬挂”变成 ~30s 快失败 + 自动切换镜像 + 清晰报错。"
+      "rationale": "把“20 分钟静默悬挂”变成 ~30s 快失败 + 自动切换镜像 + 清晰报错。",
+      "rejected": "未记录（历史卡片；决策依据见 commit 信息）。"
     },
     {
       "id": "card-ec992325-540f-46bf-8344-b9301e941237",
@@ -145,7 +168,9 @@
       ],
       "createdAt": 1787205100823,
       "updatedAt": 1787230789426,
-      "summary": "v0.3.3 CI 全绿并已发布：GitHub Release v0.3.3 含 DSH.Desktop_0.3.3_x64-setup.exe（pnpm 安装根因修复）。用户可下载或本地 git pull && npm run bundle。"
+      "summary": "v0.3.3 CI 全绿并已发布：GitHub Release v0.3.3 含 DSH.Desktop_0.3.3_x64-setup.exe（pnpm 安装根因修复）。用户可下载或本地 git pull && npm run bundle。",
+      "rationale": "任务见标题；实现见 commit 72a9ad4。",
+      "rejected": "未记录（历史卡片；决策依据见 commit 信息）。"
     },
     {
       "id": "card-6f642993-d0fe-4abd-af28-c041fe5a4135",
@@ -158,7 +183,10 @@
         "decision"
       ],
       "createdAt": 1787209789302,
-      "updatedAt": 1787209789302
+      "updatedAt": 1787209789302,
+      "summary": "见 git log --all（按标题关键词搜索对应 commit）。",
+      "rationale": "任务见标题。",
+      "rejected": "未记录（历史卡片）。"
     },
     {
       "id": "card-975f74b7-6bb6-4cf0-b705-67bc9f56857f",
@@ -172,7 +200,10 @@
         "install"
       ],
       "createdAt": 1787220483541,
-      "updatedAt": 1787220483541
+      "updatedAt": 1787220483541,
+      "summary": "见 commit 72a9ad4：fix(install): hoisted pnpm layout so preinstalled plugins resolve dsh internals — 0.3.4",
+      "rationale": "任务见标题；实现见 commit 72a9ad4。",
+      "rejected": "未记录（历史卡片；决策依据见 commit 信息）。"
     },
     {
       "id": "card-d9fb1b2b-748d-4e99-ad30-f6f4d7007f79",
@@ -186,7 +217,9 @@
       ],
       "createdAt": 1787220491292,
       "updatedAt": 1787230824755,
-      "summary": "v0.3.3 已发布（重复卡，归档）。"
+      "summary": "v0.3.3 已发布（重复卡，归档）。",
+      "rationale": "任务见标题；实现见 commit 72a9ad4。",
+      "rejected": "未记录（历史卡片；决策依据见 commit 信息）。"
     },
     {
       "id": "card-e520f114-4dbc-4bd6-890e-fb6d3eec1f5b",
@@ -200,7 +233,10 @@
         "release-gate"
       ],
       "createdAt": 1787230841135,
-      "updatedAt": 1787230841135
+      "updatedAt": 1787230841135,
+      "summary": "见 commit bd349c8：fix(dev-build): notify-rust app_id 接收 &str（Windows 专属路径 E0308）",
+      "rationale": "任务见标题；实现见 commit bd349c8。",
+      "rejected": "未记录（历史卡片；决策依据见 commit 信息）。"
     },
     {
       "id": "card-0eb19fb4-44e1-4743-9eb3-937a343b9c5e",
@@ -215,7 +251,10 @@
         "install"
       ],
       "createdAt": 1787236016581,
-      "updatedAt": 1787236016581
+      "updatedAt": 1787236016581,
+      "summary": "见 commit 46c0912：chore(board): record black-screen/hoisted-layout fix",
+      "rationale": "任务见标题；实现见 commit 46c0912。",
+      "rejected": "未记录（历史卡片；决策依据见 commit 信息）。"
     },
     {
       "id": "card-bde6de49-9bb9-4551-b2d8-29443e3a2db1",
@@ -229,7 +268,10 @@
         "update"
       ],
       "createdAt": 1787239670280,
-      "updatedAt": 1787239670280
+      "updatedAt": 1787239670280,
+      "summary": "见 commit 93a51f0：feat(console): pre-release (next tag) update option in the plugin console — 0.3.5",
+      "rationale": "任务见标题；实现见 commit 93a51f0。",
+      "rejected": "未记录（历史卡片；决策依据见 commit 信息）。"
     },
     {
       "id": "card-d6fcc0d4-5898-471d-877c-e8a6121eb5ac",
@@ -243,7 +285,10 @@
         "windows"
       ],
       "createdAt": 1787246827606,
-      "updatedAt": 1787246827606
+      "updatedAt": 1787246827606,
+      "summary": "见 commit 310c121：chore(board): record --no-open fix",
+      "rationale": "任务见标题；实现见 commit 310c121。",
+      "rejected": "未记录（历史卡片；决策依据见 commit 信息）。"
     },
     {
       "id": "card-269b53f2-51d5-4996-9f78-99f3754f6e41",
@@ -257,7 +302,10 @@
         "console"
       ],
       "createdAt": 1787247420110,
-      "updatedAt": 1787247420110
+      "updatedAt": 1787247420110,
+      "summary": "见 commit 93a51f0：feat(console): pre-release (next tag) update option in the plugin console — 0.3.5",
+      "rationale": "任务见标题；实现见 commit 93a51f0。",
+      "rejected": "未记录（历史卡片；决策依据见 commit 信息）。"
     },
     {
       "id": "card-6fc58082-7b7c-4acb-8487-5d749dbdf28b",
@@ -366,14 +414,15 @@
       "rationale": "通知双弹根因已确凿定位并修复（错误转边误报「已完成」+ 自动重试二次弹窗），需随壳发版交付给用户；仓库发布机制 = git tag v* 触发 CI 自动出包。",
       "rejected": "等 v0.3.9 真机复核后再发——用户明确要求直接发下一版；v0.3.9 已出包（含预装插件升级），v0.3.10 独立承载通知修复。",
       "sourceSessionId": "session-20b0d857-9ac9-489e-9ad6-bd3b7bcbfbae",
-      "status": "in_progress",
+      "status": "done",
       "tags": [
         "release",
         "bug-fix",
         "notification"
       ],
       "createdAt": 1787738781292,
-      "updatedAt": 1787738781292
+      "updatedAt": 1787738781292,
+      "summary": "v0.3.10 已于 2026-08-26 发布（GitHub Release v0.3.10，含通知双弹修复）。"
     },
     {
       "id": "card-d9185f47-f039-4854-84fc-7b321a73b2bd",
