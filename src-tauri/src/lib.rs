@@ -1032,7 +1032,10 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
             ("200 OK", serde_json::json!({ "ok": true }).to_string())
         }
         ("GET", "/shell/state") => {
-            let upd = app.state::<ServerState>().update.lock().unwrap();
+            // Bind the State first: the lock guard borrows it, so an inline
+            // app.state() temporary would be dropped while still borrowed.
+            let state = app.state::<ServerState>();
+            let upd = state.update.lock().unwrap();
             (
                 "200 OK",
                 serde_json::json!({
