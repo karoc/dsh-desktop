@@ -419,7 +419,7 @@ fn show_toast(app: &AppHandle, title: String, body: String) {
     let mut n = notify_rust::Notification::new();
     n.summary(&title);
     #[cfg(target_os = "windows")]
-    n.app_id(app.config().identifier.clone());
+    n.app_id(app.config().identifier.as_str());
     if !body.is_empty() {
         n.body(&body);
     }
