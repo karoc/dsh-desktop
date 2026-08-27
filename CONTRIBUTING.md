@@ -8,6 +8,8 @@
 - 分支命名：`feat/<主题>` / `fix/<主题>` / `ci/<主题>` / `docs/<主题>`。
 - PR 合并方式：**squash merge**（main 一提交一功能，提交信息 = PR 标题）。
 - main 分支保护：需 PR + CI 快层（check + test）通过才可合并。
+- main 保护 `enforce_admins` 关闭（单开发者不卡自己）：owner 直推技术上可绕过 PR，
+  但**约定仍走 PR**——直推会触发全量 CI 兜底，仅限紧急 hotfix。
 - 本地 `main` 只在合并后 `git pull` 同步，**不要**在本地 main 上直接提交功能。
 
 ## 提交规范（Conventional Commits）
