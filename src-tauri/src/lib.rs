@@ -1964,7 +1964,7 @@ pub fn run() {
                     let _ = w.set_icon(icon.clone());
                 }
                 // 任务栏/Alt-Tab 标题跟随 productName（开发版区别于正式版）。
-                let _ = w.set_title(app.package_info().name.clone());
+                let _ = w.set_title(app.package_info().name.as_str());
                 // Capture the launcher URL for post-restart reconnection (the
                 // page itself is replaced by the dsh page on the first boot).
                 if let Ok(u) = w.url() {
