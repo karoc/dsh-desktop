@@ -390,6 +390,22 @@
       "createdAt": 1787833765826,
       "updatedAt": 1787835034225,
       "summary": "主窗口无边框（decorations:false+shadow:true），新增 src-tauri/resources/ui/shell-chrome.js（SHELL_MENUS 定义点：DSH Desktop 应用菜单 + 代理设置…直开 + 视图/帮助下拉 + 窗口三键），lib.rs include_str! 内嵌并在 on_page_load 注入 main webview；新增 window_control/get_shell_state/toggle_dev_mode/open_settings/show_about 命令与 10 个桥端点（/window/*、/shell/*）；scripts/test-shell-chrome.mjs 契约测试接入 npm test（全量 7 套通过）；README 更新架构图与「壳菜单栏」小节；Agent Note 已写（.agents/notes/implemented/feature/2026-08-27-shell-menu-bar.md）。"
+    },
+    {
+      "id": "card-c57d06fb-b9c6-408a-9d3e-a3ce04c7d6a6",
+      "title": "独立开发版：tauri.dev.conf.json 覆盖 identity，与正式版同机并存",
+      "summary": "新增 src-tauri/tauri.dev.conf.json（深合并覆盖 productName=\"DSH Desktop Dev\"、identifier=\"dev.dsh.desktop.dev\"）+ npm run bundle:dev；lib.rs 将 toast 激活参数化：AUMID 用 config().identifier、CLSID 用 toast_clsid()（正式版保持原固定 GUID，其它 identifier 用 FNV-1a 派生稳定 GUID）、开始菜单快捷方式名按 productName 查找；窗口标题/托盘 tooltip/设置窗口标题/关于 toast 用 package_info().name，开发版加「（开发版）」标识；chrome 注入 __DSH_PRODUCT_NAME__ 驱动应用菜单标签；契约测试新增 dev identity 断言；README「开发版」小节。",
+      "rationale": "用户在 Windows 上已装正式版，覆盖安装会动到工作数据，需要同机并存的独立开发版用于调试。Tauri 的 identity（identifier/productName）决定安装目录、应用数据目录、单实例互斥、AUMID 等全部隔离维度，只需一个 dev 配置覆盖 + toast 激活参数化即可实现完整隔离。",
+      "rejected": "放弃用环境变量/feature 分支切换身份（编译期不确定、易误用）；放弃单独 Cargo feature + 双配置维护（过度复杂）；dev 配置不覆盖 version（tauri 要求与 Cargo.toml 一致），以名称区分版本。",
+      "sourceSessionId": "session-2022bc96-7d1e-49fd-8ada-307acaff05a9",
+      "status": "todo",
+      "tags": [
+        "dev-build",
+        "windows",
+        "feature"
+      ],
+      "createdAt": 1787836681548,
+      "updatedAt": 1787836681548
     }
   ]
 }

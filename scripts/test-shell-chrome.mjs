@@ -76,5 +76,14 @@ for (const id of ['minimize', 'toggle-maximize', 'close']) {
 assert.ok(libRs.includes('include_str!("../resources/ui/shell-chrome.js")'), 'lib.rs embeds the chrome via include_str!')
 assert.ok(libRs.includes('inject_shell_chrome'), 'lib.rs has the inject_shell_chrome wiring')
 
+// ── 7. dev build identity (side-by-side install isolation) ──────────────────
+const devConfPath = join(root, 'src-tauri', 'tauri.dev.conf.json')
+const devConf = JSON.parse(readFileSync(devConfPath, 'utf8'))
+assert.ok(devConf.productName && devConf.productName !== 'DSH Desktop', 'dev config overrides productName')
+assert.ok(devConf.identifier && devConf.identifier !== 'dev.dsh.desktop', 'dev config overrides identifier')
+assert.ok(libRs.includes('fn toast_clsid'), 'lib.rs derives the toast CLSID per build identity')
+assert.ok(libRs.includes('__DSH_PRODUCT_NAME__'), 'chrome preamble injects the product name')
+assert.ok(chromeSrc.includes('__DSH_PRODUCT_NAME__'), 'chrome renders the injected product name')
+
 console.log('PASS — shell chrome contract (menus, actions, bridge, IPC)')
 process.exit(0)

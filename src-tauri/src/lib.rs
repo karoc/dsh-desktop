@@ -178,7 +178,47 @@ static LAUNCHER_URL: Mutex<Option<String>> = Mutex::new(None);
 /// setup then refresh inaccessible" symptom after dsh web has cycled its port.
 static LIVE_DSH_URL: Mutex<Option<String>> = Mutex::new(None);
 
-/// Windows: register a PROCESS-LEVEL toast activator. The WinRT `Activated`
+/// Deterministic 64-bit FNV-1a — used to derive a per-build-identity toast
+/// activator CLSID without pulling in a hash/uuid crate.
+#[cfg(target_os = "windows")]
+fn fnv1a(seed: u64, data: &[u8]) -> u64 {
+    let mut h = seed;
+    for &b in data {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
+}
+
+/// Toast activator CLSID for a build identity. The official identifier keeps
+/// its long-standing stable GUID; any other identifier (e.g. the side-by-side
+/// dev build `dev.dsh.desktop.dev`) gets a deterministic RFC-4122-shaped GUID
+/// derived from it — two installs never clobber each other's toast
+/// registration, and the value is stable across launches/upgrades.
+#[cfg(target_os = "windows")]
+fn toast_clsid(identifier: &str) -> String {
+    if identifier == "dev.dsh.desktop" {
+        return "{7C2F4B1A-9D3E-4A8F-B6C0-5E1D2A3B4C5D}".to_string();
+    }
+    let a = fnv1a(0xcbf2_9ce4_8422_2325, identifier.as_bytes());
+    let b = fnv1a(0x9e37_79b9_7f4a_7c15, identifier.as_bytes());
+    let mut bytes = [0u8; 16];
+    bytes[..8].copy_from_slice(&a.to_le_bytes());
+    bytes[8..].copy_from_slice(&b.to_le_bytes());
+    bytes[6] = (bytes[6] & 0x0f) | 0x40; // RFC 4122 version 4
+    bytes[8] = (bytes[8] & 0x3f) | 0x80; // RFC 4122 variant
+    let hex: String = bytes.iter().map(|b| format!("{b:02X}")).collect();
+    format!(
+        "{{{}-{}-{}-{}-{}}}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..32]
+    )
+}
+
+/// Windows only: register a PROCESS-LEVEL toast activator. The WinRT `Activated`
 /// event used by notify-rust only fires while the toast is visible on screen;
 /// once it lands in the Action Center the system routes clicks to the app's
 /// COM activator instead. Registering our exe as the activator (the two
@@ -190,11 +230,11 @@ static LIVE_DSH_URL: Mutex<Option<String>> = Mutex::new(None);
 /// the last notified session. No INotificationActivationCallback COM object
 /// is needed — the relaunch IS the callback.
 #[cfg(target_os = "windows")]
-fn register_toast_activator(app_id: &str) -> Result<(), String> {
+fn register_toast_activator(app_id: &str, product_name: &str) -> Result<(), String> {
     use std::process::Command;
-    // Stable CLSID for our activator; only the registry hook that makes
-    // Windows launch this exe on toast click.
-    const CLSID: &str = "{7C2F4B1A-9D3E-4A8F-B6C0-5E1D2A3B4C5D}";
+    // Stable per-identity CLSID for our activator; only the registry hook that
+    // makes Windows launch this exe on toast click.
+    let clsid = toast_clsid(app_id);
     let exe = std::env::current_exe()
         .map_err(|e| format!("current_exe: {e}"))?
         .to_string_lossy()
@@ -213,7 +253,7 @@ fn register_toast_activator(app_id: &str) -> Result<(), String> {
     // HKCU\Software\Classes\CLSID\{GUID}\LocalServer32  (default = quoted exe)
     let _ = run(&[
         "add",
-        &format!(r"HKCU\Software\Classes\CLSID\{CLSID}\LocalServer32"),
+        &format!(r"HKCU\Software\Classes\CLSID\{clsid}\LocalServer32"),
         "/ve",
         "/d",
         &exe_quoted,
@@ -235,11 +275,11 @@ fn register_toast_activator(app_id: &str) -> Result<(), String> {
         &format!(r"HKCU\Software\Classes\AppUserModelId\{app_id}\CustomActivator"),
         "/ve",
         "/d",
-        CLSID,
+        &clsid,
         "/f",
     ])
     .map_err(|e| format!("reg add CustomActivator: {e}"))?;
-    ensure_shortcut_toast_activator(CLSID)?;
+    ensure_shortcut_toast_activator(&clsid, product_name)?;
     Ok(())
 }
 
@@ -249,7 +289,7 @@ fn register_toast_activator(app_id: &str) -> Result<(), String> {
 /// silently dropped until this property was set). Set it (self-healing: runs
 /// on every launch, so reinstall/shortcut-recreate is covered).
 #[cfg(target_os = "windows")]
-fn ensure_shortcut_toast_activator(clsid: &str) -> Result<(), String> {
+fn ensure_shortcut_toast_activator(clsid: &str, product_name: &str) -> Result<(), String> {
     use windows::core::{GUID, HSTRING, Interface, PWSTR};
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CoTaskMemAlloc, CoUninitialize, CLSCTX_INPROC_SERVER,
@@ -270,7 +310,15 @@ fn ensure_shortcut_toast_activator(clsid: &str) -> Result<(), String> {
         .join("Start Menu")
         .join("Programs");
     let mut lnk = None;
-    for name in ["DSH Desktop.lnk", "dsh Desktop.lnk"] {
+    // NSIS shortcut name = productName (Windows paths are case-insensitive,
+    // so the lowercase-first-letter spelling hits the same file).
+    let mut candidates = vec![format!("{product_name}.lnk")];
+    if let Some(first) = product_name.chars().next() {
+        let mut lower = product_name.to_string();
+        lower.replace_range(..first.len_utf8(), &first.to_lowercase().to_string());
+        candidates.push(lower);
+    }
+    for name in candidates {
         let p = base.join(name);
         if p.is_file() {
             lnk = Some(p);
@@ -371,7 +419,7 @@ fn show_toast(app: &AppHandle, title: String, body: String) {
     let mut n = notify_rust::Notification::new();
     n.summary(&title);
     #[cfg(target_os = "windows")]
-    n.app_id("dev.dsh.desktop");
+    n.app_id(app.config().identifier.clone());
     if !body.is_empty() {
         n.body(&body);
     }
@@ -1020,10 +1068,11 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
                 .current
                 .clone()
                 .unwrap_or_else(|| "?".into());
+            let dev = if is_dev_build(&app) { "（开发版）" } else { "" };
             show_toast(
                 &app,
-                "DSH Desktop".into(),
-                format!("版本 {} · dsh 当前 {}", env!("CARGO_PKG_VERSION"), current),
+                app.package_info().name.clone(),
+                format!("版本 {} · dsh 当前 {}{}", env!("CARGO_PKG_VERSION"), current, dev),
             );
             ("200 OK", serde_json::json!({ "ok": true }).to_string())
         }
@@ -1471,7 +1520,7 @@ fn open_settings_window(app: &AppHandle) {
         return;
     }
     let _ = tauri::WebviewWindowBuilder::new(app, "settings", tauri::WebviewUrl::App("settings.html".into()))
-        .title("DSH Desktop — 代理设置")
+        .title(format!("{} — 代理设置", app.package_info().name))
         .inner_size(640.0, 720.0)
         .min_inner_size(480.0, 560.0)
         .resizable(true)
@@ -1491,8 +1540,10 @@ fn inject_shell_chrome(app: &AppHandle) {
         return;
     };
     let mut prefix = format!(
-        "window.__DSH_SHELL_VERSION__={}",
-        serde_json::to_string(env!("CARGO_PKG_VERSION")).unwrap_or_else(|_| "\"\"".into())
+        "window.__DSH_SHELL_VERSION__={};window.__DSH_PRODUCT_NAME__={}",
+        serde_json::to_string(env!("CARGO_PKG_VERSION")).unwrap_or_else(|_| "\"\"".into()),
+        serde_json::to_string(app.package_info().name.as_str())
+            .unwrap_or_else(|_| "\"DSH Desktop\"".into())
     );
     let port = BRIDGE_PORT.load(std::sync::atomic::Ordering::SeqCst);
     if port > 0 {
@@ -1778,6 +1829,14 @@ fn open_settings(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// True for any build whose bundle identifier differs from the official one
+/// (the side-by-side dev build from tauri.dev.conf.json). Used to label the
+/// dev variant in user-visible strings so it can't be mistaken for the
+/// official install.
+fn is_dev_build(app: &AppHandle) -> bool {
+    app.config().identifier != "dev.dsh.desktop"
+}
+
 /// Chrome menu bar entry: "关于 DSH Desktop" — native toast with the shell
 /// version and the current dsh version.
 #[tauri::command]
@@ -1789,10 +1848,11 @@ fn show_about(app: AppHandle, state: State<'_, ServerState>) -> Result<(), Strin
         .current
         .clone()
         .unwrap_or_else(|| "?".into());
+    let dev = if is_dev_build(&app) { "（开发版）" } else { "" };
     show_toast(
         &app,
-        "DSH Desktop".into(),
-        format!("版本 {} · dsh 当前 {}", env!("CARGO_PKG_VERSION"), current),
+        app.package_info().name.clone(),
+        format!("版本 {} · dsh 当前 {}{}", env!("CARGO_PKG_VERSION"), current, dev),
     );
     Ok(())
 }
@@ -1882,7 +1942,11 @@ pub fn run() {
                 // 阻塞了 WebView 首帧（启动黑屏几秒）且闪 cmd 窗。注册必须在
                 // 第一次 toast 前完成即可——后台线程毫秒级跑完，远早于用户
                 // 触发任何通知。
-                std::thread::spawn(move || match register_toast_activator("dev.dsh.desktop") {
+                // identifier/productName 来自（合并后的）tauri.conf：开发版
+                // （tauri.dev.conf.json）有独立 identity，与正式版互不抢注册。
+                let identifier = app.config().identifier.clone();
+                let product_name = app.package_info().name.clone();
+                std::thread::spawn(move || match register_toast_activator(&identifier, &product_name) {
                     Ok(()) => {
                         log_line(&data, "activator registered");
                         eprintln!("[dsh-desktop] activator registered");
@@ -1899,6 +1963,8 @@ pub fn run() {
                 if let Some(icon) = app.default_window_icon() {
                     let _ = w.set_icon(icon.clone());
                 }
+                // 任务栏/Alt-Tab 标题跟随 productName（开发版区别于正式版）。
+                let _ = w.set_title(app.package_info().name.clone());
                 // Capture the launcher URL for post-restart reconnection (the
                 // page itself is replaced by the dsh page on the first boot).
                 if let Ok(u) = w.url() {
@@ -1927,7 +1993,7 @@ pub fn run() {
 
             let _tray = tauri::tray::TrayIconBuilder::with_id("dsh-tray")
                 .icon(app.default_window_icon().expect("app icon").clone())
-                .tooltip("DSH Desktop")
+                .tooltip(app.package_info().name.clone())
                 .menu(&menu)
                 // Left click shows no menu (only right-click does); left
                 // double-click restores the window below.

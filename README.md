@@ -91,6 +91,34 @@ AppImage/deb，方便 Linux 桌面验证）。
 `tauri build` 前（`beforeBuildCommand`）会自动下载 Node 24 运行时并校验
 SHA-256，再同步 manager/plugin/patch 等资源。
 
+## 开发版（与正式版同机并存调试）
+
+Windows 上已装正式版时，覆盖安装会动到工作数据。项目支持打一个**独立身份的开发版**，
+与正式版互不干扰、可同时运行：
+
+```bash
+npm run bundle:dev        # = tauri build --config src-tauri/tauri.dev.conf.json --bundles nsis
+```
+
+`src-tauri/tauri.dev.conf.json` 只覆盖两个顶层字段（深合并到 tauri.conf.json，其余
+配置原样继承）：`productName: "DSH Desktop Dev"`、`identifier: "dev.dsh.desktop.dev"`。
+由此带来的隔离：
+
+| 维度 | 正式版 | 开发版 |
+|---|---|---|
+| 安装目录 / 开始菜单 / 卸载项 | `%LOCALAPPDATA%\DSH Desktop` | `%LOCALAPPDATA%\DSH Desktop Dev` |
+| 应用数据（runtime、dsh 本体、`DSH_HOME`、proxy.json） | `%APPDATA%\dev.dsh.desktop` | `%APPDATA%\dev.dsh.desktop.dev` |
+| 单实例互斥 / 任务栏 AUMID | `dev.dsh.desktop-sim` | `dev.dsh.desktop.dev-sim` |
+| toast 激活 CLSID（随 identifier 派生） | 固定 GUID | 独立派生 GUID |
+| dsh web 端口 / 通知桥端口 | 随机 | 随机（互不冲突） |
+
+- 两个版本可**同时运行**（各自单实例、各自 runtime、各自端口）。
+- 开发版首次启动用自己的 runtime 冷安装一份 dsh（视网络 1~3 分钟），不动正式版数据。
+- 顶栏应用菜单、托盘 tooltip、任务栏标题、关于 toast 均显示 "DSH Desktop Dev（开发版）"，不会认错。
+- 调试入口：顶栏「DSH Desktop」→ 开发者模式（devtools）；`DSH_DESKTOP_REGISTRY` 等环境变量照常生效。
+- 卸载开发版只清开发版自己的数据（卸载器「删除应用程序数据」只作用于 dev 目录）。
+- 开发版版本号与正式版相同（tauri 要求 tauri.conf.json 与 Cargo.toml 版本一致，dev 配置不覆盖 version），以名称区分。
+
 ## 本地验证（Linux 可跑的部分）
 
 ```bash

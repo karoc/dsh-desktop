@@ -87,6 +87,8 @@
   // ── 传输层：双通道 ────────────────────────────────────────────────
   const hasTauri = !!(globalThis.__TAURI__ && globalThis.__TAURI__.core && globalThis.__TAURI__.core.invoke);
   const BRIDGE_PORT = globalThis.__DSH_BRIDGE_PORT__ || 0;
+  // 应用名随构建身份注入（开发版 = "DSH Desktop Dev"，见 tauri.dev.conf.json）。
+  const PRODUCT_NAME = globalThis.__DSH_PRODUCT_NAME__ || 'DSH Desktop';
 
   function invoke(ipc, args) {
     return globalThis.__TAURI__.core
@@ -242,7 +244,8 @@
     const btn = document.createElement('button');
     btn.className = 'menu-btn';
     if (entry.id === 'app') {
-      btn.innerHTML = `<span class="logo">${ICONS.logo}</span><span class="label">${entry.label}</span>${ICONS.chevron}`;
+      // 应用名跟随构建身份（开发版显示 "DSH Desktop Dev"）。
+      btn.innerHTML = `<span class="logo">${ICONS.logo}</span><span class="label">${PRODUCT_NAME}</span>${ICONS.chevron}`;
       btn.dataset.menu = 'app';
     } else if (entry.items) {
       btn.innerHTML = `<span class="label">${entry.label}</span>${ICONS.chevron}`;
