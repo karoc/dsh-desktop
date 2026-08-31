@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// DSH Desktop — built-in local forward proxy (shell code; never touches dsh).
+// DSH Smoothly Desktop — built-in local forward proxy (shell code; never touches dsh).
 //
 // Runs inside the manager process and is the SINGLE egress point for every
 // outbound request the shell starts: dsh model fetch (undici), web search,

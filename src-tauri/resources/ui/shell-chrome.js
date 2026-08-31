@@ -1,4 +1,4 @@
-// DSH Desktop — 壳顶栏（注入式覆盖标题栏 + 菜单栏）。
+// DSH Smoothly Desktop — 壳顶栏（注入式覆盖标题栏 + 菜单栏）。
 //
 // 由 Rust 壳在每次页面加载时注入主窗口（include_str! 编译期内嵌 +
 // on_page_load 里 w.eval()）：启动页（tauri://localhost，有 __TAURI__）
@@ -25,7 +25,7 @@
     {
       // 应用菜单：图标 + 应用名，下拉应用级动作（通用桌面范式）。
       id: 'app',
-      label: 'DSH Desktop',
+      label: 'DSH Smoothly Desktop',
       items: [
         { id: 'check-update', label: '检查更新…' }, // 有更新时翻转为「有更新 vX（点击更新）」
         { id: 'dev-mode', label: '开发者模式', type: 'checkbox' },
@@ -48,7 +48,7 @@
       label: '帮助',
       items: [
         { id: 'open-data', label: '打开数据目录' },
-        { id: 'about', label: '关于 DSH Desktop' },
+        { id: 'about', label: '关于 DSH Smoothly Desktop' },
       ],
     },
   ];
@@ -87,8 +87,8 @@
   // ── 传输层：双通道 ────────────────────────────────────────────────
   const hasTauri = !!(globalThis.__TAURI__ && globalThis.__TAURI__.core && globalThis.__TAURI__.core.invoke);
   const BRIDGE_PORT = globalThis.__DSH_BRIDGE_PORT__ || 0;
-  // 应用名随构建身份注入（开发版 = "DSH Desktop Dev"，见 tauri.dev.conf.json）。
-  const PRODUCT_NAME = globalThis.__DSH_PRODUCT_NAME__ || 'DSH Desktop';
+  // 应用名随构建身份注入（开发版 = "DSH Smoothly Desktop Dev"，见 tauri.dev.conf.json）。
+  const PRODUCT_NAME = globalThis.__DSH_PRODUCT_NAME__ || 'DSH Smoothly Desktop';
 
   function invoke(ipc, args) {
     return globalThis.__TAURI__.core
@@ -244,7 +244,7 @@
     const btn = document.createElement('button');
     btn.className = 'menu-btn';
     if (entry.id === 'app') {
-      // 应用名跟随构建身份（开发版显示 "DSH Desktop Dev"）。
+      // 应用名跟随构建身份（开发版显示 "DSH Smoothly Desktop Dev"）。
       btn.innerHTML = `<span class="logo">${ICONS.logo}</span><span class="label">${PRODUCT_NAME}</span>${ICONS.chevron}`;
       btn.dataset.menu = 'app';
     } else if (entry.items) {

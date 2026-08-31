@@ -1,4 +1,4 @@
-// DSH Desktop launcher page (local, tauri://localhost).
+// DSH Smoothly Desktop launcher page (local, tauri://localhost).
 // Waits for the Rust shell to report the dsh web loopback URL, then navigates.
 // Proxy settings live in a standalone window (settings.html) opened from the
 // window menu bar or the tray — not on this short-lived startup page.

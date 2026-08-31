@@ -79,7 +79,7 @@ feat/shell-menu-bar 分支）。本技能是"改壳自身功能"的操作手册�
 npm run bundle:dev   # = tauri build --config src-tauri/tauri.dev.conf.json --bundles nsis
 ```
 
-- `src-tauri/tauri.dev.conf.json` 只放两个顶层标量：`productName:"DSH Desktop Dev"`、
+- `src-tauri/tauri.dev.conf.json` 只放两个顶层标量：`productName:"DSH Smoothly Desktop Dev"`、
   `identifier:"dev.dsh.desktop.dev"`。`--config` 是**深合并**：对象键合并、数组整体替换——
   **不要**在 dev 配置里写 `windows` 数组（会整组覆盖主配置，丢 decorations 等）。
 - **不要覆盖 version**：tauri-cli 强制 tauri.conf.json 与 Cargo.toml 版本一致，覆盖会报错。
@@ -98,7 +98,7 @@ npm run bundle:dev   # = tauri build --config src-tauri/tauri.dev.conf.json --bu
 
 - 目录：`D:\Dev\dsh-desktop-dev`（= WSL 的 `/mnt/d/Dev/dsh-desktop-dev`，同一目录）。
 - 步骤：`git pull` + 检出目标分支 → `npm install` → `npm run bundle:dev`。
-- 产物：`src-tauri\target\release\bundle\nsis\DSH Desktop Dev_<version>_x64-setup.exe`（~28MB）。
+- 产物：`src-tauri\target\release\bundle\nsis\DSH Smoothly Desktop Dev_<version>_x64-setup.exe`（~28MB）。
 - **本机 WSL 的 `/mnt/c`、`/mnt/d` 是 9p 只读挂载**——D 盘任何写入（clone/install/build）必须
   经 Windows interop：`/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile
   -Command "..."`（以 Windows 用户身份运行，可写 D:\）。

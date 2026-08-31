@@ -32,7 +32,7 @@ assert.ok(Array.isArray(SHELL_MENUS) && SHELL_MENUS.length >= 3, 'SHELL_MENUS is
 assert.ok(ACTIONS && typeof ACTIONS === 'object', 'ACTIONS table present')
 
 // ── 1. structure: app menu first, top-level proxy-settings direct entry ─────
-assert.equal(SHELL_MENUS[0].id, 'app', 'first menu is the app menu (DSH Desktop)')
+assert.equal(SHELL_MENUS[0].id, 'app', 'first menu is the app menu (DSH Smoothly Desktop)')
 assert.ok(Array.isArray(SHELL_MENUS[0].items), 'app menu has dropdown items')
 const proxyEntry = SHELL_MENUS.find((e) => e.id === 'proxy-settings')
 assert.ok(proxyEntry, 'top-level 代理设置… entry exists')
@@ -79,7 +79,12 @@ assert.ok(libRs.includes('inject_shell_chrome'), 'lib.rs has the inject_shell_ch
 // ── 7. dev build identity (side-by-side install isolation) ──────────────────
 const devConfPath = join(root, 'src-tauri', 'tauri.dev.conf.json')
 const devConf = JSON.parse(readFileSync(devConfPath, 'utf8'))
-assert.ok(devConf.productName && devConf.productName !== 'DSH Desktop', 'dev config overrides productName')
+const mainConfPath = join(root, 'src-tauri', 'tauri.conf.json')
+const mainConf = JSON.parse(readFileSync(mainConfPath, 'utf8'))
+assert.ok(
+  devConf.productName && devConf.productName !== mainConf.productName,
+  'dev config overrides productName',
+)
 assert.ok(devConf.identifier && devConf.identifier !== 'dev.dsh.desktop', 'dev config overrides identifier')
 // NSIS 安装器按 MainBinaryName.exe 检测运行实例——dev 版必须用独立 exe 名，
 // 否则正式版在跑时装 dev 版会被误判为 dev 在运行（无法并存安装）。

@@ -1,4 +1,4 @@
-//! DSH Desktop — Tauri 2 shell for DeepSeek Harness.
+//! DSH Smoothly Desktop — Tauri 2 shell for DeepSeek Harness.
 //!
 //! Responsibilities (everything dsh-version-specific lives in the JS
 //! `server-manager`; Rust only owns the window/shell lifecycle):
@@ -1176,7 +1176,7 @@ fn resource_paths(app: &AppHandle) -> Result<(std::path::PathBuf, std::path::Pat
         }
     }
     Err(format!(
-        "bundled node not found; probed: {} — 资源缺失，请重新安装 DSH Desktop",
+        "bundled node not found; probed: {} — 资源缺失，请重新安装 DSH Smoothly Desktop",
         bases
             .iter()
             .map(|b| b.display().to_string())
@@ -1543,7 +1543,7 @@ fn inject_shell_chrome(app: &AppHandle) {
         "window.__DSH_SHELL_VERSION__={};window.__DSH_PRODUCT_NAME__={}",
         serde_json::to_string(env!("CARGO_PKG_VERSION")).unwrap_or_else(|_| "\"\"".into()),
         serde_json::to_string(app.package_info().name.as_str())
-            .unwrap_or_else(|_| "\"DSH Desktop\"".into())
+            .unwrap_or_else(|_| "\"DSH Smoothly Desktop\"".into())
     );
     let port = BRIDGE_PORT.load(std::sync::atomic::Ordering::SeqCst);
     if port > 0 {
@@ -1837,7 +1837,7 @@ fn is_dev_build(app: &AppHandle) -> bool {
     app.config().identifier != "dev.dsh.desktop"
 }
 
-/// Chrome menu bar entry: "关于 DSH Desktop" — native toast with the shell
+/// Chrome menu bar entry: "关于 DSH Smoothly Desktop" — native toast with the shell
 /// version and the current dsh version.
 #[tauri::command]
 fn show_about(app: AppHandle, state: State<'_, ServerState>) -> Result<(), String> {
@@ -2167,5 +2167,5 @@ pub fn run() {
             show_about
         ])
         .run(tauri::generate_context!())
-        .expect("error while running DSH Desktop");
+        .expect("error while running DSH Smoothly Desktop");
 }

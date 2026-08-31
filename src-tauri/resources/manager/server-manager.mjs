@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// DSH Desktop — server manager.
+// DSH Smoothly Desktop — server manager.
 //
 // Runs under the bundled Node 24 (process.execPath). Owns everything
 // dsh-version-specific:

@@ -1,4 +1,4 @@
-// DSH Desktop — notification client plugin, browser half.
+// DSH Smoothly Desktop — notification client plugin, browser half.
 //
 // Classic-script bundle served by dsh web under /plugins/<id>/client.js and
 // registered through window.__ModuleLoader__.load (the dsh client module

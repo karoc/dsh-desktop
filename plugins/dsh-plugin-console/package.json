@@ -1,7 +1,7 @@
 {
   "name": "@dsh-desktop/plugin-console",
   "version": "0.1.0",
-  "description": "DSH Desktop plugin console: a floating panel to manage preinstalled plugins (enable/disable), check and apply dsh updates, and restart/refresh the service. Talks to the shell's loopback bridge.",
+  "description": "DSH Smoothly Desktop plugin console: a floating panel to manage preinstalled plugins (enable/disable), check and apply dsh updates, and restart/refresh the service. Talks to the shell's loopback bridge.",
   "license": "MIT",
   "type": "module",
   "main": "index.js",
