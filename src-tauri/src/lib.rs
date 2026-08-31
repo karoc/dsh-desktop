@@ -1547,7 +1547,14 @@ fn inject_shell_chrome(app: &AppHandle) {
     );
     let port = BRIDGE_PORT.load(std::sync::atomic::Ordering::SeqCst);
     if port > 0 {
-        prefix.push_str(&format!(";window.__DSH_BRIDGE_PORT__={port}"));
+        // 契约：client-notifications 插件的 BRIDGE_PORT 用 startsWith('__DSH')
+        // 判 token，且 manager 只替换带引号字面量、保留 globalThis 读取路径
+        // 给外部注入者——因此这里必须以字符串注入（JSON 引号），数字字面量
+        // 会让 globalThis.__DSH_BRIDGE_PORT__ 为 number → startsWith 崩溃。
+        prefix.push_str(&format!(
+            ";window.__DSH_BRIDGE_PORT__={}",
+            serde_json::to_string(&port.to_string()).unwrap_or_else(|_| "\"0\"".into())
+        ));
     }
     let _ = w.eval(format!("(()=>{{{prefix};{SHELL_CHROME}}})()"));
 }

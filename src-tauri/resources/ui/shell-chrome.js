@@ -162,11 +162,14 @@
       display: flex;
       align-items: center;
       height: 100%;
-      background: rgba(13, 17, 23, 0.85);
-      backdrop-filter: blur(10px);
-      -webkit-backdrop-filter: blur(10px);
-      border-bottom: 1px solid rgba(48, 54, 61, 0.55);
-      color: #e6edf3;
+      /* 通透毛玻璃：高透明底 + 强 blur，页面内容透出又不喧宾夺主 */
+      background: linear-gradient(180deg, rgba(26, 32, 40, 0.50), rgba(15, 19, 25, 0.42));
+      backdrop-filter: blur(18px) saturate(1.5);
+      -webkit-backdrop-filter: blur(18px) saturate(1.5);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+      color: #eef2f6;
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
       font-size: 13px;
       user-select: none;
       -webkit-user-select: none;
@@ -175,12 +178,14 @@
     .menus { display: flex; align-items: stretch; height: 100%; }
     .menu-btn {
       display: flex; align-items: center; gap: 6px;
-      padding: 0 11px;
+      padding: 0 11px; margin: 0 1px;
       border: 0; background: transparent;
+      border-radius: 6px;
       color: inherit; font: inherit;
       cursor: pointer; white-space: nowrap;
+      transition: background 0.12s ease;
     }
-    .menu-btn:hover, .menu-btn.open { background: rgba(255, 255, 255, 0.08); }
+    .menu-btn:hover, .menu-btn.open { background: rgba(255, 255, 255, 0.09); }
     .menu-btn .logo { display: flex; align-items: center; }
     .menu-btn .chevron {
       width: 7px; height: 7px;
@@ -201,29 +206,42 @@
       width: 44px; height: 100%;
       display: flex; align-items: center; justify-content: center;
       border: 0; background: transparent;
-      color: #e6edf3; cursor: pointer;
+      color: #eef2f6; cursor: pointer;
+      transition: background 0.12s ease;
     }
     .ctl:hover { background: rgba(255, 255, 255, 0.10); }
-    .ctl-close:hover { background: #e81123; }
+    .ctl-close:hover { background: rgba(232, 17, 35, 0.90); }
     .dropdown {
       position: fixed; top: 37px;
       min-width: 212px;
-      background: #161b22;
-      border: 1px solid #30363d;
-      border-radius: 8px;
-      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
-      padding: 4px;
+      /* 与顶栏同语言：毛玻璃浮层，圆角更大、阴影更柔和 */
+      background: rgba(24, 29, 37, 0.66);
+      backdrop-filter: blur(24px) saturate(1.5);
+      -webkit-backdrop-filter: blur(24px) saturate(1.5);
+      border: 1px solid rgba(255, 255, 255, 0.09);
+      border-radius: 12px;
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.32), 0 1px 2px rgba(0, 0, 0, 0.18);
+      padding: 5px;
       z-index: 2147483647;
+      animation: dsh-dd-in 0.15s ease-out;
     }
     .dropdown[hidden] { display: none; }
+    @keyframes dsh-dd-in {
+      from { opacity: 0; transform: translateY(-5px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .dropdown { animation: none; }
+    }
     .dd-item {
       display: flex; align-items: center; gap: 8px;
-      padding: 6px 10px; border-radius: 6px;
+      padding: 6px 10px; border-radius: 7px;
       cursor: pointer; white-space: nowrap;
+      transition: background 0.12s ease;
     }
-    .dd-item:hover { background: rgba(56, 139, 253, 0.18); }
+    .dd-item:hover { background: rgba(88, 166, 255, 0.20); }
     .dd-check { width: 14px; color: #58a6ff; text-align: center; }
-    .dd-sep { height: 1px; background: #30363d; margin: 4px 8px; }
+    .dd-sep { height: 1px; background: rgba(255, 255, 255, 0.10); margin: 4px 8px; }
   `;
 
   const styleEl = document.createElement('style');
