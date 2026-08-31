@@ -1,10 +1,10 @@
 <p align="center">
-  <img src="src-tauri/icons/128x128.png" width="128" height="128" alt="DSH Desktop logo" />
+  <img src="src-tauri/icons/128x128.png" width="128" height="128" alt="DSH Smoothly Desktop logo" />
 </p>
 
-# DSH Desktop
+# DSH Smoothly Desktop (DSH SD)
 
-把 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）打包成可独立运行的 Windows 桌面 App。
+DSH Smoothly Desktop（**DSH SD**）把 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）打包成可独立运行的 Windows 桌面 App。
 
 - **dsh 更新由你决定**：启动时只检查 npm 上 `@deepseek-ai/dsh` 的稳定版（`latest` tag）与预发布（`next` tag，如 0.1.0-rc.8），**不自动安装**。有新版时托盘菜单高亮「有更新 vX → 点击更新」；插件控制台的「dsh 更新」区显示可升版本（含预发布，想升才升）；点一下即下载安装并自动重启。dsh 永远来自官方 npm 包（经内置 pnpm 安装），本地零改动。
 - **内置 Node 24 运行时**：安装包自带 Node（满足 dsh 的运行要求），用户机器无需装 Node。
@@ -101,12 +101,12 @@ npm run bundle:dev        # = tauri build --config src-tauri/tauri.dev.conf.json
 ```
 
 `src-tauri/tauri.dev.conf.json` 只覆盖两个顶层字段（深合并到 tauri.conf.json，其余
-配置原样继承）：`productName: "DSH Desktop Dev"`、`identifier: "dev.dsh.desktop.dev"`。
+配置原样继承）：`productName: "DSH Smoothly Desktop Dev"`、`identifier: "dev.dsh.desktop.dev"`。
 由此带来的隔离：
 
 | 维度 | 正式版 | 开发版 |
 |---|---|---|
-| 安装目录 / 开始菜单 / 卸载项 | `%LOCALAPPDATA%\DSH Desktop` | `%LOCALAPPDATA%\DSH Desktop Dev` |
+| 安装目录 / 开始菜单 / 卸载项 | `%LOCALAPPDATA%\DSH Smoothly Desktop` | `%LOCALAPPDATA%\DSH Smoothly Desktop Dev` |
 | 应用数据（runtime、dsh 本体、`DSH_HOME`、proxy.json） | `%APPDATA%\dev.dsh.desktop` | `%APPDATA%\dev.dsh.desktop.dev` |
 | 单实例互斥 / 任务栏 AUMID | `dev.dsh.desktop-sim` | `dev.dsh.desktop.dev-sim` |
 | toast 激活 CLSID（随 identifier 派生） | 固定 GUID | 独立派生 GUID |
@@ -114,8 +114,8 @@ npm run bundle:dev        # = tauri build --config src-tauri/tauri.dev.conf.json
 
 - 两个版本可**同时运行**（各自单实例、各自 runtime、各自端口）。
 - 开发版首次启动用自己的 runtime 冷安装一份 dsh（视网络 1~3 分钟），不动正式版数据。
-- 顶栏应用菜单、托盘 tooltip、任务栏标题、关于 toast 均显示 "DSH Desktop Dev（开发版）"，不会认错。
-- 调试入口：顶栏「DSH Desktop」→ 开发者模式（devtools）；`DSH_DESKTOP_REGISTRY` 等环境变量照常生效。
+- 顶栏应用菜单、托盘 tooltip、任务栏标题、关于 toast 均显示 "DSH Smoothly Desktop Dev（开发版）"，不会认错。
+- 调试入口：顶栏「DSH Smoothly Desktop」→ 开发者模式（devtools）；`DSH_DESKTOP_REGISTRY` 等环境变量照常生效。
 - 卸载开发版只清开发版自己的数据（卸载器「删除应用程序数据」只作用于 dev 目录）。
 - 开发版版本号与正式版相同（tauri 要求 tauri.conf.json 与 Cargo.toml 版本一致，dev 配置不覆盖 version），以名称区分。
 - **构建流程约定**：开发版只在本地构建（固定目录 `D:\Dev\dsh-desktop-dev`），**不上 GitHub Actions**；GitHub 仓库与 Release 只承载正式版（正式版构建 = `npm run bundle`，CI 与本地一致）。
@@ -171,7 +171,7 @@ node scripts/server-manager.mjs \
 主窗口无系统标题栏（`decorations: false`），壳在每次页面加载时注入一条 36px 顶栏
 （`src-tauri/resources/ui/shell-chrome.js`，编译期内嵌，启动页与 dsh 页面都生效）：
 
-- 左上角 **DSH Desktop** 应用菜单：检查更新…（有更新时翻转为「有更新 vX（点击更新）」）、
+- 左上角 **DSH Smoothly Desktop** 应用菜单：检查更新…（有更新时翻转为「有更新 vX（点击更新）」）、
   开发者模式、退出；
 - 其后**可见顶级条目一字向右**：**代理设置…**（点击直开设置窗口）、**视图**（刷新页面 /
   重启服务）、**帮助**（打开数据目录 / 关于）；

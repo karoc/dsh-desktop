@@ -1,4 +1,4 @@
-// DSH Desktop — plugin console, browser half.
+// DSH Smoothly Desktop — plugin console, browser half.
 //
 // Classic-script bundle served by dsh web under /plugins/<id>/client.js and
 // registered through window.__ModuleLoader__.load (the dsh client module
@@ -816,7 +816,7 @@ window.__ModuleLoader__.load({
         .map(([id, label]) => `<button class="dshc-btn2" id="${id}">${label}</button>`)
         .join(' ')
       bodyEl.appendChild(actionsEl)
-      bodyEl.appendChild(el('div', 'DSH Desktop', 'dshc-footer'))
+      bodyEl.appendChild(el('div', 'DSH Smoothly Desktop', 'dshc-footer'))
       bindEvents()
     }
 

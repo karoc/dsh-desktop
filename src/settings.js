@@ -1,4 +1,4 @@
-// DSH Desktop — proxy settings window (standalone local page, opened from the
+// DSH Smoothly Desktop — proxy settings window (standalone local page, opened from the
 // main window menu bar or the tray). No dependency on the launcher page, so it
 // works whether or not dsh is loaded; the dsh page is never interrupted.
 const tauri = globalThis.__TAURI__;

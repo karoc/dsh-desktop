@@ -1,4 +1,4 @@
-# DSH Desktop overlay: inject the desktop client plugins into the web
+# DSH Smoothly Desktop overlay: inject the desktop client plugins into the web
 # profile's loader roster. Applied at runtime with `dsh web --patch <this>`;
 # the official @deepseek-ai/dsh package is never modified, so updating dsh to
 # the latest npm release cannot wipe these plugins.

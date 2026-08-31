@@ -1,7 +1,7 @@
 {
   "name": "dsh-desktop",
   "version": "0.3.10",
-  "description": "Standalone desktop shell for DeepSeek Harness (dsh): auto-updates dsh from npm, embeds Node 24, native notifications.",
+  "description": "DSH Smoothly Desktop (DSH SD): standalone desktop shell for DeepSeek Harness (dsh) — auto-updates dsh from npm, embeds Node 24, native notifications.",
   "private": true,
   "type": "module",
   "scripts": {
