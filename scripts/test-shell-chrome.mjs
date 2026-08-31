@@ -81,6 +81,12 @@ const devConfPath = join(root, 'src-tauri', 'tauri.dev.conf.json')
 const devConf = JSON.parse(readFileSync(devConfPath, 'utf8'))
 assert.ok(devConf.productName && devConf.productName !== 'DSH Desktop', 'dev config overrides productName')
 assert.ok(devConf.identifier && devConf.identifier !== 'dev.dsh.desktop', 'dev config overrides identifier')
+// NSIS 安装器按 MainBinaryName.exe 检测运行实例——dev 版必须用独立 exe 名，
+// 否则正式版在跑时装 dev 版会被误判为 dev 在运行（无法并存安装）。
+assert.ok(
+  devConf.mainBinaryName && devConf.mainBinaryName !== 'dsh-desktop',
+  'dev config sets a distinct mainBinaryName (side-by-side install)',
+)
 assert.ok(libRs.includes('fn toast_clsid'), 'lib.rs derives the toast CLSID per build identity')
 assert.ok(libRs.includes('__DSH_PRODUCT_NAME__'), 'chrome preamble injects the product name')
 assert.ok(chromeSrc.includes('__DSH_PRODUCT_NAME__'), 'chrome renders the injected product name')
