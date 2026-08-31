@@ -21,34 +21,27 @@
 
   const TEST_HOOK = globalThis.__DSH_CHROME_TEST__;
 
+  // 应用名/图标随构建身份注入（dev 版 = "DSH Smoothly Desktop Dev"）。
+  const PRODUCT_NAME = globalThis.__DSH_PRODUCT_NAME__ || 'DSH Smoothly Desktop';
+
   const SHELL_MENUS = [
     {
-      // 应用菜单：图标 + 应用名，下拉应用级动作（通用桌面范式）。
+      // 唯一菜单：顶栏左侧 icon 触发；首项显示应用名。
       id: 'app',
-      label: 'DSH Smoothly Desktop',
       items: [
+        { id: 'brand', label: PRODUCT_NAME, type: 'brand' },
+        { type: 'sep' },
+        { id: 'proxy-settings', label: '代理设置…' },
         { id: 'check-update', label: '检查更新…' }, // 有更新时翻转为「有更新 vX（点击更新）」
         { id: 'dev-mode', label: '开发者模式', type: 'checkbox' },
         { type: 'sep' },
-        { id: 'quit', label: '退出' },
-      ],
-    },
-    // 可见顶级条目：代理设置直开设置窗口（无需下拉）。
-    { id: 'proxy-settings', label: '代理设置…', action: 'proxy-settings' },
-    {
-      id: 'view',
-      label: '视图',
-      items: [
         { id: 'refresh', label: '刷新页面' },
         { id: 'restart', label: '重启服务' },
-      ],
-    },
-    {
-      id: 'help',
-      label: '帮助',
-      items: [
+        { type: 'sep' },
         { id: 'open-data', label: '打开数据目录' },
-        { id: 'about', label: '关于 DSH Smoothly Desktop' },
+        { id: 'about', label: `关于 ${PRODUCT_NAME}` },
+        { type: 'sep' },
+        { id: 'quit', label: '退出' },
       ],
     },
   ];
@@ -87,8 +80,6 @@
   // ── 传输层：双通道 ────────────────────────────────────────────────
   const hasTauri = !!(globalThis.__TAURI__ && globalThis.__TAURI__.core && globalThis.__TAURI__.core.invoke);
   const BRIDGE_PORT = globalThis.__DSH_BRIDGE_PORT__ || 0;
-  // 应用名随构建身份注入（开发版 = "DSH Smoothly Desktop Dev"，见 tauri.dev.conf.json）。
-  const PRODUCT_NAME = globalThis.__DSH_PRODUCT_NAME__ || 'DSH Smoothly Desktop';
 
   function invoke(ipc, args) {
     return globalThis.__TAURI__.core
@@ -149,6 +140,9 @@
     chevron: '<span class="chevron" aria-hidden="true"></span>',
   };
 
+  // 真实应用图标（Rust 注入为 data URI；缺省回退闪电占位）。
+  const LOGO = globalThis.__DSH_LOGO__ || ICONS.logo;
+
   const STYLE = `
     :host {
       all: initial;
@@ -157,6 +151,9 @@
       height: 36px;
       z-index: 2147483647;
       font-family: system-ui, "Segoe UI", "Microsoft YaHei", sans-serif;
+      /* 显式浅色：shadow root 内文字不继承页面（页面可能是浅色主题 → 黑字，
+         深色毛玻璃上看不见）。dropdown 等所有后代由此继承。 */
+      color: #eef2f6;
     }
     .bar {
       display: flex;
@@ -174,19 +171,30 @@
       user-select: none;
       -webkit-user-select: none;
       cursor: default;
+      /* WebView2 原生窗口拖动（不依赖 Tauri JS，远程页同样生效）；
+         比 mousedown→start_dragging 异步触发可靠。mousedown 兜底仍保留。 */
+      -webkit-app-region: drag;
     }
     .menus { display: flex; align-items: stretch; height: 100%; }
     .menu-btn {
-      display: flex; align-items: center; gap: 6px;
-      padding: 0 11px; margin: 0 1px;
+      display: flex; align-items: center; justify-content: center;
+      width: 40px; margin: 0 2px;
       border: 0; background: transparent;
       border-radius: 6px;
-      color: inherit; font: inherit;
-      cursor: pointer; white-space: nowrap;
+      color: inherit;
+      cursor: pointer;
       transition: background 0.12s ease;
+      -webkit-app-region: no-drag;
     }
     .menu-btn:hover, .menu-btn.open { background: rgba(255, 255, 255, 0.09); }
     .menu-btn .logo { display: flex; align-items: center; }
+    .menu-btn .logo img {
+      width: 20px; height: 20px;
+      border-radius: 5px;
+      display: block;
+      user-select: none;
+      -webkit-user-drag: none;
+    }
     .menu-btn .chevron {
       width: 7px; height: 7px;
       border-left: 1.5px solid currentColor;
@@ -208,6 +216,7 @@
       border: 0; background: transparent;
       color: #eef2f6; cursor: pointer;
       transition: background 0.12s ease;
+      -webkit-app-region: no-drag;
     }
     .ctl:hover { background: rgba(255, 255, 255, 0.10); }
     .ctl-close:hover { background: rgba(232, 17, 35, 0.90); }
@@ -242,6 +251,13 @@
     .dd-item:hover { background: rgba(88, 166, 255, 0.20); }
     .dd-check { width: 14px; color: #58a6ff; text-align: center; }
     .dd-sep { height: 1px; background: rgba(255, 255, 255, 0.10); margin: 4px 8px; }
+    .dd-brand {
+      display: flex; align-items: center; gap: 8px;
+      padding: 7px 10px 5px;
+      font-weight: 600;
+      cursor: default;
+    }
+    .dd-brand img { width: 18px; height: 18px; border-radius: 4px; display: block; }
   `;
 
   const styleEl = document.createElement('style');
@@ -256,25 +272,18 @@
   const controls = document.createElement('div');
   controls.className = 'controls';
 
-  // 顶级菜单按钮。
+  // 顶级菜单按钮：全部菜单收进左侧应用 icon（真实 logo），名字显示在下拉首项。
   const menuButtons = new Map(); // menuId -> button
   for (const entry of SHELL_MENUS) {
     const btn = document.createElement('button');
     btn.className = 'menu-btn';
-    if (entry.id === 'app') {
-      // 应用名跟随构建身份（开发版显示 "DSH Smoothly Desktop Dev"）。
-      btn.innerHTML = `<span class="logo">${ICONS.logo}</span><span class="label">${PRODUCT_NAME}</span>${ICONS.chevron}`;
-      btn.dataset.menu = 'app';
-    } else if (entry.items) {
-      btn.innerHTML = `<span class="label">${entry.label}</span>${ICONS.chevron}`;
-      btn.dataset.menu = entry.id;
-    } else {
-      btn.innerHTML = `<span class="label">${entry.label}</span>`;
-      btn.dataset.action = entry.action || entry.id;
-    }
-    btn.setAttribute('aria-haspopup', entry.items ? 'true' : 'false');
+    // 真实应用图标（data URI）；所有菜单经此 icon 展开。
+    btn.innerHTML = `<span class="logo"><img src="${LOGO}" alt="" draggable="false"></span>`;
+    btn.dataset.menu = entry.id;
+    btn.setAttribute('aria-label', '菜单');
+    btn.setAttribute('aria-haspopup', 'true');
     menusWrap.appendChild(btn);
-    if (entry.items) menuButtons.set(entry.id, btn);
+    menuButtons.set(entry.id, btn);
   }
 
   // 窗口控制三键。
@@ -311,6 +320,20 @@
         const sep = document.createElement('div');
         sep.className = 'dd-sep';
         dd.appendChild(sep);
+        continue;
+      }
+      // 应用名展示项：下拉首行，带小图标、不可点（不给 data-item 即被点击处理器忽略）。
+      if (item.type === 'brand') {
+        const row = document.createElement('div');
+        row.className = 'dd-brand';
+        const img = document.createElement('img');
+        img.src = LOGO;
+        img.alt = '';
+        img.width = 18;
+        img.height = 18;
+        row.appendChild(img);
+        row.appendChild(document.createTextNode(item.label));
+        dd.appendChild(row);
         continue;
       }
       const row = document.createElement('div');

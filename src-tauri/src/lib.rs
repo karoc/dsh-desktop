@@ -1545,6 +1545,13 @@ fn inject_shell_chrome(app: &AppHandle) {
         serde_json::to_string(app.package_info().name.as_str())
             .unwrap_or_else(|_| "\"DSH Smoothly Desktop\"".into())
     );
+    // 真实应用图标：打包进二进制的 logo.png → data URI，顶栏按钮与下拉品牌项使用
+    // （页面 origin 无 img 权限问题，跨 tauri:// 也不会被第三方 CSP 拦）。
+    let logo_uri = format!("data:image/png;base64,{}", b64(include_bytes!("../../src/logo.png")));
+    prefix.push_str(&format!(
+        ";window.__DSH_LOGO__={}",
+        serde_json::to_string(&logo_uri).unwrap_or_else(|_| "\"\"".into())
+    ));
     let port = BRIDGE_PORT.load(std::sync::atomic::Ordering::SeqCst);
     if port > 0 {
         // 契约：client-notifications 插件的 BRIDGE_PORT 用 startsWith('__DSH')

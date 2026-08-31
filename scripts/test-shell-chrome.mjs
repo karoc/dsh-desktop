@@ -28,23 +28,25 @@ const sandbox = { console, __DSH_CHROME_TEST__: {} }
 vm.createContext(sandbox)
 vm.runInContext(chromeSrc, sandbox, { filename: 'shell-chrome.js' })
 const { SHELL_MENUS, ACTIONS } = sandbox.__DSH_CHROME_TEST__.config
-assert.ok(Array.isArray(SHELL_MENUS) && SHELL_MENUS.length >= 3, 'SHELL_MENUS is a non-trivial array')
+assert.ok(Array.isArray(SHELL_MENUS) && SHELL_MENUS.length >= 1, 'SHELL_MENUS is a non-trivial array')
 assert.ok(ACTIONS && typeof ACTIONS === 'object', 'ACTIONS table present')
 
-// ── 1. structure: app menu first, top-level proxy-settings direct entry ─────
-assert.equal(SHELL_MENUS[0].id, 'app', 'first menu is the app menu (DSH Smoothly Desktop)')
+// ── 1. structure: single icon menu; brand name shown first ──────────────────
+assert.equal(SHELL_MENUS.length, 1, 'all shell menus live in one app menu (icon dropdown)')
+assert.equal(SHELL_MENUS[0].id, 'app', 'the single menu id is app')
 assert.ok(Array.isArray(SHELL_MENUS[0].items), 'app menu has dropdown items')
-const proxyEntry = SHELL_MENUS.find((e) => e.id === 'proxy-settings')
-assert.ok(proxyEntry, 'top-level 代理设置… entry exists')
-assert.equal(typeof proxyEntry.action, 'string', '代理设置… is a direct-action entry (opens the settings window)')
-assert.ok(SHELL_MENUS.some((e) => e.id === 'view' && e.items), '视图 dropdown menu exists')
-assert.ok(SHELL_MENUS.some((e) => e.id === 'help' && e.items), '帮助 dropdown menu exists')
+const brand = SHELL_MENUS[0].items[0]
+assert.ok(brand && brand.id === 'brand' && brand.type === 'brand', 'dropdown first row shows the app name (brand)')
+const ids = SHELL_MENUS[0].items.map((i) => i.id).filter(Boolean)
+for (const id of ['proxy-settings', 'check-update', 'dev-mode', 'refresh', 'restart', 'open-data', 'about', 'quit']) {
+  assert.ok(ids.includes(id), `app menu contains ${id}`)
+}
 
-// ── 2. every menu id resolves in ACTIONS ────────────────────────────────────
+// ── 2. every clickable menu id resolves in ACTIONS ───────────────────────────
 for (const entry of SHELL_MENUS) {
-  const ids = entry.items ? entry.items.map((i) => i.id).filter(Boolean) : [entry.action]
-  for (const id of ids) {
-    assert.ok(ACTIONS[id], `menu item "${id}" (menu ${entry.id}) has an ACTIONS entry`)
+  const clickable = (entry.items || []).filter((i) => i.id && i.type !== 'brand' && i.type !== 'sep')
+  for (const item of clickable) {
+    assert.ok(ACTIONS[item.id], `menu item "${item.id}" (menu ${entry.id}) has an ACTIONS entry`)
   }
 }
 
@@ -95,6 +97,13 @@ assert.ok(
 assert.ok(libRs.includes('fn toast_clsid'), 'lib.rs derives the toast CLSID per build identity')
 assert.ok(libRs.includes('__DSH_PRODUCT_NAME__'), 'chrome preamble injects the product name')
 assert.ok(chromeSrc.includes('__DSH_PRODUCT_NAME__'), 'chrome renders the injected product name')
+
+// ── 8. UI 可读性 + 真实图标（防回归）────────────────────────────────────
+// 显式浅色文字：shadow root 不继承页面（dsh 页面可能是浅色主题 → 黑字压深色底看不清）。
+assert.ok(chromeSrc.includes('color: #eef2f6'), 'chrome sets an explicit light text color (no page-inherit black-on-dark)')
+assert.ok(chromeSrc.includes("type: 'brand'"), 'chrome renders the brand (app name) dropdown row')
+assert.ok(chromeSrc.includes('__DSH_LOGO__'), 'chrome uses the injected real logo')
+assert.ok(libRs.includes('__DSH_LOGO__'), 'lib.rs injects the real logo data URI')
 
 console.log('PASS — shell chrome contract (menus, actions, bridge, IPC)')
 process.exit(0)
