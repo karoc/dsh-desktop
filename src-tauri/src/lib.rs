@@ -1874,6 +1874,9 @@ fn show_about(app: AppHandle, state: State<'_, ServerState>) -> Result<(), Strin
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
+        // 窗口状态记忆（位置/大小/最大化）：上次最大化关闭、下次启动还原；
+        // dev/正式各自独立存储（app data 按 identifier 隔离）。
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // Toast click / external activation: remember the session to
             // reopen, then bring the existing window forward. Never spawn a

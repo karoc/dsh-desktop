@@ -171,9 +171,6 @@
       user-select: none;
       -webkit-user-select: none;
       cursor: default;
-      /* WebView2 原生窗口拖动（不依赖 Tauri JS，远程页同样生效）；
-         比 mousedown→start_dragging 异步触发可靠。mousedown 兜底仍保留。 */
-      -webkit-app-region: drag;
     }
     .menus { display: flex; align-items: stretch; height: 100%; }
     .menu-btn {
@@ -184,7 +181,6 @@
       color: inherit;
       cursor: pointer;
       transition: background 0.12s ease;
-      -webkit-app-region: no-drag;
     }
     .menu-btn:hover, .menu-btn.open { background: rgba(255, 255, 255, 0.09); }
     .menu-btn .logo { display: flex; align-items: center; }
@@ -216,7 +212,6 @@
       border: 0; background: transparent;
       color: #eef2f6; cursor: pointer;
       transition: background 0.12s ease;
-      -webkit-app-region: no-drag;
     }
     .ctl:hover { background: rgba(255, 255, 255, 0.10); }
     .ctl-close:hover { background: rgba(232, 17, 35, 0.90); }
@@ -427,15 +422,68 @@
   }
 
   // ── 事件 ──────────────────────────────────────────────────────────
+  // window 级 CAPTURE 统一分发：不依赖 shadow 内单个元素监听（实机曾出现
+  // "全部点击无反应"——具体绑定可能因注入/遮蔽失效）。capture 阶段最早收包，
+  // composedPath 穿透 shadow 边界定位 data 命中元素；命中即 stopPropagation，
+  // 未命中（页面自身点击）原样放行。
+  window.addEventListener(
+    'click',
+    (e) => {
+      const path = e.composedPath ? e.composedPath() : [];
+      const hit = path.find((el) => el && el.dataset && (el.dataset.menu || el.dataset.item || el.dataset.action));
+      if (!hit) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const d = hit.dataset;
+      if (d.menu) {
+        toggleMenu(d.menu);
+        return;
+      }
+      if (d.item) {
+        runMenuAction(d.item);
+        closeMenus();
+        return;
+      }
+      if (d.action) {
+        runControlAction(d.action);
+      }
+    },
+    true
+  );
+
+  function runMenuAction(id) {
+    if (id === 'check-update') {
+      const actionId = updateInfo.updateAvailable ? 'update-now' : 'check-update';
+      call(actionId).then((r) => {
+        if (!updateInfo.updateAvailable) refreshUpdateInfo(); // 手动检查后刷新状态
+      });
+    } else if (id === 'dev-mode') {
+      call('dev-mode').then((r) => {
+        if (r && typeof r.devMode === 'boolean') setDevMode(r.devMode);
+      });
+    } else {
+      call(id);
+    }
+  }
+
+  function runControlAction(actionId) {
+    if (actionId === 'toggle-maximize') {
+      call('toggle-maximize').then((r) => {
+        if (r && typeof r.maximized === 'boolean') setMaximized(r.maximized);
+      });
+    } else {
+      call(actionId);
+    }
+  }
+
+  // 拖动窗口：mousedown → 桥/IPC → start_dragging（Tauri 官方 drag-region
+  // 同款机制；不使用 CSS app-region，避免 WebView2 中按钮点击被拖拽吞掉）。
   bar.addEventListener('mousedown', (e) => {
     if (e.button !== 0) return;
-    // 点击空白/菜单区关闭已开菜单；交互元素除外。
-    if (!e.target.closest('button')) {
-      if (openMenuId) closeMenus();
-      // 拖动窗口（mousedown → 桥 → start_dragging）。按钮区域不拖。
-      e.preventDefault();
-      call('drag');
-    }
+    if (e.target.closest('button')) return;
+    if (openMenuId) closeMenus();
+    e.preventDefault();
+    call('drag');
   });
 
   bar.addEventListener('dblclick', (e) => {
@@ -443,51 +491,6 @@
     call('toggle-maximize').then((r) => {
       if (r && typeof r.maximized === 'boolean') setMaximized(r.maximized);
     });
-  });
-
-  menusWrap.addEventListener('click', (e) => {
-    const btn = e.target.closest('[data-menu]');
-    if (btn) {
-      toggleMenu(btn.dataset.menu);
-      return;
-    }
-    // 直开动作条目（如「代理设置…」）。
-    const actBtn = e.target.closest('[data-action]');
-    if (actBtn) call(actBtn.dataset.action);
-  });
-
-  for (const [menuId, dd] of dropdowns) {
-    dd.addEventListener('click', (e) => {
-      const row = e.target.closest('[data-item]');
-      if (!row) return;
-      const id = row.dataset.item;
-      if (id === 'check-update') {
-        const actionId = updateInfo.updateAvailable ? 'update-now' : 'check-update';
-        call(actionId).then((r) => {
-          if (!updateInfo.updateAvailable) refreshUpdateInfo(); // 手动检查后刷新状态
-        });
-      } else if (id === 'dev-mode') {
-        call('dev-mode').then((r) => {
-          if (r && typeof r.devMode === 'boolean') setDevMode(r.devMode);
-        });
-      } else {
-        call(id);
-      }
-      closeMenus();
-    });
-  }
-
-  controls.addEventListener('click', (e) => {
-    const btn = e.target.closest('[data-action]');
-    if (!btn) return;
-    const action = btn.dataset.action;
-    if (action === 'toggle-maximize') {
-      call('toggle-maximize').then((r) => {
-        if (r && typeof r.maximized === 'boolean') setMaximized(r.maximized);
-      });
-    } else {
-      call(action);
-    }
   });
 
   // 最大化状态跟随真实窗口（Aero 拖拽/Win+↑ 等外部路径会漂移）。
