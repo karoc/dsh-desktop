@@ -104,8 +104,10 @@ assert.ok(libRs.includes('__DSH_PRODUCT_NAME__'), 'chrome preamble injects the p
 assert.ok(chromeSrc.includes('__DSH_PRODUCT_NAME__'), 'chrome renders the injected product name')
 
 // ── 8. UI 可读性 + 真实图标（防回归）────────────────────────────────────
-// 白色主题 + 显式文字色：shadow root 不继承页面（避免黑字压深底看不清）。
-assert.ok(chromeSrc.includes('#1f2328'), 'chrome uses the white-theme text color #1f2328 (no page-inherit)')
+// 随系统配色（浅色默认 #1f2328，深色由 prefers-color-scheme 覆盖）；显式文字色
+// 不继承页面（避免黑字压深底看不清）。
+assert.ok(chromeSrc.includes('#1f2328'), 'chrome light scheme keeps the #1f2328 text color')
+assert.ok(chromeSrc.includes('prefers-color-scheme'), 'chrome follows the OS color scheme (light/dark)')
 assert.ok(chromeSrc.includes("type: 'brand'"), 'chrome renders the brand (app name) dropdown row')
 assert.ok(chromeSrc.includes('__DSH_LOGO__'), 'chrome uses the injected real logo')
 assert.ok(libRs.includes('__DSH_LOGO__'), 'lib.rs injects the real logo data URI')
