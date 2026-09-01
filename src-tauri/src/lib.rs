@@ -2170,6 +2170,12 @@ fn plugins_reset_preinstalled(app: AppHandle, state: State<'_, ServerState>, nam
     if !preinstalled_names(&runtime).contains(&name) {
         return Err("not a preinstalled plugin".into());
     }
+    send_line(
+        &mut state.stdin.lock().unwrap(),
+        &serde_json::json!({ "cmd": "preinstalled-reset", "name": name }).to_string(),
+    );
+    Ok(serde_json::json!({ "ok": true }))
+}
 
 /// 壳健康状态（chrome 故障条幅轮询用）：最近故障摘要 + 服务是否在跑。
 #[tauri::command]
