@@ -1,0 +1,122 @@
+--- a/src-tauri/resources/manager/server-manager.mjs	2026-09-01 08:44:08.525032278 +0800
++++ b/src-tauri/resources/manager/server-manager.mjs	2026-09-01 08:44:08.527215339 +0800
+@@ -18,7 +18,7 @@
+ //        {"cmd":"check-update"} / {"cmd":"update-dsh"} / {"cmd":"restart-dsh"}
+ //   7. on signal, kill the whole dsh tree (taskkill /T /F on Windows).
+ 
+-import { spawn } from 'node:child_process'
++import { spawn, spawnSync } from 'node:child_process'
+ import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, appendFileSync } from 'node:fs'
+ import { tmpdir } from 'node:os'
+ import { dirname, delimiter as pathDelimiter, join, relative, resolve } from 'node:path'
+@@ -891,9 +891,59 @@
+ const URL_RE = /(https?:\/\/127\.0\.0\.1:\d+)/
+ 
+ let currentChild = null
++let currentChildPid = null
+ let restartRequested = false
+ let pendingTask = null
+ 
++// ── liveness watchdog ──────────────────────────────────────────────────────
++// dsh web can EVENT-LOOP HANG (black page, refresh dead) without exiting, so
++// the supervisor's normal child-exit path never fires. Poll the reported URL:
++// after WATCHDOG_MISS_LIMIT silent misses the child gets a best-effort memory
++// dump and is killed + re-spawned (same recovery as the tray's 重启服务), so
++// the next hang recovers by itself AND leaves a dump for diagnosis. Evidence
++// lands in <runtime>/reports (same dir as node --report crash reports).
++let watchdogUrl = null
++let watchdogArmed = false
++let watchdogMisses = 0
++let watchdogTimer = null
++const WATCHDOG_MS = 3000
++const WATCHDOG_MISS_LIMIT = 3
++
++function watchdogStart() {
++  if (watchdogTimer) return
++  watchdogTimer = setInterval(() => { void watchdogTick() }, WATCHDOG_MS)
++  watchdogTimer.unref?.()
++}
++async function watchdogTick() {
++  if (!watchdogUrl || !watchdogArmed) return
++  let ok = false
++  try {
++    const res = await fetch(watchdogUrl, { signal: AbortSignal.timeout(1500) })
++    ok = res.ok
++  } catch { /* unresponsive */ }
++  if (ok) { watchdogMisses = 0; return }
++  watchdogMisses += 1
++  log(`watchdog: dsh web miss ${watchdogMisses}/${WATCHDOG_MISS_LIMIT} (${watchdogUrl})`)
++  if (watchdogMisses >= WATCHDOG_MISS_LIMIT) {
++    log(`watchdog: dsh web UNRESPONSIVE — dumping pid ${currentChildPid ?? '?'} then restarting`)
++    dumpChild(currentChildPid)
++    watchdogMisses = 0
++    watchdogArmed = false
++    watchdogUrl = null
++    if (currentChildPid) { restartRequested = true; killTree(currentChildPid) }
++  }
++}
++function dumpChild(pid) {
++  if (!pid) return
++  try {
++    // Full memory dump via the comsvcs MiniDump path (no external tools); the
++    // debugger then tells us exactly where the event loop is stuck.
++    const out = join(args.runtimeDir, 'reports', `dshweb-${pid}-${Date.now()}.dmp`)
++    spawnSync('rundll32', [`c:\\windows\\system32\\comsvcs.dll, MiniDump`, String(pid), out, 'full'], { stdio: 'ignore', timeout: 20000, windowsHide: true })
++    if (existsSync(out)) log(`watchdog: dump saved ${out}`)
++  } catch (err) { log(`watchdog: dump failed: ${err.message}`) }
++}
++
+ function killTree(pid) {
+   try {
+     if (process.platform === 'win32') {
+@@ -943,14 +993,33 @@
+   const child = spawn(process.execPath, [entry, 'web', '--patch', patchPath, '--no-open', '--host', '127.0.0.1', '--port', '0'], {
+     cwd,
+     stdio: ['ignore', 'pipe', 'pipe'],
+-    env: { ...process.env, DSH_HOME: dshHome },
++    // Node crash reports (OOM / fatal / uncaught exception) land in
++    // <runtime>/reports so a hard death of dsh web is diagnosable even without
++    // WER. Only the dsh web child gets NODE_OPTIONS; the manager itself stays
++    // clean.
++    env: {
++      ...process.env,
++      DSH_HOME: dshHome,
++      NODE_OPTIONS: [
++        process.env.NODE_OPTIONS ?? '',
++        `--report-on-fatalerror --report-uncaught-exception --report-compact --report-dir=${join(runtimeDir, 'reports').replaceAll('\\', '/')}`,
++      ].filter(Boolean).join(' '),
++    },
+     windowsHide: true,
+   })
++  mkdirSync(join(runtimeDir, 'reports'), { recursive: true })
+   child.stdout.on('data', (buf) => {
+     for (const line of String(buf).split(/\r?\n/)) {
+       if (!line) continue
+       const m = line.match(URL_RE)
+-      if (m) emit({ t: 'url', url: m[1] })
++      if (m) {
++        emit({ t: 'url', url: m[1] })
++        // Watchdog: re-arm on every announced URL (a new URL = a respawn).
++        watchdogUrl = m[1]
++        watchdogMisses = 0
++        watchdogArmed = true
++        watchdogStart()
++      }
+       log(line)
+     }
+   })
+@@ -958,8 +1027,14 @@
+     for (const line of String(buf).split(/\r?\n/)) if (line) log(line)
+   })
+   currentChild = child
++  currentChildPid = child.pid
+   const code = await new Promise((resolvePromise) => child.on('exit', (c, s) => resolvePromise(c ?? (s === 'SIGKILL' ? 137 : 1))))
+   if (currentChild === child) currentChild = undefined
++  // Child gone: disarm the watchdog until a fresh URL is announced.
++  watchdogUrl = null
++  watchdogArmed = false
++  watchdogMisses = 0
++  currentChildPid = null
+   return { code, pid: child.pid }
+ }
+ 

@@ -504,6 +504,74 @@
       ],
       "createdAt": 1787865885502,
       "updatedAt": 1787865893560
+    },
+    {
+      "id": "card-f54f54df-b28e-4ea6-a1cf-77f2fe1b069c",
+      "title": "跟进：resources/plugin 插件同步拷贝滞后（提交 plugins/ 源后未提交拷贝）",
+      "rationale": "构建时 beforeBuildCommand 的 sync-resources.mjs 会把 plugins/dsh-plugin-console/ 源拷贝到 src-tauri/resources/plugin/，但 #15（去悬浮按钮/改全局接口）只提交了源文件，仓库里跟踪的拷贝仍带旧版 .dshc-btn（18 处）。功能无碍（每次构建自动覆盖），但仓库两份不一致，长期会让 diff 混乱、误导排查。为什么现在：本轮在 D 盘重建时发现了这个不一致。",
+      "rejected": "不放当前 PR：与本轮 UI 反馈无关、且 PR #18 已合并，单独开一个小 PR 更干净。也可以选择把 resources/plugin 改为 gitignore + 强制构建生成，但那会改变仓库约定，需要先讨论。",
+      "sourceSessionId": "session-2022bc96-7d1e-49fd-8ada-307acaff05a9",
+      "status": "todo",
+      "tags": [
+        "repo-hygiene",
+        "plugins",
+        "follow-up"
+      ],
+      "createdAt": 1788267731908,
+      "updatedAt": 1788267731908
+    },
+    {
+      "id": "card-4298568a-a066-430f-a3ec-a0c14f8419b5",
+      "title": "UI 批次 2：检查更新/关于弹窗 + 插件管理撤回自研窗口 + 下拉现代化 + 设置窗居中修复 (#18)",
+      "summary": "五条反馈全部落地并经 PR #18 合并（1288f71），npm test 7 套 + CI check/test 全绿：1) 检查更新=壳内模态弹窗（当前/最新版本+确定+立即更新，无版本时自动检查并轮询 /update-status，15s 超时如实提示）；2) 关于=壳内模态弹窗（软件名称/版本/构建日期/dsh 本体+确定），build.rs 用 civil_from_days 输出 DSH_BUILD_DATE 并注入 __DSH_BUILD_DATE__；3) 下拉修复动态文本覆盖对齐列的 bug + 按主流桌面菜单模式现代化（30px 行高/18px 勾选列/dd-label 独立 span/品牌头+版本副行/focus-visible 焦点环/role=menu 全键盘导航/超长滚动）；4) 代理设置窗口 with_denylist(&[\"settings\"]) 排除 window-state，修复\"先闪居中又跳回左边\"（根因 restore_state 覆盖 builder .center()，主窗口记忆保留）；5) 插件管理撤回自研窗口（删除 plugin-console.html/js、移除 open_plugins/get_plugins_panel/plugins_* IPC 与 /shell/open-plugins、/shell/about 桥臂及 is_dev_build），菜单改就地触发原插件控制台面板（globalThis.__DSH_PLUGIN_CONSOLE__.toggle()），原 UI 零改动。契约测试同步：plugins/about 归入 IN_SHELL_ACTIONS 豁免 + 新增弹窗/构建日期/denylist/无窗口路由断言；README 与 shell-dev SKILL 同步。D:\\Dev\\dsh-desktop-dev 已同步至 main 并重建安装包成功。",
+      "rationale": "用户第二轮 UI 反馈：检查更新/关于要弹窗（带确定/立即更新按钮）、插件管理 UI 被 #17 改回自研窗口（应保持原控制台）、下拉检查更新未对齐且要按主流设计适配、代理设置窗口\"闪一下居中又跳回左边\"。为什么现在：反馈明确后一次修完，出 dev 版供验证。",
+      "rejected": "放弃：a) 插件管理继续用自研窗口换皮（用户明确\"为什么改 UI\"，#14→#17 两轮已证明不可行）；b) 检查更新/关于用系统 toast 或瞬时提示（用户要弹窗+按钮）；c) builder 后手动 .center() 修闪跳（与 window-state restore 竞态不可靠，改用官方 with_denylist）；d) 弹窗建原生子窗口（多余窗口管理面、违背壳内就地原则）；e) 构建日期引 chrono 或 CI 注入 env（为一行日期不值）。",
+      "sourceSessionId": "session-2022bc96-7d1e-49fd-8ada-307acaff05a9",
+      "status": "done",
+      "tags": [
+        "shell",
+        "ui",
+        "bug-fix",
+        "feature"
+      ],
+      "createdAt": 1788267851554,
+      "updatedAt": 1788267851554
+    },
+    {
+      "id": "card-7c04d1eb-c49a-4ea9-a541-ecfe0fd720a4",
+      "title": "第二次复现（21:02:27）已恢复——用户需装 instrumentation 前不再跑全量测试套件",
+      "summary": "第二次复现已记录并主动恢复服务；交付\"黑屏即时抓 dump\"三命令；待用户装 L1/L2/L3 并规避全量测试套件工具调用，直至拿到 dump 定位。",
+      "rationale": "2026-09-01 21:02:27 正式版第二次黑屏（同一会话 session-86c3f3d5，同一工具场景\"pwsh npm 测试套件\"），且本次整树消失（无任何 WER/事件日志）——已通过桥 POST /restart 现场恢复（21:07:41 新 web 56065 存活）。两次复现模式确认\"工具派发边界 + 杀进程树误杀\"嫌疑，但无 dump 仍无法钉死。用户仍未装任何 instrumentation（L1/L2/L3 均未落地），第三次复现前必须装上；同时给出零前置的黑屏即时抓 dump 命令。",
+      "rejected": "不再继续推测具体杀树代码行（两次均无 dump，猜测会误导）；test:engine 源码已排除测试内杀祖先逻辑。",
+      "sourceSessionId": "session-788be97d-7ef1-480f-9552-d09ab4eaf37b",
+      "status": "todo",
+      "tags": [
+        "windows",
+        "waiting-user",
+        "investigate",
+        "dsh-web",
+        "urgent"
+      ],
+      "createdAt": 1788268219936,
+      "updatedAt": 1788268219936
+    },
+    {
+      "id": "card-d689c8c2-29c0-46ca-86f6-a6163046ae56",
+      "title": "正式版部署 instrumentation（watchdog + node report + 守护脚本）",
+      "summary": "正式版已部署 instrumentation 并生效：① 正式仓源码 git apply 合入补丁（server-manager.mjs 含 NODE_OPTIONS node report + watchdog）；② 已安装正式版 manager 就地替换（备份 .bak-20260901，node --check 通过）；③ 桥 POST /restart 重启服务，新 manager 22:00:49 上线、dsh web 56579 HTTP 200，runtime\\reports 目录已创建（补丁代码路径执行证据）；④ 守护脚本已拷至 %LOCALAPPDATA%\\dsh-hang-guard.ps1。未完成（需用户管理员权限）：HKLM WER LocalDumps 注册表、计划任务自启（schtasks 被拒）。",
+      "rationale": "用户要求直接部署正式版为可捕获日志版本（不要 dev 版）。已就地升级已安装正式版（%LOCALAPPDATA%\\dsh Desktop\\resources\\manager\\server-manager.mjs），无需重打包；正式仓源码同步合入补丁供未来 CI 构建。剩余两项需用户/管理员权限执行（WER HKLM、计划任务），均已给出命令。",
+      "rejected": "放弃重新打包 NSIS 安装（本地 WSL 无法交叉构建 Windows 包，且就地替换 manager 资源即可生效，更快且不动安装结构）；放弃动 dev 版（用户明确要求只部署正式版）。",
+      "sourceSessionId": "session-788be97d-7ef1-480f-9552-d09ab4eaf37b",
+      "status": "done",
+      "tags": [
+        "windows",
+        "deploy",
+        "watchdog",
+        "dsh-web",
+        "prod"
+      ],
+      "createdAt": 1788271286081,
+      "updatedAt": 1788271286081
     }
   ]
 }
