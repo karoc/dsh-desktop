@@ -1193,23 +1193,6 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
             let _ = open_data_dir(app.clone());
             ("200 OK", serde_json::json!({ "ok": true }).to_string())
         }
-        ("POST", "/shell/about") => {
-            let current = app
-                .state::<ServerState>()
-                .update
-                .lock()
-                .unwrap()
-                .current
-                .clone()
-                .unwrap_or_else(|| "?".into());
-            let dev = if is_dev_build(app) { "（开发版）" } else { "" };
-            show_toast(
-                app,
-                app.package_info().name.clone(),
-                format!("版本 {} · dsh 当前 {}{}", env!("CARGO_PKG_VERSION"), current, dev),
-            );
-            ("200 OK", serde_json::json!({ "ok": true }).to_string())
-        }
         ("POST", "/shell/quit") => {
             let _ = quit_app(app.clone(), app.state::<ServerState>());
             ("200 OK", serde_json::json!({ "ok": true }).to_string())
@@ -1243,10 +1226,6 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
                 "200 OK",
                 serde_json::json!({ "lastError": last_error, "hasServer": has_server }).to_string(),
             )
-        }
-        ("POST", "/shell/open-plugins") => {
-            open_plugins_window(app);
-            ("200 OK", serde_json::json!({ "ok": true }).to_string())
         }
         _ => ("404 Not Found", "not found".into()),
     };
@@ -1710,10 +1689,11 @@ fn inject_shell_chrome(app: &AppHandle) {
         return;
     };
     let mut prefix = format!(
-        "window.__DSH_SHELL_VERSION__={};window.__DSH_PRODUCT_NAME__={}",
+        "window.__DSH_SHELL_VERSION__={};window.__DSH_PRODUCT_NAME__={};window.__DSH_BUILD_DATE__={}",
         serde_json::to_string(env!("CARGO_PKG_VERSION")).unwrap_or_else(|_| "\"\"".into()),
         serde_json::to_string(app.package_info().name.as_str())
-            .unwrap_or_else(|_| "\"DSH Smoothly Desktop\"".into())
+            .unwrap_or_else(|_| "\"DSH Smoothly Desktop\"".into()),
+        serde_json::to_string(env!("DSH_BUILD_DATE")).unwrap_or_else(|_| "\"\"".into())
     );
     // 真实应用图标：打包进二进制的 logo.png → data URI，顶栏按钮与下拉品牌项使用
     // （页面 origin 无 img 权限问题，跨 tauri:// 也不会被第三方 CSP 拦）。
@@ -2015,32 +1995,13 @@ fn open_settings(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Open (or focus) the standalone plugins manager window (menu bar entry).
-fn open_plugins_window(app: &AppHandle) {
-    if let Some(w) = app.get_webview_window("plugins") {
-        let _ = w.show();
-        let _ = w.set_focus();
-        return;
-    }
-    let _ = tauri::WebviewWindowBuilder::new(app, "plugins", tauri::WebviewUrl::App("plugin-console.html".into()))
-        .title(format!("{} — 插件管理", app.package_info().name))
-        .inner_size(680.0, 720.0)
-        .min_inner_size(520.0, 560.0)
-        .resizable(true)
-        .center()
-        .build();
-}
-
-/// Chrome menu bar entry: open (or focus) the plugins manager window.
-#[tauri::command]
-fn open_plugins(app: AppHandle) -> Result<(), String> {
-    open_plugins_window(&app);
-    Ok(())
-}
-
-// ── 插件管理（壳内独立窗口，复用桥 /plugins/* 的同一套逻辑）────────────
+// ── 插件管理（入口在壳菜单栏，界面保留 dsh-plugin-console 原面板）────────
+// 菜单「插件管理」在 dsh 页内就地触发原插件控制台面板（globalThis
+// __DSH_PLUGIN_CONSOLE__.toggle()），壳不建自研窗口、不改插件 UI/UX。
+// 桥端点 /plugins/*（list/enable/disable/install/remove/update/…）仍由
+// 面板直接调用，以下 shared 状态逻辑保留：
 /// 插件面板完整状态：bundles / preinstalled / preinstalledUpdates / devMode /
-/// update / op。桥端点 /plugins/list 与本地窗口 get_plugins_panel 共用，防漂移。
+/// update / op。桥端点 /plugins/list 使用（插件控制台面板的唯一数据源）。
 fn plugins_panel_state(app: &AppHandle) -> serde_json::Value {
     let runtime = runtime_dir(app);
     let bundles = web_profile_bundles(&runtime);
@@ -2074,109 +2035,6 @@ fn plugins_panel_state(app: &AppHandle) -> serde_json::Value {
     })
 }
 
-/// 插件管理窗口：全量状态。
-#[tauri::command]
-fn get_plugins_panel(app: AppHandle) -> serde_json::Value {
-    plugins_panel_state(&app)
-}
-
-/// 预装插件启用/禁用（写入 web profile manifest；重启服务生效）。
-#[tauri::command]
-fn plugins_set_enabled(app: AppHandle, name: String, enabled: bool) -> Result<serde_json::Value, String> {
-    let runtime = runtime_dir(&app);
-    if !preinstalled_names(&runtime).contains(&name) {
-        return Err("not a preinstalled plugin".into());
-    }
-    let mut bundles = web_profile_bundles(&runtime);
-    if enabled {
-        if !bundles.contains(&name) {
-            bundles.push(name.clone());
-        }
-    } else {
-        bundles.retain(|b| b != &name);
-    }
-    write_web_profile_bundles(&runtime, &bundles)?;
-    Ok(serde_json::json!({ "ok": true, "name": name, "nextAction": "restart" }))
-}
-
-/// 插件管理窗口：安装用户插件（spec 交给 manager 的 pnpm 校验）。
-#[tauri::command]
-fn plugins_install(state: State<'_, ServerState>, spec: String) -> Result<serde_json::Value, String> {
-    let valid = !spec.is_empty() && spec.len() <= 512 && !spec.contains(char::is_whitespace);
-    if !valid {
-        return Err("invalid plugin spec".into());
-    }
-    send_line(
-        &mut state.stdin.lock().unwrap(),
-        &serde_json::json!({ "cmd": "plugins-install", "spec": spec }).to_string(),
-    );
-    Ok(serde_json::json!({ "ok": true }))
-}
-
-/// 插件管理窗口：卸载用户插件。
-#[tauri::command]
-fn plugins_remove(app: AppHandle, state: State<'_, ServerState>, name: String) -> Result<serde_json::Value, String> {
-    let runtime = runtime_dir(&app);
-    let is_user = web_profile_bundles(&runtime).iter().any(|b| b == &name)
-        && !preinstalled_names(&runtime).contains(&name)
-        && !WEB_PROFILE_TEMPLATE.iter().any(|t| *t == name);
-    if !is_user {
-        return Err("not a user-installed plugin".into());
-    }
-    send_line(
-        &mut state.stdin.lock().unwrap(),
-        &serde_json::json!({ "cmd": "plugins-remove", "name": name }).to_string(),
-    );
-    Ok(serde_json::json!({ "ok": true }))
-}
-
-/// 插件管理窗口：更新用户插件（name 为空 = 全部）。
-#[tauri::command]
-fn plugins_update(state: State<'_, ServerState>, name: String) -> Result<serde_json::Value, String> {
-    let line = if name.is_empty() {
-        serde_json::json!({ "cmd": "plugins-update" }).to_string()
-    } else {
-        serde_json::json!({ "cmd": "plugins-update", "name": name }).to_string()
-    };
-    send_line(&mut state.stdin.lock().unwrap(), &line);
-    Ok(serde_json::json!({ "ok": true }))
-}
-
-/// 插件管理窗口：检查预装插件更新。
-#[tauri::command]
-fn plugins_check_preinstalled_updates(state: State<'_, ServerState>) -> Result<serde_json::Value, String> {
-    send_manager(&mut state.stdin.lock().unwrap(), "preinstalled-check");
-    Ok(serde_json::json!({ "ok": true }))
-}
-
-/// 插件管理窗口：更新指定预装插件。
-#[tauri::command]
-fn plugins_update_preinstalled(app: AppHandle, state: State<'_, ServerState>, name: String) -> Result<serde_json::Value, String> {
-    let runtime = runtime_dir(&app);
-    if !preinstalled_names(&runtime).contains(&name) {
-        return Err("not a preinstalled plugin".into());
-    }
-    send_line(
-        &mut state.stdin.lock().unwrap(),
-        &serde_json::json!({ "cmd": "preinstalled-update", "name": name }).to_string(),
-    );
-    Ok(serde_json::json!({ "ok": true }))
-}
-
-/// 插件管理窗口：恢复指定预装插件到出厂版本。
-#[tauri::command]
-fn plugins_reset_preinstalled(app: AppHandle, state: State<'_, ServerState>, name: String) -> Result<serde_json::Value, String> {
-    let runtime = runtime_dir(&app);
-    if !preinstalled_names(&runtime).contains(&name) {
-        return Err("not a preinstalled plugin".into());
-    }
-    send_line(
-        &mut state.stdin.lock().unwrap(),
-        &serde_json::json!({ "cmd": "preinstalled-reset", "name": name }).to_string(),
-    );
-    Ok(serde_json::json!({ "ok": true }))
-}
-
 /// 壳健康状态（chrome 故障条幅轮询用）：最近故障摘要 + 服务是否在跑。
 #[tauri::command]
 fn get_shell_status(state: State<'_, ServerState>) -> serde_json::Value {
@@ -2185,40 +2043,17 @@ fn get_shell_status(state: State<'_, ServerState>) -> serde_json::Value {
     serde_json::json!({ "lastError": last_error, "hasServer": has_server })
 }
 
-/// True for any build whose bundle identifier differs from the official one
-/// (the side-by-side dev build from tauri.dev.conf.json). Used to label the
-/// dev variant in user-visible strings so it can't be mistaken for the
-/// official install.
-fn is_dev_build(app: &AppHandle) -> bool {
-    app.config().identifier != "dsh.smoothly.desktop"
-}
-
-/// Chrome menu bar entry: "关于 DSH Smoothly Desktop" — native toast with the shell
-/// version and the current dsh version.
-#[tauri::command]
-fn show_about(app: AppHandle, state: State<'_, ServerState>) -> Result<(), String> {
-    let current = state
-        .update
-        .lock()
-        .unwrap()
-        .current
-        .clone()
-        .unwrap_or_else(|| "?".into());
-    let dev = if is_dev_build(&app) { "（开发版）" } else { "" };
-    show_toast(
-        &app,
-        app.package_info().name.clone(),
-        format!("版本 {} · dsh 当前 {}{}", env!("CARGO_PKG_VERSION"), current, dev),
-    );
-    Ok(())
-}
-
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         // 窗口状态记忆（位置/大小/最大化）：上次最大化关闭、下次启动还原；
         // dev/正式各自独立存储（app data 按 identifier 隔离）。
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(tauri_plugin_window_state::Builder::default()
+            // settings 是工具窗：不参与窗口状态记忆（记忆恢复会在创建时覆盖
+            // builder 的 .center()，表现为"弹窗先闪一下居中、又跳回上次的
+            // 左边位置"）。主窗口仍保留位置/大小/最大化记忆。
+            .with_denylist(&["settings"])
+            .build())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // Toast click / external activation: remember the session to
             // reopen, then bring the existing window forward. Never spawn a
@@ -2530,16 +2365,6 @@ pub fn run() {
             get_shell_state,
             toggle_dev_mode,
             open_settings,
-            show_about,
-            get_plugins_panel,
-            plugins_set_enabled,
-            plugins_install,
-            plugins_remove,
-            plugins_update,
-            plugins_check_preinstalled_updates,
-            plugins_update_preinstalled,
-            plugins_reset_preinstalled,
-            open_plugins,
             get_shell_status
         ])
         .run(tauri::generate_context!())
