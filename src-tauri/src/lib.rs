@@ -1245,7 +1245,7 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
             )
         }
         ("POST", "/shell/open-plugins") => {
-            open_plugins_window(&app);
+            open_plugins_window(app);
             ("200 OK", serde_json::json!({ "ok": true }).to_string())
         }
         _ => ("404 Not Found", "not found".into()),
@@ -2099,7 +2099,7 @@ fn plugins_set_enabled(app: AppHandle, name: String, enabled: bool) -> Result<se
 
 /// 插件管理窗口：安装用户插件（spec 交给 manager 的 pnpm 校验）。
 #[tauri::command]
-fn plugins_install(app: AppHandle, state: State<'_, ServerState>, spec: String) -> Result<serde_json::Value, String> {
+fn plugins_install(state: State<'_, ServerState>, spec: String) -> Result<serde_json::Value, String> {
     let valid = !spec.is_empty() && spec.len() <= 512 && !spec.contains(char::is_whitespace);
     if !valid {
         return Err("invalid plugin spec".into());
@@ -2130,7 +2130,7 @@ fn plugins_remove(app: AppHandle, state: State<'_, ServerState>, name: String) -
 
 /// 插件管理窗口：更新用户插件（name 为空 = 全部）。
 #[tauri::command]
-fn plugins_update(app: AppHandle, state: State<'_, ServerState>, name: String) -> Result<serde_json::Value, String> {
+fn plugins_update(state: State<'_, ServerState>, name: String) -> Result<serde_json::Value, String> {
     let line = if name.is_empty() {
         serde_json::json!({ "cmd": "plugins-update" }).to_string()
     } else {
@@ -2177,7 +2177,7 @@ fn plugins_reset_preinstalled(app: AppHandle, state: State<'_, ServerState>, nam
 
 /// 壳健康状态（chrome 故障条幅轮询用）：最近故障摘要 + 服务是否在跑。
 #[tauri::command]
-fn get_shell_status(app: AppHandle, state: State<'_, ServerState>) -> serde_json::Value {
+fn get_shell_status(state: State<'_, ServerState>) -> serde_json::Value {
     let last_error = state.last_error.lock().unwrap().clone();
     let has_server = state.child.lock().unwrap().is_some();
     serde_json::json!({ "lastError": last_error, "hasServer": has_server })
