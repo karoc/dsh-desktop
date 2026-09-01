@@ -1248,7 +1248,6 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
             open_plugins_window(app);
             ("200 OK", serde_json::json!({ "ok": true }).to_string())
         }
-        }
         _ => ("404 Not Found", "not found".into()),
     };
     let resp = format!(
