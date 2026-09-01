@@ -4,7 +4,8 @@
 // on_page_load 里 w.eval()）：启动页（tauri://localhost，有 __TAURI__）
 // 与远程 dsh 页（http://127.0.0.1:*，无 __TAURI__ —— 经环回桥通信）都生效。
 // 注入前缀会写入 window.__DSH_BRIDGE_PORT__（环回桥端口）与
-// window.__DSH_SHELL_VERSION__（壳版本）。
+// window.__DSH_SHELL_VERSION__（壳版本）、window.__DSH_PRODUCT_NAME__、
+// window.__DSH_BUILD_DATE__（构建日期）、window.__DSH_LOGO__（应用图标）。
 //
 // ── 壳菜单唯一定义点 ──────────────────────────────────────────────
 // 以后加壳菜单 = 往 SHELL_MENUS 加条目 + ACTIONS 加一行映射。
@@ -14,6 +15,12 @@
 //                                      { type: 'checkbox', id, label }）
 //   { id, label, action: 'actionId' }  直开动作条目（无下拉）
 //
+// 三类动作的传输：
+//   - 跨壳动作（开窗/服务/设置…）→ ACTIONS（ipc 命令 + 环回桥路径，双通道）；
+//   - 壳内就地动作（插件管理/关于/检查更新 → Shell 内模态弹窗或页面内面板）
+//     不进 ACTIONS，也不占桥 —— 界面零改动、无跨进程调用；
+//   - 窗口控制 → ACTIONS 的 window_control 命令 / /window/* 桥端点。
+//
 // 测试钩子：脚本开头检测 __DSH_CHROME_TEST__（scripts/test-shell-chrome.mjs
 // 在 vm 沙箱中提供），命中则只暴露配置、不渲染。
 (() => {
@@ -21,8 +28,10 @@
 
   const TEST_HOOK = globalThis.__DSH_CHROME_TEST__;
 
-  // 应用名/图标随构建身份注入（dev 版 = "DSH Smoothly Desktop Dev"）。
+  // 应用名/图标/版本/构建日期随构建身份注入（dev 版 = "DSH Smoothly Desktop Dev"）。
   const PRODUCT_NAME = globalThis.__DSH_PRODUCT_NAME__ || 'DSH Smoothly Desktop';
+  const SHELL_VERSION = globalThis.__DSH_SHELL_VERSION__ || '?';
+  const BUILD_DATE = globalThis.__DSH_BUILD_DATE__ || '?';
 
   const SHELL_MENUS = [
     {
@@ -32,8 +41,8 @@
         { id: 'brand', label: PRODUCT_NAME, type: 'brand' },
         { type: 'sep' },
         { id: 'proxy-settings', label: '代理设置…' },
-        { id: 'plugins', label: '插件管理…' },
-        { id: 'check-update', label: '检查更新…' }, // 有更新时翻转为「有更新 vX（点击更新）」
+        { id: 'plugins', label: '插件管理…' }, // 就地触发原插件控制台（dsh 页内面板）
+        { id: 'check-update', label: '检查更新…' }, // 有更新时翻转为「有更新 vX」
         { id: 'dev-mode', label: '开发者模式', type: 'checkbox' },
         { type: 'sep' },
         { id: 'refresh', label: '刷新页面' },
@@ -50,6 +59,8 @@
   // ── 动作表：每个 id → 本地 IPC 命令 + 环回桥路径（双通道）─────────
   // ipc 命令必须在 lib.rs 的 invoke_handler 注册；bridge 路径必须在
   // handle_bridge_conn 有 match 分支（契约测试校验，勿漂移）。
+  // 注：plugins / about / check-update 的交互改在壳内完成（页面内面板 /
+  // 模态弹窗），其中 check-update 仍借用 ACTIONS 的双通道触发检测与更新。
   const ACTIONS = {
     'proxy-settings': { ipc: 'open_settings', bridge: '/shell/open-settings' },
     'check-update': { ipc: 'check_update', bridge: '/check-update' },
@@ -58,9 +69,7 @@
     refresh: { ipc: 'refresh_page', bridge: '/refresh' },
     restart: { ipc: 'restart_server', bridge: '/restart' },
     'open-data': { ipc: 'open_data_dir', bridge: '/shell/open-data-dir' },
-    plugins: { ipc: 'open_plugins', bridge: '/shell/open-plugins' },
     'shell-status': { ipc: 'get_shell_status', bridge: '/shell/status', method: 'GET' },
-    about: { ipc: 'show_about', bridge: '/shell/about' },
     quit: { ipc: 'quit_app', bridge: '/shell/quit' },
     // 窗口控制（本地页走 IPC 命令 window_control；远程页走桥端点）。
     minimize: { ipc: 'window_control', args: { action: 'minimize' }, bridge: '/window/minimize' },
@@ -152,6 +161,11 @@
   // 真实应用图标（Rust 注入为 data URI；缺省回退闪电占位）。
   const LOGO = globalThis.__DSH_LOGO__ || ICONS.logo;
 
+  // ── 样式：随系统配色（浅色默认 + prefers-color-scheme 深色覆盖）──
+  // 下拉/弹窗参考当前主流桌面菜单模式（Windows 11 Flyout / macOS 菜单 /
+  // VS Code 类现代化下拉）：统一行高（30px）、左列 18px 勾选/占位列、
+  // 品牌头（名称 + 版本副行）、圆角卡片 + 阴影 + 毛玻璃、focus-visible 焦点环、
+  // 全键盘导航（↑↓/Home/End/Enter/Esc）、prefers-reduced-motion 降级。
   const STYLE = `
     :host {
       all: initial;
@@ -164,6 +178,7 @@
          显式设色/字号，避免继承页面（页面可能是深色主题、字号更大）。 */
       color-scheme: light dark;
       --dsh-fg: #1f2328;
+      --dsh-muted: #59636e;
       --dsh-bar-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.80), rgba(250, 250, 250, 0.68));
       --dsh-bar-border: rgba(0, 0, 0, 0.08);
       --dsh-bar-highlight: rgba(255, 255, 255, 0.9);
@@ -185,6 +200,7 @@
     @media (prefers-color-scheme: dark) {
       :host {
         --dsh-fg: #e6edf3;
+        --dsh-muted: #9198a1;
         --dsh-bar-bg: linear-gradient(180deg, rgba(22, 27, 34, 0.74), rgba(13, 17, 23, 0.62));
         --dsh-bar-border: rgba(255, 255, 255, 0.09);
         --dsh-bar-highlight: rgba(255, 255, 255, 0.06);
@@ -266,9 +282,13 @@
     }
     .ctl:hover { background: var(--dsh-hover); }
     .ctl-close:hover { background: var(--dsh-close); color: #fff; }
+    /* ── 下拉：现代桌面菜单模式 ─────────────────────────────── */
     .dropdown {
       position: fixed; top: 37px;
-      min-width: 212px;
+      min-width: 236px;
+      max-height: min(72vh, 440px);
+      overflow-y: auto;
+      scrollbar-width: thin;
       /* 随系统配色的毛玻璃浮层 */
       background: var(--dsh-dd-bg);
       backdrop-filter: blur(24px) saturate(1.4);
@@ -276,7 +296,7 @@
       border: 1px solid var(--dsh-dd-border);
       border-radius: 12px;
       box-shadow: var(--dsh-dd-shadow);
-      padding: 5px;
+      padding: 6px;
       z-index: 2147483647;
       animation: dsh-dd-in 0.15s ease-out;
     }
@@ -285,25 +305,73 @@
       from { opacity: 0; transform: translateY(-5px); }
       to { opacity: 1; transform: translateY(0); }
     }
-    @media (prefers-reduced-motion: reduce) {
-      .dropdown { animation: none; }
-    }
     .dd-item {
-      display: flex; align-items: center; gap: 8px;
-      padding: 6px 10px; border-radius: 7px;
+      display: flex; align-items: center; gap: 10px;
+      height: 30px; padding: 0 10px; border-radius: 7px;
       cursor: pointer; white-space: nowrap;
       transition: background 0.12s ease;
     }
     .dd-item:hover { background: var(--dsh-hover-acc); }
-    .dd-check { width: 14px; color: var(--dsh-check); text-align: center; }
-    .dd-sep { height: 1px; background: var(--dsh-sep); margin: 4px 8px; }
-    .dd-brand {
-      display: flex; align-items: center; gap: 8px;
-      padding: 7px 10px 5px;
-      font-weight: 600;
-      cursor: default;
+    .dd-item:focus-visible {
+      outline: 2px solid var(--dsh-check);
+      outline-offset: -2px;
     }
-    .dd-brand img { width: 18px; height: 18px; border-radius: 4px; display: block; }
+    /* 左列统一 18px 勾选/占位：checkbox 显示 ✓，普通项留空 —— 行首对齐一致 */
+    .dd-check { width: 18px; flex: none; color: var(--dsh-check); text-align: center; }
+    .dd-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+    .dd-sep { height: 1px; background: var(--dsh-sep); margin: 4px 8px; }
+    /* 品牌头：应用名 + 版本副行（无图标，仅文字） */
+    .dd-brand { padding: 7px 10px 6px; cursor: default; }
+    .dd-brand-name { font-weight: 600; font-size: 12.5px; }
+    .dd-brand-ver { font-size: 11px; color: var(--dsh-muted); margin-top: 1px; }
+    /* ── 壳内模态弹窗（关于 / 检查更新） ─────────────────────── */
+    .dialog-backdrop {
+      position: fixed; inset: 0;
+      z-index: 2147483600;
+      background: rgba(0, 0, 0, 0.35);
+      backdrop-filter: blur(3px);
+      -webkit-backdrop-filter: blur(3px);
+      display: flex; align-items: center; justify-content: center;
+      padding: 24px;
+      animation: dsh-fade 0.15s ease-out;
+    }
+    @keyframes dsh-fade { from { opacity: 0; } to { opacity: 1; } }
+    .dialog-card {
+      min-width: 300px;
+      max-width: 400px;
+      width: min(400px, 100%);
+      background: var(--dsh-dd-bg); color: var(--dsh-fg);
+      border: 1px solid var(--dsh-dd-border);
+      border-radius: 14px;
+      box-shadow: var(--dsh-dd-shadow);
+      padding: 18px 20px 16px;
+      animation: dsh-dd-in 0.18s ease-out;
+    }
+    .dialog-title { font-size: 14px; font-weight: 700; margin-bottom: 12px; }
+    .dialog-body { font-size: 12.5px; }
+    .dlg-row { display: flex; gap: 10px; padding: 4px 0; align-items: baseline; }
+    .dlg-k { flex: none; width: 72px; color: var(--dsh-muted); }
+    .dlg-v { flex: 1; min-width: 0; word-break: break-all; }
+    .dlg-note { color: var(--dsh-muted); font-size: 11.5px; margin-top: 8px; line-height: 1.5; }
+    .dlg-progress { display: flex; align-items: center; gap: 8px; color: var(--dsh-muted); font-size: 12.5px; padding: 6px 0; }
+    .dsh-spin {
+      flex: none; width: 12px; height: 12px;
+      border: 2px solid currentColor; border-top-color: transparent;
+      border-radius: 50%; animation: dsh-spin 0.8s linear infinite;
+    }
+    @keyframes dsh-spin { to { transform: rotate(360deg); } }
+    .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+    .dlg-btn {
+      min-width: 64px; padding: 6px 14px; border-radius: 8px;
+      border: 1px solid var(--dsh-dd-border);
+      background: transparent; color: var(--dsh-fg);
+      font-size: 12.5px; cursor: pointer;
+      transition: background 0.12s ease;
+    }
+    .dlg-btn:hover { background: var(--dsh-hover); }
+    .dlg-btn.primary { border-color: transparent; background: var(--dsh-check); color: #fff; }
+    .dlg-btn.primary:hover { filter: brightness(1.08); }
+    .dlg-btn:disabled { opacity: 0.5; cursor: default; }
     .errbanner {
       position: fixed; top: 36px; left: 0; right: 0;
       display: flex; align-items: center; gap: 12px;
@@ -334,6 +402,9 @@
       z-index: 2147483646;
     }
     .mini-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+    @media (prefers-reduced-motion: reduce) {
+      .dropdown, .dialog-backdrop, .dialog-card, .dsh-spin { animation: none; }
+    }
   `;
 
   const styleEl = document.createElement('style');
@@ -394,38 +465,52 @@
     pushActive = true;
   }
 
-  // 下拉面板（每个含 items 的菜单一个）。
+  // ── 小工具 ─────────────────────────────────────────────────────
+  function el(tag, text, cls) {
+    const e = document.createElement(tag);
+    if (text !== undefined && text !== null) e.textContent = text;
+    if (cls) e.className = cls;
+    return e;
+  }
+
+  // ── 下拉面板（每个含 items 的菜单一个）──────────────────────────
   const dropdowns = new Map(); // menuId -> element
   for (const entry of SHELL_MENUS) {
     if (!entry.items) continue;
     const dd = document.createElement('div');
     dd.className = 'dropdown';
     dd.dataset.for = entry.id;
+    dd.setAttribute('role', 'menu');
     dd.hidden = true;
     for (const item of entry.items) {
       if (item.type === 'sep') {
         const sep = document.createElement('div');
         sep.className = 'dd-sep';
+        sep.setAttribute('role', 'separator');
         dd.appendChild(sep);
         continue;
       }
-      // 应用名展示项：下拉首行（仅文字，图标已去），不可点。
+      // 应用名展示项：下拉首行品牌头（名称 + 版本副行，无图标），不可点。
       if (item.type === 'brand') {
         const row = document.createElement('div');
         row.className = 'dd-brand';
-        row.appendChild(document.createTextNode(item.label));
+        row.appendChild(el('div', item.label, 'dd-brand-name'));
+        row.appendChild(el('div', `v${SHELL_VERSION}`, 'dd-brand-ver'));
         dd.appendChild(row);
         continue;
       }
       const row = document.createElement('div');
       row.className = 'dd-item';
       row.dataset.item = item.id;
-      // 左侧统一占位（14px）：checkbox 显示 ✓，普通项留空——对齐一致
+      row.setAttribute('role', item.type === 'checkbox' ? 'menuitemcheckbox' : 'menuitem');
+      row.tabIndex = -1; // 全键盘导航：↑↓ 移动焦点，Enter 激活
+      // 左列统一占位（18px）：checkbox 显示 ✓，普通项留空——对齐一致
       const leader = document.createElement('span');
       leader.className = 'dd-check';
+      leader.setAttribute('aria-hidden', 'true');
       if (item.type === 'checkbox') leader.dataset.check = item.id;
       row.appendChild(leader);
-      row.appendChild(document.createTextNode(item.label));
+      row.appendChild(el('span', item.label, 'dd-label'));
       dd.appendChild(row);
     }
     root.appendChild(dd);
@@ -461,7 +546,7 @@
   setInterval(updateErrorBanner, 3000);
   updateErrorBanner();
 
-  // ── 菜单开关 ──────────────────────────────────────────────────────
+  // ── 菜单开关 ────────────────────────────────────────────────────
   function closeMenus() {
     openMenuId = null;
     for (const [id, dd] of dropdowns) {
@@ -514,9 +599,13 @@
     if (!dd) return;
     const item = dd.querySelector('[data-item="check-update"]');
     if (!item) return;
-    item.textContent = updateInfo.updateAvailable
-      ? `有更新 ${updateInfo.latest || '?'}（点击更新）`
-      : '检查更新…';
+    // 只更新标签文本，保留左侧 ✓/占位列（textContent 整体替换会清掉对齐列）。
+    const label = item.querySelector('.dd-label');
+    if (label) {
+      label.textContent = updateInfo.updateAvailable
+        ? `有更新 ${updateInfo.latest || '?'}`
+        : '检查更新…';
+    }
   }
 
   function setDevMode(on) {
@@ -524,6 +613,8 @@
     for (const el of root.querySelectorAll('[data-check="dev-mode"]')) {
       el.textContent = devMode ? '✓' : '';
     }
+    const row = root.querySelector('[data-item="dev-mode"]');
+    if (row) row.setAttribute('aria-checked', String(devMode));
   }
 
   function setMaximized(on) {
@@ -533,8 +624,7 @@
     maximizeBtn.el.setAttribute('aria-label', maximized ? '还原' : '最大化');
   }
 
-  // ── 事件 ──────────────────────────────────────────────────────────
-  // 壳内瞬时提示条（2.4s 自动消失；不依赖系统通知，任何页面都有可见反馈）。
+  // ── 壳内瞬时提示条（2.4s 自动消失；不依赖系统通知，任何页面都有可见反馈）──
   let miniEl = null;
   let miniTimer = null;
   function miniToast(text) {
@@ -549,6 +639,202 @@
     miniTimer = setTimeout(() => { miniEl.className = 'mini-toast'; }, 2400);
   }
 
+  // ── 壳内模态弹窗（关于 / 检查更新）──────────────────────────────
+  let dialog = null;
+  function closeDialog() {
+    if (dialog) {
+      dialog.remove();
+      dialog = null;
+    }
+  }
+
+  function dlgRow(k, v) {
+    const row = document.createElement('div');
+    row.className = 'dlg-row';
+    row.appendChild(el('span', k, 'dlg-k'));
+    row.appendChild(el('span', v, 'dlg-v'));
+    return row;
+  }
+
+  function mkDlgBtn(label, primary) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'dlg-btn' + (primary ? ' primary' : '');
+    b.textContent = label;
+    return b;
+  }
+
+  function openDialog(build) {
+    closeDialog();
+    const bd = document.createElement('div');
+    bd.className = 'dialog-backdrop';
+    const card = document.createElement('div');
+    card.className = 'dialog-card';
+    bd.appendChild(card);
+    bd.addEventListener('mousedown', (e) => {
+      if (e.target === bd) closeDialog();
+    });
+    root.appendChild(bd);
+    dialog = bd;
+    build(card, closeDialog);
+  }
+
+  // 「关于」弹窗：软件名称 / 版本 / 构建日期 / dsh 本体版本 + 确定。
+  function openAboutDialog() {
+    const cur = updateInfo.current || '—';
+    const dev = PRODUCT_NAME.indexOf('Dev') >= 0 ? '（开发版）' : '';
+    openDialog((card, close) => {
+      card.appendChild(el('div', `关于 ${PRODUCT_NAME}`, 'dialog-title'));
+      const body = document.createElement('div');
+      body.className = 'dialog-body';
+      body.appendChild(dlgRow('软件名称', PRODUCT_NAME));
+      body.appendChild(dlgRow('版本', `v${SHELL_VERSION}${dev}`));
+      body.appendChild(dlgRow('构建日期', BUILD_DATE));
+      body.appendChild(dlgRow('dsh 本体', `v${cur}`));
+      body.appendChild(el('div', 'DeepSeek Harness 桌面壳 —— 自带 Node 运行时，自动更新 dsh 官方 npm 包。', 'dlg-note'));
+      card.appendChild(body);
+      const actions = document.createElement('div');
+      actions.className = 'dialog-actions';
+      const ok = mkDlgBtn('确定');
+      ok.addEventListener('click', close);
+      actions.appendChild(ok);
+      card.appendChild(actions);
+    });
+  }
+
+  // 「检查更新」弹窗：展示当前/最新版本信息 + 确定 + 立即更新。
+  // 无已知版本时先触发 /check-update 并轮询 /update-status（上限 15s）。
+  function openCheckUpdateDialog() {
+    const info = Object.assign({}, updateInfo);
+    const startedAt = Date.now();
+    let busy = !info.latest; // 尚无最新版本 → 需要先检查
+    let timedOut = false;
+    let updTimer = null;
+
+    const bd = document.createElement('div');
+    bd.className = 'dialog-backdrop';
+    const card = document.createElement('div');
+    card.className = 'dialog-card';
+    const title = el('div', '检查更新', 'dialog-title');
+    const body = document.createElement('div');
+    body.className = 'dialog-body';
+    const actions = document.createElement('div');
+    actions.className = 'dialog-actions';
+    const btnClose = mkDlgBtn('确定');
+    const btnUpdate = mkDlgBtn('立即更新', true);
+    btnUpdate.hidden = true;
+    actions.append(btnClose, btnUpdate);
+    card.append(title, body, actions);
+    bd.appendChild(card);
+    bd.addEventListener('mousedown', (e) => {
+      if (e.target === bd) closeDialog();
+    });
+    root.appendChild(bd);
+    dialog = bd;
+
+    function render() {
+      body.textContent = '';
+      if (busy) {
+        const line = document.createElement('div');
+        line.className = 'dlg-progress';
+        line.appendChild(el('span', '', 'dsh-spin'));
+        line.appendChild(document.createTextNode('正在检查更新…'));
+        body.appendChild(line);
+        btnUpdate.hidden = true;
+        return;
+      }
+      if (info.updateAvailable) {
+        body.appendChild(dlgRow('当前版本', `v${info.current || '?'}`));
+        body.appendChild(dlgRow('最新版本', `v${info.latest || '?'}`));
+        body.appendChild(el('div', '发现新版本，可点击「立即更新」升级到最新稳定版。', 'dlg-note'));
+        btnUpdate.hidden = false;
+        btnUpdate.disabled = false;
+        btnUpdate.textContent = '立即更新';
+        delete btnUpdate.dataset.version; // 稳定版更新不需要指定版本
+      } else if (info.nextAvailable && info.next) {
+        body.appendChild(dlgRow('当前版本', `v${info.current || '?'}`));
+        body.appendChild(dlgRow('预发布', `v${info.next}（非正式版）`));
+        body.appendChild(el('div', '最新稳定版无需更新；存在预发布通道版本，按需自选。', 'dlg-note'));
+        btnUpdate.hidden = false;
+        btnUpdate.disabled = false;
+        btnUpdate.textContent = '立即更新';
+        btnUpdate.dataset.version = info.next;
+      } else if (timedOut) {
+        body.appendChild(el('div', '检查超时，请稍后重试。', 'dlg-note'));
+        btnUpdate.hidden = true;
+        delete btnUpdate.dataset.version;
+      } else {
+        body.appendChild(el('div', `已是最新版本（当前 v${info.current || '?'}）。`, 'dlg-note'));
+        btnUpdate.hidden = true;
+        delete btnUpdate.dataset.version;
+      }
+    }
+
+    function poll() {
+      if (Date.now() - startedAt > 15000) {
+        busy = false;
+        timedOut = true;
+        if (updTimer) clearInterval(updTimer);
+        render();
+        return;
+      }
+      getUpdateStatus().then((r) => {
+        if (!r || typeof r.updateAvailable !== 'boolean') return;
+        Object.assign(info, r);
+        if (r.latest) {
+          busy = false;
+          if (updTimer) clearInterval(updTimer);
+        }
+        render();
+      });
+    }
+
+    btnClose.addEventListener('click', closeDialog);
+    btnUpdate.addEventListener('click', () => {
+      btnUpdate.disabled = true;
+      btnUpdate.textContent = '更新中…';
+      body.textContent = '';
+      const line = document.createElement('div');
+      line.className = 'dlg-progress';
+      line.appendChild(el('span', '', 'dsh-spin'));
+      line.appendChild(document.createTextNode('正在更新并重启 dsh，完成后自动恢复…'));
+      body.appendChild(line);
+      // 远程页（桥）可携带目标版本（预发布）；本地启动页走 IPC 不传参。
+      const payload = btnUpdate.dataset.version && !hasTauri ? { version: btnUpdate.dataset.version } : undefined;
+      call('update-now', payload);
+    });
+
+    if (busy) {
+      // 触发一次检测（无已知版本时），随后轮询更新状态。
+      call('check-update');
+      updTimer = setInterval(poll, 1500);
+      poll();
+    }
+    render();
+  }
+
+  // ── 插件管理（入口在菜单栏，界面保留原插件控制台）────────────────
+  // dsh-plugin-console 已不渲染右下角浮动按钮（.dshc-btn 不再生成），面板
+  // 开关暴露为 globalThis.__DSH_PLUGIN_CONSOLE__.toggle()——壳菜单「插件管理」
+  // 就地调用该接口（原面板 UI/UX 零改动，壳只提供入口）。非 dsh 页/插件未
+  // 注入时亮壳内提示；旧版本插件残留的 .dshc-btn 防御性隐藏。
+  function hideFabIfPresent() {
+    const btn = document.querySelector('button.dshc-btn');
+    if (btn && btn.style.display !== 'none') btn.style.display = 'none';
+  }
+  hideFabIfPresent();
+
+  function togglePluginConsole() {
+    const api = globalThis.__DSH_PLUGIN_CONSOLE__;
+    if (api && typeof api.toggle === 'function') {
+      api.toggle();
+      return true;
+    }
+    miniToast('插件控制台未加载（需在 dsh 主页使用）');
+    return false;
+  }
+
+  // ── 事件 ────────────────────────────────────────────────────────
   // window 级 CAPTURE 统一分发：不依赖 shadow 内单个元素监听（实机曾出现
   // "全部点击无反应"——具体绑定可能因注入/遮蔽失效）。capture 阶段最早收包，
   // composedPath 穿透 shadow 边界定位 data 命中元素；命中即 stopPropagation，
@@ -578,35 +864,18 @@
     true
   );
 
-  // ── 插件管理（入口挪到菜单栏，界面保留原插件控制台）─────────────
-  // 原 dsh-plugin-console 渲染右下角浮动按钮 .dshc-btn（点击切换面板显隐）。
-  // 壳菜单「插件管理」就地触发该按钮（原面板 UI/UX 零改动）；右下角原入口隐藏
-  //（"挪"到菜单栏）。非 dsh 页/插件未注入时红框反馈。
-  function dshcBtn() {
-    return document.querySelector('button.dshc-btn');
-  }
-  function hideFabIfPresent() {
-    const btn = dshcBtn();
-    if (btn && btn.style.display !== 'none') btn.style.display = 'none';
-  }
-  hideFabIfPresent();
-
   function runMenuAction(id) {
     if (id === 'plugins') {
-      // 插件管理：打开壳内独立管理窗口（与代理设置同尺寸、居中）。
-      call('plugins');
+      // 插件管理：就地触发原插件控制台面板（原 UI/UX 零改动）。
+      togglePluginConsole();
       return;
     }
     if (id === 'check-update') {
-      miniToast(updateInfo.updateAvailable ? '正在更新…' : '正在检查更新…');
-      const actionId = updateInfo.updateAvailable ? 'update-now' : 'check-update';
-      call(actionId).then(() => {
-        if (!updateInfo.updateAvailable) refreshUpdateInfo(); // 手动检查后刷新状态
-      });
+      // 检查更新：壳内模态弹窗（信息 + 确定 + 立即更新），不再用瞬时提示。
+      openCheckUpdateDialog();
     } else if (id === 'about') {
-      // 壳内提示版本信息（不依赖系统通知，必定可见）。
-      const ver = globalThis.__DSH_SHELL_VERSION__ || '?';
-      miniToast(`DSH Smoothly Desktop v${ver} · dsh 当前 v${updateInfo.current || '?'}`);
+      // 关于：壳内模态弹窗（名称/版本/构建日期/dsh 版本 + 确定）。
+      openAboutDialog();
     } else if (id === 'dev-mode') {
       call('dev-mode').then((r) => {
         if (r && typeof r.devMode === 'boolean') setDevMode(r.devMode);
@@ -659,10 +928,46 @@
   const UPDATE_POLL_MS = 60 * 1000;
   setInterval(refreshUpdateInfo, UPDATE_POLL_MS);
 
-  // Esc 关闭菜单；点外部关闭（composedPath 穿透 shadow 边界）。
+  // 键盘：Esc 关闭弹窗/菜单；下拉展开时全键盘导航（↑↓/Home/End/Enter）——
+  // 与 WinUI MenuFlyout / macOS 菜单一致的主流交互。
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closeMenus();
+    if (e.key === 'Escape') {
+      if (dialog) {
+        closeDialog();
+        return;
+      }
+      closeMenus();
+      return;
+    }
+    if (!openMenuId) return;
+    const dd = dropdowns.get(openMenuId);
+    if (!dd) return;
+    const items = Array.from(dd.querySelectorAll('[data-item]'));
+    if (!items.length) return;
+    let idx = items.indexOf(document.activeElement);
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      idx = idx < 0 ? 0 : (idx + 1) % items.length;
+      items[idx].focus();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      idx = idx < 0 ? items.length - 1 : (idx - 1 + items.length) % items.length;
+      items[idx].focus();
+    } else if (e.key === 'Home') {
+      e.preventDefault();
+      items[0].focus();
+    } else if (e.key === 'End') {
+      e.preventDefault();
+      items[items.length - 1].focus();
+    } else if (e.key === 'Enter') {
+      if (idx >= 0) {
+        e.preventDefault();
+        runMenuAction(items[idx].dataset.item);
+        closeMenus();
+      }
+    }
   });
+  // 点外部关闭（composedPath 穿透 shadow 边界）。
   document.addEventListener('mousedown', (e) => {
     if (!e.composedPath || !e.composedPath().includes(host)) closeMenus();
   });
@@ -676,12 +981,12 @@
       closeMenus();
       document.body.appendChild(host);
     }
-    // 插件控制台浮动按钮可能晚于 chrome 注入挂载：出现即隐藏（入口在菜单栏）。
+    // 旧版插件控制台浮动按钮可能晚于 chrome 注入挂载：出现即隐藏（入口在菜单栏）。
     hideFabIfPresent();
   });
   observer.observe(document.body, { childList: true });
 
-  // ── 启动状态 ──────────────────────────────────────────────────────
+  // ── 启动状态 ────────────────────────────────────────────────────
   getShellState().then((r) => {
     if (!r) return;
     if (typeof r.devMode === 'boolean') setDevMode(r.devMode);

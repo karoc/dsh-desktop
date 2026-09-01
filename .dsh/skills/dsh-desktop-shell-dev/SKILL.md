@@ -31,8 +31,12 @@ feat/shell-menu-bar 分支）。本技能是"改壳自身功能"的操作手册�
   `{id,label}` / `{type:'sep'}` / `{type:'checkbox',id,label}`）或 `{id, label, action:'actionId'}`
   （直开动作，如「代理设置…」）。
 - `ACTIONS`：每个 id → `{ipc:'<命令>', bridge:'/路径'}` 双通道映射；只读状态查询加 `method:'GET'`。
+- **壳内就地动作不进 ACTIONS、不占桥**：纯壳内完成的菜单项（插件管理=就地触发原插件
+  控制台 `globalThis.__DSH_PLUGIN_CONSOLE__.toggle()`；关于/检查更新=壳内模态弹窗）——
+  契约测试对它们豁免，避免为 UI 造无意义的 IPC/桥端点。
 
-**加一个壳菜单 = SHELL_MENUS 加条目 + ACTIONS 加一行 + lib.rs 加对应命令/桥端点。**
+**加一个壳菜单 = SHELL_MENUS 加条目 + ACTIONS 加一行 + lib.rs 加对应命令/桥端点**
+（或明确归入"壳内就地动作"豁免并同步契约测试）。
 契约测试 `scripts/test-shell-chrome.mjs` 守护三方不漂移（见 §6）。
 
 ### 2.2 注入机制要点
@@ -94,9 +98,12 @@ npm run bundle:dev   # = tauri build --config src-tauri/tauri.dev.conf.json --bu
   任务栏 AUMID、NSIS 安装目录/开始菜单/卸载项（按 productName）。
 - **toast 激活必须参数化**（否则两版互抢注册）：AUMID 用 `app.config().identifier`；
   激活 CLSID 用 `toast_clsid(identifier)`（正式版保持历史固定 GUID，其它 identifier 用 FNV-1a×2
-  派生稳定 GUID）；开始菜单快捷方式名按 productName 生成候选。窗口标题/托盘 tooltip/关于 toast
-  用 `app.package_info().name`；开发版标识 `is_dev_build()`（identifier≠官方）加「（开发版）」。
-- chrome 应用菜单标签用注入的 `__DSH_PRODUCT_NAME__`。
+  派生稳定 GUID）；开始菜单快捷方式名按 productName 生成候选。窗口标题/托盘 tooltip
+  用 `app.package_info().name`；「关于」是**壳内模态弹窗**（chrome 内，数据来自注入前缀
+  `__DSH_SHELL_VERSION__`/`__DSH_BUILD_DATE__`/`__DSH_PRODUCT_NAME__` + `/update-status`
+  的 dsh 当前版本）——开发版标识随 productName 自带「Dev」，无需 Rust 侧 is_dev_build。
+- chrome 应用菜单标签用注入的 `__DSH_PRODUCT_NAME__`；下拉/弹窗有明显的 `SHELL_MENUS`、
+  `dialog-backdrop`、`__DSH_PLUGIN_CONSOLE__`（插件管理=就地触发原控制台）等标记。
 
 ## 4. 开发版本地构建工作流（流程约定，用户指定）
 
@@ -121,6 +128,8 @@ npm run bundle:dev   # = tauri build --config src-tauri/tauri.dev.conf.json --bu
 | `set_title` / notify-rust `app_id` | 接收 **`&str`** 不是 `Into<String>`；Windows 专属路径的错误只在 Windows 侧编译暴露（Linux cargo check 发现不了）→ 改了通用代码后必须等 CI windows job |
 | E0716 | `app.state()` 临时值先 `let` 绑定再锁 |
 | drag region | `data-tauri-drag-region` 是 JS API（本地页才有）；远程页用桥 `/window/drag`→`start_dragging` |
+| 工具窗居中闪跳 | window-state 插件在窗口创建时 `restore_state` 会**覆盖 builder 的 `.center()`**（弹窗先闪一下居中、又跳回上次的旧位置）→ 工具窗（如 settings）用 `Builder::with_denylist(&["settings"])` 排除跟踪；主窗口保留记忆 |
+| 构建日期/版本信息 | `build.rs` 用 civil_from_days 算法（无 chrono）输出 `cargo:rustc-env=DSH_BUILD_DATE`，注入前缀带 `__DSH_BUILD_DATE__`，壳内「关于」弹窗展示 |
 | dev 配置合并 | `--config` 深合并数组整体替换；version 不许覆盖（与 Cargo.toml 强制一致） |
 | 单实例互斥名 | `{identifier}-sim`（Windows），改 identifier 即隔离 |
 

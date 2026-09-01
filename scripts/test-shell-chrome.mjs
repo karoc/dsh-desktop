@@ -43,8 +43,11 @@ for (const id of ['proxy-settings', 'plugins', 'check-update', 'dev-mode', 'refr
 }
 
 // ── 2. every clickable menu id resolves in ACTIONS ───────────────────────────
+// 壳内就地动作（插件管理=页面内原控制台面板、关于=壳内模态弹窗）不经
+// IPC/桥，不占 ACTIONS；其余跨壳动作必须映射。
+const IN_SHELL_ACTIONS = new Set(['plugins', 'about'])
 for (const entry of SHELL_MENUS) {
-  const clickable = (entry.items || []).filter((i) => i.id && i.type !== 'brand' && i.type !== 'sep')
+  const clickable = (entry.items || []).filter((i) => i.id && i.type !== 'brand' && i.type !== 'sep' && !IN_SHELL_ACTIONS.has(i.id))
   for (const item of clickable) {
     assert.ok(ACTIONS[item.id], `menu item "${item.id}" (menu ${entry.id}) has an ACTIONS entry`)
   }
@@ -111,9 +114,20 @@ assert.ok(chromeSrc.includes('mini-toast'), 'chrome shows in-shell transient toa
 assert.ok(!chromeSrc.includes('flashHit'), 'chrome has no diagnostic red-ring flash anymore')
 assert.ok(chromeSrc.includes('errbanner'), 'chrome renders the failure-disclosure banner (no more blank screen)')
 assert.ok(chromeSrc.includes('shell-status'), 'chrome polls shell status for failure disclosure')
-// 插件管理 = 壳内独立管理窗口（open_plugins）；对旧插件残留按钮仅做防御性隐藏。
-assert.ok(chromeSrc.includes('open-plugins'), 'chrome opens the plugins window via /shell/open-plugins')
+// ── 检查更新 / 关于 = 壳内模态弹窗（不再是 toast/瞬时提示）──────────
+assert.ok(chromeSrc.includes('dialog-backdrop'), 'chrome has a modal dialog layer')
+assert.ok(chromeSrc.includes('openCheckUpdateDialog'), 'check-update opens an in-shell modal (info + 确定 + 立即更新)')
+assert.ok(chromeSrc.includes('openAboutDialog'), 'about opens an in-shell modal (name/version/build date/dsh version + 确定)')
+assert.ok(chromeSrc.includes('__DSH_BUILD_DATE__'), 'about dialog shows the injected build date')
+// ── 插件管理 = 原插件控制台面板就地触发（壳不建自研窗口、不改 UI）───
+assert.ok(chromeSrc.includes('__DSH_PLUGIN_CONSOLE__'), 'chrome toggles the ORIGINAL plugin console panel (globalThis.__DSH_PLUGIN_CONSOLE__)')
 assert.ok(chromeSrc.includes('dshc-btn'), 'chrome defensively hides a leftover legacy fab (.dshc-btn)')
+assert.ok(!libRs.includes('"/shell/open-plugins"'), 'plugin management no longer opens a shell-owned window (bridge arm removed)')
+// ── 设置窗口不被窗口状态记忆覆盖居中（修复"闪一下居中又跳回左边"）───
+assert.ok(libRs.includes('with_denylist'), 'window-state plugin excludes utility windows via denylist')
+assert.ok(libRs.includes('"settings"'), 'settings window is denylisted from window-state restore')
+assert.ok(libRs.includes('__DSH_BUILD_DATE__'), 'lib.rs injects the build date into the chrome preamble')
+assert.ok(readFileSync(join(root, 'src-tauri', 'build.rs'), 'utf8').includes('DSH_BUILD_DATE'), 'build.rs emits the DSH_BUILD_DATE env (About build date)')
 
 console.log('PASS — shell chrome contract (menus, actions, bridge, IPC)')
 process.exit(0)
