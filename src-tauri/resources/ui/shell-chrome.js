@@ -159,22 +159,59 @@
       height: 36px;
       z-index: 2147483647;
       font-family: system-ui, "Segoe UI", "Microsoft YaHei", sans-serif;
-      /* 主题色：柔和白 #FAFAFA + 深灰文字 #1F2328（全壳 UI 统一）；
+      /* 随系统配色：浅色默认 + @media 深色覆盖（与 styles.css 同色系）。
          显式设色/字号，避免继承页面（页面可能是深色主题、字号更大）。 */
-      color: #1f2328;
+      color-scheme: light dark;
+      --dsh-fg: #1f2328;
+      --dsh-bar-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.80), rgba(250, 250, 250, 0.68));
+      --dsh-bar-border: rgba(0, 0, 0, 0.08);
+      --dsh-bar-highlight: rgba(255, 255, 255, 0.9);
+      --dsh-hover: rgba(0, 0, 0, 0.07);
+      --dsh-hover-acc: rgba(31, 111, 235, 0.10);
+      --dsh-sep: rgba(0, 0, 0, 0.12);
+      --dsh-dd-bg: rgba(255, 255, 255, 0.92);
+      --dsh-dd-border: rgba(0, 0, 0, 0.10);
+      --dsh-dd-shadow: 0 12px 36px rgba(0, 0, 0, 0.16), 0 1px 2px rgba(0, 0, 0, 0.08);
+      --dsh-check: #1f6feb;
+      --dsh-close: rgba(224, 30, 55, 0.92);
+      --dsh-err-bg: #fdeaea;
+      --dsh-err-fg: #c62828;
+      --dsh-err-border: rgba(198, 40, 40, 0.35);
+      --dsh-err-hover: rgba(198, 40, 40, 0.08);
+      color: var(--dsh-fg);
       font-size: 12px;
+    }
+    @media (prefers-color-scheme: dark) {
+      :host {
+        --dsh-fg: #e6edf3;
+        --dsh-bar-bg: linear-gradient(180deg, rgba(22, 27, 34, 0.74), rgba(13, 17, 23, 0.62));
+        --dsh-bar-border: rgba(255, 255, 255, 0.09);
+        --dsh-bar-highlight: rgba(255, 255, 255, 0.06);
+        --dsh-hover: rgba(255, 255, 255, 0.10);
+        --dsh-hover-acc: rgba(88, 166, 255, 0.22);
+        --dsh-sep: rgba(255, 255, 255, 0.14);
+        --dsh-dd-bg: rgba(22, 27, 34, 0.94);
+        --dsh-dd-border: rgba(255, 255, 255, 0.11);
+        --dsh-dd-shadow: 0 12px 36px rgba(0, 0, 0, 0.5), 0 1px 2px rgba(0, 0, 0, 0.3);
+        --dsh-check: #58a6ff;
+        --dsh-close: rgba(232, 17, 35, 0.94);
+        --dsh-err-bg: rgba(140, 30, 30, 0.32);
+        --dsh-err-fg: #f2a6a6;
+        --dsh-err-border: rgba(242, 166, 166, 0.40);
+        --dsh-err-hover: rgba(242, 166, 166, 0.14);
+      }
     }
     .bar {
       display: flex;
       align-items: center;
       height: 100%;
-      /* 白色毛玻璃：透出页面内容，舒适不压抑 */
-      background: linear-gradient(180deg, rgba(255, 255, 255, 0.80), rgba(250, 250, 250, 0.68));
+      /* 随系统配色的毛玻璃顶栏 */
+      background: var(--dsh-bar-bg);
       backdrop-filter: blur(18px) saturate(1.4);
       -webkit-backdrop-filter: blur(18px) saturate(1.4);
-      border-bottom: 1px solid rgba(0, 0, 0, 0.08);
-      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
-      color: #1f2328;
+      border-bottom: 1px solid var(--dsh-bar-border);
+      box-shadow: inset 0 1px 0 var(--dsh-bar-highlight);
+      color: var(--dsh-fg);
       font-size: 12px;
       user-select: none;
       -webkit-user-select: none;
@@ -194,7 +231,7 @@
       transition: background 0.12s ease;
       -webkit-app-region: no-drag;
     }
-    .menu-btn:hover, .menu-btn.open { background: rgba(0, 0, 0, 0.06); }
+    .menu-btn:hover, .menu-btn.open { background: var(--dsh-hover); }
     .menu-btn .logo { display: flex; align-items: center; }
     .menu-btn .logo img {
       width: 20px; height: 20px;
@@ -222,22 +259,22 @@
       width: 44px; height: 100%;
       display: flex; align-items: center; justify-content: center;
       border: 0; background: transparent;
-      color: #1f2328; cursor: pointer;
+      color: var(--dsh-fg); cursor: pointer;
       transition: background 0.12s ease;
       -webkit-app-region: no-drag;
     }
-    .ctl:hover { background: rgba(0, 0, 0, 0.07); }
-    .ctl-close:hover { background: rgba(224, 30, 55, 0.92); color: #fff; }
+    .ctl:hover { background: var(--dsh-hover); }
+    .ctl-close:hover { background: var(--dsh-close); color: #fff; }
     .dropdown {
       position: fixed; top: 37px;
       min-width: 212px;
-      /* 白色毛玻璃浮层 */
-      background: rgba(255, 255, 255, 0.92);
+      /* 随系统配色的毛玻璃浮层 */
+      background: var(--dsh-dd-bg);
       backdrop-filter: blur(24px) saturate(1.4);
       -webkit-backdrop-filter: blur(24px) saturate(1.4);
-      border: 1px solid rgba(0, 0, 0, 0.10);
+      border: 1px solid var(--dsh-dd-border);
       border-radius: 12px;
-      box-shadow: 0 12px 36px rgba(0, 0, 0, 0.16), 0 1px 2px rgba(0, 0, 0, 0.08);
+      box-shadow: var(--dsh-dd-shadow);
       padding: 5px;
       z-index: 2147483647;
       animation: dsh-dd-in 0.15s ease-out;
@@ -256,9 +293,9 @@
       cursor: pointer; white-space: nowrap;
       transition: background 0.12s ease;
     }
-    .dd-item:hover { background: rgba(31, 111, 235, 0.10); }
-    .dd-check { width: 14px; color: #1f6feb; text-align: center; }
-    .dd-sep { height: 1px; background: rgba(0, 0, 0, 0.12); margin: 4px 8px; }
+    .dd-item:hover { background: var(--dsh-hover-acc); }
+    .dd-check { width: 14px; color: var(--dsh-check); text-align: center; }
+    .dd-sep { height: 1px; background: var(--dsh-sep); margin: 4px 8px; }
     .dd-brand {
       display: flex; align-items: center; gap: 8px;
       padding: 7px 10px 5px;
@@ -269,9 +306,9 @@
     .errbanner {
       position: fixed; top: 36px; left: 0; right: 0;
       display: flex; align-items: center; gap: 12px;
-      background: #fdeaea;
-      border-bottom: 1px solid rgba(198, 40, 40, 0.35);
-      color: #c62828;
+      background: var(--dsh-err-bg);
+      border-bottom: 1px solid var(--dsh-err-border);
+      color: var(--dsh-err-fg);
       font-size: 12px;
       padding: 7px 12px;
       z-index: 2147483646;
@@ -280,10 +317,10 @@
     .errbanner .err-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .errbanner button {
       margin: 0; padding: 3px 10px; font-size: 12px;
-      border: 1px solid rgba(198, 40, 40, 0.5); border-radius: 6px;
-      background: transparent; color: #c62828; cursor: pointer;
+      border: 1px solid var(--dsh-err-border); border-radius: 6px;
+      background: transparent; color: var(--dsh-err-fg); cursor: pointer;
     }
-    .errbanner button:hover { background: rgba(198, 40, 40, 0.08); }
+    .errbanner button:hover { background: var(--dsh-err-hover); }
   `;
 
   const styleEl = document.createElement('style');
