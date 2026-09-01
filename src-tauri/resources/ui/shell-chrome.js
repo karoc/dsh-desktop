@@ -58,7 +58,6 @@
     refresh: { ipc: 'refresh_page', bridge: '/refresh' },
     restart: { ipc: 'restart_server', bridge: '/restart' },
     'open-data': { ipc: 'open_data_dir', bridge: '/shell/open-data-dir' },
-    plugins: { ipc: 'open_plugins', bridge: '/shell/open-plugins' },
     'shell-status': { ipc: 'get_shell_status', bridge: '/shell/status', method: 'GET' },
     about: { ipc: 'show_about', bridge: '/shell/about' },
     quit: { ipc: 'quit_app', bridge: '/shell/quit' },
@@ -540,7 +539,35 @@
     true
   );
 
+  // ── 插件管理（入口挪到菜单栏，界面保留原插件控制台）─────────────
+  // 原 dsh-plugin-console 渲染右下角浮动按钮 .dshc-btn（点击切换面板显隐）。
+  // 壳菜单「插件管理」就地触发该按钮（原面板 UI/UX 零改动）；右下角原入口隐藏
+  //（"挪"到菜单栏）。非 dsh 页/插件未注入时红框反馈。
+  function dshcBtn() {
+    return document.querySelector('button.dshc-btn');
+  }
+  function togglePluginConsole() {
+    const btn = dshcBtn();
+    if (btn) {
+      btn.click();
+      return true;
+    }
+    flashHit('plugins');
+    return false;
+  }
+  function hideFabIfPresent() {
+    const btn = dshcBtn();
+    if (btn && btn.style.display !== 'none') btn.style.display = 'none';
+  }
+  hideFabIfPresent();
+
   function runMenuAction(id) {
+    if (id === 'plugins') {
+      // 插件管理入口：在 dsh 页面内触发原插件控制台面板（.dshc-btn 点击切换
+      // 显隐）。界面保持插件原样，壳只换"入口"；同时原右下角浮动按钮已隐藏。
+      togglePluginConsole();
+      return;
+    }
     if (id === 'check-update') {
       const actionId = updateInfo.updateAvailable ? 'update-now' : 'check-update';
       call(actionId).then((r) => {
@@ -615,6 +642,8 @@
       closeMenus();
       document.body.appendChild(host);
     }
+    // 插件控制台浮动按钮可能晚于 chrome 注入挂载：出现即隐藏（入口在菜单栏）。
+    hideFabIfPresent();
   });
   observer.observe(document.body, { childList: true });
 
