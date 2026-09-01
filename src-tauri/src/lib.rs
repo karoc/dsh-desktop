@@ -46,6 +46,8 @@ struct ServerState {
     /// `proxy-providers` protocol lines (observed hosts + settings.yaml
     /// provider hosts, for the settings panel's checkbox list).
     proxy: Mutex<ProxyState>,
+    /// 最近一次故障（中文摘要，供 chrome 故障条幅披露）。服务正常启动后清空。
+    last_error: Mutex<Option<String>>,
 }
 
 /// Proxy panel data mirrored from manager protocol lines (see ServerState.proxy).
@@ -1006,37 +1008,7 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
             }
         }
         ("GET", "/plugins/list") => {
-            let runtime = runtime_dir(app);
-            let bundles = web_profile_bundles(&runtime);
-            let preinstalled = preinstalled_details(&runtime);
-            let upd = app.state::<ServerState>().update.lock().unwrap().clone();
-            let op = app.state::<ServerState>().op.lock().unwrap().clone();
-            let pre_updates = app.state::<ServerState>().preinstalled_updates.lock().unwrap().clone();
-            let body = serde_json::json!({
-                "bundles": bundles,
-                "preinstalled": preinstalled,
-                "preinstalledUpdates": pre_updates,
-                "devMode": dev_mode(&runtime),
-                "update": {
-                    "current": upd.current,
-                    "latest": upd.latest,
-                    "updateAvailable": upd.update_available,
-                    "next": upd.next,
-                    "nextAvailable": upd.next_available,
-                },
-                "op": {
-                    "op": op.op,
-                    "spec": op.spec,
-                    "done": op.done,
-                    "ok": op.ok,
-                    "nextAction": op.next_action,
-                    "error": op.error,
-                    "hint": op.hint,
-                    "hintKey": op.hint_key,
-                    "hintPlugins": op.hint_plugins,
-                },
-            })
-            .to_string();
+            let body = plugins_panel_state(app).to_string();
             ("200 OK", body)
         }
         ("POST", "/plugins/enable") => {
@@ -1263,6 +1235,19 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
                 .to_string(),
             )
         }
+        ("GET", "/shell/status") => {
+            let state = app.state::<ServerState>();
+            let last_error = state.last_error.lock().unwrap().clone();
+            let has_server = state.child.lock().unwrap().is_some();
+            (
+                "200 OK",
+                serde_json::json!({ "lastError": last_error, "hasServer": has_server }).to_string(),
+            )
+        }
+        ("POST", "/shell/open-plugins") => {
+            open_plugins_window(&app);
+            ("200 OK", serde_json::json!({ "ok": true }).to_string())
+        }
         _ => ("404 Not Found", "not found".into()),
     };
     let resp = format!(
@@ -1437,6 +1422,8 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
                 match t {
                     Some("url") => {
                         if let Some(url) = ev.get("url").and_then(|v| v.as_str()) {
+                            // 服务起来了：清空历史故障提示，条幅不再显示。
+                            *handle.state::<ServerState>().last_error.lock().unwrap() = None;
                             let _ = handle.emit("server-url", url);
                             *LIVE_DSH_URL.lock().unwrap() = Some(url.to_string());
                             // Reconnect: the launcher page's JS listener is gone
@@ -1558,6 +1545,11 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
         // stdout EOF => manager exited (or the dsh child detached) => tell the
         // UI and go back to the launcher page so it re-arms for the next boot
         // (a restart) or shows the error + retry (a crash).
+        // 故障披露：manager 下线时记录根因摘要（chrome 条幅 / 启动页都能读到）。
+        if handle.state::<ServerState>().last_error.lock().unwrap().is_none() {
+            *handle.state::<ServerState>().last_error.lock().unwrap() =
+                Some("dsh 服务已退出（manager 进程下线）——完整日志见数据目录 manager.log".into());
+        }
         let _ = handle.emit("server-down", ());
         *LIVE_DSH_URL.lock().unwrap() = None;
         // Back to the launcher so it re-arms for the next boot (a restart) or
@@ -1586,6 +1578,21 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
             for line in BufReader::new(err).lines().map_while(Result::ok) {
                 let _ = handle.emit("server-log", line.clone());
                 eprintln!("[dsh-desktop manager] {line}");
+                // 故障披露：捕获 manager 侧错误特征行（node 崩溃/异常），
+                // 存为最近故障摘要供 chrome 条幅展示。
+                let low = line.to_ascii_lowercase();
+                let is_error = low.contains("error")
+                    || low.contains("failed")
+                    || low.contains("exit code")
+                    || low.contains("exception")
+                    || low.contains("cannot")
+                    || low.contains("uncaught")
+                    || low.contains("econnrefused")
+                    || low.contains("esockettimeout");
+                if is_error {
+                    let trimmed: String = line.trim().chars().take(300).collect();
+                    *handle.state::<ServerState>().last_error.lock().unwrap() = Some(trimmed);
+                }
             }
         });
     }
@@ -2007,6 +2014,175 @@ fn open_settings(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Open (or focus) the standalone plugins manager window (menu bar entry).
+fn open_plugins_window(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("plugins") {
+        let _ = w.show();
+        let _ = w.set_focus();
+        return;
+    }
+    let _ = tauri::WebviewWindowBuilder::new(app, "plugins", tauri::WebviewUrl::App("plugin-console.html".into()))
+        .title(format!("{} — 插件管理", app.package_info().name))
+        .inner_size(720.0, 760.0)
+        .min_inner_size(560.0, 520.0)
+        .resizable(true)
+        .build();
+}
+
+/// Chrome menu bar entry: open (or focus) the plugins manager window.
+#[tauri::command]
+fn open_plugins(app: AppHandle) -> Result<(), String> {
+    open_plugins_window(&app);
+    Ok(())
+}
+
+// ── 插件管理（壳内独立窗口，复用桥 /plugins/* 的同一套逻辑）────────────
+/// 插件面板完整状态：bundles / preinstalled / preinstalledUpdates / devMode /
+/// update / op。桥端点 /plugins/list 与本地窗口 get_plugins_panel 共用，防漂移。
+fn plugins_panel_state(app: &AppHandle) -> serde_json::Value {
+    let runtime = runtime_dir(app);
+    let bundles = web_profile_bundles(&runtime);
+    let preinstalled = preinstalled_details(&runtime);
+    let upd = app.state::<ServerState>().update.lock().unwrap().clone();
+    let op = app.state::<ServerState>().op.lock().unwrap().clone();
+    let pre_updates = app.state::<ServerState>().preinstalled_updates.lock().unwrap().clone();
+    serde_json::json!({
+        "bundles": bundles,
+        "preinstalled": preinstalled,
+        "preinstalledUpdates": pre_updates,
+        "devMode": dev_mode(&runtime),
+        "update": {
+            "current": upd.current,
+            "latest": upd.latest,
+            "updateAvailable": upd.update_available,
+            "next": upd.next,
+            "nextAvailable": upd.next_available,
+        },
+        "op": {
+            "op": op.op,
+            "spec": op.spec,
+            "done": op.done,
+            "ok": op.ok,
+            "nextAction": op.next_action,
+            "error": op.error,
+            "hint": op.hint,
+            "hintKey": op.hint_key,
+            "hintPlugins": op.hint_plugins,
+        },
+    })
+}
+
+/// 插件管理窗口：全量状态。
+#[tauri::command]
+fn get_plugins_panel(app: AppHandle) -> serde_json::Value {
+    plugins_panel_state(&app)
+}
+
+/// 预装插件启用/禁用（写入 web profile manifest；重启服务生效）。
+#[tauri::command]
+fn plugins_set_enabled(app: AppHandle, name: String, enabled: bool) -> Result<serde_json::Value, String> {
+    let runtime = runtime_dir(&app);
+    if !preinstalled_names(&runtime).contains(&name) {
+        return Err("not a preinstalled plugin".into());
+    }
+    let mut bundles = web_profile_bundles(&runtime);
+    if enabled {
+        if !bundles.contains(&name) {
+            bundles.push(name.clone());
+        }
+    } else {
+        bundles.retain(|b| b != &name);
+    }
+    write_web_profile_bundles(&runtime, &bundles)?;
+    Ok(serde_json::json!({ "ok": true, "name": name, "nextAction": "restart" }))
+}
+
+/// 插件管理窗口：安装用户插件（spec 交给 manager 的 pnpm 校验）。
+#[tauri::command]
+fn plugins_install(app: AppHandle, state: State<'_, ServerState>, spec: String) -> Result<serde_json::Value, String> {
+    let valid = !spec.is_empty() && spec.len() <= 512 && !spec.contains(char::is_whitespace);
+    if !valid {
+        return Err("invalid plugin spec".into());
+    }
+    send_line(
+        &mut state.stdin.lock().unwrap(),
+        &serde_json::json!({ "cmd": "plugins-install", "spec": spec }).to_string(),
+    );
+    Ok(serde_json::json!({ "ok": true }))
+}
+
+/// 插件管理窗口：卸载用户插件。
+#[tauri::command]
+fn plugins_remove(app: AppHandle, state: State<'_, ServerState>, name: String) -> Result<serde_json::Value, String> {
+    let runtime = runtime_dir(&app);
+    let is_user = web_profile_bundles(&runtime).iter().any(|b| b == &name)
+        && !preinstalled_names(&runtime).contains(&name)
+        && !WEB_PROFILE_TEMPLATE.iter().any(|t| *t == name);
+    if !is_user {
+        return Err("not a user-installed plugin".into());
+    }
+    send_line(
+        &mut state.stdin.lock().unwrap(),
+        &serde_json::json!({ "cmd": "plugins-remove", "name": name }).to_string(),
+    );
+    Ok(serde_json::json!({ "ok": true }))
+}
+
+/// 插件管理窗口：更新用户插件（name 为空 = 全部）。
+#[tauri::command]
+fn plugins_update(app: AppHandle, state: State<'_, ServerState>, name: String) -> Result<serde_json::Value, String> {
+    let line = if name.is_empty() {
+        serde_json::json!({ "cmd": "plugins-update" }).to_string()
+    } else {
+        serde_json::json!({ "cmd": "plugins-update", "name": name }).to_string()
+    };
+    send_line(&mut state.stdin.lock().unwrap(), &line);
+    Ok(serde_json::json!({ "ok": true }))
+}
+
+/// 插件管理窗口：检查预装插件更新。
+#[tauri::command]
+fn plugins_check_preinstalled_updates(state: State<'_, ServerState>) -> Result<serde_json::Value, String> {
+    send_manager(&mut state.stdin.lock().unwrap(), "preinstalled-check");
+    Ok(serde_json::json!({ "ok": true }))
+}
+
+/// 插件管理窗口：更新指定预装插件。
+#[tauri::command]
+fn plugins_update_preinstalled(app: AppHandle, state: State<'_, ServerState>, name: String) -> Result<serde_json::Value, String> {
+    let runtime = runtime_dir(&app);
+    if !preinstalled_names(&runtime).contains(&name) {
+        return Err("not a preinstalled plugin".into());
+    }
+    send_line(
+        &mut state.stdin.lock().unwrap(),
+        &serde_json::json!({ "cmd": "preinstalled-update", "name": name }).to_string(),
+    );
+    Ok(serde_json::json!({ "ok": true }))
+}
+
+/// 插件管理窗口：恢复指定预装插件到出厂版本。
+#[tauri::command]
+fn plugins_reset_preinstalled(app: AppHandle, state: State<'_, ServerState>, name: String) -> Result<serde_json::Value, String> {
+    let runtime = runtime_dir(&app);
+    if !preinstalled_names(&runtime).contains(&name) {
+        return Err("not a preinstalled plugin".into());
+    }
+    send_line(
+        &mut state.stdin.lock().unwrap(),
+        &serde_json::json!({ "cmd": "preinstalled-reset", "name": name }).to_string(),
+    );
+    Ok(serde_json::json!({ "ok": true }))
+}
+
+/// 壳健康状态（chrome 故障条幅轮询用）：最近故障摘要 + 服务是否在跑。
+#[tauri::command]
+fn get_shell_status(app: AppHandle, state: State<'_, ServerState>) -> serde_json::Value {
+    let last_error = state.last_error.lock().unwrap().clone();
+    let has_server = state.child.lock().unwrap().is_some();
+    serde_json::json!({ "lastError": last_error, "hasServer": has_server })
+}
+
 /// True for any build whose bundle identifier differs from the official one
 /// (the side-by-side dev build from tauri.dev.conf.json). Used to label the
 /// dev variant in user-visible strings so it can't be mistaken for the
@@ -2064,6 +2240,7 @@ pub fn run() {
             op: Mutex::new(OpStatus::default()),
             preinstalled_updates: Mutex::new(serde_json::json!({})),
             proxy: Mutex::new(ProxyState::default()),
+            last_error: Mutex::new(None),
         })
         // Belt-and-suspenders for the taskbar icon: re-apply the bundled icon
         // on every page load (window existence/creation timing is not relied
@@ -2326,6 +2503,8 @@ pub fn run() {
                 std::thread::sleep(std::time::Duration::from_millis(400));
                 if let Err(e) = start_server(&handle) {
                     eprintln!("[dsh-desktop] start failed: {e}");
+                    *handle.state::<ServerState>().last_error.lock().unwrap() =
+                        Some(format!("服务启动失败：{e}"));
                     // Never fail silently: surface the error and show Retry.
                     let _ = handle.emit("server-log", format!("启动失败: {e}"));
                     let _ = handle.emit("server-down", ());
@@ -2349,7 +2528,17 @@ pub fn run() {
             get_shell_state,
             toggle_dev_mode,
             open_settings,
-            show_about
+            show_about,
+            open_plugins,
+            get_plugins_panel,
+            plugins_set_enabled,
+            plugins_install,
+            plugins_remove,
+            plugins_update,
+            plugins_check_preinstalled_updates,
+            plugins_update_preinstalled,
+            plugins_reset_preinstalled,
+            get_shell_status
         ])
         .run(tauri::generate_context!())
         .expect("error while running DSH Smoothly Desktop");
