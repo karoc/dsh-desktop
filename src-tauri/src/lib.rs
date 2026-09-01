@@ -2112,7 +2112,7 @@ pub fn run() {
             // ── 品牌统一数据迁移（必须最先、在任何服务启动前）────────
             // identifier 已统一为 dsh.smoothly.desktop；老版本（dev.dsh.desktop
             // 系）已装用户的旧数据目录在此整体迁入新目录，否则升级即"数据丢失"。
-            migrate_legacy_data(app);
+            migrate_legacy_data(app.handle());
             // ── process-level toast activator (Windows): makes Action Center
             // clicks relaunch the exe (`-ToastActivated`), which
             // single-instance then forwards home. Must happen before the
