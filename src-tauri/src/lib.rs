@@ -1016,7 +1016,7 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.minimize();
             }
-            log_line(&app_data_dir(&app), "bridge: /window/minimize");
+            log_line(&app_data_dir(app), "bridge: /window/minimize");
             ("200 OK", serde_json::json!({ "ok": true }).to_string())
         }
         ("POST", "/window/toggle-maximize") => {
@@ -1024,7 +1024,7 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
                 .get_webview_window("main")
                 .and_then(|w| w.is_maximized().ok())
                 .unwrap_or(false);
-            log_line(&app_data_dir(&app), "bridge: /window/toggle-maximize");
+            log_line(&app_data_dir(app), "bridge: /window/toggle-maximize");
             if let Some(w) = app.get_webview_window("main") {
                 if maximized {
                     let _ = w.unmaximize();
@@ -1037,14 +1037,14 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
         ("POST", "/window/close") => {
             // Same semantics as the native close button: CloseRequested →
             // prevent + hide to tray (menu bar 退出 is the real quit).
-            log_line(&app_data_dir(&app), "bridge: /window/close");
+            log_line(&app_data_dir(app), "bridge: /window/close");
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.close();
             }
             ("200 OK", serde_json::json!({ "ok": true }).to_string())
         }
         ("POST", "/window/drag") => {
-            log_line(&app_data_dir(&app), "bridge: /window/drag");
+            log_line(&app_data_dir(app), "bridge: /window/drag");
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.start_dragging();
             }
