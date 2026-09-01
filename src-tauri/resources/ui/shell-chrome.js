@@ -78,7 +78,13 @@
   if (document.getElementById('dsh-shell-chrome')) return;
 
   // ── 传输层：双通道 ────────────────────────────────────────────────
-  const hasTauri = !!(globalThis.__TAURI__ && globalThis.__TAURI__.core && globalThis.__TAURI__.core.invoke);
+  // 仅本地启动页（tauri://）走 IPC；dsh 远程页（http://127.0.0.1:port）即使
+  // 存在 __TAURI__（Tauri 对允许的远程 origin 也做全局注入）也强制走环回桥——
+  // 远程页 capability（remote-notifications）未授予 invoke，走 IPC 会被静默
+  // 拒绝 → 表现为"点击全部无反应"（2026-09-01 实机日志实证：场地 chrome-hit
+  // 正常但桥 /window/* 无到达）。
+  const isLocalPage = typeof location !== 'undefined' && location.protocol === 'tauri:';
+  const hasTauri = isLocalPage && !!(globalThis.__TAURI__ && globalThis.__TAURI__.core && globalThis.__TAURI__.core.invoke);
   const BRIDGE_PORT = globalThis.__DSH_BRIDGE_PORT__ || 0;
 
   function invoke(ipc, args) {
@@ -449,7 +455,7 @@
       fetch(`http://127.0.0.1:${BRIDGE_PORT}/log`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tag: 'chrome-hit', detail: String(kind) }),
+        body: JSON.stringify({ tag: 'chrome-hit', detail: `${kind} tauri=${hasTauri} port=${BRIDGE_PORT}` }),
       }).catch(() => {});
     }
   }
