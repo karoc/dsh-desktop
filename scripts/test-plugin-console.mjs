@@ -174,15 +174,18 @@ assert.equal(window.__handoff.id, '@dsh-desktop/plugin-console')
 const plugin = window.__handoff.factory()
 assert.deepEqual(plugin.inject, [], 'console plugin needs no dsh services')
 
-// ── scenario 1: apply mounts the floating button ───────────────────────────
+// ── scenario 1: apply exposes the shell toggle hook, NO floating button ────
+// 入口已挪到壳菜单栏：插件不再渲染右下角悬浮按钮，面板开关走全局接口。
 plugin.apply({})
-const btn = body.children.find((c) => c.className === 'dshc-btn')
-assert.ok(btn, 'floating button must be mounted')
+const fab = body.children.find((c) => c.className === 'dshc-btn')
+assert.equal(fab, undefined, 'no floating button when the entry lives in the shell menu')
+const consoleHook = globalThis.__DSH_PLUGIN_CONSOLE__
+assert.ok(consoleHook && typeof consoleHook.toggle === 'function', 'shell toggle hook exposed on globalThis')
 
-// ── scenario 2: clicking the button opens the panel and fetches /plugins/list ─
-btn.click()
+// ── scenario 2: invoking the hook opens the panel and fetches /plugins/list ─
+consoleHook.toggle()
 const panel = body.children.find((c) => c.className === 'dshc-panel')
-assert.ok(panel, 'panel must be created on first click')
+assert.ok(panel, 'panel must be created on first toggle')
 const listCall = calls.find((c) => c[0] === '/plugins/list')
 assert.ok(listCall, 'opening the panel fetches /plugins/list')
 assert.equal(listCall[1], 'GET')
@@ -206,12 +209,12 @@ const enableCall = calls.filter((c) => c[0] === '/plugins/enable')
 assert.equal(enableCall.length, 1, 'enable POST fired')
 assert.deepEqual(enableCall[0][2], { name: 'dsh-model-reasoning' }, 'enable body carries the package name')
 
-// now it's enabled -> clicking again disables
+// now it's enabled -> toggling again disables
 listPayload = { ...listPayload, bundles: [...listPayload.bundles, 'dsh-model-reasoning'] }
 calls.length = 0
-btn.click() // re-open triggers refresh
-btn.click() // close
-btn.click() // open
+consoleHook.toggle() // re-open triggers refresh
+consoleHook.toggle() // close
+consoleHook.toggle() // open
 await new Promise((r) => setTimeout(r, 10))
 toggle[0].click()
 await new Promise((r) => setTimeout(r, 15))
@@ -221,7 +224,7 @@ assert.deepEqual(disableCall[0][2], { name: 'dsh-model-reasoning' })
 
 // ── scenario 5: update section shows one-click update when available ────────
 calls.length = 0
-btn.click()
+consoleHook.toggle()
 await new Promise((r) => setTimeout(r, 10))
 const updateBtn = panel.querySelector('#dshc-update')
 assert.ok(updateBtn, 'one-click update button shown when an update is available')
@@ -235,9 +238,9 @@ assert.equal(updateCall[1], 'POST')
 // upgrading to it via a versioned /update-dsh call.
 calls.length = 0
 listPayload.update = { current: '0.1.0-rc.7', latest: '0.1.0-rc.7', updateAvailable: false, next: '0.1.0-rc.8', nextAvailable: true }
-btn.click() // close
+consoleHook.toggle() // close
 await new Promise((r) => setTimeout(r, 10))
-btn.click() // reopen -> refresh() re-fetches /plugins/list and re-renders
+consoleHook.toggle() // reopen -> refresh() re-fetches /plugins/list and re-renders
 await new Promise((r) => setTimeout(r, 10))
 const preBtn = panel.querySelector('#dshc-update')
 assert.ok(preBtn, 'pre-release update button shown when only next is newer')
@@ -250,7 +253,7 @@ assert.deepEqual(preCall[2], { version: '0.1.0-rc.8' }, 'pre-release update pass
 
 // ── scenario 6: action buttons map to the right endpoints ───────────────────
 calls.length = 0
-btn.click()
+consoleHook.toggle()
 await new Promise((r) => setTimeout(r, 10))
 assert.equal(panel.querySelector('#dshc-proxy'), null, 'no proxy settings button in the console (entry lives in the shell settings window + tray)')
 const refreshBtn = panel.querySelector('#dshc-refresh')
@@ -267,7 +270,7 @@ assert.ok(
 
 // ── scenario 7: install input + user-installed row (P5) ─────────────────────
 calls.length = 0
-btn.click()
+consoleHook.toggle()
 await new Promise((r) => setTimeout(r, 10))
 const specInput = panel.querySelector('#dshc-spec')
 assert.ok(specInput, 'install input rendered')
@@ -300,8 +303,8 @@ assert.deepEqual(updateCall2[2], { name: 'some-user-plugin' })
 
 // ── scenario 8: completed op with nextAction shows "restart now" ────────────
 listPayload = { ...listPayload, op: { op: 'install', spec: 'my-awesome-plugin', done: true, ok: true, nextAction: 'restart' } }
-btn.click()
-btn.click() // close + reopen to force a fresh render
+consoleHook.toggle()
+consoleHook.toggle() // close + reopen to force a fresh render
 await new Promise((r) => setTimeout(r, 10))
 const restartNow = panel.querySelector('#dshc-restart-now')
 assert.ok(restartNow, 'completed install with nextAction renders an immediate-restart button')
@@ -312,7 +315,7 @@ listPayload = {
   preinstalledUpdates: { 'dsh-model-reasoning': { installed: '0.1.1', latest: '0.1.3', updateAvailable: true, userUpdated: false } },
   op: { op: null, done: true },
 }
-btn.click(); btn.click() // close + reopen for a fresh render
+consoleHook.toggle(); consoleHook.toggle() // close + reopen for a fresh render
 await new Promise((r) => setTimeout(r, 10))
 const updPre = panel.querySelector('[data-upd-pre]')
 assert.ok(updPre, 'preinstalled row renders an update button when a newer version exists')
@@ -325,12 +328,12 @@ assert.ok(updPreCall, 'update-preinstalled posts /plugins/update-preinstalled')
 assert.deepEqual(updPreCall[2], { name: 'dsh-model-reasoning' })
 
 // ── scenario 8e: typed install input survives a re-render (5s poll bug) ─────
-btn.click(); btn.click()
+consoleHook.toggle(); consoleHook.toggle()
 await new Promise((r) => setTimeout(r, 10))
 const inA = panel.querySelector('#dshc-spec')
 inA.value = 'keep-me-plugin'
-btn.click() // close
-btn.click() // reopen -> refresh re-renders the panel
+consoleHook.toggle() // close
+consoleHook.toggle() // reopen -> refresh re-renders the panel
 await new Promise((r) => setTimeout(r, 10))
 const inB = panel.querySelector('#dshc-spec')
 assert.ok(inB, 'input re-rendered')
@@ -341,7 +344,7 @@ listPayload = {
   ...listPayload,
   preinstalledUpdates: { 'dsh-model-reasoning': { installed: '0.1.3', latest: '0.1.3', updateAvailable: false, userUpdated: true } },
 }
-btn.click(); btn.click()
+consoleHook.toggle(); consoleHook.toggle()
 await new Promise((r) => setTimeout(r, 10))
 const resetPre = panel.querySelector('[data-reset-pre]')
 assert.ok(resetPre, 'user-updated preinstalled renders a reset-to-default button')
@@ -355,7 +358,7 @@ assert.deepEqual(resetCall[2], { name: 'dsh-model-reasoning' })
 
 // ── scenario 8d: check-preinstalled-updates button ──────────────────────────
 calls.length = 0
-btn.click(); btn.click()
+consoleHook.toggle(); consoleHook.toggle()
 await new Promise((r) => setTimeout(r, 10))
 const checkPre = panel.querySelector('#dshc-check-pre')
 assert.ok(checkPre, 'check-preinstalled-updates button rendered')
@@ -367,7 +370,7 @@ assert.ok(
 )
 
 // ── scenario 9: custom tooltip on hover (no native title) ───────────────────
-btn.click(); btn.click()
+consoleHook.toggle(); consoleHook.toggle()
 await new Promise((r) => setTimeout(r, 10))
 const subEl = panel.querySelector('.dshc-sub')
 assert.ok(subEl, 'description line rendered')
@@ -384,7 +387,7 @@ assert.equal(
 )
 
 // ── scenario 11: clicking outside the panel closes it ───────────────────────
-for (let i = 0; i < 3 && !panelElVisible(); i++) { btn.click(); await new Promise((r) => setTimeout(r, 10)) }
+for (let i = 0; i < 3 && !panelElVisible(); i++) { consoleHook.toggle(); await new Promise((r) => setTimeout(r, 10)) }
 assert.ok(panelElVisible(), 'panel is open before the outside click')
 const outsideClick = (docListeners.click || []).slice(-1)[0] // the console's own listener
 assert.ok(outsideClick, 'document click listener attached')
@@ -400,7 +403,7 @@ function panelElVisible() {
 }
 
 // ── scenario 12: language toggle switches zh -> en (default is zh) ───────────
-for (let i = 0; i < 3 && !panelElVisible(); i++) { btn.click(); await new Promise((r) => setTimeout(r, 10)) }
+for (let i = 0; i < 3 && !panelElVisible(); i++) { consoleHook.toggle(); await new Promise((r) => setTimeout(r, 10)) }
 let langBtn = panel.querySelector('#dshc-lang')
 assert.ok(langBtn, 'language toggle rendered')
 assert.equal(langBtn.textContent, 'EN', 'default zh shows EN as the switch target')

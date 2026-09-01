@@ -141,10 +141,6 @@ window.__ModuleLoader__.load({
       lang = next === 'en' ? 'en' : 'zh'
       L = lang === 'zh' ? ZH : EN
       saveLang(lang)
-      if (floatingBtn) {
-        floatingBtn.textContent = `⚙ ${L.btnLabel}`
-        floatingBtn.title = L.title
-      }
     }
 
     // 预装插件的双语简介（壳自有插件的简介我们维护；未收录的用包自带 description）。
@@ -267,8 +263,6 @@ window.__ModuleLoader__.load({
     // Preserved install input value across re-renders (a 5s poll refresh must
     // not wipe what the user is typing).
     let installSpec = ''
-    // The floating button element (label updates on language switch).
-    let floatingBtn = null
 
     function bridge(path, opts) {
       if (!ready()) return Promise.resolve(null)
@@ -931,12 +925,9 @@ window.__ModuleLoader__.load({
       if (mounted) return
       mounted = true
       injectStyle()
-      const btn = document.createElement('button')
-      btn.className = 'dshc-btn'
-      btn.textContent = `⚙ ${L.btnLabel}`
-      btn.title = L.title
-      floatingBtn = btn
-      btn.addEventListener('click', () => {
+      // 入口在壳菜单栏：不再渲染右下角悬浮按钮，面板开关暴露给壳调用。
+      // 首次调用创建面板并显示；再次调用切换显隐。
+      function togglePanel() {
         if (!panelEl) {
           panelEl = document.createElement('div')
           panelEl.className = 'dshc-panel'
@@ -945,17 +936,21 @@ window.__ModuleLoader__.load({
           document.body.appendChild(panelEl)
           applyTheme()
           refresh()
-          return // first click opens (display is visible from applyTheme)
+          return // first open (display visible from applyTheme)
         }
         const visible = panelEl.style.display !== 'none'
         panelEl.style.display = visible ? 'none' : 'block'
         if (!visible) refresh()
-      })
-      document.body.appendChild(btn)
-      // 点击弹窗外部关闭（点击弹窗内部或插件按钮本身不关）。
+      }
+      // 壳（注入 chrome 的菜单栏「插件管理」）通过该全局接口唤起面板。
+      const prev = globalThis.__DSH_PLUGIN_CONSOLE__
+      if (!prev || typeof prev.toggle !== 'function') {
+        globalThis.__DSH_PLUGIN_CONSOLE__ = { toggle: togglePanel }
+      }
+      // 点击面板外部关闭（面板内部点击不关）。
       if (typeof document.addEventListener === 'function') {
         document.addEventListener('click', (e) => {
-          if (panelEl && panelEl.style.display !== 'none' && !panelEl.contains(e.target) && !btn.contains(e.target)) {
+          if (panelEl && panelEl.style.display !== 'none' && !panelEl.contains(e.target)) {
             panelEl.style.display = 'none'
           }
         })

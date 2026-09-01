@@ -113,9 +113,12 @@ assert.ok(chromeSrc.includes('dsh-chrome-push') || chromeSrc.includes('paddingTo
 assert.ok(chromeSrc.includes('flashHit'), 'chrome has a click-hit diagnostic flash (red ring on chrome hit)')
 assert.ok(chromeSrc.includes('errbanner'), 'chrome renders the failure-disclosure banner (no more blank screen)')
 assert.ok(chromeSrc.includes('shell-status'), 'chrome polls shell status for failure disclosure')
-// 插件管理入口 = 就地触发原插件控制台（保留原 UI/UX），并隐藏原右下角浮动按钮。
-assert.ok(chromeSrc.includes('dshc-btn'), 'chrome triggers the original plugin-console panel (.dshc-btn)')
-assert.ok(chromeSrc.includes('hideFabIfPresent'), 'chrome hides the original bottom-right plugin fab (entry moved to menu bar)')
+// 插件管理入口 = 壳菜单栏就地触发原插件控制台（保留原 UI/UX）。
+// 插件不再渲染右下角按钮：优先走全局接口 __DSH_PLUGIN_CONSOLE__.toggle，
+// hideFabIfPresent 仅作旧版插件的防御性兜底。
+assert.ok(chromeSrc.includes('__DSH_PLUGIN_CONSOLE__'), 'chrome drives the console via the plugin global hook')
+assert.ok(chromeSrc.includes('dshc-btn'), 'chrome falls back to the legacy .dshc-btn only for old plugin versions')
+assert.ok(chromeSrc.includes('hideFabIfPresent'), 'chrome defensively hides a leftover legacy fab')
 
 console.log('PASS — shell chrome contract (menus, actions, bridge, IPC)')
 process.exit(0)
