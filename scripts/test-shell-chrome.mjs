@@ -38,7 +38,7 @@ assert.ok(Array.isArray(SHELL_MENUS[0].items), 'app menu has dropdown items')
 const brand = SHELL_MENUS[0].items[0]
 assert.ok(brand && brand.id === 'brand' && brand.type === 'brand', 'dropdown first row shows the app name (brand)')
 const ids = SHELL_MENUS[0].items.map((i) => i.id).filter(Boolean)
-for (const id of ['proxy-settings', 'check-update', 'dev-mode', 'refresh', 'restart', 'open-data', 'about', 'quit']) {
+for (const id of ['proxy-settings', 'plugins', 'check-update', 'dev-mode', 'refresh', 'restart', 'open-data', 'about', 'quit']) {
   assert.ok(ids.includes(id), `app menu contains ${id}`)
 }
 
@@ -106,6 +106,8 @@ assert.ok(chromeSrc.includes('__DSH_LOGO__'), 'chrome uses the injected real log
 assert.ok(libRs.includes('__DSH_LOGO__'), 'lib.rs injects the real logo data URI')
 assert.ok(chromeSrc.includes('dsh-chrome-push') || chromeSrc.includes('paddingTop'), 'chrome pushes page content below the title bar without extra scrollbar')
 assert.ok(chromeSrc.includes('flashHit'), 'chrome has a click-hit diagnostic flash (red ring on chrome hit)')
+assert.ok(chromeSrc.includes('errbanner'), 'chrome renders the failure-disclosure banner (no more blank screen)')
+assert.ok(chromeSrc.includes('shell-status'), 'chrome polls shell status for failure disclosure')
 
 console.log('PASS — shell chrome contract (menus, actions, bridge, IPC)')
 process.exit(0)

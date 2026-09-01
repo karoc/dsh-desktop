@@ -32,6 +32,7 @@
         { id: 'brand', label: PRODUCT_NAME, type: 'brand' },
         { type: 'sep' },
         { id: 'proxy-settings', label: '代理设置…' },
+        { id: 'plugins', label: '插件管理…' },
         { id: 'check-update', label: '检查更新…' }, // 有更新时翻转为「有更新 vX（点击更新）」
         { id: 'dev-mode', label: '开发者模式', type: 'checkbox' },
         { type: 'sep' },
@@ -57,6 +58,8 @@
     refresh: { ipc: 'refresh_page', bridge: '/refresh' },
     restart: { ipc: 'restart_server', bridge: '/restart' },
     'open-data': { ipc: 'open_data_dir', bridge: '/shell/open-data-dir' },
+    plugins: { ipc: 'open_plugins', bridge: '/shell/open-plugins' },
+    'shell-status': { ipc: 'get_shell_status', bridge: '/shell/status', method: 'GET' },
     about: { ipc: 'show_about', bridge: '/shell/about' },
     quit: { ipc: 'quit_app', bridge: '/shell/quit' },
     // 窗口控制（本地页走 IPC 命令 window_control；远程页走桥端点）。
@@ -264,6 +267,24 @@
       cursor: default;
     }
     .dd-brand img { width: 18px; height: 18px; border-radius: 4px; display: block; }
+    .errbanner {
+      position: fixed; top: 36px; left: 0; right: 0;
+      display: flex; align-items: center; gap: 12px;
+      background: #fdeaea;
+      border-bottom: 1px solid rgba(198, 40, 40, 0.35);
+      color: #c62828;
+      font-size: 12px;
+      padding: 7px 12px;
+      z-index: 2147483646;
+    }
+    .errbanner[hidden] { display: none; }
+    .errbanner .err-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .errbanner button {
+      margin: 0; padding: 3px 10px; font-size: 12px;
+      border: 1px solid rgba(198, 40, 40, 0.5); border-radius: 6px;
+      background: transparent; color: #c62828; cursor: pointer;
+    }
+    .errbanner button:hover { background: rgba(198, 40, 40, 0.08); }
   `;
 
   const styleEl = document.createElement('style');
@@ -370,6 +391,35 @@
     root.appendChild(dd);
     dropdowns.set(entry.id, dd);
   }
+
+  // ── 故障披露条幅：服务/启动异常时显示原因 + 重试/开日志（不再一片黑）──
+  const errBanner = document.createElement('div');
+  errBanner.className = 'errbanner';
+  errBanner.hidden = true;
+  const errText = document.createElement('span');
+  errText.className = 'err-text';
+  const errRetryBtn = document.createElement('button');
+  errRetryBtn.textContent = '重试';
+  const errDataBtn = document.createElement('button');
+  errDataBtn.textContent = '打开数据目录';
+  const errDismissBtn = document.createElement('button');
+  errDismissBtn.textContent = '✕';
+  errBanner.append(errText, errRetryBtn, errDataBtn, errDismissBtn);
+  root.appendChild(errBanner);
+  let errDismissed = false;
+  function updateErrorBanner() {
+    call('shell-status').then((r) => {
+      if (!r) return;
+      const hasErr = !!r.lastError;
+      errBanner.hidden = !(hasErr && !errDismissed);
+      if (hasErr && !errDismissed) errText.textContent = '⚠ ' + r.lastError;
+    });
+  }
+  errRetryBtn.addEventListener('click', () => call('restart'));
+  errDataBtn.addEventListener('click', () => call('open-data'));
+  errDismissBtn.addEventListener('click', () => { errDismissed = true; errBanner.hidden = true; });
+  setInterval(updateErrorBanner, 3000);
+  updateErrorBanner();
 
   // ── 菜单开关 ──────────────────────────────────────────────────────
   function closeMenus() {
