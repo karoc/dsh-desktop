@@ -1794,6 +1794,8 @@ fn toggle_dev_mode_impl(app: &AppHandle) -> Result<serde_json::Value, String> {
 /// close-to-tray semantics (CloseRequested → prevent + hide).
 #[tauri::command]
 fn window_control(app: AppHandle, action: String) -> Result<serde_json::Value, String> {
+    // 诊断：IPC 路径到达证据（桥路径已另有 bridge: 行）。
+    log_line(&app_data_dir(&app), &format!("ipc: window_control {action}"));
     let w = app
         .get_webview_window("main")
         .ok_or_else(|| "main window not found".to_string())?;
