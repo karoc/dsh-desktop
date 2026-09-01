@@ -87,7 +87,7 @@ assert.ok(
   devConf.productName && devConf.productName !== mainConf.productName,
   'dev config overrides productName',
 )
-assert.ok(devConf.identifier && devConf.identifier !== 'dev.dsh.desktop', 'dev config overrides identifier')
+assert.ok(devConf.identifier && devConf.identifier !== mainConf.identifier, 'dev config overrides identifier (side-by-side)')
 // NSIS 安装器按 MainBinaryName.exe 检测运行实例——dev 版必须用独立 exe 名，
 // 否则正式版在跑时装 dev 版会被误判为 dev 在运行（无法并存安装）。
 assert.ok(

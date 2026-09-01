@@ -101,16 +101,22 @@ npm run bundle:dev        # = tauri build --config src-tauri/tauri.dev.conf.json
 ```
 
 `src-tauri/tauri.dev.conf.json` 只覆盖两个顶层字段（深合并到 tauri.conf.json，其余
-配置原样继承）：`productName: "DSH Smoothly Desktop Dev"`、`identifier: "dev.dsh.desktop.dev"`。
+配置原样继承）：`productName: "DSH Smoothly Desktop Dev"`、`identifier: "dsh.smoothly.desktop.dev"`。
 由此带来的隔离：
 
 | 维度 | 正式版 | 开发版 |
 |---|---|---|
 | 安装目录 / 开始菜单 / 卸载项 | `%LOCALAPPDATA%\DSH Smoothly Desktop` | `%LOCALAPPDATA%\DSH Smoothly Desktop Dev` |
-| 应用数据（runtime、dsh 本体、`DSH_HOME`、proxy.json） | `%APPDATA%\dev.dsh.desktop` | `%APPDATA%\dev.dsh.desktop.dev` |
-| 单实例互斥 / 任务栏 AUMID | `dev.dsh.desktop-sim` | `dev.dsh.desktop.dev-sim` |
+| 应用数据（runtime、dsh 本体、`DSH_HOME`、proxy.json） | `%APPDATA%\dsh.smoothly.desktop` | `%APPDATA%\dsh.smoothly.desktop.dev` |
+| 单实例互斥 / 任务栏 AUMID | `dsh.smoothly.desktop-sim` | `dsh.smoothly.desktop.dev-sim` |
 | toast 激活 CLSID（随 identifier 派生） | 固定 GUID | 独立派生 GUID |
 | dsh web 端口 / 通知桥端口 | 随机 | 随机（互不冲突） |
+
+**应用标识（identifier）统一为 `dsh.smoothly.desktop`**（早期立项用 `dev.dsh.desktop`，`dev`
+是命名空间前缀而非"开发版"——旧标识名易误读）。**老版本已装用户升级后自动迁移**：
+应用启动时把旧 `%APPDATA%\dev.dsh.desktop` 系目录整体迁入新标识目录（整目录 rename 保持
+node_modules 符号链接树、写迁移标记、绝不上移覆盖已有新数据、失败不丢旧数据下次重试），
+随后在 `%APPDATA%\dsh.smoothly.desktop` 下正常工作。已装正式版与 dev 版均有同一套迁移保障。
 
 - 两个版本可**同时运行**（各自单实例、各自 runtime、各自端口）。
 - 开发版首次启动用自己的 runtime 冷安装一份 dsh（视网络 1~3 分钟），不动正式版数据。

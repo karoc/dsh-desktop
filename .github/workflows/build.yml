@@ -43,6 +43,8 @@ jobs:
       # with the Rust toolchain, commit as style(chrome): cargo fmt, then
       # re-enable: `- run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`).
       - run: cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
+      # Rust unit tests (lib): migration logic & any pure-path logic.
+      - run: cargo test --manifest-path src-tauri/Cargo.toml --lib
 
   # Fast node gate (no Rust/system deps, ~1 min): all scripts/test-*.mjs
   # behavioral + contract suites (notifications / control plane / console /

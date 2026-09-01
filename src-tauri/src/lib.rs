@@ -192,12 +192,12 @@ fn fnv1a(seed: u64, data: &[u8]) -> u64 {
 
 /// Toast activator CLSID for a build identity. The official identifier keeps
 /// its long-standing stable GUID; any other identifier (e.g. the side-by-side
-/// dev build `dev.dsh.desktop.dev`) gets a deterministic RFC-4122-shaped GUID
-/// derived from it — two installs never clobber each other's toast
+/// dev build `dsh.smoothly.desktop.dev`) gets a deterministic RFC-4122-shaped
+/// GUID derived from it — two installs never clobber each other's toast
 /// registration, and the value is stable across launches/upgrades.
 #[cfg(target_os = "windows")]
 fn toast_clsid(identifier: &str) -> String {
-    if identifier == "dev.dsh.desktop" {
+    if identifier == "dsh.smoothly.desktop" {
         return "{7C2F4B1A-9D3E-4A8F-B6C0-5E1D2A3B4C5D}".to_string();
     }
     let a = fnv1a(0xcbf2_9ce4_8422_2325, identifier.as_bytes());
@@ -480,6 +480,155 @@ fn app_data_dir(app: &AppHandle) -> std::path::PathBuf {
     app.path()
         .app_data_dir()
         .unwrap_or_else(|_| std::path::PathBuf::from("."))
+}
+
+// ── 品牌统一数据迁移（legacy identifier → dsh.smoothly.desktop）────────────
+// identifier 决定 %APPDATA%/<id>（runtime、dsh-home 会话/插件、proxy.json、
+// 窗口状态等全部用户数据）。改 identifier 后，老版本已装用户的旧数据目录
+// 不再被新版本读取——必须把旧目录整体迁移过来，否则"数据丢失"。
+//
+// 安全设计（绝不丢数据）：
+//   1. 只迁移与当前身份对应的旧 identifier（正式迁 dev.dsh.desktop，
+//      dev 迁 dev.dsh.desktop.dev），互不抢；
+//   2. 只做「整目录 rename」：同卷内原子、秒级；node_modules 是相对符号链接
+//      树（pnpm hoisted），整树一起移动相对链接关系保持不变；绝不逐文件
+//      copy（会跟链放大并破坏链接结构）；
+//   3. 新目录已存在 → 视为已有新数据/已迁移，跳过（新数据优先，旧目录保留）；
+//   4. 迁移成功写 marker，防重复执行；
+//   5. rename 失败（异常占用等）→ 记日志、本次不迁、旧数据原封不动，
+//      下次启动再试——失败安全，宁可多启动一次也不冒覆盖/改链风险。
+const LEGACY_IDENT_MIGRATIONS: &[(&str, &str)] = &[
+    ("dsh.smoothly.desktop", "dev.dsh.desktop"),
+    ("dsh.smoothly.desktop.dev", "dev.dsh.desktop.dev"),
+];
+const MIGRATION_MARKER: &str = ".dsh-migration-ok";
+
+/// 单目录迁移核心（纯 Path 逻辑，可单测）。返回是否发生了迁移。
+fn migrate_legacy_data_dir(old_dir: &std::path::Path, new_dir: &std::path::Path, mut log: impl FnMut(&str)) -> bool {
+    if !old_dir.is_dir() {
+        return false; // 无旧数据
+    }
+    if new_dir.join(MIGRATION_MARKER).exists() {
+        return false; // 已迁移过
+    }
+    if new_dir.exists() {
+        // 目标已有内容且无标记：新数据优先，旧目录保留，永不覆盖。
+        log("target app-data exists without migration marker — new data wins, legacy left in place");
+        return false;
+    }
+    if let Some(p) = new_dir.parent() {
+        if std::fs::create_dir_all(p).is_err() {
+            return false;
+        }
+    }
+    match std::fs::rename(old_dir, new_dir) {
+        Ok(()) => {
+            let _ = std::fs::write(new_dir.join(MIGRATION_MARKER), b"migrated\n");
+            log(&format!(
+                "migrated legacy app data: {} -> {}",
+                old_dir.display(),
+                new_dir.display()
+            ));
+            true
+        }
+        Err(e) => {
+            log(&format!("legacy migration rename failed: {e} — old data intact, retry next launch"));
+            false
+        }
+    }
+}
+
+/// 启动时执行品牌统一迁移：app data 与 WebView2 缓存（local data）都搬。
+/// 必须在 start_server（manager 拉起 dsh）之前完成。
+fn migrate_legacy_data(app: &AppHandle) {
+    let ident = app.config().identifier.as_str();
+    let Some(old_name) = LEGACY_IDENT_MIGRATIONS
+        .iter()
+        .find(|(n, _)| n == &ident)
+        .map(|(_, o)| *o)
+    else {
+        return;
+    };
+    let new_dir = app_data_dir(app);
+    let log_sink = new_dir.clone();
+    let Some(base) = new_dir.parent() else { return };
+    let old_dir = base.join(old_name);
+    let moved = migrate_legacy_data_dir(&old_dir, &new_dir, |m| {
+        eprintln!("[dsh-desktop] data-migration: {m}");
+        log_line(&log_sink, &format!("data-migration: {m}"));
+    });
+    if moved {
+        // 同卷 WebView2 缓存：一并搬移（非关键，失败仅记日志）。
+        if let Ok(new_local) = app.path().app_local_data_dir() {
+            let old_local = new_local.parent().map(|p| p.join(old_name));
+            if let Some(old_local) = old_local {
+                if old_local.is_dir() && !new_local.exists() {
+                    if let Err(e) = std::fs::rename(&old_local, &new_local) {
+                        eprintln!("[dsh-desktop] data-migration: local cache rename skipped: {e}");
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use super::*;
+
+    fn tmp_base(tag: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("dsh-mig-{tag}-{}", std::process::id()))
+    }
+
+    #[test]
+    fn migrates_legacy_directory_and_is_idempotent() {
+        let base = tmp_base("ok");
+        let _ = std::fs::remove_dir_all(&base);
+        let old = base.join("dev.dsh.desktop");
+        let new = base.join("dsh.smoothly.desktop");
+        std::fs::create_dir_all(old.join("runtime/dsh-home")).unwrap();
+        std::fs::write(old.join("runtime/dsh-home/hello.txt"), "x").unwrap();
+
+        let moved = migrate_legacy_data_dir(&old, &new, |_| {});
+        assert!(moved, "legacy dir should migrate");
+        assert!(new.join("runtime/dsh-home/hello.txt").is_file(), "data present at new location");
+        assert!(new.join(MIGRATION_MARKER).is_file(), "marker written");
+        assert!(!old.exists(), "legacy dir moved away");
+
+        // 幂等：旧目录已不在 → 第二次 noop
+        let moved2 = migrate_legacy_data_dir(&old, &new, |_| {});
+        assert!(!moved2);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn new_data_wins_when_target_exists() {
+        let base = tmp_base("skip");
+        let _ = std::fs::remove_dir_all(&base);
+        let old = base.join("dev.dsh.desktop");
+        let new = base.join("dsh.smoothly.desktop");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::create_dir_all(new.join("runtime")).unwrap();
+        std::fs::write(new.join("runtime/keep.txt"), "keep").unwrap();
+
+        let moved = migrate_legacy_data_dir(&old, &new, |_| {});
+        assert!(!moved, "must not overwrite existing (new) data");
+        assert!(old.exists(), "legacy dir untouched");
+        assert!(new.join("runtime/keep.txt").is_file(), "new data kept");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn noop_without_legacy() {
+        let base = tmp_base("none");
+        let _ = std::fs::remove_dir_all(&base);
+        let old = base.join("dev.dsh.desktop");
+        let new = base.join("dsh.smoothly.desktop");
+        let moved = migrate_legacy_data_dir(&old, &new, |_| {});
+        assert!(!moved);
+        assert!(!new.exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }
 
 /// Absolute path of the web profile manifest.
@@ -1863,7 +2012,7 @@ fn open_settings(app: AppHandle) -> Result<(), String> {
 /// dev variant in user-visible strings so it can't be mistaken for the
 /// official install.
 fn is_dev_build(app: &AppHandle) -> bool {
-    app.config().identifier != "dev.dsh.desktop"
+    app.config().identifier != "dsh.smoothly.desktop"
 }
 
 /// Chrome menu bar entry: "关于 DSH Smoothly Desktop" — native toast with the shell
@@ -1960,6 +2109,10 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            // ── 品牌统一数据迁移（必须最先、在任何服务启动前）────────
+            // identifier 已统一为 dsh.smoothly.desktop；老版本（dev.dsh.desktop
+            // 系）已装用户的旧数据目录在此整体迁入新目录，否则升级即"数据丢失"。
+            migrate_legacy_data(app.handle());
             // ── process-level toast activator (Windows): makes Action Center
             // clicks relaunch the exe (`-ToastActivated`), which
             // single-instance then forwards home. Must happen before the
