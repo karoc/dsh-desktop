@@ -152,8 +152,9 @@
       z-index: 2147483647;
       font-family: system-ui, "Segoe UI", "Microsoft YaHei", sans-serif;
       /* 主题色：柔和白 #FAFAFA + 深灰文字 #1F2328（全壳 UI 统一）；
-         显式设色避免继承页面（页面可能是深色主题）。 */
+         显式设色/字号，避免继承页面（页面可能是深色主题、字号更大）。 */
       color: #1f2328;
+      font-size: 12px;
     }
     .bar {
       display: flex;
@@ -166,10 +167,13 @@
       border-bottom: 1px solid rgba(0, 0, 0, 0.08);
       box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
       color: #1f2328;
-      font-size: 13px;
+      font-size: 12px;
       user-select: none;
       -webkit-user-select: none;
       cursor: default;
+      /* WebView2 原生窗口拖动；交互按钮 no-drag。mousedown 兜底同时保留
+         （app-region 生效时 mousedown 不触发，两者天然互斥）。 */
+      -webkit-app-region: drag;
     }
     .menus { display: flex; align-items: stretch; height: 100%; }
     .menu-btn {
@@ -180,6 +184,7 @@
       color: inherit;
       cursor: pointer;
       transition: background 0.12s ease;
+      -webkit-app-region: no-drag;
     }
     .menu-btn:hover, .menu-btn.open { background: rgba(0, 0, 0, 0.06); }
     .menu-btn .logo { display: flex; align-items: center; }
@@ -211,6 +216,7 @@
       border: 0; background: transparent;
       color: #1f2328; cursor: pointer;
       transition: background 0.12s ease;
+      -webkit-app-region: no-drag;
     }
     .ctl:hover { background: rgba(0, 0, 0, 0.07); }
     .ctl-close:hover { background: rgba(224, 30, 55, 0.92); color: #fff; }
@@ -301,14 +307,14 @@
   root.append(styleEl, bar);
   document.body.appendChild(host);
 
-  // ── 页面内容推挤：dsh 远程页顶部垫 36px，避免内容被顶栏遮挡 ──────
-  // 启动页（tauri://）主内容居中、无遮挡，不垫。
-  const pushEl = document.createElement('div');
-  pushEl.id = 'dsh-chrome-push';
-  pushEl.style.cssText = 'height:36px;flex:0 0 auto;';
+  // ── 自适应推挤（不产生滚动条）：dsh 远程页 html 顶部补 36px padding，
+  // border-box 下内容区减少 36、总高不变 → 内容下移不被顶栏遮挡、无额外
+  // 滚动条。启动页（tauri://）居中布局无需推挤。
   let pushActive = false;
   if (typeof location !== 'undefined' && location.protocol !== 'tauri:') {
-    document.body.insertBefore(pushEl, document.body.firstChild);
+    const rootEl = document.documentElement;
+    rootEl.style.paddingTop = '36px';
+    rootEl.style.boxSizing = 'border-box';
     pushActive = true;
   }
 
@@ -432,6 +438,22 @@
   }
 
   // ── 事件 ──────────────────────────────────────────────────────────
+  // 诊断（临时）：命中 chrome 交互时顶栏闪红框 + console 日志 + 上报桥 /log，
+  // 实机一点即可区分"点击是否被 chrome 收到"（红框闪={收到} 才对）。
+  function flashHit(kind) {
+    if (!bar) return;
+    bar.style.boxShadow = 'inset 0 0 0 2px rgba(224, 30, 55, 0.95)';
+    setTimeout(() => { bar.style.boxShadow = ''; }, 200);
+    console.warn('[dsh-chrome] hit', kind);
+    if (BRIDGE_PORT) {
+      fetch(`http://127.0.0.1:${BRIDGE_PORT}/log`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tag: 'chrome-hit', detail: String(kind) }),
+      }).catch(() => {});
+    }
+  }
+
   // window 级 CAPTURE 统一分发：不依赖 shadow 内单个元素监听（实机曾出现
   // "全部点击无反应"——具体绑定可能因注入/遮蔽失效）。capture 阶段最早收包，
   // composedPath 穿透 shadow 边界定位 data 命中元素；命中即 stopPropagation，
@@ -445,6 +467,7 @@
       e.preventDefault();
       e.stopPropagation();
       const d = hit.dataset;
+      flashHit(d.menu || d.item || d.action);
       if (d.menu) {
         toggleMenu(d.menu);
         return;
@@ -530,14 +553,11 @@
   // 顶栏区域不出页面右键菜单。
   host.addEventListener('contextmenu', (e) => e.preventDefault());
 
-  // ── 自愈：dsh SPA 重渲染 body 清掉顶栏/占位后自动重挂 ─────────────
+  // ── 自愈：dsh SPA 重渲染 body 清掉顶栏后自动重挂（html padding 不受影响）─
   const observer = new MutationObserver(() => {
     if (!document.body.contains(host)) {
       closeMenus();
       document.body.appendChild(host);
-    }
-    if (pushActive && !document.body.contains(pushEl)) {
-      document.body.insertBefore(pushEl, document.body.firstChild);
     }
   });
   observer.observe(document.body, { childList: true });

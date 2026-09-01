@@ -104,7 +104,8 @@ assert.ok(chromeSrc.includes('#1f2328'), 'chrome uses the white-theme text color
 assert.ok(chromeSrc.includes("type: 'brand'"), 'chrome renders the brand (app name) dropdown row')
 assert.ok(chromeSrc.includes('__DSH_LOGO__'), 'chrome uses the injected real logo')
 assert.ok(libRs.includes('__DSH_LOGO__'), 'lib.rs injects the real logo data URI')
-assert.ok(chromeSrc.includes('dsh-chrome-push'), 'chrome pushes page content below the title bar (no occlusion)')
+assert.ok(chromeSrc.includes('dsh-chrome-push') || chromeSrc.includes('paddingTop'), 'chrome pushes page content below the title bar without extra scrollbar')
+assert.ok(chromeSrc.includes('flashHit'), 'chrome has a click-hit diagnostic flash (red ring on chrome hit)')
 
 console.log('PASS — shell chrome contract (menus, actions, bridge, IPC)')
 process.exit(0)

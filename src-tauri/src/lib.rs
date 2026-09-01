@@ -475,6 +475,13 @@ fn runtime_dir(app: &AppHandle) -> std::path::PathBuf {
         .join("runtime")
 }
 
+/// App data dir helper (logging).
+fn app_data_dir(app: &AppHandle) -> std::path::PathBuf {
+    app.path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+}
+
 /// Absolute path of the web profile manifest.
 fn profile_manifest_path(runtime: &std::path::Path) -> std::path::PathBuf {
     runtime
@@ -1003,10 +1010,13 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
         }
         // ── shell chrome (custom title bar + menu bar; remote dsh page has
         // no __TAURI__, so window/menu actions ride the bridge) ────────────
+        // 诊断（临时）：记录窗口动作到达桥的时间，配合 chrome 闪框区分
+        // "点击没到页面" vs "页面到了桥但窗口操作失败"。
         ("POST", "/window/minimize") => {
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.minimize();
             }
+            log_line(&app_data_dir(app), "bridge: /window/minimize");
             ("200 OK", serde_json::json!({ "ok": true }).to_string())
         }
         ("POST", "/window/toggle-maximize") => {
@@ -1014,6 +1024,7 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
                 .get_webview_window("main")
                 .and_then(|w| w.is_maximized().ok())
                 .unwrap_or(false);
+            log_line(&app_data_dir(app), "bridge: /window/toggle-maximize");
             if let Some(w) = app.get_webview_window("main") {
                 if maximized {
                     let _ = w.unmaximize();
@@ -1026,12 +1037,14 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
         ("POST", "/window/close") => {
             // Same semantics as the native close button: CloseRequested →
             // prevent + hide to tray (menu bar 退出 is the real quit).
+            log_line(&app_data_dir(app), "bridge: /window/close");
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.close();
             }
             ("200 OK", serde_json::json!({ "ok": true }).to_string())
         }
         ("POST", "/window/drag") => {
+            log_line(&app_data_dir(app), "bridge: /window/drag");
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.start_dragging();
             }
