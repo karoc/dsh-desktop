@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "DSH Smoothly Desktop Dev",
-  "identifier": "dev.dsh.desktop.dev",
+  "identifier": "dsh.smoothly.desktop.dev",
   "mainBinaryName": "dsh-desktop-dev"
 }

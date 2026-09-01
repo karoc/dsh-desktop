@@ -80,9 +80,15 @@ npm run bundle:dev   # = tauri build --config src-tauri/tauri.dev.conf.json --bu
 ```
 
 - `src-tauri/tauri.dev.conf.json` 只放两个顶层标量：`productName:"DSH Smoothly Desktop Dev"`、
-  `identifier:"dev.dsh.desktop.dev"`。`--config` 是**深合并**：对象键合并、数组整体替换——
-  **不要**在 dev 配置里写 `windows` 数组（会整组覆盖主配置，丢 decorations 等）。
+  `identifier:"dsh.smoothly.desktop.dev"`（正式版 `dsh.smoothly.desktop`，2026-09 品牌统一；
+  早期曾为 `dev.dsh.desktop`，`dev` 是命名空间前缀并非"开发版"）。`--config` 是**深合并**：
+  对象键合并、数组整体替换——**不要**在 dev 配置里写 `windows` 数组（会整组覆盖主配置，
+  丢 decorations 等）。
 - **不要覆盖 version**：tauri-cli 强制 tauri.conf.json 与 Cargo.toml 版本一致，覆盖会报错。
+- **改 identifier 必须带数据迁移**（已内置 `migrate_legacy_data`：启动时把旧
+  `%APPDATA%\<legacy-id>` 整目录 rename 到新目录、写 `.dsh-migration-ok` 标记、
+  新目录已有内容则不覆盖、rename 失败不丢旧数据下次重试。改 identifier 前先扩
+  `LEGACY_IDENT_MIGRATIONS` 表并补 `migration_tests` 单测）。
 - identifier 驱动的隔离（全部自动）：应用数据 `%APPDATA%\<identifier>`（runtime/dsh 本体/
   DSH_HOME/proxy.json 独立）、单实例互斥 **`{identifier}-sim`**（源码核实，两版可同时运行）、
   任务栏 AUMID、NSIS 安装目录/开始菜单/卸载项（按 productName）。
