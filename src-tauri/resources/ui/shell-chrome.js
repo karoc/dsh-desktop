@@ -547,6 +547,13 @@
     return document.querySelector('button.dshc-btn');
   }
   function togglePluginConsole() {
+    // 插件已不再渲染右下角按钮：面板开关走插件暴露的全局接口。
+    const g = globalThis.__DSH_PLUGIN_CONSOLE__;
+    if (g && typeof g.toggle === 'function') {
+      g.toggle();
+      return true;
+    }
+    // 旧版插件兜底：仍有 .dshc-btn 时模拟点击。
     const btn = dshcBtn();
     if (btn) {
       btn.click();
