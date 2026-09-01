@@ -58,6 +58,7 @@
     refresh: { ipc: 'refresh_page', bridge: '/refresh' },
     restart: { ipc: 'restart_server', bridge: '/restart' },
     'open-data': { ipc: 'open_data_dir', bridge: '/shell/open-data-dir' },
+    plugins: { ipc: 'open_plugins', bridge: '/shell/open-plugins' },
     'shell-status': { ipc: 'get_shell_status', bridge: '/shell/status', method: 'GET' },
     about: { ipc: 'show_about', bridge: '/shell/about' },
     quit: { ipc: 'quit_app', bridge: '/shell/quit' },
@@ -321,6 +322,18 @@
       background: transparent; color: var(--dsh-err-fg); cursor: pointer;
     }
     .errbanner button:hover { background: var(--dsh-err-hover); }
+    .mini-toast {
+      position: fixed; top: 46px; left: 50%;
+      transform: translateX(-50%) translateY(-4px);
+      background: var(--dsh-dd-bg); color: var(--dsh-fg);
+      border: 1px solid var(--dsh-dd-border); border-radius: 8px;
+      padding: 6px 14px; font-size: 12px;
+      box-shadow: var(--dsh-dd-shadow);
+      opacity: 0; pointer-events: none;
+      transition: opacity 0.15s ease, transform 0.15s ease;
+      z-index: 2147483646;
+    }
+    .mini-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
   `;
 
   const styleEl = document.createElement('style');
@@ -396,16 +409,10 @@
         dd.appendChild(sep);
         continue;
       }
-      // 应用名展示项：下拉首行，带小图标、不可点（不给 data-item 即被点击处理器忽略）。
+      // 应用名展示项：下拉首行（仅文字，图标已去），不可点。
       if (item.type === 'brand') {
         const row = document.createElement('div');
         row.className = 'dd-brand';
-        const img = document.createElement('img');
-        img.src = LOGO;
-        img.alt = '';
-        img.width = 18;
-        img.height = 18;
-        row.appendChild(img);
         row.appendChild(document.createTextNode(item.label));
         dd.appendChild(row);
         continue;
@@ -413,15 +420,12 @@
       const row = document.createElement('div');
       row.className = 'dd-item';
       row.dataset.item = item.id;
-      if (item.type === 'checkbox') {
-        const check = document.createElement('span');
-        check.className = 'dd-check';
-        check.dataset.check = item.id;
-        row.appendChild(check);
-        row.appendChild(document.createTextNode(item.label));
-      } else {
-        row.appendChild(document.createTextNode(item.label));
-      }
+      // 左侧统一占位（14px）：checkbox 显示 ✓，普通项留空——对齐一致
+      const leader = document.createElement('span');
+      leader.className = 'dd-check';
+      if (item.type === 'checkbox') leader.dataset.check = item.id;
+      row.appendChild(leader);
+      row.appendChild(document.createTextNode(item.label));
       dd.appendChild(row);
     }
     root.appendChild(dd);
@@ -530,20 +534,19 @@
   }
 
   // ── 事件 ──────────────────────────────────────────────────────────
-  // 诊断（临时）：命中 chrome 交互时顶栏闪红框 + console 日志 + 上报桥 /log，
-  // 实机一点即可区分"点击是否被 chrome 收到"（红框闪={收到} 才对）。
-  function flashHit(kind) {
-    if (!bar) return;
-    bar.style.boxShadow = 'inset 0 0 0 2px rgba(224, 30, 55, 0.95)';
-    setTimeout(() => { bar.style.boxShadow = ''; }, 200);
-    console.warn('[dsh-chrome] hit', kind);
-    if (BRIDGE_PORT) {
-      fetch(`http://127.0.0.1:${BRIDGE_PORT}/log`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tag: 'chrome-hit', detail: `${kind} tauri=${hasTauri} port=${BRIDGE_PORT}` }),
-      }).catch(() => {});
+  // 壳内瞬时提示条（2.4s 自动消失；不依赖系统通知，任何页面都有可见反馈）。
+  let miniEl = null;
+  let miniTimer = null;
+  function miniToast(text) {
+    if (!miniEl) {
+      miniEl = document.createElement('div');
+      miniEl.id = 'dsh-mini-toast';
+      root.appendChild(miniEl);
     }
+    miniEl.textContent = text;
+    miniEl.className = 'mini-toast show';
+    clearTimeout(miniTimer);
+    miniTimer = setTimeout(() => { miniEl.className = 'mini-toast'; }, 2400);
   }
 
   // window 级 CAPTURE 统一分发：不依赖 shadow 内单个元素监听（实机曾出现
@@ -559,7 +562,6 @@
       e.preventDefault();
       e.stopPropagation();
       const d = hit.dataset;
-      flashHit(d.menu || d.item || d.action);
       if (d.menu) {
         toggleMenu(d.menu);
         return;
@@ -583,22 +585,6 @@
   function dshcBtn() {
     return document.querySelector('button.dshc-btn');
   }
-  function togglePluginConsole() {
-    // 插件已不再渲染右下角按钮：面板开关走插件暴露的全局接口。
-    const g = globalThis.__DSH_PLUGIN_CONSOLE__;
-    if (g && typeof g.toggle === 'function') {
-      g.toggle();
-      return true;
-    }
-    // 旧版插件兜底：仍有 .dshc-btn 时模拟点击。
-    const btn = dshcBtn();
-    if (btn) {
-      btn.click();
-      return true;
-    }
-    flashHit('plugins');
-    return false;
-  }
   function hideFabIfPresent() {
     const btn = dshcBtn();
     if (btn && btn.style.display !== 'none') btn.style.display = 'none';
@@ -607,16 +593,20 @@
 
   function runMenuAction(id) {
     if (id === 'plugins') {
-      // 插件管理入口：在 dsh 页面内触发原插件控制台面板（.dshc-btn 点击切换
-      // 显隐）。界面保持插件原样，壳只换"入口"；同时原右下角浮动按钮已隐藏。
-      togglePluginConsole();
+      // 插件管理：打开壳内独立管理窗口（与代理设置同尺寸、居中）。
+      call('plugins');
       return;
     }
     if (id === 'check-update') {
+      miniToast(updateInfo.updateAvailable ? '正在更新…' : '正在检查更新…');
       const actionId = updateInfo.updateAvailable ? 'update-now' : 'check-update';
-      call(actionId).then((r) => {
+      call(actionId).then(() => {
         if (!updateInfo.updateAvailable) refreshUpdateInfo(); // 手动检查后刷新状态
       });
+    } else if (id === 'about') {
+      // 壳内提示版本信息（不依赖系统通知，必定可见）。
+      const ver = globalThis.__DSH_SHELL_VERSION__ || '?';
+      miniToast(`DSH Smoothly Desktop v${ver} · dsh 当前 v${updateInfo.current || '?'}`);
     } else if (id === 'dev-mode') {
       call('dev-mode').then((r) => {
         if (r && typeof r.devMode === 'boolean') setDevMode(r.devMode);

@@ -43,13 +43,8 @@ for (const id of ['proxy-settings', 'plugins', 'check-update', 'dev-mode', 'refr
 }
 
 // ── 2. every clickable menu id resolves in ACTIONS ───────────────────────────
-// plugins 是"本地就地触发"项（在页面内触发原插件的 .dshc-btn，不经过
-// ACTIONS/IPC/桥），故豁免；其余项必须能在 ACTIONS 命中。
-const LOCAL_MENU_ITEMS = ['plugins']
 for (const entry of SHELL_MENUS) {
-  const clickable = (entry.items || []).filter(
-    (i) => i.id && i.type !== 'brand' && i.type !== 'sep' && !LOCAL_MENU_ITEMS.includes(i.id),
-  )
+  const clickable = (entry.items || []).filter((i) => i.id && i.type !== 'brand' && i.type !== 'sep')
   for (const item of clickable) {
     assert.ok(ACTIONS[item.id], `menu item "${item.id}" (menu ${entry.id}) has an ACTIONS entry`)
   }
@@ -112,15 +107,13 @@ assert.ok(chromeSrc.includes("type: 'brand'"), 'chrome renders the brand (app na
 assert.ok(chromeSrc.includes('__DSH_LOGO__'), 'chrome uses the injected real logo')
 assert.ok(libRs.includes('__DSH_LOGO__'), 'lib.rs injects the real logo data URI')
 assert.ok(chromeSrc.includes('dsh-chrome-push') || chromeSrc.includes('paddingTop'), 'chrome pushes page content below the title bar without extra scrollbar')
-assert.ok(chromeSrc.includes('flashHit'), 'chrome has a click-hit diagnostic flash (red ring on chrome hit)')
+assert.ok(chromeSrc.includes('mini-toast'), 'chrome shows in-shell transient toasts (no flash, no silent actions)')
+assert.ok(!chromeSrc.includes('flashHit'), 'chrome has no diagnostic red-ring flash anymore')
 assert.ok(chromeSrc.includes('errbanner'), 'chrome renders the failure-disclosure banner (no more blank screen)')
 assert.ok(chromeSrc.includes('shell-status'), 'chrome polls shell status for failure disclosure')
-// 插件管理入口 = 壳菜单栏就地触发原插件控制台（保留原 UI/UX）。
-// 插件不再渲染右下角按钮：优先走全局接口 __DSH_PLUGIN_CONSOLE__.toggle，
-// hideFabIfPresent 仅作旧版插件的防御性兜底。
-assert.ok(chromeSrc.includes('__DSH_PLUGIN_CONSOLE__'), 'chrome drives the console via the plugin global hook')
-assert.ok(chromeSrc.includes('dshc-btn'), 'chrome falls back to the legacy .dshc-btn only for old plugin versions')
-assert.ok(chromeSrc.includes('hideFabIfPresent'), 'chrome defensively hides a leftover legacy fab')
+// 插件管理 = 壳内独立管理窗口（open_plugins）；对旧插件残留按钮仅做防御性隐藏。
+assert.ok(chromeSrc.includes('open-plugins'), 'chrome opens the plugins window via /shell/open-plugins')
+assert.ok(chromeSrc.includes('dshc-btn'), 'chrome defensively hides a leftover legacy fab (.dshc-btn)')
 
 console.log('PASS — shell chrome contract (menus, actions, bridge, IPC)')
 process.exit(0)
