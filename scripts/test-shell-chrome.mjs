@@ -43,8 +43,13 @@ for (const id of ['proxy-settings', 'plugins', 'check-update', 'dev-mode', 'refr
 }
 
 // ── 2. every clickable menu id resolves in ACTIONS ───────────────────────────
+// plugins 是"本地就地触发"项（在页面内触发原插件的 .dshc-btn，不经过
+// ACTIONS/IPC/桥），故豁免；其余项必须能在 ACTIONS 命中。
+const LOCAL_MENU_ITEMS = ['plugins']
 for (const entry of SHELL_MENUS) {
-  const clickable = (entry.items || []).filter((i) => i.id && i.type !== 'brand' && i.type !== 'sep')
+  const clickable = (entry.items || []).filter(
+    (i) => i.id && i.type !== 'brand' && i.type !== 'sep' && !LOCAL_MENU_ITEMS.includes(i.id),
+  )
   for (const item of clickable) {
     assert.ok(ACTIONS[item.id], `menu item "${item.id}" (menu ${entry.id}) has an ACTIONS entry`)
   }
@@ -108,6 +113,9 @@ assert.ok(chromeSrc.includes('dsh-chrome-push') || chromeSrc.includes('paddingTo
 assert.ok(chromeSrc.includes('flashHit'), 'chrome has a click-hit diagnostic flash (red ring on chrome hit)')
 assert.ok(chromeSrc.includes('errbanner'), 'chrome renders the failure-disclosure banner (no more blank screen)')
 assert.ok(chromeSrc.includes('shell-status'), 'chrome polls shell status for failure disclosure')
+// 插件管理入口 = 就地触发原插件控制台（保留原 UI/UX），并隐藏原右下角浮动按钮。
+assert.ok(chromeSrc.includes('dshc-btn'), 'chrome triggers the original plugin-console panel (.dshc-btn)')
+assert.ok(chromeSrc.includes('hideFabIfPresent'), 'chrome hides the original bottom-right plugin fab (entry moved to menu bar)')
 
 console.log('PASS — shell chrome contract (menus, actions, bridge, IPC)')
 process.exit(0)
