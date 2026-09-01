@@ -99,11 +99,12 @@ assert.ok(libRs.includes('__DSH_PRODUCT_NAME__'), 'chrome preamble injects the p
 assert.ok(chromeSrc.includes('__DSH_PRODUCT_NAME__'), 'chrome renders the injected product name')
 
 // ── 8. UI 可读性 + 真实图标（防回归）────────────────────────────────────
-// 显式浅色文字：shadow root 不继承页面（dsh 页面可能是浅色主题 → 黑字压深色底看不清）。
-assert.ok(chromeSrc.includes('color: #eef2f6'), 'chrome sets an explicit light text color (no page-inherit black-on-dark)')
+// 白色主题 + 显式文字色：shadow root 不继承页面（避免黑字压深底看不清）。
+assert.ok(chromeSrc.includes('#1f2328'), 'chrome uses the white-theme text color #1f2328 (no page-inherit)')
 assert.ok(chromeSrc.includes("type: 'brand'"), 'chrome renders the brand (app name) dropdown row')
 assert.ok(chromeSrc.includes('__DSH_LOGO__'), 'chrome uses the injected real logo')
 assert.ok(libRs.includes('__DSH_LOGO__'), 'lib.rs injects the real logo data URI')
+assert.ok(chromeSrc.includes('dsh-chrome-push'), 'chrome pushes page content below the title bar (no occlusion)')
 
 console.log('PASS — shell chrome contract (menus, actions, bridge, IPC)')
 process.exit(0)
