@@ -1,10 +1,11 @@
 :root {
-  color-scheme: dark;
-  --bg: #0d1117;
-  --card: #161b22;
-  --border: #30363d;
-  --fg: #e6edf3;
-  --muted: #8b949e;
+  /* 主题色：柔和白（全壳 UI 统一，见 shell-chrome.js 同色系） */
+  color-scheme: light;
+  --bg: #fafafa;
+  --card: #ffffff;
+  --border: #e3e5e8;
+  --fg: #1f2328;
+  --muted: #636c76;
   --accent: #1f6feb;
 }
 

@@ -151,22 +151,21 @@
       height: 36px;
       z-index: 2147483647;
       font-family: system-ui, "Segoe UI", "Microsoft YaHei", sans-serif;
-      /* 显式浅色：shadow root 内文字不继承页面（页面可能是浅色主题 → 黑字，
-         深色毛玻璃上看不见）。dropdown 等所有后代由此继承。 */
-      color: #eef2f6;
+      /* 主题色：柔和白 #FAFAFA + 深灰文字 #1F2328（全壳 UI 统一）；
+         显式设色避免继承页面（页面可能是深色主题）。 */
+      color: #1f2328;
     }
     .bar {
       display: flex;
       align-items: center;
       height: 100%;
-      /* 通透毛玻璃：高透明底 + 强 blur，页面内容透出又不喧宾夺主 */
-      background: linear-gradient(180deg, rgba(26, 32, 40, 0.50), rgba(15, 19, 25, 0.42));
-      backdrop-filter: blur(18px) saturate(1.5);
-      -webkit-backdrop-filter: blur(18px) saturate(1.5);
-      border-bottom: 1px solid rgba(255, 255, 255, 0.07);
-      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
-      color: #eef2f6;
-      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+      /* 白色毛玻璃：透出页面内容，舒适不压抑 */
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.80), rgba(250, 250, 250, 0.68));
+      backdrop-filter: blur(18px) saturate(1.4);
+      -webkit-backdrop-filter: blur(18px) saturate(1.4);
+      border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+      color: #1f2328;
       font-size: 13px;
       user-select: none;
       -webkit-user-select: none;
@@ -182,7 +181,7 @@
       cursor: pointer;
       transition: background 0.12s ease;
     }
-    .menu-btn:hover, .menu-btn.open { background: rgba(255, 255, 255, 0.09); }
+    .menu-btn:hover, .menu-btn.open { background: rgba(0, 0, 0, 0.06); }
     .menu-btn .logo { display: flex; align-items: center; }
     .menu-btn .logo img {
       width: 20px; height: 20px;
@@ -210,21 +209,21 @@
       width: 44px; height: 100%;
       display: flex; align-items: center; justify-content: center;
       border: 0; background: transparent;
-      color: #eef2f6; cursor: pointer;
+      color: #1f2328; cursor: pointer;
       transition: background 0.12s ease;
     }
-    .ctl:hover { background: rgba(255, 255, 255, 0.10); }
-    .ctl-close:hover { background: rgba(232, 17, 35, 0.90); }
+    .ctl:hover { background: rgba(0, 0, 0, 0.07); }
+    .ctl-close:hover { background: rgba(224, 30, 55, 0.92); color: #fff; }
     .dropdown {
       position: fixed; top: 37px;
       min-width: 212px;
-      /* 与顶栏同语言：毛玻璃浮层，圆角更大、阴影更柔和 */
-      background: rgba(24, 29, 37, 0.66);
-      backdrop-filter: blur(24px) saturate(1.5);
-      -webkit-backdrop-filter: blur(24px) saturate(1.5);
-      border: 1px solid rgba(255, 255, 255, 0.09);
+      /* 白色毛玻璃浮层 */
+      background: rgba(255, 255, 255, 0.92);
+      backdrop-filter: blur(24px) saturate(1.4);
+      -webkit-backdrop-filter: blur(24px) saturate(1.4);
+      border: 1px solid rgba(0, 0, 0, 0.10);
       border-radius: 12px;
-      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.32), 0 1px 2px rgba(0, 0, 0, 0.18);
+      box-shadow: 0 12px 36px rgba(0, 0, 0, 0.16), 0 1px 2px rgba(0, 0, 0, 0.08);
       padding: 5px;
       z-index: 2147483647;
       animation: dsh-dd-in 0.15s ease-out;
@@ -243,9 +242,9 @@
       cursor: pointer; white-space: nowrap;
       transition: background 0.12s ease;
     }
-    .dd-item:hover { background: rgba(88, 166, 255, 0.20); }
-    .dd-check { width: 14px; color: #58a6ff; text-align: center; }
-    .dd-sep { height: 1px; background: rgba(255, 255, 255, 0.10); margin: 4px 8px; }
+    .dd-item:hover { background: rgba(31, 111, 235, 0.10); }
+    .dd-check { width: 14px; color: #1f6feb; text-align: center; }
+    .dd-sep { height: 1px; background: rgba(0, 0, 0, 0.12); margin: 4px 8px; }
     .dd-brand {
       display: flex; align-items: center; gap: 8px;
       padding: 7px 10px 5px;
@@ -301,6 +300,17 @@
   bar.append(menusWrap, spacer, controls);
   root.append(styleEl, bar);
   document.body.appendChild(host);
+
+  // ── 页面内容推挤：dsh 远程页顶部垫 36px，避免内容被顶栏遮挡 ──────
+  // 启动页（tauri://）主内容居中、无遮挡，不垫。
+  const pushEl = document.createElement('div');
+  pushEl.id = 'dsh-chrome-push';
+  pushEl.style.cssText = 'height:36px;flex:0 0 auto;';
+  let pushActive = false;
+  if (typeof location !== 'undefined' && location.protocol !== 'tauri:') {
+    document.body.insertBefore(pushEl, document.body.firstChild);
+    pushActive = true;
+  }
 
   // 下拉面板（每个含 items 的菜单一个）。
   const dropdowns = new Map(); // menuId -> element
@@ -520,11 +530,14 @@
   // 顶栏区域不出页面右键菜单。
   host.addEventListener('contextmenu', (e) => e.preventDefault());
 
-  // ── 自愈：dsh SPA 重渲染 body 清掉顶栏后自动重挂 ──────────────────
+  // ── 自愈：dsh SPA 重渲染 body 清掉顶栏/占位后自动重挂 ─────────────
   const observer = new MutationObserver(() => {
     if (!document.body.contains(host)) {
       closeMenus();
       document.body.appendChild(host);
+    }
+    if (pushActive && !document.body.contains(pushEl)) {
+      document.body.insertBefore(pushEl, document.body.firstChild);
     }
   });
   observer.observe(document.body, { childList: true });
