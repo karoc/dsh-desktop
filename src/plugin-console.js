@@ -153,11 +153,6 @@
       warn: '#fbbf24',
       err: '#f87171',
       shadow: '0 16px 48px rgba(0,0,0,.55)',
-      radius: '18px',
-      radiusRow: '12px',
-      blur: '14px',
-      pad: '16px 18px',
-      gap: '8px',
     },
     aurora: {
       label: '极光',
@@ -173,11 +168,6 @@
       warn: '#fcd34d',
       err: '#fb7185',
       shadow: '0 18px 56px rgba(76,29,149,.45)',
-      radius: '24px',
-      radiusRow: '16px',
-      blur: '28px',
-      pad: '22px 24px',
-      gap: '12px',
     },
     moon: {
       label: '月光',
@@ -193,11 +183,6 @@
       warn: '#d97706',
       err: '#dc2626',
       shadow: '0 14px 40px rgba(15,23,42,.14)',
-      radius: '10px',
-      radiusRow: '8px',
-      blur: '0px',
-      pad: '12px 14px',
-      gap: '6px',
     },
     amber: {
       label: '琥珀',
@@ -213,11 +198,6 @@
       warn: '#fbbf24',
       err: '#f87171',
       shadow: '0 16px 48px rgba(120,53,15,.5)',
-      radius: '14px',
-      radiusRow: '10px',
-      blur: '0px',
-      pad: '18px 20px',
-      gap: '10px',
     },
   }
   const THEME_STORAGE = 'dshc-theme'
@@ -277,7 +257,7 @@
 .dshc-hint { color: var(--dshc-muted); font-size: 11.5px; margin-top: 5px; }
 .dshc-row {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
-  padding: 12px 14px; margin: 7px 0; border-radius: var(--dshc-radius-row);
+  padding: 12px 14px; margin: 7px 0; border-radius: 12px;
   background: var(--dshc-surface); border: 1px solid var(--dshc-border);
   transition: background .15s ease, transform .15s ease;
 }
@@ -328,7 +308,7 @@
 .dshc-item { margin: 7px 0; }
 .dshc-item {
   background: var(--dshc-surface); border: 1px solid var(--dshc-border);
-  border-radius: var(--dshc-radius-row); padding: 12px 14px;
+  border-radius: 12px; padding: 12px 14px;
 }
 .dshc-item:hover { background: var(--dshc-surfaceHover); }
 .dshc-item .dshc-row {
@@ -347,19 +327,27 @@
 .dshc-actions { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 8px; }
 .dshc-btn2 {
   border: 1px solid var(--dshc-border); background: var(--dshc-surface); color: var(--dshc-text);
-  border-radius: 9px; padding: 6px 13px; min-width: 58px; text-align: center;
-  font: 600 12px/1.4 system-ui,"Segoe UI","Microsoft YaHei",sans-serif;
+  border-radius: 8px; padding: 7px 16px; min-width: 72px; text-align: center;
+  font: 600 12.5px/1.4 system-ui,"Segoe UI","Microsoft YaHei",sans-serif;
   cursor: pointer; transition: background .15s ease, transform .12s ease, border-color .15s ease;
   white-space: nowrap;
 }
 .dshc-btn2:hover { background: var(--dshc-surfaceHover); border-color: var(--dshc-accent); }
 .dshc-btn2:active { transform: scale(.97); }
+/* 主按钮：纯色 accent（与壳内弹窗/设置窗统一；不再用渐变） */
 .dshc-btn2.primary {
   border-color: transparent;
-  background: linear-gradient(135deg, var(--dshc-accent), var(--dshc-accent2));
+  background: var(--dshc-accent);
   color: #fff;
 }
 .dshc-btn2.primary:hover { filter: brightness(1.08); }
+/* 危险操作（卸载/恢复默认确认）：纯色错误色 */
+.dshc-btn2.danger {
+  border-color: transparent;
+  background: var(--dshc-err);
+  color: #fff;
+}
+.dshc-btn2.danger:hover { filter: brightness(1.1); }
 .dshc-btn2:disabled { opacity: .45; cursor: default; }
 .dshc-status, .dshc-op {
   margin-top: 12px; padding: 9px 13px; border-radius: 11px; font-size: 12px;
@@ -373,7 +361,7 @@
 .dshc-op.err { background: color-mix(in srgb, var(--dshc-err) 16%, transparent); color: var(--dshc-err); }
 .dshc-install { display: flex; gap: 7px; margin-top: 6px; }
 .dshc-install input {
-  flex: 1; min-width: 0; padding: 8px 12px; border-radius: 10px;
+  flex: 1; min-width: 0; padding: 8px 12px; border-radius: 8px;
   border: 1px solid var(--dshc-border); background: var(--dshc-surface);
   color: var(--dshc-text); font: 12.5px/1.4 system-ui,"Segoe UI","Microsoft YaHei",sans-serif;
   outline: none; transition: border-color .15s ease;
@@ -395,6 +383,23 @@
   color: #e6edf3; font: 600 14px/1.4 system-ui,"Segoe UI","Microsoft YaHei",sans-serif;
 }
 .dshc-overlay .dshc-spin { width: 36px; height: 36px; border-width: 3px; }
+/* ── 壳内确认弹窗（替换原生 confirm；与壳内模态弹窗同一视觉规范） ── */
+.dshc-confirm-backdrop {
+  position: fixed; inset: 0; z-index: 2147483900;
+  background: rgba(0,0,0,.35); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+  animation: dshc-in .15s ease;
+}
+.dshc-confirm {
+  min-width: 280px; max-width: 380px; width: min(380px, 100%);
+  background: var(--dshc-bg); color: var(--dshc-text);
+  border: 1px solid var(--dshc-border); border-radius: 14px;
+  box-shadow: var(--dshc-shadow); padding: 18px 20px 16px;
+  animation: dshc-in .18s ease;
+}
+.dshc-confirm-title { font-size: 14px; font-weight: 700; margin-bottom: 8px; }
+.dshc-confirm-msg { font-size: 12.5px; color: var(--dshc-muted); line-height: 1.5; word-break: break-all; }
+.dshc-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 .dshc-tip {
   position: fixed; z-index: 2147483998; max-width: 280px; padding: 7px 10px;
   border-radius: 8px; background: rgba(13,17,23,.96); border: 1px solid rgba(255,255,255,.14);
@@ -409,6 +414,8 @@
   function applyTheme() {
     const t = loadTheme()
     const theme = THEMES[t] || THEMES.deep
+    // 主题只控制配色（bg/surface/border/text/muted/accent/…与浮层阴影氛围）；
+    // 几何（圆角/按钮/间距/字号）由 CSS 固定值统一（与壳内/设置窗同一规范）。
     const vars = [
       `--dshc-bg: ${theme.bg}`,
       `--dshc-surface: ${theme.surface}`,
@@ -422,13 +429,7 @@
       `--dshc-warn: ${theme.warn}`,
       `--dshc-err: ${theme.err}`,
       `--dshc-shadow: ${theme.shadow}`,
-      `--dshc-radius: ${theme.radius}`,
-      `--dshc-radius-row: ${theme.radiusRow}`,
-      `--dshc-blur: ${theme.blur}`,
-      `--dshc-pad: ${theme.pad}`,
-      `--dshc-gap: ${theme.gap}`,
     ].join('; ')
-    // 窗口全屏即面板视觉：背景铺到 body，token 铺到容器。
     document.body.style.background = theme.bg
     document.body.style.color = theme.text
     if (bodyEl) {
@@ -556,6 +557,34 @@
     overlayEl.style.display = 'flex'
     if (overlayEl._timer) clearTimeout(overlayEl._timer)
     overlayEl._timer = setTimeout(() => { if (overlayEl) overlayEl.style.display = 'none' }, 20000)
+  }
+
+  // ── 壳内确认弹窗（替代原生 confirm；resolve(true/false)）──────────
+  function showConfirm({ title, message, okLabel, cancelLabel, danger }) {
+    return new Promise((resolve) => {
+      const bd = document.createElement('div')
+      bd.className = 'dshc-confirm-backdrop'
+      const card = document.createElement('div')
+      card.className = 'dshc-confirm'
+      card.appendChild(el('div', title, 'dshc-confirm-title'))
+      card.appendChild(el('div', message, 'dshc-confirm-msg'))
+      const actions = document.createElement('div')
+      actions.className = 'dshc-confirm-actions'
+      const cancel = document.createElement('button')
+      cancel.className = 'dshc-btn2'
+      cancel.textContent = cancelLabel || (lang === 'zh' ? '取消' : 'Cancel')
+      const ok = document.createElement('button')
+      ok.className = 'dshc-btn2' + (danger ? ' danger' : ' primary')
+      ok.textContent = okLabel || (lang === 'zh' ? '确定' : 'OK')
+      const done = (v) => { bd.remove(); resolve(v) }
+      cancel.addEventListener('click', () => done(false))
+      ok.addEventListener('click', () => done(true))
+      bd.addEventListener('mousedown', (e) => { if (e.target === bd) done(false) })
+      actions.append(cancel, ok)
+      card.appendChild(actions)
+      bd.appendChild(card)
+      document.body.appendChild(bd)
+    })
   }
 
   async function refresh() {
@@ -781,7 +810,12 @@
     bodyEl.querySelectorAll('[data-reset-pre]').forEach((btn) => {
       btn.addEventListener('click', async () => {
         const name = btn.dataset.resetPre
-        if (!globalThis.confirm || confirm(`${L.resetDefault}：${name}？`)) {
+        const ok = await showConfirm({
+          title: L.resetDefault,
+          message: `${L.resetDefault}：${name}？`,
+          okLabel: L.resetDefault,
+        })
+        if (ok) {
           await bridge('/plugins/reset-preinstalled', { method: 'POST', body: { name } })
           status(`${L.opActive}：${L.resetDefault} ${name}`, 'warn')
         }
@@ -802,7 +836,13 @@
     bodyEl.querySelectorAll('[data-remove]').forEach((btn) => {
       btn.addEventListener('click', async () => {
         const name = btn.dataset.remove
-        if (!globalThis.confirm || confirm(L.confirmUninstall.replace('%s', name))) {
+        const ok = await showConfirm({
+          title: L.uninstall,
+          message: L.confirmUninstall.replace('%s', name),
+          okLabel: L.uninstall,
+          danger: true,
+        })
+        if (ok) {
           await bridge('/plugins/remove', { method: 'POST', body: { name } })
           status(`${L.opActive}：${L.uninstall} ${name}`, 'warn')
         }
