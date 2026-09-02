@@ -308,7 +308,7 @@
     }
     .dd-item {
       display: flex; align-items: center; gap: 10px;
-      height: 30px; padding: 0 10px; border-radius: 7px;
+      height: 30px; padding: 0 10px; border-radius: 8px;
       cursor: pointer; white-space: nowrap;
       transition: background 0.12s ease;
     }
@@ -361,16 +361,19 @@
     }
     @keyframes dsh-spin { to { transform: rotate(360deg); } }
     .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+    /* 统一按钮规格（全壳/设置窗/插件管理同款）：圆角 8、高约 32、主按钮纯色 accent */
     .dlg-btn {
-      min-width: 64px; padding: 6px 14px; border-radius: 8px;
+      min-width: 72px; padding: 7px 16px; border-radius: 8px;
       border: 1px solid var(--dsh-dd-border);
       background: transparent; color: var(--dsh-fg);
-      font-size: 12.5px; cursor: pointer;
+      font-size: 13px; cursor: pointer;
       transition: background 0.12s ease;
     }
     .dlg-btn:hover { background: var(--dsh-hover); }
     .dlg-btn.primary { border-color: transparent; background: var(--dsh-check); color: #fff; }
     .dlg-btn.primary:hover { filter: brightness(1.08); }
+    .dlg-btn.danger { border-color: transparent; background: var(--dsh-close); color: #fff; }
+    .dlg-btn.danger:hover { filter: brightness(1.1); }
     .dlg-btn:disabled { opacity: 0.5; cursor: default; }
     .errbanner {
       position: fixed; top: 36px; left: 0; right: 0;

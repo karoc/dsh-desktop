@@ -133,10 +133,13 @@ button.secondary {
 
 button:disabled { opacity: 0.5; cursor: default; }
 
-/* 设置窗口内的按钮（保存/测试/关闭）不套用启动页的大上边距 */
+/* 设置窗口内的按钮（保存/测试/关闭）不套用启动页的大上边距，且收敛到
+   统一按钮规格（圆角 8、13px、主按钮纯色 accent——与壳内弹窗/插件管理同款） */
 .settings button {
   margin-top: 0;
   margin-right: 8px;
+  padding: 8px 16px;
+  font-size: 13px;
 }
 
 /* 上游协议选择 */
@@ -213,7 +216,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 .set-group {
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 12px;
   padding: 14px 16px;
 }
 

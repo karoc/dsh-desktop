@@ -80,6 +80,15 @@ feat/shell-menu-bar 分支）。本技能是"改壳自身功能"的操作手册�
 - **E0716 陷阱**：`app.state::<ServerState>().update.lock().unwrap()` 直接取锁会因临时 State
   被提前释放而编译失败——**先 `let state = app.state::<ServerState>()` 再锁**（`/shell/state` 踩过）。
 
+### 2.4 UI 设计 token（样式统一）
+
+样式规范唯一真源：`docs/2026-09-02-ui-design-tokens.md`（圆角 8/12/14、按钮规格、
+主按钮纯色 accent、backdrop、字号、动效、键盘/焦点、无原生 confirm）。三处独立打包无法
+共享 CSS，按规范分别实现：壳 `shell-chrome.js` STYLE、设置窗/启动页 `styles.css`、
+插件管理窗口 `plugin-console.js`（`.dshc-*`，主题仅配色）。**插件管理窗口布局是硬约束**
+（head→安装→预装→用户→dsh 更新→操作→footer），改样式后跑
+`node scripts/test-plugin-console-window.mjs` 守护；不许引入新的圆角/字号/按钮规格。
+
 ## 3. 开发版身份隔离（与正式版同机并存）
 
 正式版已装时，覆盖安装会动工作数据。开发版 = **独立 identity 的安装包**，全维度隔离：
