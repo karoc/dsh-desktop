@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DSH Smoothly Desktop — 插件管理</title>
+    <link rel="icon" type="image/png" href="logo.png" />
+    <link rel="stylesheet" href="styles.css" />
+    <style>
+      /* 插件管理窗口 = 原插件控制台面板的窗口化（视觉 token 与 dsh 页内面板
+         完全一致：主题/语言/卡片行/开关，由 plugin-console.js 注入 .dshc-* 样式
+         并按所选主题把 CSS 变量铺到容器与 body）。窗口独立于 dsh 页面运行，
+         dsh 崩溃/未启动时依然可管理插件（数据走环回桥，桥由壳拉起）。 */
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        background: #0d1117; /* 主题背景由 JS 按所选主题覆盖 */
+        font: 13px/1.55 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif;
+      }
+      #dshc-app {
+        max-width: 660px;
+        margin: 0 auto;
+        padding: 24px 26px 40px;
+        min-height: 100%;
+        box-sizing: border-box;
+        color: var(--dshc-text, #e6edf3);
+      }
+      /* 桥未就绪时的加载占位 */
+      .dshc-boot {
+        padding: 40px 10px;
+        text-align: center;
+        color: var(--dshc-muted, #9ba7b4);
+        font-size: 12.5px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="dshc-app"></div>
+    <script src="plugin-console.js"></script>
+  </body>
+</html>
