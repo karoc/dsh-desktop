@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.5.0](https://github.com/karoc/dsh-desktop/compare/v0.4.0...v0.5.0) (2026-09-02)
+
+
+### Features
+
+* **plugins:** 插件管理改壳内独立窗口——dsh 崩溃时也能管理插件 ([#19](https://github.com/karoc/dsh-desktop/issues/19)) ([b96420e](https://github.com/karoc/dsh-desktop/commit/b96420efc80095b16a90763648ac98f6d0e48741))
+* **shell:** 旧版接管——迁移前备份 + 安装器静默卸载 + 启动页/菜单/设置三入口清理 ([58611bf](https://github.com/karoc/dsh-desktop/commit/58611bf12a0ec2c019484bde113fa929f8363d6d))
+
+
+### Bug Fixes
+
+* **shell:** clippy 门禁——powershell_lines 非 Windows 分支 unused var + needless_borrow ([5afc697](https://github.com/karoc/dsh-desktop/commit/5afc697da04c31cff2e827163e7c15c5f86ad819))
+* **shell:** 修正旧版接管单测断言（白名单只认 dsh Desktop，dev 目录不被作为识别对象） ([8a7a63b](https://github.com/karoc/dsh-desktop/commit/8a7a63bbe1ddc34f5e9420f0101e130fa62a424f))
+* **ui:** 检查更新弹窗标明检查对象为 dsh；下拉品牌头去掉版本号 ([#20](https://github.com/karoc/dsh-desktop/issues/20)) ([8b86378](https://github.com/karoc/dsh-desktop/commit/8b863782d64e08d5427ebfeba79cdd7a0f74ee54))
+
 ## [0.4.0](https://github.com/karoc/dsh-desktop/compare/v0.3.10...v0.4.0) (2026-09-01)
 
 
