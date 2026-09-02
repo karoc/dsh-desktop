@@ -324,7 +324,6 @@
     /* 品牌头：应用名 + 版本副行（无图标，仅文字） */
     .dd-brand { padding: 7px 10px 6px; cursor: default; }
     .dd-brand-name { font-weight: 600; font-size: 12.5px; }
-    .dd-brand-ver { font-size: 11px; color: var(--dsh-muted); margin-top: 1px; }
     /* ── 壳内模态弹窗（关于 / 检查更新） ─────────────────────── */
     .dialog-backdrop {
       position: fixed; inset: 0;
@@ -495,8 +494,8 @@
       if (item.type === 'brand') {
         const row = document.createElement('div');
         row.className = 'dd-brand';
+        // 品牌头只显示应用名；版本号不在此重复（「关于」弹窗里有）。
         row.appendChild(el('div', item.label, 'dd-brand-name'));
-        row.appendChild(el('div', `v${SHELL_VERSION}`, 'dd-brand-ver'));
         dd.appendChild(row);
         continue;
       }
@@ -716,7 +715,7 @@
     bd.className = 'dialog-backdrop';
     const card = document.createElement('div');
     card.className = 'dialog-card';
-    const title = el('div', '检查更新', 'dialog-title');
+    const title = el('div', '检查更新（dsh 本体）', 'dialog-title');
     const body = document.createElement('div');
     body.className = 'dialog-body';
     const actions = document.createElement('div');
@@ -739,7 +738,7 @@
         const line = document.createElement('div');
         line.className = 'dlg-progress';
         line.appendChild(el('span', '', 'dsh-spin'));
-        line.appendChild(document.createTextNode('正在检查更新…'));
+        line.appendChild(document.createTextNode('正在检查 dsh 更新…'));
         body.appendChild(line);
         btnUpdate.hidden = true;
         return;
@@ -747,7 +746,7 @@
       if (info.updateAvailable) {
         body.appendChild(dlgRow('当前版本', `v${info.current || '?'}`));
         body.appendChild(dlgRow('最新版本', `v${info.latest || '?'}`));
-        body.appendChild(el('div', '发现新版本，可点击「立即更新」升级到最新稳定版。', 'dlg-note'));
+        body.appendChild(el('div', '发现 dsh 新版本，可点击「立即更新」升级到最新稳定版。', 'dlg-note'));
         btnUpdate.hidden = false;
         btnUpdate.disabled = false;
         btnUpdate.textContent = '立即更新';
@@ -765,7 +764,7 @@
         btnUpdate.hidden = true;
         delete btnUpdate.dataset.version;
       } else {
-        body.appendChild(el('div', `已是最新版本（当前 v${info.current || '?'}）。`, 'dlg-note'));
+        body.appendChild(el('div', `dsh 已是最新版本（当前 v${info.current || '?'}）。`, 'dlg-note'));
         btnUpdate.hidden = true;
         delete btnUpdate.dataset.version;
       }
