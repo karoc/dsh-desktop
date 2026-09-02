@@ -650,6 +650,8 @@ fn powershell_lines(script: &str) -> Vec<String> {
                 .collect();
         }
     }
+    #[cfg(not(windows))]
+    let _ = script;
     Vec::new()
 }
 
@@ -1584,10 +1586,10 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
             )
         }
         ("GET", "/shell/legacy") => {
-            ("200 OK", legacy_check_json(&app).to_string())
+            ("200 OK", legacy_check_json(app).to_string())
         }
         ("POST", "/shell/legacy-cleanup") => {
-            ("200 OK", legacy_cleanup_json(&app).to_string())
+            ("200 OK", legacy_cleanup_json(app).to_string())
         }
         _ => ("404 Not Found", "not found".into()),
     };
