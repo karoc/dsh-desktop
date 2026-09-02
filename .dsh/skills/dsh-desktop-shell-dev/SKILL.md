@@ -31,9 +31,14 @@ feat/shell-menu-bar 分支）。本技能是"改壳自身功能"的操作手册�
   `{id,label}` / `{type:'sep'}` / `{type:'checkbox',id,label}`）或 `{id, label, action:'actionId'}`
   （直开动作，如「代理设置…」）。
 - `ACTIONS`：每个 id → `{ipc:'<命令>', bridge:'/路径'}` 双通道映射；只读状态查询加 `method:'GET'`。
-- **壳内就地动作不进 ACTIONS、不占桥**：纯壳内完成的菜单项（插件管理=就地触发原插件
-  控制台 `globalThis.__DSH_PLUGIN_CONSOLE__.toggle()`；关于/检查更新=壳内模态弹窗）——
+- **壳内就地动作不进 ACTIONS、不占桥**：纯壳内完成的菜单项（关于/检查更新=壳内模态弹窗）——
   契约测试对它们豁免，避免为 UI 造无意义的 IPC/桥端点。
+- **插件管理 = 壳内独立窗口**（label `plugins`，`src/plugin-console.html/js`）：复用原插件
+  控制台渲染核心（主题/语言/卡片/开关），数据走**环回桥 /plugins/***（桥由壳拉起、不依赖
+  dsh）——dsh 崩溃/未启动时照样能卸载/禁用出问题的插件。窗口页不用 IPC，capability
+  无需加；`on_page_load` 对 `plugins` 窗口注入 `__DSH_BRIDGE_PORT__`（`inject_plugins_preamble`，
+  页面脚本轮询等待桥端口就绪）。工具窗（settings/plugins）在 window-state `with_denylist`
+  排除，固定居中。
 
 **加一个壳菜单 = SHELL_MENUS 加条目 + ACTIONS 加一行 + lib.rs 加对应命令/桥端点**
 （或明确归入"壳内就地动作"豁免并同步契约测试）。
@@ -128,7 +133,8 @@ npm run bundle:dev   # = tauri build --config src-tauri/tauri.dev.conf.json --bu
 | `set_title` / notify-rust `app_id` | 接收 **`&str`** 不是 `Into<String>`；Windows 专属路径的错误只在 Windows 侧编译暴露（Linux cargo check 发现不了）→ 改了通用代码后必须等 CI windows job |
 | E0716 | `app.state()` 临时值先 `let` 绑定再锁 |
 | drag region | `data-tauri-drag-region` 是 JS API（本地页才有）；远程页用桥 `/window/drag`→`start_dragging` |
-| 工具窗居中闪跳 | window-state 插件在窗口创建时 `restore_state` 会**覆盖 builder 的 `.center()`**（弹窗先闪一下居中、又跳回上次的旧位置）→ 工具窗（如 settings）用 `Builder::with_denylist(&["settings"])` 排除跟踪；主窗口保留记忆 |
+| 工具窗居中闪跳 | window-state 插件在窗口创建时 `restore_state` 会**覆盖 builder 的 `.center()`**（弹窗先闪一下居中、又跳回上次的旧位置）→ 工具窗（settings / plugins）用 `Builder::with_denylist(&["settings", "plugins"])` 排除跟踪；主窗口保留记忆 |
+| 插件管理全局可用 | dsh 页内插件面板依赖 dsh 运行；插件出问题时（dsh 崩溃）恰恰需要管理入口 → 插件管理用壳内独立窗口（`src/plugin-console.*`，复用原控制台渲染核心走环回桥 `/plugins/*`，桥由壳拉起不依赖 dsh；窗口 label `plugins` 在 `on_page_load` 注入 `__DSH_BRIDGE_PORT__`，页面脚本轮询等待桥端口就绪） |
 | 构建日期/版本信息 | `build.rs` 用 civil_from_days 算法（无 chrono）输出 `cargo:rustc-env=DSH_BUILD_DATE`，注入前缀带 `__DSH_BUILD_DATE__`，壳内「关于」弹窗展示 |
 | dev 配置合并 | `--config` 深合并数组整体替换；version 不许覆盖（与 Cargo.toml 强制一致） |
 | 单实例互斥名 | `{identifier}-sim`（Windows），改 identifier 即隔离 |

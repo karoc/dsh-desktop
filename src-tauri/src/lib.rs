@@ -1182,6 +1182,10 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
             open_settings_window(app);
             ("200 OK", serde_json::json!({ "ok": true }).to_string())
         }
+        ("POST", "/shell/open-plugins") => {
+            open_plugins_window(app);
+            ("200 OK", serde_json::json!({ "ok": true }).to_string())
+        }
         ("POST", "/shell/dev-mode-toggle") => match toggle_dev_mode_impl(app) {
             Ok(v) => ("200 OK", v.to_string()),
             Err(e) => (
@@ -1716,6 +1720,29 @@ fn inject_shell_chrome(app: &AppHandle) {
     let _ = w.eval(format!("(()=>{{{prefix};{SHELL_CHROME}}})()"));
 }
 
+/// 给插件管理窗口（独立 webview，label "plugins"）注入应用名与环回桥端口。
+/// 该窗口页面（src/plugin-console.js）数据走环回桥（/plugins/*），与 dsh 页
+/// 同机制——桥由壳拉起，dsh 崩溃/未启动时窗口依然可管理插件。注入时机在
+/// on_page_load；页面脚本在桥端口注入前只显示"加载中"，就绪后初始化。
+fn inject_plugins_preamble(app: &AppHandle) {
+    let Some(w) = app.get_webview_window("plugins") else {
+        return;
+    };
+    let mut prefix = format!(
+        "window.__DSH_PRODUCT_NAME__={}",
+        serde_json::to_string(app.package_info().name.as_str())
+            .unwrap_or_else(|_| "\"DSH Smoothly Desktop\"".into())
+    );
+    let port = BRIDGE_PORT.load(std::sync::atomic::Ordering::SeqCst);
+    if port > 0 {
+        prefix.push_str(&format!(
+            ";window.__DSH_BRIDGE_PORT__={}",
+            serde_json::to_string(&port.to_string()).unwrap_or_else(|_| "\"0\"".into())
+        ));
+    }
+    let _ = w.eval(format!("(()=>{{{prefix};}})()"));
+}
+
 // ── proxy connection test (settings window "测试连接") ────────────────────────
 /// Basic base64 (RFC 4648, no padding variants) — avoids a crate for one use.
 fn b64(input: &[u8]) -> String {
@@ -1995,6 +2022,32 @@ fn open_settings(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Open (or focus) the standalone plugins manager window (menu bar entry).
+/// 独立于 dsh 页面运行：dsh 崩溃/未启动时同样可管理插件（数据走环回桥，
+/// 桥由壳拉起、不依赖 dsh 进程）。窗口 UI 复用原插件控制台（主题/语言/
+/// 卡片/开关，src/plugin-console.js 与 dsh 页内面板同一渲染核心）。
+fn open_plugins_window(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("plugins") {
+        let _ = w.show();
+        let _ = w.set_focus();
+        return;
+    }
+    let _ = tauri::WebviewWindowBuilder::new(app, "plugins", tauri::WebviewUrl::App("plugin-console.html".into()))
+        .title(format!("{} — 插件管理", app.package_info().name))
+        .inner_size(680.0, 720.0)
+        .min_inner_size(520.0, 560.0)
+        .resizable(true)
+        .center()
+        .build();
+}
+
+/// Chrome menu bar entry: open (or focus) the plugins manager window.
+#[tauri::command]
+fn open_plugins(app: AppHandle) -> Result<(), String> {
+    open_plugins_window(&app);
+    Ok(())
+}
+
 // ── 插件管理（入口在壳菜单栏，界面保留 dsh-plugin-console 原面板）────────
 // 菜单「插件管理」在 dsh 页内就地触发原插件控制台面板（globalThis
 // __DSH_PLUGIN_CONSOLE__.toggle()），壳不建自研窗口、不改插件 UI/UX。
@@ -2049,10 +2102,10 @@ pub fn run() {
         // 窗口状态记忆（位置/大小/最大化）：上次最大化关闭、下次启动还原；
         // dev/正式各自独立存储（app data 按 identifier 隔离）。
         .plugin(tauri_plugin_window_state::Builder::default()
-            // settings 是工具窗：不参与窗口状态记忆（记忆恢复会在创建时覆盖
-            // builder 的 .center()，表现为"弹窗先闪一下居中、又跳回上次的
-            // 左边位置"）。主窗口仍保留位置/大小/最大化记忆。
-            .with_denylist(&["settings"])
+            // settings / plugins 是工具窗：不参与窗口状态记忆（记忆恢复会在
+            // 创建时覆盖 builder 的 .center()，表现为"弹窗先闪一下居中、又跳回
+            // 上次的左边位置"）。主窗口仍保留位置/大小/最大化记忆。
+            .with_denylist(&["settings", "plugins"])
             .build())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // Toast click / external activation: remember the session to
@@ -2085,6 +2138,9 @@ pub fn run() {
         .on_page_load(|webview, payload| {
             if webview.label() == "main" {
                 inject_shell_chrome(webview.app_handle());
+            } else if webview.label() == "plugins" {
+                // 插件管理窗口：注入环回桥端口（窗口页数据走桥，不依赖 dsh）。
+                inject_plugins_preamble(webview.app_handle());
             }
             if let Some(w) = webview.app_handle().get_webview_window("main") {
                 if let Some(icon) = w.app_handle().default_window_icon() {
@@ -2365,6 +2421,7 @@ pub fn run() {
             get_shell_state,
             toggle_dev_mode,
             open_settings,
+            open_plugins,
             get_shell_status
         ])
         .run(tauri::generate_context!())

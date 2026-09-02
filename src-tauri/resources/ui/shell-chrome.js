@@ -41,7 +41,7 @@
         { id: 'brand', label: PRODUCT_NAME, type: 'brand' },
         { type: 'sep' },
         { id: 'proxy-settings', label: '代理设置…' },
-        { id: 'plugins', label: '插件管理…' }, // 就地触发原插件控制台（dsh 页内面板）
+        { id: 'plugins', label: '插件管理…' }, // 打开壳内独立管理窗口（dsh 崩溃时也可用）
         { id: 'check-update', label: '检查更新…' }, // 有更新时翻转为「有更新 vX」
         { id: 'dev-mode', label: '开发者模式', type: 'checkbox' },
         { type: 'sep' },
@@ -59,10 +59,11 @@
   // ── 动作表：每个 id → 本地 IPC 命令 + 环回桥路径（双通道）─────────
   // ipc 命令必须在 lib.rs 的 invoke_handler 注册；bridge 路径必须在
   // handle_bridge_conn 有 match 分支（契约测试校验，勿漂移）。
-  // 注：plugins / about / check-update 的交互改在壳内完成（页面内面板 /
-  // 模态弹窗），其中 check-update 仍借用 ACTIONS 的双通道触发检测与更新。
+  // 注：about / check-update 的交互改在壳内完成（壳内模态弹窗）；plugins 打开
+  // 壳内独立管理窗口（跨壳动作，走 ACTIONS 的 /shell/open-plugins）。
   const ACTIONS = {
     'proxy-settings': { ipc: 'open_settings', bridge: '/shell/open-settings' },
+    plugins: { ipc: 'open_plugins', bridge: '/shell/open-plugins' },
     'check-update': { ipc: 'check_update', bridge: '/check-update' },
     'update-now': { ipc: 'update_now', bridge: '/update-dsh' },
     'dev-mode': { ipc: 'toggle_dev_mode', bridge: '/shell/dev-mode-toggle' },
@@ -813,26 +814,16 @@
     render();
   }
 
-  // ── 插件管理（入口在菜单栏，界面保留原插件控制台）────────────────
-  // dsh-plugin-console 已不渲染右下角浮动按钮（.dshc-btn 不再生成），面板
-  // 开关暴露为 globalThis.__DSH_PLUGIN_CONSOLE__.toggle()——壳菜单「插件管理」
-  // 就地调用该接口（原面板 UI/UX 零改动，壳只提供入口）。非 dsh 页/插件未
-  // 注入时亮壳内提示；旧版本插件残留的 .dshc-btn 防御性隐藏。
+  // ── 插件管理（入口在菜单栏，管理在壳内独立窗口）────────────────
+  // 菜单「插件管理」打开壳内独立管理窗口（src/plugin-console.html，与代理
+  // 设置同尺寸居中）——窗口数据走环回桥，**不依赖 dsh 页面**，dsh 崩溃/未
+  // 启动时照样能卸载/禁用出问题的插件。窗口 UI 复用原插件控制台视觉。
+  // 旧版本插件残留的右下角 .dshc-btn 防御性隐藏。
   function hideFabIfPresent() {
     const btn = document.querySelector('button.dshc-btn');
     if (btn && btn.style.display !== 'none') btn.style.display = 'none';
   }
   hideFabIfPresent();
-
-  function togglePluginConsole() {
-    const api = globalThis.__DSH_PLUGIN_CONSOLE__;
-    if (api && typeof api.toggle === 'function') {
-      api.toggle();
-      return true;
-    }
-    miniToast('插件控制台未加载（需在 dsh 主页使用）');
-    return false;
-  }
 
   // ── 事件 ────────────────────────────────────────────────────────
   // window 级 CAPTURE 统一分发：不依赖 shadow 内单个元素监听（实机曾出现
@@ -866,8 +857,8 @@
 
   function runMenuAction(id) {
     if (id === 'plugins') {
-      // 插件管理：就地触发原插件控制台面板（原 UI/UX 零改动）。
-      togglePluginConsole();
+      // 插件管理：打开壳内独立管理窗口（全局可用，dsh 崩溃时也能管理）。
+      call('plugins');
       return;
     }
     if (id === 'check-update') {
