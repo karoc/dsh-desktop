@@ -925,10 +925,15 @@ mod migration_tests {
         // uninstaller 就位 → 识别
         std::fs::write(local.join("dsh Desktop").join("uninstall.exe"), b"x").unwrap();
         assert!(legacy_install_dir(&local).is_some());
-        // 名字不同的目录（dev 版等）→ 永不识别
+        // 名字不同的目录（dev 版等）→ 永不作为识别对象（识别结果仍指向 dsh Desktop）
         let _ = std::fs::create_dir_all(local.join("DSH Smoothly Desktop Dev"));
         std::fs::write(local.join("DSH Smoothly Desktop Dev").join("uninstall.exe"), b"x").unwrap();
-        assert!(legacy_install_dir(&local).is_none(), "dev 目录不得被识别为旧安装");
+        let got = legacy_install_dir(&local);
+        assert_eq!(
+            got.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string()),
+            Some(LEGACY_INSTALL_DIR_NAME.to_string()),
+            "dev 目录不得被识别为旧安装（白名单只认 dsh Desktop）"
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 
