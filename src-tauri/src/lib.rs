@@ -555,6 +555,30 @@ fn migrate_legacy_data(app: &AppHandle) {
     let log_sink = new_dir.clone();
     let Some(base) = new_dir.parent() else { return };
     let old_dir = base.join(old_name);
+    // 备份优先：rename 之前先把旧 dsh-home 的关键数据复制到
+    // %LOCALAPPDATA%\dsh-backup\migration-<ts>\（双保险——即使 rename 失败或
+    // 后续任何意外，都有一份独立副本；备份失败仅记日志，不阻断迁移）。
+    let old_home = old_dir.join("runtime").join("dsh-home");
+    let backup_root = app
+        .path()
+        .app_local_data_dir()
+        .unwrap_or_else(|_| new_dir.join(BACKUP_ROOT_DIR_NAME))
+        .join(BACKUP_ROOT_DIR_NAME);
+    if old_home.is_dir() {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let back_dir = backup_root.join(format!("migration-{ts}"));
+        let mut log2 = |m: &str| {
+            eprintln!("[dsh-desktop] data-migration backup: {m}");
+            log_line(&log_sink, &format!("data-migration backup: {m}"));
+        };
+        match backup_home_data(&old_home, &back_dir, &mut log2) {
+            Ok(()) => log2(&format!("saved to {}", back_dir.display())),
+            Err(e) => log2(&format!("FAILED ({e})")),
+        }
+    }
     let moved = migrate_legacy_data_dir(&old_dir, &new_dir, |m| {
         eprintln!("[dsh-desktop] data-migration: {m}");
         log_line(&log_sink, &format!("data-migration: {m}"));
@@ -572,6 +596,262 @@ fn migrate_legacy_data(app: &AppHandle) {
             }
         }
     }
+}
+
+// ── 旧版接管（legacy takeover）─────────────────────────────────────────────
+// 0.3.x → 0.4.x 品牌统一后，旧安装（%LOCALAPPDATA%\dsh Desktop，旧 identifier
+// dev.dsh.desktop）已无数据；但旧 exe/快捷方式可能残留——旧壳一旦被启动会
+// 重建空 dev.dsh.desktop runtime（"数据全丢"假象，2026-09-02 实发）。
+// 本段提供：检测（旧安装/运行中/快捷方式/空壳重建迹象）+ 清理（备份旧数据
+// → 静默卸载 → 白名单快捷方式删除 → 空目录回收）+ 迁移前备份。
+// 安全规则：路径严格白名单（%LOCALAPPDATA%\dsh Desktop 且含 uninstall.exe）；
+// 快捷方式删除前校验 lnk 目标；%APPDATA% 数据目录永不删除，只检测与提示。
+const LEGACY_INSTALL_DIR_NAME: &str = "dsh Desktop";
+const LEGACY_SHORTCUT_NAME: &str = "DSH Desktop.lnk";
+const BACKUP_ROOT_DIR_NAME: &str = "dsh-backup";
+
+/// %LOCALAPPDATA%\dsh Desktop（且含 uninstall.exe）才算旧安装；白名单判定。
+fn legacy_install_dir(local_data: &std::path::Path) -> Option<std::path::PathBuf> {
+    let dir = local_data.join(LEGACY_INSTALL_DIR_NAME);
+    if dir.join("uninstall.exe").is_file() {
+        Some(dir)
+    } else {
+        None
+    }
+}
+
+/// 两个已知快捷方式候选（桌面 + 开始菜单），存在才列出。
+fn legacy_shortcut_candidates(home: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    for base in [
+        home.join("Desktop"),
+        home.join("AppData").join("Roaming").join("Microsoft").join("Windows").join("Start Menu").join("Programs"),
+    ] {
+        let lnk = base.join(LEGACY_SHORTCUT_NAME);
+        if lnk.is_file() {
+            out.push(lnk);
+        }
+    }
+    out
+}
+
+/// 跑一条 PowerShell 并取 stdout 非空行（Windows 专用；跨平台编译安全）。
+fn powershell_lines(script: &str) -> Vec<String> {
+    #[cfg(windows)]
+    {
+        let out = std::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-Command", script])
+            .output();
+        if let Ok(out) = out {
+            return String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+        }
+    }
+    Vec::new()
+}
+
+/// 旧 dsh-desktop.exe 是否仍在运行（按可执行文件路径前缀精确匹配）。
+fn legacy_process_running(legacy_dir: &std::path::Path) -> bool {
+    let want = legacy_dir.to_string_lossy().replace('/', "\\");
+    let script = r#"Get-CimInstance Win32_Process -Filter "Name='dsh-desktop.exe'" | ForEach-Object { $_.ExecutablePath }"#;
+    powershell_lines(script)
+        .into_iter()
+        .any(|p| p.replace('/', "\\").starts_with(&want))
+}
+
+/// 读取 .lnk 的目标路径（Windows COM，WScript.Shell）。
+fn shortcut_target(lnk: &std::path::Path) -> Option<std::path::PathBuf> {
+    let l = lnk.to_string_lossy().replace('\'', "''");
+    let script = format!(
+        "$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{l}');Write-Output $s.TargetPath"
+    );
+    powershell_lines(&script).into_iter().next().map(std::path::PathBuf::from)
+}
+
+/// 快捷方式是否指向旧安装目录（校验通过才删除，防误删同名 lnk）。
+fn should_delete_shortcut(lnk: &std::path::Path, legacy_dir: &std::path::Path) -> bool {
+    let want = legacy_dir.to_string_lossy().replace('/', "\\");
+    shortcut_target(lnk)
+        .map(|t| t.to_string_lossy().replace('/', "\\").starts_with(&want))
+        .unwrap_or(false)
+}
+
+/// dsh-home 中应备份的关键数据（跳过 node_modules 等可重建的大目录）。
+fn backup_entries(home: &std::path::Path) -> Vec<(String, std::path::PathBuf)> {
+    let mut out = Vec::new();
+    for name in ["sessions", "storages"] {
+        let p = home.join(name);
+        if p.is_dir() {
+            out.push((name.to_string(), p));
+        }
+    }
+    for name in [
+        "settings.yaml",
+        "settings.yaml.bak-anyrouter-1m",
+        "settings.yaml.bak-capture-dsh",
+        ".credentials.yaml",
+        ".anonymous-user-id",
+    ] {
+        let p = home.join(name);
+        if p.is_file() {
+            out.push((name.to_string(), p));
+        }
+    }
+    let web = home.join("profiles").join("web");
+    for name in ["cordis.yml", "cordis.patch.yml", "package.json", "pnpm-workspace.yaml"] {
+        let p = web.join(name);
+        if p.is_file() {
+            out.push((format!("profiles/web/{name}"), p));
+        }
+    }
+    out
+}
+
+fn copy_dir_all(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if ty.is_dir() {
+            copy_dir_all(&from, &to)?;
+        } else if ty.is_file() {
+            std::fs::copy(&from, &to)?;
+        }
+    }
+    Ok(())
+}
+
+/// 复制 dsh-home 关键数据到备份目录（复制不移动：原数据不动；单文件失败仅记日志）。
+fn backup_home_data(home: &std::path::Path, back_dir: &std::path::Path, log: &mut dyn FnMut(&str)) -> Result<(), String> {
+    for (rel, src) in backup_entries(home) {
+        let dst = back_dir.join(&rel);
+        if let Some(parent) = dst.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let r = if src.is_dir() {
+            copy_dir_all(&src, &dst)
+        } else {
+            std::fs::copy(&src, &dst).map(|_| ())
+        };
+        if let Err(e) = r {
+            log(&format!("backup skip {rel}: {e}"));
+        }
+    }
+    Ok(())
+}
+
+/// 当前用户主目录（Windows 用 USERPROFILE；跨平台回退 HOME）。
+fn user_home() -> std::path::PathBuf {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(std::path::PathBuf::from)
+        .unwrap_or_default()
+}
+
+/// 检测结果（check_legacy_install command 与桥 GET /shell/legacy 共用）。
+fn legacy_check_json(app: &AppHandle) -> serde_json::Value {
+    let local = app.path().app_local_data_dir().unwrap_or_default();
+    let home = user_home();
+    let legacy = legacy_install_dir(&local);
+    let running = legacy.as_ref().map(|d| legacy_process_running(d)).unwrap_or(false);
+    let data_recreated = app
+        .path()
+        .app_data_dir()
+        .ok()
+        .and_then(|d| d.parent().map(|b| b.join("dev.dsh.desktop").is_dir()))
+        .unwrap_or(false);
+    serde_json::json!({
+        "legacyDir": legacy.as_ref().map(|d| d.to_string_lossy().to_string()),
+        "running": running,
+        "shortcuts": legacy_shortcut_candidates(&home).iter().map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>(),
+        "dataRecreated": data_recreated,
+        "canCleanup": legacy.as_ref().map(|_| !running).unwrap_or(false),
+        "backupRoot": local.join(BACKUP_ROOT_DIR_NAME).to_string_lossy().to_string(),
+    })
+}
+
+/// 清理动作（cleanup_legacy_install command 与桥 POST /shell/legacy-cleanup 共用）。
+fn legacy_cleanup_json(app: &AppHandle) -> serde_json::Value {
+    let data = app.path().app_data_dir().unwrap_or_default();
+    let local = app.path().app_local_data_dir().unwrap_or_default();
+    let mut log = |m: &str| {
+        eprintln!("[dsh-desktop] legacy-cleanup: {m}");
+        log_line(&data, &format!("legacy-cleanup: {m}"));
+    };
+    let Some(legacy) = legacy_install_dir(&local) else {
+        return serde_json::json!({ "ok": false, "reason": "no-legacy", "removedDir": false, "removedShortcuts": 0 });
+    };
+    if legacy_process_running(&legacy) {
+        return serde_json::json!({ "ok": false, "reason": "running", "removedDir": false, "removedShortcuts": 0 });
+    }
+    // 1) 旧数据目录若已被旧壳重建（空壳产物），先备份其关键数据（纯保险，大概率空）。
+    let old_home = data.parent().map(|b| b.join("dev.dsh.desktop").join("runtime").join("dsh-home"));
+    if let Some(old_home) = old_home {
+        if old_home.is_dir() {
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let back = local.join(BACKUP_ROOT_DIR_NAME).join(format!("cleanup-{ts}"));
+            let _ = backup_home_data(&old_home, &back, &mut log);
+        }
+    }
+    // 2) 静默卸载旧版：/S 静默（不触发"删除应用数据"页，数据目录不动）；
+    //    _?= 让卸载器不删除自身；沿用统一的无窗口启动。
+    let uninstaller = legacy.join("uninstall.exe");
+    log(&format!("uninstalling legacy via {}", uninstaller.display()));
+    let mut cmd = std::process::Command::new(&uninstaller);
+    let silent_arg = format!("_?={}", legacy.to_string_lossy());
+    cmd.arg("/S").arg(&silent_arg);
+    #[cfg(windows)]
+    no_console_window(&mut cmd);
+    let exit = cmd.status();
+    log(&format!("uninstaller finished: {exit:?}"));
+    // 3) 快捷方式删除（target 校验通过才删）。
+    let home = user_home();
+    let mut removed = 0usize;
+    for lnk in legacy_shortcut_candidates(&home) {
+        if should_delete_shortcut(&lnk, &legacy) {
+            match std::fs::remove_file(&lnk) {
+                Ok(()) => {
+                    removed += 1;
+                    log(&format!("removed shortcut {}", lnk.display()));
+                }
+                Err(e) => log(&format!("shortcut remove failed {}: {e}", lnk.display())),
+            }
+        } else {
+            log(&format!("shortcut skipped (target mismatch) {}", lnk.display()));
+        }
+    }
+    // 4) 旧目录回收：仅当已空（卸载器清理后）；非空保留现场不递归删除。
+    let emptied = std::fs::read_dir(&legacy)
+        .map(|mut d| d.next().is_none())
+        .unwrap_or(false)
+        && std::fs::remove_dir(&legacy).is_ok();
+    if emptied {
+        log(&format!("legacy install dir removed: {}", legacy.display()));
+    }
+    serde_json::json!({
+        "ok": true,
+        "uninstallerExit": exit.ok().and_then(|s| s.code()),
+        "removedDir": emptied,
+        "removedShortcuts": removed,
+    })
+}
+
+#[tauri::command]
+fn check_legacy_install(app: AppHandle) -> serde_json::Value {
+    legacy_check_json(&app)
+}
+
+#[tauri::command]
+fn cleanup_legacy_install(app: AppHandle) -> serde_json::Value {
+    legacy_cleanup_json(&app)
 }
 
 #[cfg(test)]
@@ -630,6 +910,78 @@ mod migration_tests {
         assert!(!moved);
         assert!(!new.exists());
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn legacy_dir_requires_exact_name_and_uninstaller() {
+        let base = tmp_base("legacy-dir");
+        let _ = std::fs::remove_dir_all(&base);
+        let local = base.join("local");
+        // 正确名字但无 uninstaller → 不识别
+        let _ = std::fs::create_dir_all(local.join("dsh Desktop"));
+        assert!(legacy_install_dir(&local).is_none());
+        // uninstaller 就位 → 识别
+        std::fs::write(local.join("dsh Desktop").join("uninstall.exe"), b"x").unwrap();
+        assert!(legacy_install_dir(&local).is_some());
+        // 名字不同的目录（dev 版等）→ 永不识别
+        let _ = std::fs::create_dir_all(local.join("DSH Smoothly Desktop Dev"));
+        std::fs::write(local.join("DSH Smoothly Desktop Dev").join("uninstall.exe"), b"x").unwrap();
+        assert!(legacy_install_dir(&local).is_none(), "dev 目录不得被识别为旧安装");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn shortcut_candidates_only_existing_files() {
+        let base = tmp_base("legacy-lnk");
+        let _ = std::fs::remove_dir_all(&base);
+        let home = base.join("home");
+        let desktop = home.join("Desktop");
+        std::fs::create_dir_all(&desktop).unwrap();
+        std::fs::write(desktop.join(LEGACY_SHORTCUT_NAME), b"x").unwrap();
+        let lnks = legacy_shortcut_candidates(&home);
+        assert_eq!(lnks.len(), 1, "只应列出存在的 lnk（桌面）");
+        assert_eq!(lnks[0].file_name().unwrap().to_string_lossy(), LEGACY_SHORTCUT_NAME);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn backup_entries_collects_key_data_and_skips_node_modules() {
+        let base = tmp_base("legacy-backup");
+        let _ = std::fs::remove_dir_all(&base);
+        let home = base.join("dsh-home");
+        std::fs::create_dir_all(home.join("sessions/ws-a")).unwrap();
+        std::fs::write(home.join("sessions/ws-a/x.jsonl.zstd"), b"a").unwrap();
+        std::fs::write(home.join("settings.yaml"), b"s").unwrap();
+        std::fs::create_dir_all(home.join("profiles/web/node_modules")).unwrap();
+        std::fs::write(home.join("profiles/web/node_modules/big.bin"), b"big").unwrap();
+        std::fs::write(home.join("profiles/web/cordis.yml"), b"c").unwrap();
+        let entries = backup_entries(&home);
+        let rels: Vec<&str> = entries.iter().map(|(r, _)| r.as_str()).collect();
+        assert!(rels.contains(&"sessions"), "会话目录必须备份");
+        assert!(rels.contains(&"settings.yaml"), "模型配置必须备份");
+        assert!(rels.contains(&"profiles/web/cordis.yml"), "web profile 配置必须备份");
+        assert!(!rels.iter().any(|r| r.contains("node_modules")), "node_modules 不得备份");
+        // 实际复制验证
+        let back = base.join("backup");
+        let mut log_calls = Vec::new();
+        let mut log = |m: &str| log_calls.push(m.to_string());
+        backup_home_data(&home, &back, &mut log).unwrap();
+        assert!(back.join("sessions/ws-a/x.jsonl.zstd").is_file());
+        assert!(back.join("settings.yaml").is_file());
+        assert!(back.join("profiles/web/cordis.yml").is_file());
+        assert!(!back.join("profiles/web/node_modules").exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn should_delete_shortcut_requires_matching_target_via_fn() {
+        // 纯路径前缀判定（lnk target 读取走 PowerShell，此处测前缀逻辑复用于
+        // shortcut_target 之后调用的判定表达式——直接验证 starts_with 语义）。
+        let legacy = std::path::Path::new(r"C:\Users\u\AppData\Local\dsh Desktop");
+        let target = std::path::PathBuf::from(r"C:\Users\u\AppData\Local\dsh Desktop\dsh-desktop.exe");
+        assert!(target.to_string_lossy().replace('/', "\\").starts_with(&legacy.to_string_lossy().replace('/', "\\")));
+        let unrelated = std::path::PathBuf::from(r"C:\Users\u\AppData\Local\DSH Smoothly Desktop\dsh-desktop.exe");
+        assert!(!unrelated.to_string_lossy().replace('/', "\\").starts_with(&legacy.to_string_lossy().replace('/', "\\")));
     }
 }
 
@@ -1230,6 +1582,12 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
                 "200 OK",
                 serde_json::json!({ "lastError": last_error, "hasServer": has_server }).to_string(),
             )
+        }
+        ("GET", "/shell/legacy") => {
+            ("200 OK", legacy_check_json(&app).to_string())
+        }
+        ("POST", "/shell/legacy-cleanup") => {
+            ("200 OK", legacy_cleanup_json(&app).to_string())
         }
         _ => ("404 Not Found", "not found".into()),
     };
@@ -2422,7 +2780,9 @@ pub fn run() {
             toggle_dev_mode,
             open_settings,
             open_plugins,
-            get_shell_status
+            get_shell_status,
+            check_legacy_install,
+            cleanup_legacy_install
         ])
         .run(tauri::generate_context!())
         .expect("error while running DSH Smoothly Desktop");

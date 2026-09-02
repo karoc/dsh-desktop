@@ -46,6 +46,16 @@
           <div class="host-list" id="otherHosts"></div>
         </section>
 
+        <section class="set-group">
+          <h3>升级与旧版接管</h3>
+          <p class="muted small">品牌统一迁移（0.3.x → 0.4.x）时旧版安装/快捷方式可能残留；误开旧版会重建空数据目录。数据会在迁移/清理前自动备份到 <code>%LOCALAPPDATA%\dsh-backup\</code>，数据目录永不删除。</p>
+          <div class="row actions">
+            <button id="legacyCheck" class="secondary">检查旧版残留</button>
+            <button id="legacyClean" class="primary">清理并卸载旧版</button>
+            <span class="muted" id="legacyStatus"></span>
+          </div>
+        </section>
+
         <p class="muted small">保存后立即生效，无需重启；改动「安装/更新」相关主机的代理会在下次安装/更新时生效。</p>
         <div class="row actions">
           <button id="testProxy" class="secondary">测试连接</button>

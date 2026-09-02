@@ -196,4 +196,50 @@ document.getElementById('settingsClose').addEventListener('click', async () => {
   }
 });
 
+// ── 升级与旧版接管 ──────────────────────────────────────
+// 检测/清理 0.3.x 残留。清理为静默卸载（uninstall.exe /S）+ 删指向旧版的快捷
+// 方式；执行前自动备份旧数据目录关键数据到 %LOCALAPPDATA%\dsh-backup\。
+const legacyStatus = document.getElementById('legacyStatus');
+const legacyCheckBtn = document.getElementById('legacyCheck');
+const legacyCleanBtn = document.getElementById('legacyClean');
+let legacyInfo = null;
+
+async function doLegacyCheck(silent) {
+  try {
+    const r = await tauri.core.invoke('check_legacy_install');
+    legacyInfo = r || {};
+    if (!r.legacyDir && !r.dataRecreated) {
+      legacyStatus.textContent = '未发现旧版残留。';
+      legacyCleanBtn.disabled = true;
+      return;
+    }
+    const parts = [];
+    if (r.legacyDir) parts.push(r.running ? '旧版运行中（请先退出）' : '旧版安装残留');
+    if (r.dataRecreated) parts.push('旧数据目录被空壳重建');
+    if (r.shortcuts && r.shortcuts.length) parts.push(`${r.shortcuts.length} 个快捷方式`);
+    legacyStatus.textContent = parts.join('；') + `。备份目录：${r.backupRoot || 'dsh-backup'}`;
+    legacyCleanBtn.disabled = !(r.legacyDir && !r.running);
+  } catch (err) {
+    if (!silent) legacyStatus.textContent = '检测失败：' + String(err);
+  }
+}
+
+legacyCheckBtn.addEventListener('click', () => doLegacyCheck(false));
+legacyCleanBtn.addEventListener('click', async () => {
+  legacyCleanBtn.disabled = true;
+  legacyStatus.textContent = '清理中（静默卸载旧版 + 删快捷方式）…';
+  try {
+    const res = await tauri.core.invoke('cleanup_legacy_install');
+    legacyStatus.textContent = res && res.ok
+      ? `✓ 清理完成：快捷方式已删 ${res.removedShortcuts ?? 0} 个，旧目录${res.removedDir ? '已移除' : '留有残留（见 session.log）'}。`
+      : `清理未完成（${(res && res.reason) || '未知原因'}）。`;
+    await doLegacyCheck(true);
+  } catch (err) {
+    legacyStatus.textContent = '清理失败：' + String(err);
+    legacyCleanBtn.disabled = false;
+  }
+});
+
+doLegacyCheck(true);
+
 loadSettings();

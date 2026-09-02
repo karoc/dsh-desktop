@@ -226,6 +226,35 @@ dsh 页面以纯远程页面加载，只授予 loopback 权限
 沿目录链向上能找到它。想与浏览器版共享数据的用户，可自行在系统环境里放
 `DSH_HOME=~/.dsh`（需先把插件装进该 profile，见"注入原理"）。
 
+## 升级与数据安全（0.4.x 起）
+
+**版本演进策略**：正式版安装目录名 / 快捷方式名一经定型不得随版本改动；
+升级一律"就地覆盖安装"。标识（identifier）变更属特殊事件，必须配整套旧版接管。
+
+**数据迁移**：0.3.x → 0.4.x 品牌统一时，旧数据目录（`%APPDATA%\dev.dsh.desktop`）
+在首次启动整体搬入新目录（`%APPDATA%\dsh.smoothly.desktop`），原子 rename + marker，
+目标已存在则跳过（新数据优先）。
+
+**数据备份（双保险）**：
+- 迁移前：旧 `dsh-home` 的关键数据（sessions / settings.yaml / storages /
+  credentials / web profile 配置）自动复制到 `%LOCALAPPDATA%\dsh-backup\migration-<时间戳>\`；
+- 旧版清理前：若旧数据目录被旧壳重建（空壳分叉），同样先备份到
+  `%LOCALAPPDATA%\dsh-backup\cleanup-<时间戳>\`。
+- 数据目录（%APPDATA%）在任何路径下都不会被删除。
+
+**旧版接管（静默卸载 + 明确提示）**：
+- 安装新版时（NSIS 钩子）：旧版未运行 → 自动静默卸载（`uninstall.exe /S _?=`，
+  不触发"删除应用数据"页，AppData 数据保留）；运行中 → 弹窗提示先退出再装。
+- 首次启动/菜单/设置页：检测旧安装残留与快捷方式 → 启动页横幅 + 壳菜单
+  「旧版清理…」+ 设置页按钮，一键完成"备份 → 静默卸载 → 删指向旧版的快捷方式"。
+- 旧壳被误启动 → 新壳检测到空壳重建迹象（`dev.dsh.desktop` 再现）→ 记录日志并提示。
+
+**数据出问题时的处理**：
+1. 先看 `dsh-desktop-session.log` 与 `runtime/manager.log`（壳菜单「打开数据目录」）；
+2. 若会话/配置异常：从 `%LOCALAPPDATA%\dsh-backup\` 按时间戳目录恢复
+   （sessions/、settings.yaml、storages/ 拷回 `%APPDATA%\dsh.smoothly.desktop\runtime\dsh-home\` 同路径）；
+3. 恢复后重启壳；仍有问题请保留 `dsh-backup` 与两份日志再求助。
+
 ## 注入原理（为什么更新 dsh 不会冲掉通知）
 
 1. `dsh web --patch <file>` 把一行 loader 条目插入 web profile：

@@ -49,6 +49,7 @@
         { id: 'restart', label: '重启服务' },
         { type: 'sep' },
         { id: 'open-data', label: '打开数据目录' },
+        { id: 'legacy-cleanup', label: '旧版清理…' },
         { id: 'about', label: `关于 ${PRODUCT_NAME}` },
         { type: 'sep' },
         { id: 'quit', label: '退出' },
@@ -705,6 +706,79 @@
     });
   }
 
+  // 旧版接管双通道（本地页 IPC / 远程页桥）——壳内就地动作，不入 ACTIONS。
+  function legacyCheck() {
+    if (hasTauri) return invoke('check_legacy_install');
+    return bridge('/shell/legacy', 'GET');
+  }
+  function legacyCleanup() {
+    if (hasTauri) return invoke('cleanup_legacy_install');
+    return bridge('/shell/legacy-cleanup', 'POST');
+  }
+
+  // 「旧版清理」弹窗：检测 0.3.x 残留（安装目录/运行中/快捷方式/空壳重建），
+  // 说明备份位置，提供「清理并卸载旧版」（静默调用 uninstall.exe）+ 确定。
+  // 数据的备份策略：迁移/清理前自动备份至 %LOCALAPPDATA%\dsh-backup\，
+  // 本弹窗只展示备份根目录，不做任何数据目录操作。
+  function openLegacyDialog() {
+    legacyCheck().then((r) => {
+      const info = r || {};
+      openDialog((card, close) => {
+        card.appendChild(el('div', '旧版清理（0.3.x 残留接管）', 'dialog-title'));
+        const body = document.createElement('div');
+        body.className = 'dialog-body';
+        const legacyDir = info.legacyDir || null;
+        const rows = document.createElement('div');
+        if (!legacyDir && !info.dataRecreated) {
+          rows.appendChild(dlgRow('检测结果', '未发现旧版安装残留'));
+          rows.appendChild(el('div', '若之前误开过旧版，其重建的数据目录会在下次启动时被检测并提示。', 'dlg-note'));
+        } else {
+          rows.appendChild(dlgRow('旧版安装目录', legacyDir || '（未检出）'));
+          if (legacyDir) {
+            rows.appendChild(dlgRow('运行中', info.running ? '是 — 请先退出旧版再清理' : '否'));
+          }
+          if (info.dataRecreated) {
+            rows.appendChild(dlgRow('旧数据目录重建', '是（旧版被启动过，已记录）'));
+          }
+          rows.appendChild(dlgRow('快捷方式', info.shortcuts && info.shortcuts.length ? `${info.shortcuts.length} 个待清理` : '无'));
+          rows.appendChild(dlgRow('备份位置', info.backupRoot || '—'));
+          rows.appendChild(el('div', '清理前会自动备份旧数据目录的关键数据到上述备份位置；数据永不删除。清理动作：静默卸载旧版 + 删除指向旧版的快捷方式。', 'dlg-note'));
+        }
+        body.appendChild(rows);
+        card.appendChild(body);
+        const actions = document.createElement('div');
+        actions.className = 'dialog-actions';
+        const btnClose = mkDlgBtn('确定');
+        btnClose.addEventListener('click', close);
+        actions.appendChild(btnClose);
+        if (legacyDir && !info.running) {
+          const btnClean = mkDlgBtn('清理并卸载旧版', true);
+          btnClean.addEventListener('click', async () => {
+            btnClean.disabled = true;
+            btnClean.textContent = '清理中…';
+            try {
+              const res = await legacyCleanup();
+              rows.replaceChildren();
+              rows.appendChild(dlgRow('清理结果', res && res.ok ? '完成' : '未完成'));
+              if (res) {
+                rows.appendChild(dlgRow('卸载器退出码', String(res.uninstallerExit ?? '—')));
+                rows.appendChild(dlgRow('旧目录已移除', String(res.removedDir ?? false)));
+                rows.appendChild(dlgRow('快捷方式已删', String(res.removedShortcuts ?? 0)));
+              }
+              btnClean.hidden = true;
+            } catch (err) {
+              rows.appendChild(dlgRow('清理失败', String(err)));
+              btnClean.disabled = false;
+              btnClean.textContent = '清理并卸载旧版';
+            }
+          });
+          actions.appendChild(btnClean);
+        }
+        card.appendChild(actions);
+      });
+    });
+  }
+
   // 「检查更新」弹窗：展示当前/最新版本信息 + 确定 + 立即更新。
   // 无已知版本时先触发 /check-update 并轮询 /update-status（上限 15s）。
   function openCheckUpdateDialog() {
@@ -869,6 +943,9 @@
     } else if (id === 'about') {
       // 关于：壳内模态弹窗（名称/版本/构建日期/dsh 版本 + 确定）。
       openAboutDialog();
+    } else if (id === 'legacy-cleanup') {
+      // 旧版清理：壳内模态弹窗（检测 + 备份说明 + 清理按钮）。壳内就地动作。
+      openLegacyDialog();
     } else if (id === 'dev-mode') {
       call('dev-mode').then((r) => {
         if (r && typeof r.devMode === 'boolean') setDevMode(r.devMode);

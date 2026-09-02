@@ -239,3 +239,52 @@ openDataBtn.addEventListener('click', async () => {
     appendLog('打开数据目录失败：' + String(err));
   }
 });
+
+// ── 旧版（0.3.x）残留检测横幅 ───────────────────────────
+// 启动时查一次 check_legacy_install：发现旧安装或旧数据目录被空壳重建
+// （dev.dsh.desktop 意外出现）→ 显示横幅，可一键清理（静默卸载旧版 +
+// 删快捷方式；数据先自动备份至 %LOCALAPPDATA%\dsh-backup\，永不删除）。
+const legacyBanner = document.getElementById('legacyBanner');
+const legacyBannerText = document.getElementById('legacyBannerText');
+const legacyCleanBtn = document.getElementById('legacyCleanBtn');
+const legacyLaterBtn = document.getElementById('legacyLaterBtn');
+
+async function checkLegacy() {
+  if (!tauri || !tauri.core) return;
+  try {
+    const r = await tauri.core.invoke('check_legacy_install');
+    if (!r || (!r.legacyDir && !r.dataRecreated)) return;
+    if (sessionStorage.getItem('dsh-legacy-later')) return; // 本次会话已选"稍后"
+    const parts = [];
+    if (r.legacyDir) parts.push('安装残留（0.3.x）');
+    if (r.dataRecreated) parts.push('旧数据目录被旧版重建');
+    const canClean = r.legacyDir && !r.running;
+    legacyBannerText.textContent = canClean
+      ? `检测到${parts.join('、')}。清理前会先备份数据（${r.backupRoot || 'dsh-backup'}），数据不会删除。`
+      : `检测到${parts.join('、')}。请退出旧版后再清理（可在「DSH Desktop」菜单 →「旧版清理…」操作）。`;
+    legacyCleanBtn.hidden = !canClean;
+    legacyBanner.hidden = false;
+    legacyCleanBtn.onclick = async () => {
+      legacyCleanBtn.disabled = true;
+      legacyCleanBtn.textContent = '清理中…';
+      try {
+        const res = await tauri.core.invoke('cleanup_legacy_install');
+        legacyBannerText.textContent = res && res.ok
+          ? `清理完成：快捷方式已删 ${res.removedShortcuts ?? 0} 个，旧目录${res.removedDir ? '已移除' : '留有残留'}。`
+          : `清理未完成（${(res && res.reason) || '未知原因'}）。请从「旧版清理…」菜单重试。`;
+        legacyCleanBtn.hidden = true;
+      } catch (err) {
+        legacyBannerText.textContent = '清理失败：' + String(err);
+        legacyCleanBtn.disabled = false;
+        legacyCleanBtn.textContent = '清理并卸载旧版';
+      }
+    };
+    legacyLaterBtn.onclick = () => {
+      sessionStorage.setItem('dsh-legacy-later', '1');
+      legacyBanner.hidden = true;
+    };
+  } catch (err) {
+    appendLog('旧版检测失败：' + String(err));
+  }
+}
+if (tauri && tauri.core) checkLegacy();

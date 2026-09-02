@@ -288,3 +288,25 @@ button:disabled { opacity: 0.5; cursor: default; }
 .muted { color: var(--muted); }
 .muted.small { font-size: 12px; margin: 2px 0 0; }
 .row.actions { margin-top: 2px; align-items: center; }
+
+/* ── 启动页旧版残留横幅 ─────────────────────────── */
+.legacy-banner {
+  margin-top: 14px;
+  padding: 10px 14px;
+  max-width: 560px;
+  border: 1px solid #f0883e;
+  border-radius: 8px;
+  background: rgba(240, 136, 62, 0.12);
+  color: var(--fg, #e6edf3);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: stretch;
+  text-align: left;
+  font-size: 13px;
+}
+.legacy-banner[hidden] { display: none; }
+.legacy-banner .primary, .legacy-banner .secondary {
+  margin-right: 8px;
+  font-size: 13px;
+}

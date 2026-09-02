@@ -38,14 +38,14 @@ assert.ok(Array.isArray(SHELL_MENUS[0].items), 'app menu has dropdown items')
 const brand = SHELL_MENUS[0].items[0]
 assert.ok(brand && brand.id === 'brand' && brand.type === 'brand', 'dropdown first row shows the app name (brand)')
 const ids = SHELL_MENUS[0].items.map((i) => i.id).filter(Boolean)
-for (const id of ['proxy-settings', 'plugins', 'check-update', 'dev-mode', 'refresh', 'restart', 'open-data', 'about', 'quit']) {
+for (const id of ['proxy-settings', 'plugins', 'check-update', 'dev-mode', 'refresh', 'restart', 'open-data', 'legacy-cleanup', 'about', 'quit']) {
   assert.ok(ids.includes(id), `app menu contains ${id}`)
 }
 
 // ── 2. every clickable menu id resolves in ACTIONS ───────────────────────────
-// 壳内就地动作（关于=壳内模态弹窗）不经 IPC/桥，不占 ACTIONS；其余跨壳动作
-// （含插件管理=打开壳内独立窗口）必须映射。
-const IN_SHELL_ACTIONS = new Set(['about'])
+// 壳内就地动作（关于/检查更新/旧版清理 = 壳内模态弹窗）不经 IPC/桥，不占
+// ACTIONS；其余跨壳动作（含插件管理=打开壳内独立窗口）必须映射。
+const IN_SHELL_ACTIONS = new Set(['about', 'legacy-cleanup'])
 for (const entry of SHELL_MENUS) {
   const clickable = (entry.items || []).filter((i) => i.id && i.type !== 'brand' && i.type !== 'sep' && !IN_SHELL_ACTIONS.has(i.id))
   for (const item of clickable) {

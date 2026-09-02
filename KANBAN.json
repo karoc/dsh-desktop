@@ -572,6 +572,40 @@
       ],
       "createdAt": 1788271286081,
       "updatedAt": 1788271286081
+    },
+    {
+      "id": "card-d55c340e-9e09-4172-aebc-b6bd00052808",
+      "title": "全壳样式统一：设计 token + 插件管理确认弹窗 (#22)",
+      "summary": "PR #22 合并（6e33583）：新增 docs/2026-09-02-ui-design-tokens.md 作为统一设计规范唯一真源（圆角 8/12/14、按钮 min-width72/padding7x16/13px、主按钮纯色 accent、backdrop rgba.35+blur3、字号、动效、键盘/焦点、禁用原生 confirm）。壳 chrome 下拉条目圆角 7→8、弹窗按钮统一规格 + danger 变体；设置窗按钮收敛（13px/padding8x16）、组卡圆角 10→12；插件管理窗口（布局不变）主题仅配色（删主题几何字段）、主按钮渐变→纯色、原生 confirm→壳内 showConfirm 确认弹窗（卸载 danger 色）。新增结构测试 scripts/test-plugin-console-window.mjs（守护布局顺序/主按钮纯色/无原生 confirm/主题纯配色）接入 npm test（8 套全绿）。SKILL 新增 §2.4。保留例外：启动页 hero 按钮、开关/升级箭头/进度条渐变。CI check/test 通过，D 盘已同步重建（DSH Smoothly Desktop Dev_0.4.0_x64-setup.exe）。",
+      "rationale": "用户要求梳理下拉/所有弹窗/设置窗/插件管理的样式并统一，出方案确认后实施。方案经确认：几何/层级/动效全局统一，颜色分治（壳+设置窗跟随系统、插件管理保留 4 主题仅配色），布局一律不动，主按钮纯色，原生 confirm 换壳内确认弹窗。",
+      "rejected": "放弃：a) 插件管理砍主题跟随系统（用户选保留 4 主题仅配色）；b) 主按钮统一渐变（用户选纯色 accent）；c) 保持原生 confirm（用户选壳内确认弹窗）；d) 共享 CSS 文件（三处独立打包物理不可行，改以规范文档为唯一真源）。",
+      "sourceSessionId": "session-2022bc96-7d1e-49fd-8ada-307acaff05a9",
+      "status": "done",
+      "tags": [
+        "shell",
+        "ui",
+        "design-system",
+        "feature"
+      ],
+      "createdAt": 1788337380693,
+      "updatedAt": 1788337380693
+    },
+    {
+      "id": "card-076b1507-7469-4122-9898-eefbac68744c",
+      "title": "迁移后旧版接管：检测残留 + 提示清理（防空壳分叉）",
+      "rationale": "0.4.0 迁移（dev.dsh.desktop → dsh.smoothly.desktop）只搬数据目录，不清旧安装：旧 exe（%LOCALAPPDATA%\\dsh Desktop\\）与 \"DSH Desktop.lnk\" 快捷方式残留，用户点到旧壳即重建空 runtime 造成\"数据全丢\"假象与本轮事故。迁移流程需要补\"旧版接管\"环节。",
+      "rejected": "放弃让迁移代码自动卸载旧版（卸载/删快捷方式是安装器治理而非数据迁移职责，自动静默卸载风险高）；放弃修改旧 exe 资产（0.3.10 二进制不可改，改其 resources 属 hack）。采用\"迁移后检测 + 提示 + 一键清理按钮\"的渐进方案。",
+      "sourceSessionId": "session-788be97d-7ef1-480f-9552-d09ab4eaf37b",
+      "status": "todo",
+      "tags": [
+        "windows",
+        "migration",
+        "upgrade",
+        "shell",
+        "follow-up"
+      ],
+      "createdAt": 1788348438192,
+      "updatedAt": 1788348438192
     }
   ]
 }
