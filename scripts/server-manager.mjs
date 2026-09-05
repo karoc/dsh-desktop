@@ -18,7 +18,7 @@
 //        {"cmd":"check-update"} / {"cmd":"update-dsh"} / {"cmd":"restart-dsh"}
 //   7. on signal, kill the whole dsh tree (taskkill /T /F on Windows).
 
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, appendFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, delimiter as pathDelimiter, join, relative, resolve } from 'node:path'
@@ -260,40 +260,55 @@ function pnpm(argsList, { cwd, timeoutMs = 600_000, stream = false } = {}) {
 }
 
 /**
- * 查询远端版本：`latest`（稳定 tag）与 `next`（预发布 tag，如 0.1.0-rc.8）。
- * dsh 团队常把新 rc 标在 next 而非 latest——只读 latest 会让用户看不到更新。
- * 两值都存入模块级 latestVersion / nextVersion，UI 据此展示"有预发布可升"。
+ * 查询远端版本：latest（稳定 tag）+ 全部预发布 tag（next/alpha/beta 等）。
+ * dsh 团队常把新 rc/alpha 标在 next/alpha 而非 latest；只读 latest 会漏更新，
+ * 只读 next 会漏 alpha 等其它预发布 tag。规则：latest 取 dist-tags.latest；
+ * nextVersion 取"所有 tag 版本中高于当前版本的最高者"（允许任意预发布 tag）。
  */
 async function resolveRemoteVersions() {
-  const out = await npm(['view', PACKAGE, 'dist-tags.latest', 'dist-tags.next', '--json', '--registry', REGISTRY], { timeoutMs: 60_000 })
+  const out = await npm(['view', PACKAGE, 'dist-tags', '--json', '--registry', REGISTRY], { timeoutMs: 60_000 })
   let parsed = null
   try { parsed = JSON.parse(out) } catch { parsed = null }
-  // npm view 多字段返回的对象键带完整路径（dist-tags.latest / dist-tags.next）；
-  // 若某 tag 不存在则折叠为纯字符串（只剩 latest）。
   if (typeof parsed === 'string') {
     latestVersion = parsed
     nextVersion = null
-  } else if (parsed && typeof parsed === 'object') {
-    latestVersion = parsed['dist-tags.latest'] ?? parsed.latest ?? null
-    nextVersion = parsed['dist-tags.next'] ?? parsed.next ?? null
-  } else {
-    latestVersion = null
-    nextVersion = null
+    return
   }
+  // npm view 返回 {"dist-tags": {latest, next, alpha, ...}}；解析失败时兜底为 null。
+  const tags = (parsed && typeof parsed === 'object') ? (parsed['dist-tags'] ?? parsed) : null
+  const current = installedVersion(args.runtimeDir)
+  latestVersion = tags && typeof tags.latest === 'string' ? tags.latest : null
+  let best = null
+  nextTag = null
+  if (tags && typeof tags === 'object') {
+    for (const [tagName, v] of Object.entries(tags)) {
+      if (typeof v !== 'string' || !v || v === latestVersion || v === current) continue
+      // 预发布通道只提示"高于稳定线的新预发布"（如 0.1.3-alpha.1 > latest
+      // rc.1）；比 latest 旧的 alpha/beta 不应引导用户"升级"。
+      if (latestVersion !== null && !versionGt(v, latestVersion)) continue
+      if (versionGt(v, current) && (best === null || versionGt(v, best))) { best = v; nextTag = tagName }
+    }
+  }
+  nextVersion = best
 }
 
-/** 极简预发布感知比较：0.1.0-rc.8 > 0.1.0-rc.7；正式版（无 -rc）> 任何 rc。 */
+/** 预发布排序值：无 pre 最高（正式版）；alpha < beta < rc；数字越大越高。 */
+function preOrder(v) {
+  const pre = String(v).split('-')[1]
+  if (!pre) return 999
+  const m = /^([a-z]+)\.?(\d+)?/.exec(pre)
+  const rank = { alpha: 0, beta: 1, rc: 2 }[m ? m[1] : ''] ?? 0
+  return rank * 1000 + Number(m && m[2] ? m[2] : 0)
+}
+
+/** 极简预发布感知比较：0.1.2-rc.1 > 0.1.2-alpha.5；正式版 > 任何预发布。 */
 function versionGt(a, b) {
   const pa = String(a).split('-')[0].split('.').map(Number)
   const pb = String(b).split('-')[0].split('.').map(Number)
   for (let i = 0; i < 3; i++) {
     if ((pa[i] ?? 0) !== (pb[i] ?? 0)) return (pa[i] ?? 0) > (pb[i] ?? 0)
   }
-  const ra = /rc\.(\d+)/.exec(String(a))
-  const rb = /rc\.(\d+)/.exec(String(b))
-  const na = ra ? Number(ra[1]) : Infinity
-  const nb = rb ? Number(rb[1]) : Infinity
-  return na > nb
+  return preOrder(a) > preOrder(b)
 }
 
 function installedVersion(runtimeDir) {
@@ -336,6 +351,7 @@ function isIsolatedPnpmLayout(runtimeDir) {
 // ── update status ──────────────────────────────────────────────────────────
 let latestVersion = null
 let nextVersion = null
+let nextTag = null // 预发布候选所在 dist-tag（alpha/beta/next…）
 // Shell manifest (<runtime>/dsh.json) snapshot: preinstalled list, devMode, …
 let shellManifest = {}
 
@@ -350,6 +366,7 @@ function emitUpdateStatus(updateAvailable) {
     // 上时 latest（rc.7）反而更旧，绝不能提示降级。
     updateAvailable: updateAvailable ?? (latestVersion !== null && versionGt(latestVersion, current)),
     next: nextVersion,
+    nextTag: nextVersion ? nextTag : null,
     nextAvailable: nextVersion !== null && nextVersion !== latestVersion && current !== nextVersion && versionGt(nextVersion, current),
   })
 }
@@ -369,7 +386,7 @@ async function checkDshUpdate({ frozen = false } = {}) {
   }
   try {
     await resolveRemoteVersions()
-    log(`npm latest ${PACKAGE}: ${latestVersion ?? 'unknown'}${nextVersion ? ` (next ${nextVersion})` : ''}`)
+    log(`npm latest ${PACKAGE}: ${latestVersion ?? 'unknown'}${nextVersion ? ` (${nextTag ?? '?'} ${nextVersion})` : ''}`)
   } catch (err) {
     latestVersion = null
     nextVersion = null
@@ -390,6 +407,46 @@ async function checkDshUpdate({ frozen = false } = {}) {
  * replace. The caller kills dsh first (see `updateDshAndRestart`).
  * @returns true when a new version was installed.
  */
+/**
+ * 迁移修复（幂等）：pnpm 在 node_modules/.modules.yaml 里记录 storeDir /
+ * virtualStoreDir 的绝对路径；0.3.x→0.4.x 标识迁移整体 rename 了 runtime 目录，
+ * 旧路径失配会让 pnpm 报 ERR_PNPM_UNEXPECTED_STORE——升级安装必然失败，而 UI
+ * 只看 update-status（远端版本），用户会误以为"升级成功"，重启后仍是旧版。
+ * 任何 pnpm 安装前调用：把两个字段重写为当前 runtime 的绝对路径。
+ */
+function ensureStorePathsMatch(runtimeDir) {
+  const modulesYaml = join(runtimeDir, 'node_modules', '.modules.yaml')
+  if (!existsSync(modulesYaml)) return
+  let doc = null
+  try {
+    doc = JSON.parse(readFileSync(modulesYaml, 'utf8'))
+  } catch {
+    return
+  }
+  const norm = (p) => resolve(p).replaceAll('\\', '/')
+  const actualStore = norm(join(runtimeDir, '.pnpm-store'))
+  const actualVirtual = norm(join(runtimeDir, 'node_modules', '.pnpm'))
+  let changed = false
+  if (typeof doc.storeDir === 'string' && norm(doc.storeDir) !== actualStore) {
+    // 保留末端版本段（v11 等），只替换根前缀
+    const m = /(v\d+)\s*$/.exec(norm(doc.storeDir))
+    doc.storeDir = join(runtimeDir, '.pnpm-store', m ? m[1] : 'v11')
+    changed = true
+  }
+  if (typeof doc.virtualStoreDir === 'string' && norm(doc.virtualStoreDir) !== actualVirtual) {
+    doc.virtualStoreDir = join(runtimeDir, 'node_modules', '.pnpm')
+    changed = true
+  }
+  if (changed) {
+    try {
+      writeFileSync(modulesYaml, JSON.stringify(doc, null, 2))
+      log('ensureStorePathsMatch: rewrote store dirs in .modules.yaml (legacy path after migration)')
+    } catch (err) {
+      log(`ensureStorePathsMatch: rewrite failed: ${err.message}`)
+    }
+  }
+}
+
 async function installDshUpdate({ force = false, version } = {}) {
   const current = installedVersion(args.runtimeDir)
   const fullyInstalled = dshInstalled(args.runtimeDir)
@@ -453,6 +510,8 @@ async function installDshUpdate({ force = false, version } = {}) {
     // launch + injected plugins + URL all work with the pnpm layout).
     ensurePnpmWorkspace(args.runtimeDir)
     await ensurePnpm(args.runtimeDir)
+    // 迁移后 store 路径失配修复：必须在任何 pnpm install 前执行。
+    ensureStorePathsMatch(args.runtimeDir)
     // Registry fallback chain: mirrors can lag on freshly-published deps, so
     // retry with the other default if the primary install fails.
     const fallback = REGISTRY === 'https://registry.npmjs.org/'
@@ -888,11 +947,76 @@ function readdirRecursive(dir) {
 }
 
 // ── dsh process ────────────────────────────────────────────────────────────
-const URL_RE = /(https?:\/\/127\.0\.0\.1:\d+)/
+// 0.1.2-rc.1 起 dsh web URL 带 token（?token=...）：URL 快照必须保留尾部，
+// 否则 watchdog / 壳导航拿到的是无 token 地址（401），被误判为服务不响应。
+const URL_RE = /(https?:\/\/127\.0\.0\.1:\d+[^\s]*)/
 
 let currentChild = null
+let currentChildPid = null
 let restartRequested = false
 let pendingTask = null
+
+// ── liveness watchdog ──────────────────────────────────────────────────────
+// dsh web can EVENT-LOOP HANG (black page, refresh dead) without exiting, so
+// the supervisor's normal child-exit path never fires. Poll the reported URL:
+// after WATCHDOG_MISS_LIMIT silent misses the child gets a best-effort memory
+// dump and is killed + re-spawned (same recovery as the tray's 重启服务), so
+// the next hang recovers by itself AND leaves a dump for diagnosis. Evidence
+// lands in <runtime>/reports (same dir as node --report crash reports).
+let watchdogUrl = null
+let watchdogArmed = false
+let watchdogMisses = 0
+let watchdogTimer = null
+const WATCHDOG_MS = 3000
+const WATCHDOG_MISS_LIMIT = 3
+
+function watchdogStart() {
+  if (watchdogTimer) return
+  watchdogTimer = setInterval(() => { void watchdogTick() }, WATCHDOG_MS)
+  watchdogTimer.unref?.()
+}
+async function watchdogTick() {
+  if (!watchdogUrl || !watchdogArmed) return
+  let ok = false
+  try {
+    const res = await fetch(watchdogUrl, { signal: AbortSignal.timeout(1500) })
+    // 存活判定：任何 HTTP 状态（含 401/404 等鉴权/路由响应）都说明服务在
+    // 听并应答——只有连接失败/超时才算 miss。
+    ok = res.status >= 200 && res.status < 500
+  } catch { /* unresponsive */ }
+  if (ok) { watchdogMisses = 0; return }
+  watchdogMisses += 1
+  log(`watchdog: dsh web miss ${watchdogMisses}/${WATCHDOG_MISS_LIMIT} (${watchdogUrl})`)
+  if (watchdogMisses >= WATCHDOG_MISS_LIMIT) {
+    log(`watchdog: dsh web UNRESPONSIVE — dumping pid ${currentChildPid ?? '?'} then restarting`)
+    dumpChild(currentChildPid)
+    watchdogMisses = 0
+    watchdogArmed = false
+    watchdogUrl = null
+    if (currentChildPid) { restartRequested = true; killTree(currentChildPid) }
+  }
+}
+function dumpChild(pid) {
+  if (!pid) return
+  try {
+    // Full memory dump via the comsvcs MiniDump path (no external tools); the
+    // debugger then tells us exactly where the event loop is stuck.
+    const out = join(args.runtimeDir, 'reports', `dshweb-${pid}-${Date.now()}.dmp`)
+    const rr = spawnSync('C:\\Windows\\System32\\rundll32.exe', [`c:\\windows\\system32\\comsvcs.dll, MiniDump`, String(pid), out, 'full'], { stdio: 'ignore', timeout: 20000, windowsHide: true })
+    // MiniDump 由 rundll32 异步写盘：spawnSync 返回后再短暂重试读取。
+    let produced = false
+    for (let i = 0; i < 10 && !produced; i++) {
+      produced = existsSync(out)
+      if (!produced) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300)
+    }
+    // 失败必须留痕（实践：多次静默失败，导致 reports/ 空、无法分析）。
+    if (produced) {
+      log(`watchdog: dump saved ${out}`)
+    } else {
+      log(`watchdog: dump NOT produced for pid ${pid} (rundll32 exit=${rr.status ?? '?'})`)
+    }
+  } catch (err) { log(`watchdog: dump failed: ${err.message}`) }
+}
 
 function killTree(pid) {
   try {
@@ -927,6 +1051,22 @@ function setPendingTask(task) {
 async function launchDsh(runtimeDir, patchPath, cwd) {
   const entry = dshEntry(runtimeDir)
   if (!existsSync(entry)) throw new Error(`${PACKAGE} not installed at ${entry}`)
+  // dsh CLI regression（0.1.2-rc.1 起）：--patch 参数如果含空格（安装目录
+  // "DSH Smoothly Desktop"），overlay 以空白切分导致路径截断、启动失败
+  // （0.1.1-rc.2 正常）。兼容处理：把 patch 复制到无空格路径
+  // <runtime>/dsh-desktop.patch.yml 再传参——新旧版本均适用，幂等。
+  const SPACE_FREE_PATCH = 'dsh-desktop.patch.yml'
+  let patchArg = patchPath
+  if (/[\s]/.test(patchPath)) {
+    const mirror = join(runtimeDir, SPACE_FREE_PATCH)
+    try {
+      cpSync(patchPath, mirror, { force: true })
+      patchArg = mirror
+      log(`patch overlay 路径含空格（dsh ${installedVersion(runtimeDir) ?? '?'} CLI 截断 regression）→ 改用无空格镜像 ${mirror}`)
+    } catch (err) {
+      log(`patch 无空格镜像失败（fallback 原路径）: ${err.message}`)
+    }
+  }
   // Desktop-owned DSH_HOME (default <runtime>/dsh-home): keeps data
   // self-contained and — crucially — makes the profile's module resolver walk
   // up to <runtime>/node_modules so the injected plugin package resolves.
@@ -940,17 +1080,36 @@ async function launchDsh(runtimeDir, patchPath, cwd) {
   // everything after it to the booted app verbatim. `--no-open` is a web-app
   // flag, so it must trail `--patch` or the patch overlay would be handed to
   // the web app ("unknown option '--patch'").
-  const child = spawn(process.execPath, [entry, 'web', '--patch', patchPath, '--no-open', '--host', '127.0.0.1', '--port', '0'], {
+  const child = spawn(process.execPath, [entry, 'web', '--patch', patchArg, '--no-open', '--host', '127.0.0.1', '--port', '0'], {
     cwd,
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, DSH_HOME: dshHome },
+    // Node crash reports (OOM / fatal / uncaught exception) land in
+    // <runtime>/reports so a hard death of dsh web is diagnosable even without
+    // WER. Only the dsh web child gets NODE_OPTIONS; the manager itself stays
+    // clean.
+    env: {
+      ...process.env,
+      DSH_HOME: dshHome,
+      NODE_OPTIONS: [
+        process.env.NODE_OPTIONS ?? '',
+        `--report-on-fatalerror --report-uncaught-exception --report-compact --report-dir=${join(runtimeDir, 'reports').replaceAll('\\', '/')}`,
+      ].filter(Boolean).join(' '),
+    },
     windowsHide: true,
   })
+  mkdirSync(join(runtimeDir, 'reports'), { recursive: true })
   child.stdout.on('data', (buf) => {
     for (const line of String(buf).split(/\r?\n/)) {
       if (!line) continue
       const m = line.match(URL_RE)
-      if (m) emit({ t: 'url', url: m[1] })
+      if (m) {
+        emit({ t: 'url', url: m[1] })
+        // Watchdog: re-arm on every announced URL (a new URL = a respawn).
+        watchdogUrl = m[1]
+        watchdogMisses = 0
+        watchdogArmed = true
+        watchdogStart()
+      }
       log(line)
     }
   })
@@ -958,8 +1117,14 @@ async function launchDsh(runtimeDir, patchPath, cwd) {
     for (const line of String(buf).split(/\r?\n/)) if (line) log(line)
   })
   currentChild = child
+  currentChildPid = child.pid
   const code = await new Promise((resolvePromise) => child.on('exit', (c, s) => resolvePromise(c ?? (s === 'SIGKILL' ? 137 : 1))))
   if (currentChild === child) currentChild = undefined
+  // Child gone: disarm the watchdog until a fresh URL is announced.
+  watchdogUrl = null
+  watchdogArmed = false
+  watchdogMisses = 0
+  currentChildPid = null
   return { code, pid: child.pid }
 }
 
@@ -1011,6 +1176,9 @@ async function updateDshAndRestart(version) {
       }
     } catch (err) {
       log(`update failed: ${err.message}`)
+      // 如实回报 UI：op-status error 让「检查更新」弹窗显示失败原因，
+      // 而不是让用户看着 update-status 的"可升级"误以为成功。
+      emitOpStatus({ op: 'update-dsh', done: true, ok: false, error: err.message })
       emitUpdateStatus(false)
     }
   })()

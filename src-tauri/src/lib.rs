@@ -2568,6 +2568,30 @@ pub fn run() {
             // identifier 已统一为 dsh.smoothly.desktop；老版本（dev.dsh.desktop
             // 系）已装用户的旧数据目录在此整体迁入新目录，否则升级即"数据丢失"。
             migrate_legacy_data(app.handle());
+            // ── 导航兜底守护线程：WebView2 冷启动时首次 server-url 的
+            // navigate 会丢失（黑屏根因；launcher JS 轮询依赖 capability/
+            // 时序不可靠）。Rust 侧每 2s 检查：主窗口仍在本地页（tauri:）
+            // 且已有 live dsh URL → 强制导航；已到 dsh 页则不动。幂等、
+            // 持续到成功，重启服务后的新 URL 也会被自动推入。
+            {
+                let nav_app = app.handle().clone();
+                std::thread::spawn(move || loop {
+                    std::thread::sleep(std::time::Duration::from_millis(2000));
+                    let live = LIVE_DSH_URL.lock().unwrap().clone();
+                    let Some(live) = live else { continue };
+                    let Some(w) = nav_app.get_webview_window("main") else { continue };
+                    let Ok(cur) = w.url() else { continue };
+                    let cur_str = cur.to_string();
+                    let is_dsh_like = cur_str.starts_with("http://127.0.0.1:")
+                        || cur_str.starts_with("http://localhost:");
+                    if is_dsh_like {
+                        continue; // 已到 dsh 页，无需干预
+                    }
+                    if let Ok(u) = tauri::Url::parse(&live) {
+                        let _ = w.navigate(u);
+                    }
+                });
+            }
             // ── process-level toast activator (Windows): makes Action Center
             // clicks relaunch the exe (`-ToastActivated`), which
             // single-instance then forwards home. Must happen before the
