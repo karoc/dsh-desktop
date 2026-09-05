@@ -260,40 +260,54 @@ function pnpm(argsList, { cwd, timeoutMs = 600_000, stream = false } = {}) {
 }
 
 /**
- * 查询远端版本：`latest`（稳定 tag）与 `next`（预发布 tag，如 0.1.0-rc.8）。
- * dsh 团队常把新 rc 标在 next 而非 latest——只读 latest 会让用户看不到更新。
- * 两值都存入模块级 latestVersion / nextVersion，UI 据此展示"有预发布可升"。
+ * 查询远端版本：latest（稳定 tag）+ 全部预发布 tag（next/alpha/beta 等）。
+ * dsh 团队常把新 rc/alpha 标在 next/alpha 而非 latest；只读 latest 会漏更新，
+ * 只读 next 会漏 alpha 等其它预发布 tag。规则：latest 取 dist-tags.latest；
+ * nextVersion 取"所有 tag 版本中高于当前版本的最高者"（允许任意预发布 tag）。
  */
 async function resolveRemoteVersions() {
-  const out = await npm(['view', PACKAGE, 'dist-tags.latest', 'dist-tags.next', '--json', '--registry', REGISTRY], { timeoutMs: 60_000 })
+  const out = await npm(['view', PACKAGE, 'dist-tags', '--json', '--registry', REGISTRY], { timeoutMs: 60_000 })
   let parsed = null
   try { parsed = JSON.parse(out) } catch { parsed = null }
-  // npm view 多字段返回的对象键带完整路径（dist-tags.latest / dist-tags.next）；
-  // 若某 tag 不存在则折叠为纯字符串（只剩 latest）。
   if (typeof parsed === 'string') {
     latestVersion = parsed
     nextVersion = null
-  } else if (parsed && typeof parsed === 'object') {
-    latestVersion = parsed['dist-tags.latest'] ?? parsed.latest ?? null
-    nextVersion = parsed['dist-tags.next'] ?? parsed.next ?? null
-  } else {
-    latestVersion = null
-    nextVersion = null
+    return
   }
+  // npm view 返回 {"dist-tags": {latest, next, alpha, ...}}；解析失败时兜底为 null。
+  const tags = (parsed && typeof parsed === 'object') ? (parsed['dist-tags'] ?? parsed) : null
+  const current = installedVersion(args.runtimeDir)
+  latestVersion = tags && typeof tags.latest === 'string' ? tags.latest : null
+  let best = null
+  if (tags && typeof tags === 'object') {
+    for (const v of new Set(Object.values(tags))) {
+      if (typeof v !== 'string' || !v || v === latestVersion || v === current) continue
+      // 预发布通道只提示"高于稳定线的新预发布"（如 0.1.3-alpha.1 > latest
+      // rc.1）；比 latest 旧的 alpha/beta 不应引导用户"升级"。
+      if (latestVersion !== null && !versionGt(v, latestVersion)) continue
+      if (versionGt(v, current) && (best === null || versionGt(v, best))) best = v
+    }
+  }
+  nextVersion = best
 }
 
-/** 极简预发布感知比较：0.1.0-rc.8 > 0.1.0-rc.7；正式版（无 -rc）> 任何 rc。 */
+/** 预发布排序值：无 pre 最高（正式版）；alpha < beta < rc；数字越大越高。 */
+function preOrder(v) {
+  const pre = String(v).split('-')[1]
+  if (!pre) return 999
+  const m = /^([a-z]+)\.?(\d+)?/.exec(pre)
+  const rank = { alpha: 0, beta: 1, rc: 2 }[m ? m[1] : ''] ?? 0
+  return rank * 1000 + Number(m && m[2] ? m[2] : 0)
+}
+
+/** 极简预发布感知比较：0.1.2-rc.1 > 0.1.2-alpha.5；正式版 > 任何预发布。 */
 function versionGt(a, b) {
   const pa = String(a).split('-')[0].split('.').map(Number)
   const pb = String(b).split('-')[0].split('.').map(Number)
   for (let i = 0; i < 3; i++) {
     if ((pa[i] ?? 0) !== (pb[i] ?? 0)) return (pa[i] ?? 0) > (pb[i] ?? 0)
   }
-  const ra = /rc\.(\d+)/.exec(String(a))
-  const rb = /rc\.(\d+)/.exec(String(b))
-  const na = ra ? Number(ra[1]) : Infinity
-  const nb = rb ? Number(rb[1]) : Infinity
-  return na > nb
+  return preOrder(a) > preOrder(b)
 }
 
 function installedVersion(runtimeDir) {
@@ -390,6 +404,46 @@ async function checkDshUpdate({ frozen = false } = {}) {
  * replace. The caller kills dsh first (see `updateDshAndRestart`).
  * @returns true when a new version was installed.
  */
+/**
+ * 迁移修复（幂等）：pnpm 在 node_modules/.modules.yaml 里记录 storeDir /
+ * virtualStoreDir 的绝对路径；0.3.x→0.4.x 标识迁移整体 rename 了 runtime 目录，
+ * 旧路径失配会让 pnpm 报 ERR_PNPM_UNEXPECTED_STORE——升级安装必然失败，而 UI
+ * 只看 update-status（远端版本），用户会误以为"升级成功"，重启后仍是旧版。
+ * 任何 pnpm 安装前调用：把两个字段重写为当前 runtime 的绝对路径。
+ */
+function ensureStorePathsMatch(runtimeDir) {
+  const modulesYaml = join(runtimeDir, 'node_modules', '.modules.yaml')
+  if (!existsSync(modulesYaml)) return
+  let doc = null
+  try {
+    doc = JSON.parse(readFileSync(modulesYaml, 'utf8'))
+  } catch {
+    return
+  }
+  const norm = (p) => resolve(p).replaceAll('\\', '/')
+  const actualStore = norm(join(runtimeDir, '.pnpm-store'))
+  const actualVirtual = norm(join(runtimeDir, 'node_modules', '.pnpm'))
+  let changed = false
+  if (typeof doc.storeDir === 'string' && norm(doc.storeDir) !== actualStore) {
+    // 保留末端版本段（v11 等），只替换根前缀
+    const m = /(v\d+)\s*$/.exec(norm(doc.storeDir))
+    doc.storeDir = join(runtimeDir, '.pnpm-store', m ? m[1] : 'v11')
+    changed = true
+  }
+  if (typeof doc.virtualStoreDir === 'string' && norm(doc.virtualStoreDir) !== actualVirtual) {
+    doc.virtualStoreDir = join(runtimeDir, 'node_modules', '.pnpm')
+    changed = true
+  }
+  if (changed) {
+    try {
+      writeFileSync(modulesYaml, JSON.stringify(doc, null, 2))
+      log('ensureStorePathsMatch: rewrote store dirs in .modules.yaml (legacy path after migration)')
+    } catch (err) {
+      log(`ensureStorePathsMatch: rewrite failed: ${err.message}`)
+    }
+  }
+}
+
 async function installDshUpdate({ force = false, version } = {}) {
   const current = installedVersion(args.runtimeDir)
   const fullyInstalled = dshInstalled(args.runtimeDir)
@@ -453,6 +507,8 @@ async function installDshUpdate({ force = false, version } = {}) {
     // launch + injected plugins + URL all work with the pnpm layout).
     ensurePnpmWorkspace(args.runtimeDir)
     await ensurePnpm(args.runtimeDir)
+    // 迁移后 store 路径失配修复：必须在任何 pnpm install 前执行。
+    ensureStorePathsMatch(args.runtimeDir)
     // Registry fallback chain: mirrors can lag on freshly-published deps, so
     // retry with the other default if the primary install fails.
     const fallback = REGISTRY === 'https://registry.npmjs.org/'
@@ -1086,6 +1142,9 @@ async function updateDshAndRestart(version) {
       }
     } catch (err) {
       log(`update failed: ${err.message}`)
+      // 如实回报 UI：op-status error 让「检查更新」弹窗显示失败原因，
+      // 而不是让用户看着 update-status 的"可升级"误以为成功。
+      emitOpStatus({ op: 'update-dsh', done: true, ok: false, error: err.message })
       emitUpdateStatus(false)
     }
   })()

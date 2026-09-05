@@ -811,6 +811,16 @@
 
     function render() {
       body.textContent = '';
+      // 更新失败（manager op-status error）：如实显示，避免"显示新版本=升级成功"错觉。
+      const opErr = info.op && info.op.done && info.op.ok === false && info.op.error;
+      if (opErr) {
+        body.appendChild(el('div', `更新失败：${opErr}`, 'dlg-note'));
+        body.appendChild(el('div', '可打开数据目录查看 manager.log 中的 update failed 详情后重试。', 'dlg-note'));
+        btnUpdate.hidden = false;
+        btnUpdate.disabled = false;
+        btnUpdate.textContent = '重试更新';
+        return;
+      }
       if (busy) {
         const line = document.createElement('div');
         line.className = 'dlg-progress';
@@ -868,6 +878,8 @@
 
     btnClose.addEventListener('click', closeDialog);
     btnUpdate.addEventListener('click', () => {
+      // 重试前清掉上次的 op 失败标记（op-status 会随新结果回填）。
+      if (info.op) info.op = {};
       btnUpdate.disabled = true;
       btnUpdate.textContent = '更新中…';
       body.textContent = '';

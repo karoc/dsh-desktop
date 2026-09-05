@@ -2257,12 +2257,21 @@ fn quit_app(app: AppHandle, state: State<'_, ServerState>) -> Result<(), String>
 #[tauri::command]
 fn get_update_status(state: State<'_, ServerState>) -> serde_json::Value {
     let s = state.update.lock().unwrap();
+    // op 镜像（manager op-status）：更新失败时 UI 需要看到 error，而不是
+    // 只看远端版本号产生"升级成功"的错觉。
+    let op = state.op.lock().unwrap();
     serde_json::json!({
         "current": s.current,
         "latest": s.latest,
         "updateAvailable": s.update_available,
         "next": s.next,
         "nextAvailable": s.next_available,
+        "op": {
+            "op": op.op,
+            "done": op.done,
+            "ok": op.ok,
+            "error": op.error,
+        },
     })
 }
 
