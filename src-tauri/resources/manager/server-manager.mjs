@@ -944,7 +944,9 @@ function readdirRecursive(dir) {
 }
 
 // ── dsh process ────────────────────────────────────────────────────────────
-const URL_RE = /(https?:\/\/127\.0\.0\.1:\d+)/
+// 0.1.2-rc.1 起 dsh web URL 带 token（?token=...）：URL 快照必须保留尾部，
+// 否则 watchdog / 壳导航拿到的是无 token 地址（401），被误判为服务不响应。
+const URL_RE = /(https?:\/\/127\.0\.0\.1:\d+[^\s]*)/
 
 let currentChild = null
 let currentChildPid = null
@@ -975,7 +977,9 @@ async function watchdogTick() {
   let ok = false
   try {
     const res = await fetch(watchdogUrl, { signal: AbortSignal.timeout(1500) })
-    ok = res.ok
+    // 存活判定：任何 HTTP 状态（含 401/404 等鉴权/路由响应）都说明服务在
+    // 听并应答——只有连接失败/超时才算 miss。
+    ok = res.status >= 200 && res.status < 500
   } catch { /* unresponsive */ }
   if (ok) { watchdogMisses = 0; return }
   watchdogMisses += 1
@@ -995,8 +999,19 @@ function dumpChild(pid) {
     // Full memory dump via the comsvcs MiniDump path (no external tools); the
     // debugger then tells us exactly where the event loop is stuck.
     const out = join(args.runtimeDir, 'reports', `dshweb-${pid}-${Date.now()}.dmp`)
-    spawnSync('rundll32', [`c:\\windows\\system32\\comsvcs.dll, MiniDump`, String(pid), out, 'full'], { stdio: 'ignore', timeout: 20000, windowsHide: true })
-    if (existsSync(out)) log(`watchdog: dump saved ${out}`)
+    const rr = spawnSync('C:\\Windows\\System32\\rundll32.exe', [`c:\\windows\\system32\\comsvcs.dll, MiniDump`, String(pid), out, 'full'], { stdio: 'ignore', timeout: 20000, windowsHide: true })
+    // MiniDump 由 rundll32 异步写盘：spawnSync 返回后再短暂重试读取。
+    let produced = false
+    for (let i = 0; i < 10 && !produced; i++) {
+      produced = existsSync(out)
+      if (!produced) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300)
+    }
+    // 失败必须留痕（实践：多次静默失败，导致 reports/ 空、无法分析）。
+    if (produced) {
+      log(`watchdog: dump saved ${out}`)
+    } else {
+      log(`watchdog: dump NOT produced for pid ${pid} (rundll32 exit=${rr.status ?? '?'})`)
+    }
   } catch (err) { log(`watchdog: dump failed: ${err.message}`) }
 }
 
@@ -1033,6 +1048,22 @@ function setPendingTask(task) {
 async function launchDsh(runtimeDir, patchPath, cwd) {
   const entry = dshEntry(runtimeDir)
   if (!existsSync(entry)) throw new Error(`${PACKAGE} not installed at ${entry}`)
+  // dsh CLI regression（0.1.2-rc.1 起）：--patch 参数如果含空格（安装目录
+  // "DSH Smoothly Desktop"），overlay 以空白切分导致路径截断、启动失败
+  // （0.1.1-rc.2 正常）。兼容处理：把 patch 复制到无空格路径
+  // <runtime>/dsh-desktop.patch.yml 再传参——新旧版本均适用，幂等。
+  const SPACE_FREE_PATCH = 'dsh-desktop.patch.yml'
+  let patchArg = patchPath
+  if (/[\s]/.test(patchPath)) {
+    const mirror = join(runtimeDir, SPACE_FREE_PATCH)
+    try {
+      cpSync(patchPath, mirror, { force: true })
+      patchArg = mirror
+      log(`patch overlay 路径含空格（dsh ${installedVersion(runtimeDir) ?? '?'} CLI 截断 regression）→ 改用无空格镜像 ${mirror}`)
+    } catch (err) {
+      log(`patch 无空格镜像失败（fallback 原路径）: ${err.message}`)
+    }
+  }
   // Desktop-owned DSH_HOME (default <runtime>/dsh-home): keeps data
   // self-contained and — crucially — makes the profile's module resolver walk
   // up to <runtime>/node_modules so the injected plugin package resolves.
@@ -1046,7 +1077,7 @@ async function launchDsh(runtimeDir, patchPath, cwd) {
   // everything after it to the booted app verbatim. `--no-open` is a web-app
   // flag, so it must trail `--patch` or the patch overlay would be handed to
   // the web app ("unknown option '--patch'").
-  const child = spawn(process.execPath, [entry, 'web', '--patch', patchPath, '--no-open', '--host', '127.0.0.1', '--port', '0'], {
+  const child = spawn(process.execPath, [entry, 'web', '--patch', patchArg, '--no-open', '--host', '127.0.0.1', '--port', '0'], {
     cwd,
     stdio: ['ignore', 'pipe', 'pipe'],
     // Node crash reports (OOM / fatal / uncaught exception) land in
