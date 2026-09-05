@@ -2376,8 +2376,13 @@ fn window_control(app: AppHandle, action: String) -> Result<serde_json::Value, S
 #[tauri::command]
 fn get_shell_state(app: AppHandle, state: State<'_, ServerState>) -> serde_json::Value {
     let upd = state.update.lock().unwrap();
+    // liveUrl：当前 dsh web 完整地址（含 token）。launcher 页用它做导航兜底——
+    // WebView2 冷启动时首次 server-url 的 navigate 可能丢（黑屏根因），页面
+    // 自己轮询跳转不受窗口初始化时序影响。
+    let live_url = LIVE_DSH_URL.lock().unwrap().clone();
     serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
+        "liveUrl": live_url,
         "devMode": dev_mode(&runtime_dir(&app)),
         "update": {
             "current": upd.current,

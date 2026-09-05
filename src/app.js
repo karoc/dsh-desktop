@@ -240,6 +240,36 @@ openDataBtn.addEventListener('click', async () => {
   }
 });
 
+// ── 导航兜底：WebView2 冷启动时首次 server-url 的 navigate 可能丢失 ──────
+// （壳黑屏根因：manager 1.5s 出 URL，窗口初始化需数秒）。launcher 自身轮询
+// liveUrl 并跳转，不依赖窗口就绪时序；仅当仍停在本地页（tauri:）时执行。
+const NAV_POLL_MS = 1000;
+const NAV_POLL_LIMIT = 120;
+let navPolled = 0;
+const navTimer = setInterval(async () => {
+  navPolled += 1;
+  if (navPolled > NAV_POLL_LIMIT) {
+    clearInterval(navTimer);
+    return;
+  }
+  if (location.protocol !== 'tauri:') {
+    clearInterval(navTimer); // 已离开启动页（正常导航完成）
+    return;
+  }
+  try {
+    const st = await tauri.core.invoke('get_shell_state');
+    const url = st && typeof st.liveUrl === 'string' ? st.liveUrl : null;
+    if (url && /^https?:\/\//.test(url) && !gotUrl) {
+      gotUrl = true;
+      clearTimeout(launchStallTimer);
+      setState('dsh 已就绪，正在打开界面…');
+      window.location.href = url;
+    }
+  } catch {
+    /* 壳尚未就绪时静默重试 */
+  }
+}, NAV_POLL_MS);
+
 // ── 旧版（0.3.x）残留检测横幅 ───────────────────────────
 // 启动时查一次 check_legacy_install：发现旧安装或旧数据目录被空壳重建
 // （dev.dsh.desktop 意外出现）→ 显示横幅，可一键清理（静默卸载旧版 +
