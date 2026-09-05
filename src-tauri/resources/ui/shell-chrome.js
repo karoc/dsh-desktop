@@ -840,7 +840,7 @@
         delete btnUpdate.dataset.version; // 稳定版更新不需要指定版本
       } else if (info.nextAvailable && info.next) {
         body.appendChild(dlgRow('当前版本', `v${info.current || '?'}`));
-        body.appendChild(dlgRow('预发布', `v${info.next}（非正式版）`));
+        body.appendChild(dlgRow('预发布', `v${info.next}（${info.nextTag || 'pre'} 通道，非正式版）`));
         body.appendChild(el('div', '最新稳定版无需更新；存在预发布通道版本，按需自选。', 'dlg-note'));
         btnUpdate.hidden = false;
         btnUpdate.disabled = false;

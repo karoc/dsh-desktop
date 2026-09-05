@@ -65,8 +65,11 @@ struct UpdateStatus {
     current: Option<String>,
     latest: Option<String>,
     update_available: bool,
-    /// Pre-release channel (npm `next` tag), e.g. 0.1.0-rc.8 when latest is rc.7.
+    /// Pre-release channel version (any dist-tag: alpha/beta/next…), e.g.
+    /// 0.1.3-alpha.1 when latest is 0.1.2-rc.1.
     next: Option<String>,
+    /// Which dist-tag the pre-release candidate came from (alpha/beta/next).
+    next_tag: Option<String>,
     next_available: bool,
 }
 
@@ -1807,6 +1810,7 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
                         let latest = ev.get("latest").and_then(|v| v.as_str()).map(String::from);
                         let available = ev.get("updateAvailable").and_then(|v| v.as_bool()).unwrap_or(false);
                         let next = ev.get("next").and_then(|v| v.as_str()).map(String::from);
+                        let next_tag = ev.get("nextTag").and_then(|v| v.as_str()).map(String::from);
                         let next_available = ev.get("nextAvailable").and_then(|v| v.as_bool()).unwrap_or(false);
                         let state = handle.state::<ServerState>();
                         {
@@ -1815,6 +1819,7 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
                             upd.latest = latest.clone();
                             upd.update_available = available;
                             upd.next = next.clone();
+                            upd.next_tag = next_tag.clone();
                             upd.next_available = next_available;
                         }
                         // Flip the tray item between "检查更新…" and "有更新 vX（点击更新）".
@@ -2265,6 +2270,7 @@ fn get_update_status(state: State<'_, ServerState>) -> serde_json::Value {
         "latest": s.latest,
         "updateAvailable": s.update_available,
         "next": s.next,
+        "nextTag": s.next_tag,
         "nextAvailable": s.next_available,
         "op": {
             "op": op.op,

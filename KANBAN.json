@@ -628,6 +628,24 @@
       ],
       "createdAt": 1788616848536,
       "updatedAt": 1788616848536
+    },
+    {
+      "id": "card-a854c278-10f1-41de-a8b3-7eb8d1c91f04",
+      "title": "0.1.2-rc.1 兼容修复：patch 空格截断 + token URL watchdog 误判",
+      "summary": "四修已部署并验证稳定（新 web 20+ 分钟零 miss）：launchDsh patch 空格镜像（runtime/dsh-desktop.patch.yml）；URL_RE 保留 token 尾部 + 存活判定放宽 2xx-4xx；dumpChild 绝对路径 rundll32 + 产出校验 + 失败留痕。提交推送 6876b01。",
+      "rationale": "升级 0.1.2-rc.1 后黑屏循环（watchdog 6 轮重启）：两个 dsh 回归与壳不兼容——① --patch 空格路径被 CLI 按空白截断（overlay 读取失败）；② web URL 带 token 后 watchdog 无 token 探测得到 401 被误判 miss（无限重启）。另发现 dumpChild 静默失败。全部已修并部署。",
+      "rejected": "放弃回滚 0.1.1-rc.2（适配后 rc.1 验证可用，保留新版本以便顺带验证其进程树修复）；放弃经 Temp 路径绕过（不治本）；dump 等待不做成阻塞主循环的忙等。",
+      "sourceSessionId": "session-788be97d-7ef1-480f-9552-d09ab4eaf37b",
+      "status": "done",
+      "tags": [
+        "windows",
+        "upgrade",
+        "bug-fix",
+        "watchdog",
+        "done"
+      ],
+      "createdAt": 1788618070482,
+      "updatedAt": 1788618070482
     }
   ]
 }

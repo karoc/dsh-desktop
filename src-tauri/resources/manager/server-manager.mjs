@@ -279,13 +279,14 @@ async function resolveRemoteVersions() {
   const current = installedVersion(args.runtimeDir)
   latestVersion = tags && typeof tags.latest === 'string' ? tags.latest : null
   let best = null
+  nextTag = null
   if (tags && typeof tags === 'object') {
-    for (const v of new Set(Object.values(tags))) {
+    for (const [tagName, v] of Object.entries(tags)) {
       if (typeof v !== 'string' || !v || v === latestVersion || v === current) continue
       // 预发布通道只提示"高于稳定线的新预发布"（如 0.1.3-alpha.1 > latest
       // rc.1）；比 latest 旧的 alpha/beta 不应引导用户"升级"。
       if (latestVersion !== null && !versionGt(v, latestVersion)) continue
-      if (versionGt(v, current) && (best === null || versionGt(v, best))) best = v
+      if (versionGt(v, current) && (best === null || versionGt(v, best))) { best = v; nextTag = tagName }
     }
   }
   nextVersion = best
@@ -350,6 +351,7 @@ function isIsolatedPnpmLayout(runtimeDir) {
 // ── update status ──────────────────────────────────────────────────────────
 let latestVersion = null
 let nextVersion = null
+let nextTag = null // 预发布候选所在 dist-tag（alpha/beta/next…）
 // Shell manifest (<runtime>/dsh.json) snapshot: preinstalled list, devMode, …
 let shellManifest = {}
 
@@ -364,6 +366,7 @@ function emitUpdateStatus(updateAvailable) {
     // 上时 latest（rc.7）反而更旧，绝不能提示降级。
     updateAvailable: updateAvailable ?? (latestVersion !== null && versionGt(latestVersion, current)),
     next: nextVersion,
+    nextTag: nextVersion ? nextTag : null,
     nextAvailable: nextVersion !== null && nextVersion !== latestVersion && current !== nextVersion && versionGt(nextVersion, current),
   })
 }
@@ -383,7 +386,7 @@ async function checkDshUpdate({ frozen = false } = {}) {
   }
   try {
     await resolveRemoteVersions()
-    log(`npm latest ${PACKAGE}: ${latestVersion ?? 'unknown'}${nextVersion ? ` (next ${nextVersion})` : ''}`)
+    log(`npm latest ${PACKAGE}: ${latestVersion ?? 'unknown'}${nextVersion ? ` (${nextTag ?? '?'} ${nextVersion})` : ''}`)
   } catch (err) {
     latestVersion = null
     nextVersion = null
