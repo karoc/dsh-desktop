@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.6.0](https://github.com/karoc/dsh-desktop/compare/v0.5.0...v0.6.0) (2026-09-05)
+
+
+### Features
+
+* **manager:** 预发布通道携带 dist-tag 名（alpha/next 显示明确） ([c1e5aaf](https://github.com/karoc/dsh-desktop/commit/c1e5aaf8915de97f6531f00bc7b0698caaec3b58))
+
+
+### Bug Fixes
+
+* **manager:** dsh 升级修复三连——迁移后 pnpm store 失配 / 预发布通道只认 next / UI 假成功 ([3440e5d](https://github.com/karoc/dsh-desktop/commit/3440e5d1d3e291603155bddf8493580de7e36ab8))
+* **manager:** 适配 dsh 0.1.2-rc.1——patch 空格路径截断 + 带 token URL 的 watchdog 误判 ([6876b01](https://github.com/karoc/dsh-desktop/commit/6876b01fe44a8e0897ca0150b430389c66dedf0c))
+* **shell:** launcher 导航兜底——修复重开壳黑屏（WebView2 冷启动 navigate 竞态） ([996d777](https://github.com/karoc/dsh-desktop/commit/996d777ff17aae965eb9d554e0da50197af60055))
+
 ## [0.5.0](https://github.com/karoc/dsh-desktop/compare/v0.4.0...v0.5.0) (2026-09-02)
 
 
