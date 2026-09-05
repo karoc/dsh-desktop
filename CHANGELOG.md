@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/karoc/dsh-desktop/compare/v0.6.0...v0.6.1) (2026-09-05)
+
+
+### Bug Fixes
+
+* **manager:** 真源同步——scripts/server-manager.mjs 落后导致 0.5.0/0.6.0 打包旧 manager ([dbcaea6](https://github.com/karoc/dsh-desktop/commit/dbcaea6c5121bb2492b86114741be9fb6422f236))
+
 ## [0.6.0](https://github.com/karoc/dsh-desktop/compare/v0.5.0...v0.6.0) (2026-09-05)
 
 

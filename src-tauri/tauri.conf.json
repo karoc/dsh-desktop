@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "DSH Smoothly Desktop",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "identifier": "dsh.smoothly.desktop",
   "build": {
     "beforeBuildCommand": "node scripts/fetch-node.mjs && node scripts/sync-resources.mjs",
