@@ -182,6 +182,10 @@ static LAUNCHER_URL: Mutex<Option<String>> = Mutex::new(None);
 /// back to the currently-running dsh instance. Prevents the "back to initial
 /// setup then refresh inaccessible" symptom after dsh web has cycled its port.
 static LIVE_DSH_URL: Mutex<Option<String>> = Mutex::new(None);
+/// 主窗口最近一次**真实加载完成**的 URL（on_page_load 触发即页面真的加载了，
+/// 比 `window.url()` 可靠——后者在导航"空转"（URL 已变但 WebView 未渲染）时
+/// 会误报已到达 dsh 页，导致导航兜底过早撒手 → 黑屏）。
+static LAST_MAIN_LOADED: Mutex<Option<String>> = Mutex::new(None);
 
 /// Deterministic 64-bit FNV-1a — used to derive a per-build-identity toast
 /// activator CLSID without pulling in a hash/uuid crate.
@@ -2540,6 +2544,7 @@ pub fn run() {
         // on; see WindowConfig having no icon field in Tauri v2).
         .on_page_load(|webview, payload| {
             if webview.label() == "main" {
+                *LAST_MAIN_LOADED.lock().unwrap() = Some(payload.url().to_string());
                 inject_shell_chrome(webview.app_handle());
             } else if webview.label() == "plugins" {
                 // 插件管理窗口：注入环回桥端口（窗口页数据走桥，不依赖 dsh）。
@@ -2593,20 +2598,34 @@ pub fn run() {
             // 持续到成功，重启服务后的新 URL 也会被自动推入。
             {
                 let nav_app = app.handle().clone();
-                std::thread::spawn(move || loop {
-                    std::thread::sleep(std::time::Duration::from_millis(2000));
-                    let live = LIVE_DSH_URL.lock().unwrap().clone();
-                    let Some(live) = live else { continue };
-                    let Some(w) = nav_app.get_webview_window("main") else { continue };
-                    let Ok(cur) = w.url() else { continue };
-                    let cur_str = cur.to_string();
-                    let is_dsh_like = cur_str.starts_with("http://127.0.0.1:")
-                        || cur_str.starts_with("http://localhost:");
-                    if is_dsh_like {
-                        continue; // 已到 dsh 页，无需干预
-                    }
-                    if let Ok(u) = tauri::Url::parse(&live) {
-                        let _ = w.navigate(u);
+                std::thread::spawn(move || {
+                    let mut last_nav = std::time::Instant::now()
+                        .checked_sub(std::time::Duration::from_secs(60))
+                        .unwrap_or(std::time::Instant::now());
+                    loop {
+                        std::thread::sleep(std::time::Duration::from_millis(1500));
+                        let live = LIVE_DSH_URL.lock().unwrap().clone();
+                        let Some(live) = live else { continue };
+                        // 以"真实加载完成"为准：on_page_load 已到 live 同源 → 成功，撒手。
+                        let loaded = LAST_MAIN_LOADED.lock().unwrap().clone();
+                        if let Some(loaded_url) = loaded {
+                            let same_origin = |u: &str| {
+                                tauri::Url::parse(u).ok().map(|x| x.origin().ascii_serialization())
+                            };
+                            if same_origin(&loaded_url) == same_origin(&live) {
+                                continue; // 已成功到达 dsh 页
+                            }
+                        }
+                        let Some(w) = nav_app.get_webview_window("main") else { continue };
+                        // 页面尚未真实加载到 live（含"URL 已变但 WebView 空转"的情况）
+                        // → 强制导航。节流：同一 URL 至少间隔 3s 重试一次。
+                        if last_nav.elapsed().as_secs() < 3 {
+                            continue;
+                        }
+                        if let Ok(u) = tauri::Url::parse(&live) {
+                            let _ = w.navigate(u);
+                            last_nav = std::time::Instant::now();
+                        }
                     }
                 });
             }
