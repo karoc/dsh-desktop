@@ -1955,6 +1955,24 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
     eprintln!("[dsh-desktop] manager spawned (pid {pid})");
     let _ = handle.emit("server-log", format!("manager spawned (pid {pid})"));
     *app.state::<ServerState>().child.lock().unwrap() = Some(child);
+    // ── 首启 URL 索要：manager 的首个 URL 协议事件可能在 shell 的 stdout
+    // 读取器就绪前发出而丢失（LIVE_DSH_URL 永远为空 → 黑屏且重启服务才恢复
+    // 的根因之一）。启动后按 2s/2s/4s 主动让 manager 重发（report-url）；
+    // 已拿到 URL 即停。幂等。
+    {
+        let app2 = app.clone();
+        std::thread::spawn(move || {
+            use std::io::Write as _;
+            for delay_ms in [2000u64, 2000, 4000] {
+                std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                if LIVE_DSH_URL.lock().unwrap().is_some() {
+                    break;
+                }
+                let mut stdin = app2.state::<ServerState>().stdin.lock().unwrap();
+                send_line(&mut stdin, r#"{"cmd":"report-url"}"#);
+            }
+        });
+    }
     Ok(())
 }
 

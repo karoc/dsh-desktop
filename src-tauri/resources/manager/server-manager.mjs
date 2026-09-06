@@ -953,6 +953,7 @@ const URL_RE = /(https?:\/\/127\.0\.0\.1:\d+[^\s]*)/
 
 let currentChild = null
 let currentChildPid = null
+let currentUrl = null // 最近一次 dsh web URL（含 token），report-url 重发用
 let restartRequested = false
 let pendingTask = null
 
@@ -1104,6 +1105,8 @@ async function launchDsh(runtimeDir, patchPath, cwd) {
       const m = line.match(URL_RE)
       if (m) {
         emit({ t: 'url', url: m[1] })
+        // 记录最新 URL，供 report-url 重发（壳首启丢事件时主动索要）。
+        currentUrl = m[1]
         // Watchdog: re-arm on every announced URL (a new URL = a respawn).
         watchdogUrl = m[1]
         watchdogMisses = 0
@@ -1191,6 +1194,12 @@ function handleCommand(cmd) {
     case 'check-update': void checkDshUpdate({ frozen: shellManifest.devMode === true }); break
     case 'update-dsh': void updateDshAndRestart(cmd?.version); break
     case 'restart-dsh': log('restart-dsh requested'); requestRestart(); break
+    case 'report-url':
+      // 壳启动早期可能丢首个 URL 事件（stdout reader 未就绪）→ 黑屏。
+      // 壳主动索要：重发当前 dsh web 地址（带 token），让导航兜底能工作。
+      if (currentUrl) { emit({ t: 'url', url: currentUrl }); log('report-url: re-emitted current url') }
+      else { log('report-url: no current url yet') }
+      break
     case 'plugins-install':
       if (cmd.spec) {
         const spec = normalizeGitHubSpec(cmd.spec)

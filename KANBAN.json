@@ -646,6 +646,25 @@
       ],
       "createdAt": 1788618070482,
       "updatedAt": 1788618070482
+    },
+    {
+      "id": "card-9544f151-13b5-45b3-9ae5-30d25cb7c4f9",
+      "title": "修复：0.5.0/0.6.0 打包旧 manager（真源/副本漂移）+ Rust 导航兜底",
+      "summary": "真源/副本漂移已修复：scripts/server-manager.mjs 同步为最新副本（216 行差异全部是历次修复）；Rust 导航兜底守护线程加入（每 2s 强制导航，WebView2 冷启动 navigate 丢失的确定性解法）；v0.6.1 已发（tag 触发构建中）。",
+      "rationale": "0.5.0/0.6.0 安装包内的 manager 全是旧版（无 watchdog token 修复/patch 空格镜像/升级修复），导致用户装新版后黑屏反而更严重（重启 dsh 也不恢复）。根因：sync-resources.mjs 的真源是 scripts/server-manager.mjs，历次修复只改了 resources/manager 副本并就地部署；CI 构建用旧真源覆盖副本。真源已用最新副本覆盖并提交（dbcaea6），后续改 manager 一律以 scripts/server-manager.mjs 为准。",
+      "rejected": "放弃只修副本+继续就地部署（用户装新包会被覆盖回退，必须修真源）；放弃给 sync-resources 加 manager 漂移校验的自动化（先立规矩，自动化可后续加）。",
+      "sourceSessionId": "session-788be97d-7ef1-480f-9552-d09ab4eaf37b",
+      "status": "done",
+      "tags": [
+        "windows",
+        "release",
+        "manager",
+        "bug-fix",
+        "repo-hygiene",
+        "done"
+      ],
+      "createdAt": 1788626510845,
+      "updatedAt": 1788626510845
     }
   ]
 }

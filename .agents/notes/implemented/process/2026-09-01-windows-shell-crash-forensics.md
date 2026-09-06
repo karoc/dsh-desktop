@@ -22,3 +22,14 @@ dsh-desktop 壳在 Windows 侧的排障入口已确立，日志清单如下（�
 
 
 **第三次复现（2026-09-04 00:04:10，0.5.0 已装）**：s86 turn 16 step 3 派发前台 pwsh `npm run test:engine`（timeoutMs 300000）后 manager+dsh web 整树静默消失（转录止 00:04:10，tool/call 已记录无 result；step2 的 pack:check 正常完成）。事件日志（23:50-00:10）干净。**三杀模式收敛**：共同触发器 = pwsh 执行含 test:engine 的测试套件（07:21 后台 10 脚本 / 21:02 前台 9 脚本 / 00:04 单跑 engine）；共同表象 = 无 WER/无日志/同刻全树消失。**已排除**：工具调用均为标准工具（pwsh/board_list/job_output/job_list）；test:engine 自身无杀进程逻辑（仅 spawnSync 串行 node）。**根因收敛**：dsh 0.1.1-rc.2 的 Windows 子进程管理（dsh-subprocess-local：koffi 进程树快照 + taskkill /T /F 树杀）在测试套件进程树场景下误杀自身树（TerminateProcess 类死亡无记录）。**架构盲区**：manager 内置 watchdog 随 manager 同死，无法兜底"manager 也死"的场景——下一层守护必须放壳（Rust，孤儿树之父，17:29→00:04 存活）。恢复：壳桥 POST /restart（00:09 新 web 49447）。dsh 预发布 0.1.2-rc.1 已提示可升，优先升级验证是否修复。
+
+**真源/副本漂移陷阱（2026-09-05，黑屏"更严重"的根因）**：shell 的 manager 真源是
+`scripts/server-manager.mjs`，`sync-resources.mjs` 构建时把它覆盖到
+`resources/manager/server-manager.mjs`（tauri 打包用）。历次修复（watchdog token/
+patch 空格/升级修复/nextTag）只改了 resources 副本并就地部署宿主；CI 构建用旧真源
+覆盖 → 0.5.0/0.6.0 安装包全部回退旧 manager → 用户装新版后黑屏加重（patch 截断+
+watchdog 401 循环）。教训：**manager 的改动必须同时落 scripts/ 真源**（与
+sync-resources 的契约），git 里 resources/manager 的 M 不代表构建生效。
+**黑屏"重启 dsh 也不恢复"**（v0.6.0）机制：旧 manager 的 watchdog 对 0.1.2-rc.1 带
+token URL 全 401 误判循环 + patch 截断 web 起不来。治本：Rust 导航兜底守护线程
+（每 2s 主窗口仍在本地页且有 live URL 则强制导航）+ 真源同步 + v0.6.1 发布。
