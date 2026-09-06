@@ -1286,7 +1286,10 @@ async function ensurePnpm(runtimeDir) {
   try {
     for (const reg of [REGISTRY, fallback]) {
       try {
-        await npm(['install', 'pnpm', '--prefix', tmp, '--no-audit', '--no-fund', '--no-progress', '--loglevel=http', '--registry', reg], { stream: true, timeoutMs: 600_000 })
+        // 固定 pnpm 版本（11.24.0 在 node 24 全链路验证过；pnpm 12.x 在
+        // node 24.18 上 cjs loader 启动崩溃——2026-09-06 smoke 踩到，且
+        // 不固定会导致用户机器升级/装插件时被上游新版本带崩）。
+        await npm(['install', 'pnpm@11.24.0', '--prefix', tmp, '--no-audit', '--no-fund', '--no-progress', '--loglevel=http', '--registry', reg], { stream: true, timeoutMs: 600_000 })
         const src = join(tmp, 'node_modules', 'pnpm')
         if (!existsSync(src)) throw new Error('npm 未产出 pnpm')
         const dest = join(runtimeDir, 'node_modules', 'pnpm')
