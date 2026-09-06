@@ -146,7 +146,22 @@ async function writeBoard(cwd, board) {
 	await mkdir(dirname(path), { recursive: true });
 	const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
 	await writeFile(tmp, JSON.stringify(board, null, 2) + "\n", "utf8");
-	await rename(tmp, path);
+	await renameWithRetry(tmp, path);
+}
+/**
+* Rename with bounded retry for Windows: the board page polls KANBAN.json and
+* can hold a read handle for a few milliseconds; `rename()` over a file that
+* is momentarily open fails with EPERM there. Retry with short backoff before
+* giving up; POSIX targets rename on the first attempt.
+*/
+async function renameWithRetry(tmp, path, attempts = 5) {
+	for (let attempt = 0;; attempt++) try {
+		await rename(tmp, path);
+		return;
+	} catch (error) {
+		if (error.code !== "EPERM" || attempt >= attempts - 1) throw error;
+		await new Promise((resolve) => setTimeout(resolve, 25 * (attempt + 1)));
+	}
 }
 /** The archive document path under .agents/notes (git-trackable). */
 function archivePath(cwd) {
@@ -185,7 +200,7 @@ async function archiveExcessDone(cwd, board) {
 		version: 1,
 		archived: existing
 	}, null, 2) + "\n", "utf8");
-	await rename(tmp, path);
+	await renameWithRetry(tmp, path);
 	return {
 		count: toArchive.length,
 		path
@@ -640,7 +655,7 @@ function present(title, kind, rawInput) {
 * immediate feedback loop; the deep card-writing manual lives in the
 * kanban-use skill, which this section points at when available.
 */
-const BOARD_GUIDANCE = `You have a persistent kanban board (the board_* tools) backed by KANBAN.json at the workspace root — it survives session switches and branches, and it is shared with the Web "看板" page. Use it to track plans and todos that should outlive the current turn. Record each step with board_add (title + rationale (为什么 — why this task exists and why now); rejected (放弃了什么) when a decision ruled out an alternative; tags for grouping; summary (做了什么) is filled when the work is done). Write complete cards, not just titles: a title-only card is an incomplete card, because the next session must understand why it exists and what was decided against without asking. Cards missing fields are flagged (缺) in tool outputs and in the session-start snapshot — fill them when you can.
+const BOARD_GUIDANCE = `You have a persistent kanban board (the board_* tools) backed by KANBAN.json at the workspace root — it survives session switches and branches, and it is shared with the Web "思磨力看板" page. Use it to track plans and todos that should outlive the current turn. Record each step with board_add (title + rationale (为什么 — why this task exists and why now); rejected (放弃了什么) when a decision ruled out an alternative; tags for grouping; summary (做了什么) is filled when the work is done). Write complete cards, not just titles: a title-only card is an incomplete card, because the next session must understand why it exists and what was decided against without asking. Cards missing fields are flagged (缺) in tool outputs and in the session-start snapshot — fill them when you can.
 
 As work progresses, move cards with board_update (status in_progress → done), adding rationale/rejected information as decisions are made; when a card is finished or superseded, mark it done or remove it. Prefer the board over todo_write for anything the user should still see after switching branches or opening a new session: todo_write is the transient in-turn task list, while the board is the durable cross-session record. Check board_list when resuming work in a workspace to pick up what was planned before.
 

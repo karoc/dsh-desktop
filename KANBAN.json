@@ -665,6 +665,56 @@
       ],
       "createdAt": 1788626510845,
       "updatedAt": 1788626510845
+    },
+    {
+      "id": "card-73e7184f-224c-41c2-a99d-1ade9d53f284",
+      "title": "黑屏根治验证通过：0.6.2 本地构建+安装+首启导航确认",
+      "summary": "0.6.2 本地构建并安装验证：宿主机 D:\\Dev\\dsh-desktop 同步至 b11ed72，npm run tauri build --bundles nsis 成功（41s），静默安装后版本确认 0.6.2；启动壳首启 5 秒内 client-ready（before 76 → after 77），watchdog 零误判；孤儿 node 已清理，当前服务树（壳+manager+web）稳定。首启黑屏根治确认。",
+      "rationale": "重开壳黑屏根因链最终闭环：①WebView2 冷启动 navigate 竞态（首启 URL 事件丢失→LIVE_DSH_URL 空）②0.5.0/0.6.0 打包旧 manager（真源/副本漂移）③pnpm 12.x 在 node 24.18 崩溃（CI smoke 偶发失败）。修复：manager report-url + Rust 首启 URL 索要 + 真源同步 + pnpm 固定 11.24.0。宿主机本地构建工作流验证通过（D:\\Dev\\dsh-desktop 同步→build→静默安装→首启 5 秒导航成功）。",
+      "rejected": "放弃继续依赖 GitHub CI 等待出包（本地构建 41 秒即可验证，且能直接安装验证避免打包内容漂移；CI 仍保留作门禁）。",
+      "sourceSessionId": "session-788be97d-7ef1-480f-9552-d09ab4eaf37b",
+      "status": "done",
+      "tags": [
+        "windows",
+        "build",
+        "verify",
+        "black-screen",
+        "done"
+      ],
+      "createdAt": 1788669069840,
+      "updatedAt": 1788669069840
+    },
+    {
+      "id": "card-1cf39a48-bd2e-4176-acf2-1af619338787",
+      "title": "沉淀宿主机排查技能（interop/黑屏导航/本地构建/真源契约）",
+      "summary": "windows-desktop-shell-debugging 增 §9（interop 编码/日志转录解码/黑屏导航机制/0.1.2-rc.1 适配/升级坑/本地构建/vision 截屏，9 小节）；dsh-desktop-shell-dev 增 §4.1-4.3（正式版本地构建、manager 真源契约、黑屏导航三层机制）。已提交推送 081fb8e。",
+      "rationale": "多轮宿主机排障（黑屏/升级/导航/真源漂移）踩了大量弯路，需沉淀为可复用技能，确保后续排查不再绕路。已扩充两个仓库技能并提交。",
+      "rejected": "放弃新建独立\"宿主机排查\"技能（会与 windows-desktop-shell-debugging 职责重叠）；放弃把技能放全局 ~/.agents/skills（仓库 .dsh/skills 才是本项目真源，按既有约定）。",
+      "sourceSessionId": "session-788be97d-7ef1-480f-9552-d09ab4eaf37b",
+      "status": "done",
+      "tags": [
+        "process",
+        "skill",
+        "distillation",
+        "done"
+      ],
+      "createdAt": 1788669775450,
+      "updatedAt": 1788669775450
+    },
+    {
+      "id": "card-681f4c15-d575-40ca-8a95-b0652ecf4d07",
+      "title": "预装插件同步至 latest：kanban 0.2.5 / model-reasoning 0.2.4 / turn-navigator 0.4.3 + 发布新版本",
+      "rationale": "用户要求更新壳的所有内容；audit 显示 3 个预装插件落后 npm latest，且 plugin-console 打包副本滞后（board 已有跟进卡片）。同步后按用户选择发布新版本（release-please CI 出包）。",
+      "rejected": "放弃只做预装插件（用户选了全量+发布）；放弃运行时 dsh 更新（用户选了只做仓库侧，dsh 本体由应用内门控更新）。",
+      "sourceSessionId": "session-f518f553-46ee-4f47-a711-19d9e4d669d5",
+      "status": "in_progress",
+      "tags": [
+        "preinstalled",
+        "plugins",
+        "release"
+      ],
+      "createdAt": 1788706217021,
+      "updatedAt": 1788706217021
     }
   ]
 }

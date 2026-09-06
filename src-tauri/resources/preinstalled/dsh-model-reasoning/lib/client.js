@@ -333,6 +333,20 @@ window.__ModuleLoader__.load({
 			pushScalar("retryPolicy", retryWireOf(draft.retry), cur.retryPolicy);
 			return ops;
 		}
+		/**
+		* Anchor {@link buildRouteOps}'s route-relative op paths under
+		* `providers.<routeKey>`: the host settings engine applies path ops against
+		* the namespace root (`llm-pi-ai`), so the route prefix is the caller's job.
+		* Without it a route save lands at `llm-pi-ai.<field>` — a location the
+		* llm-pi-ai schema does not define — and never reaches the adapter.
+		*/
+		function anchoredRouteOps(routeKey, current, draft) {
+			const anchor = ["providers", routeKey];
+			return buildRouteOps(current, draft).map((op) => ({
+				...op,
+				path: [...anchor, ...op.path]
+			}));
+		}
 		/** Seed the per-model draft from a stored models[] entry. */
 		function modelParamsOf(entry) {
 			const draft = {
@@ -740,7 +754,11 @@ window.__ModuleLoader__.load({
 			const onHasLevel = levels.size > 0 && (levels.size > 1 || !levels.has("off"));
 			const nextDict = mode === "on" ? wireOf(levels, wire, offEmpty) : mode === "off" ? false : void 0;
 			const effortDirty = activeModel !== void 0 && stable(activeModel.reasoningEfforts) !== stable(nextDict);
-			const routeOps = (0, react.useMemo)(() => buildRouteOps(activeRoute?.[1], draft), [activeRoute, draft]);
+			const routeOps = (0, react.useMemo)(() => activeRouteKey === void 0 ? [] : anchoredRouteOps(activeRouteKey, activeRoute?.[1], draft), [
+				activeRoute,
+				activeRouteKey,
+				draft
+			]);
 			const mergedModel = (0, react.useMemo)(() => {
 				if (activeModel === void 0 || modelIndex === void 0) return null;
 				let entry = buildModelEntry(activeModel, modelDraft);
@@ -799,14 +817,10 @@ window.__ModuleLoader__.load({
 				if (api === void 0 || activeRouteKey === void 0 || ops.length === 0) return;
 				setBusy(true);
 				setFailure(void 0);
-				const response = await api.settings.mutate({
-					ns: "llm-pi-ai",
-					ops,
-					...raw?.revision === void 0 ? {} : { expectedRevision: raw.revision }
-				});
+				const response = await api.mutate("llm-pi-ai", ops, raw?.revision);
 				setBusy(false);
-				if (!response.result.ok) {
-					setFailure(response.result.error.code === "settings-conflict" ? t("conflict") : response.result.error.message);
+				if (!response.ok) {
+					setFailure(response.error.code === "settings/conflict" ? t("conflict") : response.error.message);
 					return;
 				}
 				reseedFrom.current = `${raw?.revision}`;
@@ -1840,11 +1854,11 @@ window.__ModuleLoader__.load({
 		injectReasoningStyles("dsh-model-reasoning");
 		//#endregion
 		//#region src/client/locales.ts
-		/** Copy dictionaries for the Provider parameters settings section. */
+		/** Copy dictionaries for the 思磨力提供方参数 / Smoothly MR settings section. */
 		/** English strings (the key-set source of truth for this pair). */
 		const en = {
-			nav: "Provider parameters",
-			title: "Provider parameters",
+			nav: "Smoothly MR",
+			title: "Smoothly Model Reasoning (Smoothly MR)",
 			intro: "Manage per-provider and per-model parameters for third-party (pi-ai) providers: reasoning levels, retry and backoff policy, timeouts, transport, caching, capacities. Values are written to llm-pi-ai and picked up by the model picker.",
 			readOnly: "The settings document is read-only in this deployment.",
 			conflict: "Someone else changed these settings while this page was open. Reopen it to edit the current values.",
@@ -1955,8 +1969,8 @@ window.__ModuleLoader__.load({
 		};
 		/** Chinese strings (same keys as {@link en}). */
 		const zh = {
-			nav: "提供方参数",
-			title: "提供方参数",
+			nav: "思磨力提供方参数",
+			title: "思磨力提供方参数",
 			intro: "管理第三方（pi-ai）提供方的路由级与模型级参数：思考等级、重试与退避策略、超时、传输方式、缓存与容量预算。写入 llm-pi-ai，模型选择器会自动识别。",
 			readOnly: "此部署中设置文档为只读。",
 			conflict: "页面打开期间有其他人修改了这些设置。请重新打开以编辑当前值。",
@@ -2072,12 +2086,14 @@ window.__ModuleLoader__.load({
 		/** The pi-ai settings namespace whose provider profiles this page edits. */
 		const PI_AI_NS = "llm-pi-ai";
 		/** Required services (cordis fiber inject). The target slot is declared by
-		* ui-settings; registration depends on it through `slots.inject()`. */
+		* ui-settings; registration depends on it through `slots.inject()`. The
+		* `remote.settings` namespace carries this page's writes (dsh 0.1.2+ replaced
+		* the `connection.api` RPC face with the generated Remote namespaces). */
 		const inject = [
 			"slots",
 			"locale",
-			"connection",
 			"remote",
+			"remote.settings",
 			"settingsScope"
 		];
 		/**
@@ -2091,11 +2107,10 @@ window.__ModuleLoader__.load({
 				zh,
 				en
 			}), "dsh-model-reasoning: copy dictionaries");
-			const connection = ctx.get("connection");
 			const scope = ctx.settingsScope.bind({ namespace: PI_AI_NS });
 			const t = ctx.locale.bind(NS);
 			const injected = () => ({
-				api: connection.api,
+				api: ctx.remote.settings,
 				t,
 				hooks: { modelReasoning: scope }
 			});

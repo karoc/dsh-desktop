@@ -852,7 +852,6 @@ window.__ModuleLoader__.load({
 				open,
 				onClose,
 				title: card.title,
-				closeLabel: t("close"),
 				headless: true,
 				className: "kb-detail-modal",
 				children: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
@@ -1048,11 +1047,11 @@ window.__ModuleLoader__.load({
 		}
 		//#endregion
 		//#region src/client/locales.ts
-		/** Copy dictionaries for the dsh-kanban board page. */
+		/** Copy dictionaries for the dsh-kanban board page (Smoothly Kanban / 思磨力看板). */
 		/** English strings (the key-set source of truth for this pair). */
 		const en = {
-			nav: "Kanban",
-			title: "Kanban board",
+			nav: "Smoothly Kanban",
+			title: "Smoothly Kanban",
 			intro: "Cross-session plans and todos, persisted to KANBAN.json at the workspace root.",
 			pathLabel: "Board file",
 			close: "Close",
@@ -1107,8 +1106,8 @@ window.__ModuleLoader__.load({
 		};
 		/** Chinese strings (same keys as {@link en}). */
 		const zh = {
-			nav: "看板",
-			title: "看板",
+			nav: "思磨力看板",
+			title: "思磨力看板",
 			intro: "跨会话的计划与待办，持久化到工作区根目录的 KANBAN.json。",
 			pathLabel: "看板文件",
 			close: "关闭",

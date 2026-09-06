@@ -1,7 +1,7 @@
 {
   "name": "dsh-turn-navigator",
-  "version": "0.1.1",
-  "description": "External DeepSeek Harness plugin: a turn-navigation drawer that lists every conversation turn (user message summary + timestamp), jumps to any turn's start, and highlights the current turn as you scroll.",
+  "version": "0.4.3",
+  "description": "Smoothly Turn Nav (Smoothly TN): full-history piano-key turn rail for DeepSeek Harness (dsh) web conversations — see every turn at a glance, hover to preview, click to jump anywhere, and replace the official (non-disableable) turn rail.",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -17,7 +17,12 @@
     "lib/index.js",
     "lib/client.js",
     "cordis.patch.yml",
-    "README.md"
+    "docs/turn-nav-rail.png",
+    "README.md",
+    "README.zh.md",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "LICENSE"
   ],
   "dsh": {
     "bundle": {
@@ -40,7 +45,12 @@
   "scripts": {
     "bundle": "tsdown --config ./tsdown.config.ts",
     "prepare": "tsdown --config ./tsdown.config.ts",
-    "prepublishOnly": "tsdown --config ./tsdown.config.ts"
+    "typecheck": "tsc --noEmit",
+    "test": "tsc --noEmit",
+    "release:check": "node scripts/release-check.mjs",
+    "prepack": "node scripts/release-check.mjs",
+    "prepublishOnly": "node scripts/release-check.mjs && tsdown --config ./tsdown.config.ts",
+    "postpublish": "node scripts/post-publish-check.mjs"
   },
   "engines": {
     "node": ">=18"
@@ -52,7 +62,13 @@
     "turn",
     "navigation",
     "conversation",
-    "outline"
+    "outline",
+    "turn-rail",
+    "turn-navigator",
+    "smoothly",
+    "思磨力",
+    "smoothly-turn-nav",
+    "smoothly-tn"
   ],
   "author": "karoc",
   "license": "MIT",

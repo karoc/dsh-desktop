@@ -20,19 +20,37 @@ window.__ModuleLoader__.load({
 			return "";
 		}
 		/**
-		* Derive the flat turn list from a conversation snapshot.
+		* Derive the flat turn list from a chat snapshot.
 		*
 		* For each turn in `timeline.turnOrder`, the function looks up the turn's
 		* chat-node keys via `locations.getTurn`, finds the first node whose `kind`
 		* is `'user'`, and extracts the text summary from its content blocks. The
-		* timestamp comes from `turnTimings` (preferred) or `turn.start.time`.
+		* timestamp comes from `legacy.turnTimings` (preferred) or `turn.start.time`.
 		*
-		* @param snap - the conversation snapshot (structural subset).
+		* Accepts BOTH the new (0.1.2+) ChatSnapshot (from `useChat`) and the legacy
+		* `ConversationSnapshot` (which had a `.chat` field) — so an upgrade never
+		* crashes if the host is still on the older shape.
+		*
+		* @param snap - the chat snapshot (structural subset).
 		* @returns ordered turn entries (empty when the snapshot has no turns).
 		*/
 		function extractTurns(snap) {
-			if (snap === void 0) return [];
-			const chat = snap.chat;
+			const chat = unwrapChat(snap);
+			if (chat === void 0) return [];
+			const turnTimings = chat.legacy?.turnTimings ?? (snap !== void 0 && "turnTimings" in snap ? snap.turnTimings : void 0);
+			const navItems = chat.navigation?.items?.() ?? [];
+			if (navItems.length > 0) return navItems.map((item, index) => {
+				const loc = chat.timeline.turns.get(item.turn);
+				const status = loc?.status ?? "closed";
+				return {
+					turn: item.turn,
+					index: index + 1,
+					summary: item.prompt || "(no user message)",
+					fullText: item.prompt || "",
+					startTime: turnTimings?.get(item.turn)?.startTime ?? loc?.start?.time,
+					status
+				};
+			});
 			const timeline = chat.timeline;
 			const turnOrder = timeline.turnOrder;
 			if (turnOrder.length === 0) return [];
@@ -42,7 +60,7 @@ window.__ModuleLoader__.load({
 				displayIndex += 1;
 				const loc = timeline.turns.get(turn);
 				const status = loc?.status ?? "unknown";
-				const startTime = snap.turnTimings.get(turn)?.startTime ?? loc?.start?.time;
+				const startTime = turnTimings?.get(turn)?.startTime ?? loc?.start?.time;
 				let summary = "";
 				let fullText = "";
 				const keys = chat.locations.getTurn(turn);
@@ -73,6 +91,12 @@ window.__ModuleLoader__.load({
 				});
 			}
 			return entries;
+		}
+		/** Narrow either the new ChatSnapshot or the legacy `.chat`-wrapped snapshot to a chat. */
+		function unwrapChat(snap) {
+			if (snap === void 0) return void 0;
+			if ("chat" in snap && snap.chat !== void 0) return snap.chat;
+			return snap;
 		}
 		/** Best-effort text peek from a non-user chat node's data (erased shape). */
 		function peekNodeText(node) {
@@ -109,14 +133,36 @@ window.__ModuleLoader__.load({
 		* @returns the first node key in that turn (typically the user message), or undefined.
 		*/
 		function firstNodeKeyOfTurn(snap, turn) {
-			if (snap === void 0) return void 0;
-			return snap.chat.locations.getTurn(turn)[0];
+			const chat = unwrapChat(snap);
+			if (chat === void 0) return void 0;
+			return chat.locations.getTurn(turn)[0];
+		}
+		/**
+		* Reverse-lookup: given a chat-node key, find which turn it belongs to.
+		*
+		* Used by the scroll-follow highlight: the scroll listener finds the topmost
+		* visible `[data-chat-anchor-key]` row, then this function maps its key back
+		* to a turn number so the drawer can highlight the matching entry.
+		*
+		* @param snap - the conversation snapshot.
+		* @param key - the chat-node key from the DOM anchor.
+		* @returns the owning turn number, or undefined if not found.
+		*/
+		function turnOfNodeKey(snap, key) {
+			const chat = unwrapChat(snap);
+			if (chat === void 0) return void 0;
+			const { turnOrder, turns } = chat.timeline;
+			for (const turn of turnOrder) if (chat.locations.getTurn(turn).includes(key)) return turn;
 		}
 		//#endregion
 		//#region src/client/history.ts
 		const SUMMARY_MAX_CHARS = 80;
 		/** Safety cap on history pages read (50 events each). */
 		const MAX_HISTORY_PAGES = 500;
+		/** Journal page size in MESSAGES (user/assistant count) — no host cap, fewer round trips. */
+		const JOURNAL_PAGE_MESSAGES = 200;
+		/** Safety cap on journal pages read. */
+		const MAX_JOURNAL_PAGES = 100;
 		function firstText(content) {
 			if (content === void 0) return "";
 			for (const block of content) if (block.type === "text" && typeof block.text === "string") return block.text;
@@ -138,6 +184,10 @@ window.__ModuleLoader__.load({
 		* @param onPage - incremental callback (turns so far, in ascending turn order).
 		*/
 		async function fetchAllTurns(api, sessionId, onPage) {
+			if (api === void 0 || typeof api.sessions?.history !== "function") {
+				console.warn("[dsh-turn-nav] sessions.history RPC unavailable — falling back to window-only turns");
+				return [];
+			}
 			const allEvents = [];
 			let beforeSeq;
 			for (let page = 0; page < MAX_HISTORY_PAGES; page += 1) {
@@ -146,7 +196,10 @@ window.__ModuleLoader__.load({
 					beforeSeq,
 					maxMessages: 50
 				});
-				if (response.result === void 0 || response.result.ok !== true) break;
+				if (response.result === void 0 || response.result.ok !== true) {
+					console.warn("[dsh-turn-nav] sessions.history page failed", response.error?.code ?? "no result");
+					break;
+				}
 				const value = response.result.value;
 				if (value === void 0) break;
 				const { events, hasMore } = value;
@@ -157,6 +210,59 @@ window.__ModuleLoader__.load({
 				beforeSeq = events[0].event.seq;
 			}
 			allEvents.sort((a, b) => a.seq - b.seq);
+			const turns = buildTurns(allEvents);
+			onPage(turns);
+			return turns;
+		}
+		/**
+		* Read the FULL persisted history through the 0.1.2+ journal channel
+		* (`ctx.remote.session.page`), newest page first, walking back via `beforeSeq`
+		* until `hasMore` is false. Only events BELOW the loaded window are fetched
+		* (the window itself already covers the tail), so the conversation flow is
+		* never touched — this is what keeps very long sessions responsive.
+		*
+		* Returns `undefined` when the journal channel is unavailable (older dsh), so
+		* the caller can fall back to the legacy `sessions.history` RPC or to
+		* window-only turns.
+		*
+		* @param journal - the mounted journal namespace face, or undefined.
+		* @param sessionId - the session to read.
+		* @param window - oldest/newest event seq of the currently loaded window.
+		* @param onPage - incremental callback (turns derived so far, ascending).
+		* @param signal - optional caller cancellation.
+		*/
+		async function fetchJournalTurns(journal, sessionId, window, onPage, signal) {
+			if (journal === void 0 || typeof journal.page !== "function") return void 0;
+			if (window.lastSeq === void 0 || window.firstSeq === 0) return [];
+			const before0 = window.firstSeq !== void 0 && window.firstSeq > 0 ? window.firstSeq - 1 : void 0;
+			if (before0 === void 0) return [];
+			const allEvents = [];
+			let beforeSeq = before0;
+			for (let page = 0; page < MAX_JOURNAL_PAGES; page += 1) {
+				if (signal?.aborted) break;
+				const result = await journal.page({
+					address: {
+						kind: "session",
+						sessionId
+					},
+					throughSeq: window.lastSeq,
+					beforeSeq,
+					maxMessages: JOURNAL_PAGE_MESSAGES
+				}, signal);
+				if (!result.ok || result.value === void 0) {
+					console.warn("[dsh-turn-nav] session/page failed", result.error?.code ?? "no result");
+					break;
+				}
+				const { records, hasMore } = result.value;
+				if (records.length === 0) break;
+				for (const record of records) if (record.type === "event") allEvents.push(record.event);
+				onPage(buildTurns(allEvents));
+				if (!hasMore) break;
+				let minSeq = Infinity;
+				for (const record of records) minSeq = Math.min(minSeq, record.event.seq);
+				if (!Number.isFinite(minSeq)) break;
+				beforeSeq = minSeq;
+			}
 			const turns = buildTurns(allEvents);
 			onPage(turns);
 			return turns;
@@ -211,6 +317,61 @@ window.__ModuleLoader__.load({
 			};
 		}
 		//#endregion
+		//#region src/client/mode.ts
+		/** localStorage key owning the persisted mode. */
+		const STORAGE_KEY = "dsh-turn-navigator.mode";
+		/** Default mode: our rail, official rail hidden (subtractive takeover). */
+		const DEFAULT_MODE = "stn";
+		const MODES = [
+			"stn",
+			"official",
+			"hidden"
+		];
+		/** Module-level current mode (stable reference for useSyncExternalStore). */
+		let current = readStored();
+		const listeners = /* @__PURE__ */ new Set();
+		function readStored() {
+			try {
+				const raw = window.localStorage.getItem(STORAGE_KEY);
+				if (MODES.includes(raw)) return raw;
+			} catch {}
+			return DEFAULT_MODE;
+		}
+		/** Read the current rail mode (useSyncExternalStore getSnapshot). */
+		function getRailMode() {
+			return current;
+		}
+		/** Subscribe to rail-mode changes (useSyncExternalStore subscribe). */
+		function subscribeRailMode(listener) {
+			listeners.add(listener);
+			return () => {
+				listeners.delete(listener);
+			};
+		}
+		/** Persist and publish a new rail mode. */
+		function setRailMode(mode) {
+			if (mode === current) return;
+			current = mode;
+			try {
+				window.localStorage.setItem(STORAGE_KEY, mode);
+			} catch {}
+			applyModeToBody();
+			for (const listener of [...listeners]) try {
+				listener();
+			} catch {}
+		}
+		/**
+		* Sync the `tn-hide-official` body class with the current mode. The class
+		* drives the stylesheet rule that hides the OFFICIAL rail (our rail is hidden
+		* by React instead). The official rail is hidden in every mode except
+		* `official` (where the user chose to see it). Called at plugin apply (body
+		* exists by then) and on every mode change.
+		*/
+		function applyModeToBody() {
+			if (typeof document === "undefined") return;
+			document.body.classList.toggle("tn-hide-official", current !== "official");
+		}
+		//#endregion
 		//#region src/client/TurnNavRail.tsx
 		/**
 		* Turn navigation rail: a vertical "piano-key" rail floating on the right
@@ -241,6 +402,8 @@ window.__ModuleLoader__.load({
 		const LOAD_RENDER_SETTLE_MS = 900;
 		/** Cap on pages loaded while expanding the window to a clicked turn. */
 		const MAX_JUMP_PAGES = 100;
+		/** Bounded wait for the official session binding/window to appear on mount. */
+		const JOURNAL_BINDING_WAIT_MS = 15e3;
 		/** Extra vertical margin when scrolling a target row into view. */
 		const JUMP_MARGIN_PX = 16;
 		/** Localized "Load earlier" paging button labels — idle AND in-flight. */
@@ -279,10 +442,10 @@ window.__ModuleLoader__.load({
 		function clampFeedbackY(y) {
 			return Math.max(24, Math.min(y, window.innerHeight - 24));
 		}
-		/** Tooltip body for one turn: index, time, full summary. */
+		/** Tooltip body for one turn: turn number, time, full summary. */
 		function tooltipText(entry, t) {
 			const time = formatTime(entry.startTime);
-			const label = t("turnLabel", { n: String(entry.index) });
+			const label = t("turnLabel", { n: String(entry.turn) });
 			const body = entry.fullText || entry.summary || t("noSummary");
 			const lines = [label];
 			if (time !== "") lines.push(time);
@@ -300,11 +463,12 @@ window.__ModuleLoader__.load({
 		* and renders a floating vertical capsule per turn (full history read from
 		* the host as data; the flow window is extended only on click-to-jump).
 		*/
-		function TurnNavRail({ useSession, sessionId, t, api }) {
-			const snapshot = useSession?.((s) => s);
-			const snapshotRef = (0, react.useRef)(snapshot);
-			snapshotRef.current = snapshot;
-			const windowTurns = (0, react.useMemo)(() => extractTurns(snapshot), [snapshot]);
+		function TurnNavRail({ useSession, useChat, sessionId, t, api, journal, sessionAccess }) {
+			const legacySession = useSession?.((s) => s);
+			const chat = useChat?.((c) => c);
+			const chatRef = (0, react.useRef)(chat ?? legacySession);
+			chatRef.current = chat ?? legacySession;
+			const windowTurns = (0, react.useMemo)(() => extractTurns(chat ?? legacySession), [chat, legacySession]);
 			const [historyTurns, setHistoryTurns] = (0, react.useState)([]);
 			const [hoverIndex, setHoverIndex] = (0, react.useState)(-1);
 			const [hoverY, setHoverY] = (0, react.useState)(0);
@@ -312,27 +476,129 @@ window.__ModuleLoader__.load({
 			const [canScrollUp, setCanScrollUp] = (0, react.useState)(false);
 			const [canScrollDown, setCanScrollDown] = (0, react.useState)(false);
 			const [jumpState, setJumpState] = (0, react.useState)(null);
+			const [officialRail, setOfficialRail] = (0, react.useState)(false);
 			const railRef = (0, react.useRef)(null);
 			const tipRef = (0, react.useRef)(null);
 			const hoverScrollRef = (0, react.useRef)(null);
+			const pointerOverRailRef = (0, react.useRef)(false);
 			(0, react.useEffect)(() => {
-				if (api === void 0 || sessionId === void 0) return;
-				let cancelled = false;
-				fetchAllTurns(api, sessionId, (pageTurns) => {
-					if (!cancelled) setHistoryTurns(pageTurns);
-				}).then((finalTurns) => {
-					if (!cancelled) setHistoryTurns(finalTurns);
+				let timer = null;
+				const check = () => {
+					const scroll = document.querySelector("[data-conversation-scroll]");
+					const nav = scroll === null ? null : scroll.querySelector("nav[aria-label*=\"轮次\"], nav[aria-label*=\"Turn navigation\"]");
+					const visible = nav !== null && getComputedStyle(nav).display !== "none";
+					setOfficialRail((prev) => prev === visible ? prev : visible);
+				};
+				check();
+				timer = setInterval(check, 1500);
+				const scroll = document.querySelector("[data-conversation-scroll]");
+				const observer = scroll !== null && typeof MutationObserver !== "undefined" ? new MutationObserver(check) : null;
+				if (observer !== null && scroll !== null) observer.observe(scroll, {
+					childList: true,
+					subtree: true
 				});
+				return () => {
+					if (timer !== null) clearInterval(timer);
+					observer?.disconnect();
+				};
+			}, []);
+			(0, react.useEffect)(() => {
+				if (sessionId === void 0) return;
+				let cancelled = false;
+				const applyPage = (turns) => {
+					if (!cancelled) setHistoryTurns(turns);
+				};
+				const run = async () => {
+					let window = sessionAccess?.windowSeq(sessionId) ?? {
+						firstSeq: void 0,
+						lastSeq: void 0
+					};
+					if (sessionAccess !== void 0) {
+						const deadline = Date.now() + JOURNAL_BINDING_WAIT_MS;
+						while (window.lastSeq === void 0 && Date.now() < deadline) {
+							await sleep(300);
+							if (cancelled) return;
+							window = sessionAccess.windowSeq(sessionId);
+						}
+					}
+					const journalTurns = await fetchJournalTurns(journal, sessionId, window, applyPage);
+					if (cancelled) return;
+					if (journalTurns !== void 0) {
+						setHistoryTurns(journalTurns);
+						return;
+					}
+					if (api !== void 0) await fetchAllTurns(api, sessionId, applyPage).then((finalTurns) => {
+						if (!cancelled) setHistoryTurns(finalTurns);
+					});
+				};
+				run();
 				return () => {
 					cancelled = true;
 				};
-			}, [api, sessionId]);
+			}, [
+				api,
+				journal,
+				sessionAccess,
+				sessionId
+			]);
+			const railMode = (0, react.useSyncExternalStore)(subscribeRailMode, getRailMode);
 			const turns = (0, react.useMemo)(() => {
 				if (historyTurns.length === 0) return windowTurns;
 				const historySet = new Set(historyTurns.map((entry) => entry.turn));
 				const extras = windowTurns.filter((entry) => !historySet.has(entry.turn));
-				return [...historyTurns, ...extras].sort((a, b) => a.turn - b.turn);
+				return [...historyTurns, ...extras].sort((a, b) => a.turn - b.turn).map((entry, i) => ({
+					...entry,
+					index: i + 1
+				}));
 			}, [historyTurns, windowTurns]);
+			const [activeTurn, setActiveTurn] = (0, react.useState)(null);
+			(0, react.useEffect)(() => {
+				const scroll = document.querySelector("[data-conversation-scroll]");
+				if (scroll === null) return;
+				let frame = null;
+				const compute = () => {
+					frame = null;
+					const scrollport = document.querySelector("[data-conversation-scroll]");
+					if (scrollport === null) return;
+					const rect = scrollport.getBoundingClientRect();
+					const readingLine = rect.top + Math.min(96, rect.height * .2);
+					const rows = Array.from(scrollport.querySelectorAll("[data-chat-anchor-key]"));
+					let row = null;
+					for (const r of rows) {
+						const rr = r.getBoundingClientRect();
+						if (rr.bottom > readingLine && rr.top < rect.bottom) {
+							row = r;
+							break;
+						}
+					}
+					const key = row?.getAttribute("data-chat-anchor-key") ?? null;
+					if (key !== null) setActiveTurn(turnOfNodeKey(chatRef.current, key) ?? null);
+					else if (rows.length > 0) setActiveTurn(null);
+				};
+				const schedule = () => {
+					if (frame !== null) return;
+					frame = requestAnimationFrame(compute);
+				};
+				scroll.addEventListener("scroll", schedule, { passive: true });
+				schedule();
+				return () => {
+					scroll.removeEventListener("scroll", schedule);
+					if (frame !== null) cancelAnimationFrame(frame);
+				};
+			}, [turns.length]);
+			(0, react.useEffect)(() => {
+				if (activeTurn === null || pointerOverRailRef.current) return;
+				const index = turns.findIndex((entry) => entry.turn === activeTurn);
+				if (index < 0) return;
+				const rail = railRef.current;
+				if (rail === null) return;
+				const btn = rail.querySelectorAll(".tn-cap-btn")[index];
+				if (btn === void 0) return;
+				const railRect = rail.getBoundingClientRect();
+				const btnRect = btn.getBoundingClientRect();
+				if (btnRect.top >= railRect.top && btnRect.bottom <= railRect.bottom) return;
+				centerCapsule(index);
+			}, [activeTurn, turns]);
 			(0, react.useEffect)(() => {
 				const rail = railRef.current;
 				if (rail === null) return;
@@ -404,16 +670,51 @@ window.__ModuleLoader__.load({
 					row.classList.add(HIGHLIGHT_CLASS);
 					setTimeout(() => row.classList.remove(HIGHLIGHT_CLASS), 1500);
 				};
+				const waitForRow = async (timeoutMs) => {
+					const deadline = Date.now() + timeoutMs;
+					while (Date.now() < deadline) {
+						const snap = chatRef.current;
+						const key = snap === void 0 ? void 0 : firstNodeKeyOfTurn(snap, turn);
+						if (key !== void 0) {
+							const row = scrollport.querySelector(`[${ANCHOR_ATTR}="${CSS.escape(key)}"]`);
+							if (row !== null) return row;
+						}
+						await sleep(80);
+					}
+					return null;
+				};
+				const settled = (row) => {
+					if (row === null) return false;
+					if (!isOldest) return true;
+					return !(sessionAccess !== void 0 ? sessionAccess.hasMore(sessionId ?? "") : findLoadOlderButton() !== null);
+				};
 				for (let i = 0; i < MAX_JUMP_PAGES; i += 1) {
-					const snap = snapshotRef.current;
+					const snap = chatRef.current;
 					const key = snap === void 0 ? void 0 : firstNodeKeyOfTurn(snap, turn);
 					const row = key === void 0 ? null : scrollport.querySelector(`[${ANCHOR_ATTR}="${CSS.escape(key)}"]`);
-					if (row !== null) {
-						const more = findLoadOlderButton();
-						if (!isOldest || more === null) {
-							scrollToRow(row);
+					if (settled(row)) {
+						scrollToRow(row);
+						return true;
+					}
+					if (sessionAccess !== void 0) {
+						if (!sessionAccess.hasMore(sessionId ?? "")) {
+							if (row !== null) {
+								scrollToRow(row);
+								return true;
+							}
+							return false;
+						}
+						try {
+							await sessionAccess.loadOlder(sessionId ?? "");
+						} catch {
+							return row !== null ? (scrollToRow(row), true) : false;
+						}
+						const awaited = await waitForRow(LOAD_RENDER_SETTLE_MS);
+						if (awaited !== null && settled(awaited)) {
+							scrollToRow(awaited);
 							return true;
 						}
+						continue;
 					}
 					const btn = findLoadOlderButton();
 					if (btn === null) {
@@ -452,12 +753,16 @@ window.__ModuleLoader__.load({
 					}
 				});
 			};
-			if (turns.length === 0) return null;
+			if (turns.length === 0 || railMode !== "stn") return null;
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-				className: "tn-wrap",
+				className: `tn-wrap${officialRail ? " tn-nudge" : ""}`,
 				role: "navigation",
 				"aria-label": t("rail"),
+				onMouseEnter: () => {
+					pointerOverRailRef.current = true;
+				},
 				onMouseLeave: () => {
+					pointerOverRailRef.current = false;
 					setHoverIndex(-1);
 					stopHoverScroll();
 				},
@@ -481,9 +786,10 @@ window.__ModuleLoader__.load({
 							const dist = hoverIndex === -1 ? Infinity : Math.abs(i - hoverIndex);
 							const cls = dist === 0 ? " tn-cap-hot" : dist === 1 ? " tn-cap-warm" : "";
 							const loading = jumpState !== null && jumpState.phase === "loading" && jumpState.turn === entry.turn;
+							const isActive = activeTurn === entry.turn;
 							return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 								type: "button",
-								className: `tn-cap-btn${cls}${loading ? " tn-loading" : ""}`,
+								className: `tn-cap-btn${cls}${loading ? " tn-loading" : ""}${isActive ? " tn-cap-active" : ""}`,
 								onMouseEnter: (e) => {
 									setHoverIndex(i);
 									const rect = e.currentTarget.getBoundingClientRect();
@@ -534,15 +840,94 @@ window.__ModuleLoader__.load({
 			});
 		}
 		//#endregion
+		//#region src/client/SettingsNavModeRow.tsx
+		/**
+		* Settings → General row: WHICH turn-navigation rail to show.
+		*
+		* Registered into `settings.general.item` (root scope) by the plugin's apply;
+		* the General section renders each contribution as one row, so this component
+		* draws its own title, description, and a three-way selector:
+		*
+		*   DSH official | Smoothly TN (Smoothly Turn Nav) | Hide all
+		*
+		* The choice is persisted browser-locally (see mode.ts) and drives both the
+		* rail component (React-side visibility) and the official-rail stylesheet
+		* override (body class).
+		*/
+		const OPTIONS = [
+			{
+				id: "official",
+				label: "modeOfficial"
+			},
+			{
+				id: "stn",
+				label: "modeSTN"
+			},
+			{
+				id: "hidden",
+				label: "modeHidden"
+			}
+		];
+		/** Render the rail display-mode preference row. */
+		function SettingsNavModeRow({ t }) {
+			const mode = (0, react.useSyncExternalStore)(subscribeRailMode, getRailMode);
+			const [open, setOpen] = (0, react.useState)(false);
+			const selectedLabel = OPTIONS.find((option) => option.id === mode)?.label ?? "modeSTN";
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+				className: "tn-mode-row",
+				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+					className: "tn-mode-row-text",
+					children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+						className: "tn-mode-title",
+						children: t("modeRowTitle")
+					}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+						className: "tn-mode-desc",
+						children: t("modeRowDesc")
+					})]
+				}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Menu, {
+					open,
+					onClose: () => {
+						setOpen(false);
+					},
+					items: OPTIONS.map((option) => ({
+						id: option.id,
+						label: t(option.label)
+					})),
+					selectedId: mode,
+					onSelect: (id) => {
+						setOpen(false);
+						setRailMode(id);
+					},
+					align: "end",
+					portal: true,
+					anchor: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
+						type: "button",
+						className: "tn-mode-selector",
+						"aria-haspopup": "menu",
+						"aria-expanded": open,
+						onClick: () => {
+							setOpen((value) => !value);
+						},
+						children: [t(selectedLabel), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronDownOutline14, { className: "tn-mode-chevron" })]
+					})
+				})]
+			});
+		}
+		//#endregion
 		//#region src/client/locales.ts
-		/** Copy dictionaries for the dsh-turn-navigator plugin. */
+		/** Copy dictionaries for the dsh-turn-navigator plugin (Smoothly Turn Nav / 思磨力轮次胶囊条). */
 		/** English strings (the key-set source of truth for this pair). */
 		const en = {
 			rail: "Turn navigation",
 			turnLabel: "Turn {n}",
 			noSummary: "(no user message)",
 			locatingTurn: "Locating turn {n}…",
-			locateFailed: "Could not locate turn {n}"
+			locateFailed: "Could not locate turn {n}",
+			modeRowTitle: "Turn navigation",
+			modeRowDesc: "Which turn-navigation rail to display: the DSH built-in, Smoothly TN (Smoothly Turn Nav), or none.",
+			modeOfficial: "DSH official",
+			modeSTN: "Smoothly TN",
+			modeHidden: "Hide all"
 		};
 		/** Chinese strings (same keys as {@link en}). */
 		const zh = {
@@ -550,7 +935,12 @@ window.__ModuleLoader__.load({
 			turnLabel: "第 {n} 轮",
 			noSummary: "（无用户消息）",
 			locatingTurn: "正在定位第 {n} 轮…",
-			locateFailed: "无法定位第 {n} 轮"
+			locateFailed: "无法定位第 {n} 轮",
+			modeRowTitle: "轮次导航",
+			modeRowDesc: "选择显示哪个轮次胶囊条：DSH 官方、思磨力轮次胶囊条（Smoothly Turn Nav），或全部隐藏。",
+			modeOfficial: "DSH 官方",
+			modeSTN: "思磨力轮次胶囊条",
+			modeHidden: "全部隐藏"
 		};
 		//#endregion
 		//#region src/client/styles.ts
@@ -582,6 +972,81 @@ window.__ModuleLoader__.load({
   align-items: center;
   z-index: 10;
   pointer-events: auto;
+}
+/* When the built-in (official) TurnNavigator rail is present in the transcript
+   (right edge, vertically centered on the scrollport band), nudge our rail up
+   into the header zone so the two never overlap: same right edge, but pinned
+   below the session header instead of the scrollport center. */
+.tn-wrap.tn-nudge {
+  top: 64px;
+  transform: none;
+  max-height: calc(100vh - 140px);
+}
+/* Narrow viewport: mirror the official rail's @container (max-width: 900px)
+   hide, so we never fight the compact layout for the right edge. */
+@media (max-width: 900px) {
+  .tn-wrap {
+    display: none;
+  }
+}
+/* Subtractive takeover (settings → Turn navigation = Smoothly TN): hide the
+   OFFICIAL built-in rail. The official rail lives inside the conversation
+   scroll container (data-conversation-scroll) — our rail is fixed outside
+   it — so a container-scoped rule cannot match ours. The tn-hide-official
+   body class is toggled by mode.ts; the official rail itself has no
+   off-switch, so this stylesheet override is the only way to replace it. */
+body.tn-hide-official [data-conversation-scroll] nav {
+  display: none !important;
+}
+/* Settings → General preference row (which rail to show). Mirrors the official
+   EnterBehaviorRow tokens. */
+.tn-mode-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--dsw-alias-border-l2);
+}
+.tn-mode-row-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-right: 48px;
+}
+.tn-mode-title {
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 22px;
+  color: var(--dsw-alias-label-primary);
+}
+.tn-mode-desc {
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 18px;
+  color: var(--dsw-alias-label-tertiary);
+}
+.tn-mode-selector {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  height: 36px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 18px;
+  background: var(--dsw-alias-bg-module-platform);
+  font: inherit;
+  font-size: 14px;
+  line-height: 22px;
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+}
+.tn-mode-selector:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+.tn-mode-chevron {
+  flex: none;
 }
 /* Up/down scroll controls at the top and bottom of the rail. Disabled (grey,
    no pointer/hover-scroll) when there is nothing to scroll in that
@@ -672,6 +1137,12 @@ window.__ModuleLoader__.load({
 .tn-cap-btn.tn-cap-warm .tn-cap {
   transform: scaleX(1.25);
   background: var(--dsw-alias-label-secondary);
+}
+/* Active (current) turn following the scroll: a persistent brand tint so the
+   reader always knows where they are in the rail, distinct from hover. */
+.tn-cap-btn.tn-cap-active .tn-cap {
+  background: var(--dsw-alias-state-business-primary);
+  width: 14px;
 }
 /* Custom tooltip bubble: mirrors the DSH tooltip visual (dark plate, white
    text, pre-line for multi-line info), fixed-positioned to the LEFT of the
@@ -791,15 +1262,61 @@ window.__ModuleLoader__.load({
 			}), "dsh-turn-navigator: copy dictionaries");
 			const t = ctx.locale.bind(NS);
 			const api = ctx.get("connection")?.api;
+			applyModeToBody();
+			let journal;
+			let sessionAccess;
+			const resolveHandles = () => {
+				if (journal !== void 0 && sessionAccess !== void 0) return;
+				const sessionNamespace = ctx.get("remote.session");
+				if (journal === void 0 && typeof sessionNamespace?.page === "function") journal = { page: (request, signal) => sessionNamespace.page(request, signal) };
+				if (sessionAccess === void 0) {
+					const sessionsService = ctx.get("sessions");
+					if (sessionsService !== void 0 && typeof sessionsService.binding === "function") sessionAccess = {
+						windowSeq(sessionId) {
+							const entries = sessionsService.binding?.(sessionId)?.eventSource?.getSnapshot?.()?.entries ?? [];
+							return {
+								firstSeq: entries[0]?.event?.seq,
+								lastSeq: entries.at(-1)?.event?.seq
+							};
+						},
+						hasMore(sessionId) {
+							return sessionsService.binding?.(sessionId)?.eventSource?.getSnapshot?.()?.hasMore ?? false;
+						},
+						async loadOlder(sessionId) {
+							const face = sessionsService.binding?.(sessionId)?.session;
+							if (face === void 0 || typeof face.loadOlder !== "function") return false;
+							try {
+								await face.loadOlder();
+								return true;
+							} catch {
+								return false;
+							}
+						}
+					};
+				}
+			};
+			resolveHandles();
+			ctx.slots.inject("settings.general.item", () => ctx.slots.register({
+				name: "settings.general.item",
+				id: "dsh-turn-navigator-mode",
+				order: 30,
+				locale: NS,
+				inject: () => ({ t })
+			}, SettingsNavModeRow));
 			ctx.slots.inject("conversation.session.header.utilities", () => ctx.slots.register({
 				name: "conversation.session.header.utilities",
 				id: "dsh-turn-navigator",
 				order: 20,
 				locale: NS,
-				inject: () => ({
-					t,
-					api
-				})
+				inject: () => {
+					resolveHandles();
+					return {
+						t,
+						api,
+						journal,
+						sessionAccess
+					};
+				}
 			}, TurnNavRail));
 		}
 		//#endregion

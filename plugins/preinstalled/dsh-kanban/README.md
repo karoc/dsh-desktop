@@ -1,15 +1,15 @@
-# dsh-kanban
+# Smoothly Kanban
 
 [![license MIT](https://img.shields.io/npm/l/dsh-kanban.svg)](LICENSE)
 
-An **external** DeepSeek Harness plugin: a cross-session, cross-branch, persistent **plan / todo kanban board**.
+Smoothly Kanban（**思磨力看板**）is an **external** DeepSeek Harness plugin: a cross-session, cross-branch, persistent **plan / todo kanban board**.
 
 When you chat with an agent (in dsh, Codex, Claude Code, …) you produce lots of plans and todos — and the pain is that once you switch to another branch or open a new session, those plans and todos become invisible: they still live in the long conversation, but you can't find them or remember them.
 
 `dsh-kanban` sinks plans and todos into a **`KANBAN.json` file at the workspace root** (git-trackable, human-editable, survives sessions) and gives you two ways to maintain it:
 
 - **Model entry**: 4 model-facing tools (`board_list` / `board_add` / `board_update` / `board_remove`) so the model records plan steps and todos while talking.
-- **Web entry**: a new 「看板」 button in the dsh Web GUI sidebar that opens a **full-screen three-column board page** (To do / In progress / Done) with view, status move (incl. mark done), add, and delete.
+- **Web entry**: a new 「思磨力看板」 button in the dsh Web GUI sidebar that opens a **full-screen three-column board page** (To do / In progress / Done) with view, status move (incl. mark done), add, and delete.
 
 The same `KANBAN.json` is shared by the model tools and the Web page, so **what the model writes, the page shows; what you check off on the page, the model reads next time.**
 
@@ -70,7 +70,7 @@ dsh's **system prompt** and visible to the user:
    session the model moves completed cards to done, adds follow-ups as todos,
    updates summaries, and **never leaves stale `in_progress` cards** — the
    board stays an honest cross-session hand-off.
-4. **User-side visibility**: the sidebar 「看板」 entry shows an **open-item
+4. **User-side visibility**: the sidebar 「思磨力看板」 entry shows an **open-item
    count badge** (backed by the `/kanban/counts` route; workspace resolved from
    the most-recent workspace, subscribes to workspace-list changes so it
    appears as soon as data is ready); the board page **auto-refreshes every
@@ -147,7 +147,9 @@ shipped, not part of the user-facing `test` chain).
 
 ### Web board page (client half)
 
-- A 「看板」 entry in the sidebar footer (`sidebar.footer.action`), showing an
+![The full-screen three-column board page (To do / In progress / Done)](docs/screenshots/board-page.png)
+
+- A 「思磨力看板」 entry in the sidebar footer (`sidebar.footer.action`), showing an
   **open-item count badge** (number when there are todo/in_progress cards,
   "99+" cap);
 - A full-screen three-column board: **To do / In progress / Done**, each
@@ -231,9 +233,9 @@ dsh plugin --profile web remove dsh-kanban   # removes dependency + bundle layer
 
 ## Usage
 
-1. Install, restart `dsh web`; the sidebar footer shows the 「看板」 button.
+1. Install, restart `dsh web`; the sidebar footer shows the 「思磨力看板」 button.
 2. Ask the model to record plan steps with `board_add` (e.g. "put xxx on the board"); it writes the current workspace's `KANBAN.json`.
-3. Open 「看板」 anytime for the three-column view; mark done / move / add / delete directly on the page.
+3. Open 「思磨力看板」 anytime for the three-column view; mark done / move / add / delete directly on the page.
 4. After switching branches or opening new sessions the board is still there — it's just a file in the workspace.
 
 ## Card completeness & the kanban-use skill
@@ -276,6 +278,7 @@ scripts/check-card-discipline.mjs # dev gate: guidance/schema/skill agree on com
 scripts/audit-cards.mjs          # KANBAN.json completeness audit ([workspace] [--fail])
 scripts/install-skill.mjs        # symlink/copy the skill into ~/.agents/skills (shipped too)
 scripts/verify-skill-sync.mjs    # skill self-heal three-state verification (part of pnpm test)
+docs/screenshots/board-page.png  # Web board page screenshot (README figure)
 ```
 
 ## Why an external plugin
@@ -309,6 +312,13 @@ pnpm accept     # GUI acceptance against a running dsh web (http://127.0.0.1:308
                 #   native-DSH sidebar entry → opaque full-screen three-column page
                 #   → add / move / delete
 ```
+
+Since DSH 0.1.2-alpha.2 the Web GUI protects its index with a browser-session
+cookie ("dsh web authentication required"); the live-GUI scripts authenticate
+themselves through the `/?token=` handshake. Point them at the token `dsh web`
+printed on launch via `DSH_WEB_TOKEN`, or pass the full launch URL (including
+`?token=...`) as `DSH_GUI_URL`; on instances where auth is off they run
+unchanged.
 
 External plugins get no compile-time typechecking by default (tsdown only
 transpiles); `tsc --noEmit` in `pnpm test` catches "used-but-not-imported"
