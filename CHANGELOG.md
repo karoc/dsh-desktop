@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.2](https://github.com/karoc/dsh-desktop/compare/v0.6.1...v0.6.2) (2026-09-06)
+
+
+### Bug Fixes
+
+* **shell:** 首启 URL 索要——根治重开壳黑屏（URL 事件丢失链） ([711cefb](https://github.com/karoc/dsh-desktop/commit/711cefb269daefff78a353e85ab90ad7b9f1b70a))
+
 ## [0.6.1](https://github.com/karoc/dsh-desktop/compare/v0.6.0...v0.6.1) (2026-09-05)
 
 
