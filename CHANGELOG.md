@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.3](https://github.com/karoc/dsh-desktop/compare/v0.6.2...v0.6.3) (2026-09-06)
+
+
+### Bug Fixes
+
+* **release:** make chore commits visible in release PRs — plugin syncs were silently dropped ([159d5ca](https://github.com/karoc/dsh-desktop/commit/159d5ca14d7a3aae26b614165041eec2dd829b71))
+
+
+### Chores
+
+* **plugins:** sync preinstalled bundles to latest — kanban 0.2.5, model-reasoning 0.2.4, turn-navigator 0.4.3 ([918673b](https://github.com/karoc/dsh-desktop/commit/918673b066e1aba58894d58ccd2f1be1cd6cb54f))
+
 ## [0.6.2](https://github.com/karoc/dsh-desktop/compare/v0.6.1...v0.6.2) (2026-09-06)
 
 
