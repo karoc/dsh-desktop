@@ -2598,6 +2598,10 @@ pub fn run() {
             // 持续到成功，重启服务后的新 URL 也会被自动推入。
             {
                 let nav_app = app.handle().clone();
+                let nav_data_dir = app
+                    .path()
+                    .app_data_dir()
+                    .unwrap_or_else(|_| std::path::PathBuf::from("."));
                 std::thread::spawn(move || {
                     let mut last_nav = std::time::Instant::now()
                         .checked_sub(std::time::Duration::from_secs(60))
@@ -2625,6 +2629,8 @@ pub fn run() {
                         if let Ok(u) = tauri::Url::parse(&live) {
                             let _ = w.navigate(u);
                             last_nav = std::time::Instant::now();
+                            // 诊断：导航兜底每次实际 navigate 都留痕（session.log）
+                            log_line(&nav_data_dir, &format!("nav-fallback: navigate -> {live}"));
                         }
                     }
                 });
