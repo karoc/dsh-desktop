@@ -181,3 +181,25 @@ Start-Process "C:\Users\<u>\AppData\Local\DSH Smoothly Desktop\dsh-desktop.exe"
 - 别在 WSL 里 `cat`/`grep` Windows 侧大文件（9p 慢）；用 grep 工具/分页。
 - 别改 `resources/manager/*` 后不修真源（§9.5）。
 - 别在 `curl` 时用无 token 的 URL 判断 web 存活（0.1.2-rc.1 起 401 是正常）；用 manager.log 的完整 URL。
+
+### 9.9 导航兜底终版机制（2026-09-07 定案，黑屏根治）
+
+**页面可用信号 = 桥收到 client 的 `/alive`（client-ready）**，不是 `window.url()`、也不是 `on_page_load`：
+- 前两者在"navigate 空转"（URL 变但 WebView 未渲染）时也成立 → 兜底过早撒手 → 黑屏保持
+- `/alive` 只有页面 JS 真跑起来才发（`plugins/dsh-client-notifications/client.js`）→ 唯一可靠信号
+- 实现：`CLIENT_READY` AtomicBool，`/alive` handler 置 true，`server-url` 事件（新地址）时 reset；
+  兜底线程：LIVE 有值 && !CLIENT_READY → 3s 节流持续 `w.navigate(live)`，直到 alive 出现
+- 验证链（session.log）：`nav-fallback: navigate -> <url>` 出现 + 随即 `client-ready` = 成功
+- 若 nav-fallback 零日志：查 LIVE 是否空（report-url 索要）/ CLIENT_READY 是否被误置 / 线程是否启动
+
+### 9.10 宿主机本地构建的坑（多次白折腾，务必遵守）
+
+1. **构建前必须确认宿主机工作区 commit == 要验证的 commit**（`git log --oneline -1`）——
+   之前多次"构建了但没生效"实为工作区停在旧 commit（merge 因本地改动被 abort）。先
+   `git fetch` + `git checkout -- <被改文件>` + `git merge --ff-only origin/main`，验证 log 再 build。
+2. **NSIS 同版本不覆盖**：安装包与已装版本号相同（本地构建未 bump 时常见）→ 安装器跳过覆盖。
+   手动覆盖 exe 即可（比改版本号快）：先杀 dsh 进程树（含 node/msedgewebview2），再
+   `Copy-Item target\release\dsh-desktop.exe 安装目录\dsh-desktop.exe -Force`。
+3. **杀壳进程要连树**：`Stop-Process` 只杀 exe，manager/web node 树会残留成孤儿（两个 dsh web 并存
+   → 导航目标混乱）。用 `taskkill /T /F` 或遍历 `node.exe CommandLine -match "dsh.smoothly"` 全杀。
+4. `powershell.exe -EncodedCommand` 的 bash 命令默认 60s 超时——构建用后台 job 或加 timeout。
