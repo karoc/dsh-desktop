@@ -1962,7 +1962,6 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
     {
         let app2 = app.clone();
         std::thread::spawn(move || {
-            use std::io::Write as _;
             for delay_ms in [2000u64, 2000, 4000] {
                 std::thread::sleep(std::time::Duration::from_millis(delay_ms));
                 if LIVE_DSH_URL.lock().unwrap().is_some() {
