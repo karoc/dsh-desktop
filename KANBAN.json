@@ -732,8 +732,8 @@
         "preinstalled"
       ],
       "createdAt": 1788708447442,
-      "updatedAt": 1788710850334,
-      "summary": "已通过 git 直推完成发布，无需用户在 Web 合并：PAT 无 PR 合并权限 → 本地 git merge release 分支到 main（6245332）直推 → release-please 检测 release commit 打 tag v0.6.3 + 建 Release；tag 未触发构建（API 建 tag）→ 删 tag 重推强制触发 build，windows/linux/release 全绿，3 个安装包已挂载到 Release v0.6.3。"
+      "updatedAt": 1788711800990,
+      "summary": "已通过 git 直推完成发布，无需用户在 Web 合并：PAT 无 PR 合并权限 → 本地 git merge release 分支到 main（6245332）直推 → release-please 检测 release commit 打 tag v0.6.3 + 建 Release；tag 未触发构建（API 建 tag）→ 删 tag 重推强制触发 build，windows/linux/release 全绿，3 个安装包已挂载到 Release v0.6.3。PR #26 已自动标记 MERGED（mergedBy karoc、mergeCommit 6245332，GitHub 识别到其 head 提交已进入 main），无需手动关闭。"
     }
   ]
 }
