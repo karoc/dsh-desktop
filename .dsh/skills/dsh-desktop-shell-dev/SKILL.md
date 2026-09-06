@@ -133,6 +133,43 @@ npm run bundle:dev   # = tauri build --config src-tauri/tauri.dev.conf.json --bu
   展开成空）——避免 if 分支，用顺序执行 + 看输出判断。
 - 完成后必须**告知用户**安装包位置。
 
+### 4.1 正式版本地构建（宿主机，排查/验证优先于此，别等 CI）
+
+`D:\Dev\dsh-desktop`（正式版工作目录，与开发版同机并存）。**排障要验证"包内容对不对"时，
+本地构建 + 静默安装 + 启动验证比 GitHub CI（15-20min）快一个数量级（Rust 缓存后约 40s）：**
+
+```powershell
+Set-Location "D:\Dev\dsh-desktop"
+git fetch origin; git checkout -- src-tauri/Cargo.toml src-tauri/Cargo.lock  # 丢弃本地杂散（多为换行）
+git merge --ff-only origin/main
+npm install
+npm run tauri -- build --bundles nsis   # 或 npm run bundle
+# 产物：src-tauri\target\release\bundle\nsis\DSH Smoothly Desktop_<v>_x64-setup.exe
+Start-Process -FilePath "<setup>" -ArgumentList "/S" -Wait   # 静默安装（覆盖同 productName）
+Start-Process "C:\Users\<u>\AppData\Local\DSH Smoothly Desktop\dsh-desktop.exe"
+# 验证首启导航（黑屏根治判据）：session.log 出现新 client-ready
+```
+
+### 4.2 manager 真源/副本契约（改 manager 必读，别重蹈 0.5.0/0.6.0 打包旧版覆辙）
+
+- **真源 = `scripts/server-manager.mjs`**；`sync-resources.mjs` 构建时覆盖到
+  `resources/manager/server-manager.mjs`（tauri 打包副本）。
+- **改 manager 只改真源**，然后同步副本（`cp scripts/server-manager.mjs src-tauri/resources/manager/`）。
+  只改副本 + 就地部署 = CI 构建的安装包还是旧版（0.5.0/0.6.0 实测回退事故）。
+- 改完检查：`node --check scripts/server-manager.mjs && cmp scripts/server-manager.mjs src-tauri/resources/manager/server-manager.mjs`。
+
+### 4.3 黑屏导航机制（改导航相关代码前先懂它）
+
+- **首启黑屏根因**：WebView2 冷启动 navigate 竞态（首个 server-url 事件丢失 →
+  `LIVE_DSH_URL` 恒空）+ 首启 URL 事件可能在 shell stdout reader 就绪前发出。
+- **治本三层**（都在壳内，改时保持）：① Rust 导航兜底守护线程（setup 起，每 2s 检查主窗口
+  仍在本地页且有 live URL → 强制导航）；② 首启 URL 索要（start_server 后 2s/2s/4s 若
+  LIVE_DSH_URL 空 → 发 `report-url` 给 manager，manager 重发当前 URL）；③ launcher 页轮询
+  `get_shell_state.liveUrl`。
+- **dsh 0.1.2-rc.1 起**：URL 带 `?token=`（URL_RE 必须 `\d+[^\s]*` 保留 token，watchdog/导航
+  快照都靠它）；`--patch` 空格路径截断（manager 复制到 `<runtime>/dsh-desktop.patch.yml`
+  无空格镜像）。
+
 ## 5. Tauri 2 踩坑速查（本轮新踩，先查再写）
 
 | 坑 | 真相 |
