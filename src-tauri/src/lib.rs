@@ -675,6 +675,40 @@ fn legacy_process_running(legacy_dir: &std::path::Path) -> bool {
         .any(|p| p.replace('/', "\\").starts_with(&want))
 }
 
+/// 启动时清理本身份 runtime 的残留 node 树（孤儿防驻留）。
+/// 壳被强杀/崩溃后，manager 与 dsh web 的 node 进程没有父死子清机制会残留
+/// （多个 dsh web 并存干扰导航、占端口）。按"命令行含本身份 runtime 路径"
+/// 精确匹配 node.exe（dev/正式各自只清自己），taskkill /T /F 连树杀掉。
+/// 幂等：正常退出后无残留，扫描为空操作。Windows 专用。
+#[cfg(windows)]
+fn cleanup_stale_service_tree(app: &AppHandle) {
+    let runtime_dir = runtime_dir(app); // <app_data>/runtime
+    let marker = runtime_dir.to_string_lossy().replace('/', "\\");
+    let script = format!(
+        r#"Get-CimInstance Win32_Process | Where-Object {{ $_.Name -eq 'node.exe' -and $_.CommandLine -like '*{marker}*' }} | ForEach-Object {{ $_.ProcessId }}"#
+    );
+    let stale = powershell_lines(&script);
+    if stale.is_empty() {
+        return;
+    }
+    let data = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+    for pid in &stale {
+        // 跳过自身（壳不是 node，理论上不会命中；防御）。
+        if let Ok(cur) = std::process::id().to_string().parse::<u32>() {
+            if pid.parse::<u32>().ok() == Some(cur) {
+                continue;
+            }
+        }
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", pid, "/T", "/F"])
+            .output();
+        log_line(&data, &format!("stale service node {pid} killed (startup cleanup)"));
+    }
+}
+
 /// 读取 .lnk 的目标路径（Windows COM，WScript.Shell）。
 fn shortcut_target(lnk: &std::path::Path) -> Option<std::path::PathBuf> {
     let l = lnk.to_string_lossy().replace('\'', "''");
@@ -2842,7 +2876,13 @@ pub fn run() {
                 });
             }
 
-            // ── loopback notification bridge (see start_bridge) ────────────
+            // 清理上次异常退出残留的 dsh 服务树（孤儿防驻留）：壳被强杀/
+            // 崩溃时 manager/web 的 node 树无父死子清机制会残留（多个 dsh
+            // web 并存干扰导航、占端口）。按本身份 runtime 路径精确清理
+            // （dev/正式各自只清自己；taskkill /T /F 连树）；幂等。
+            #[cfg(windows)]
+            cleanup_stale_service_tree(app.handle());
+            // loopback notification bridge (see start_bridge)
             start_bridge(app.handle().clone());
 
             // ── boot the service once the launcher page can listen ────────
