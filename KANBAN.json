@@ -511,17 +511,18 @@
     {
       "id": "card-f54f54df-b28e-4ea6-a1cf-77f2fe1b069c",
       "title": "跟进：resources/plugin 插件同步拷贝滞后（提交 plugins/ 源后未提交拷贝）",
-      "rationale": "构建时 beforeBuildCommand 的 sync-resources.mjs 会把 plugins/dsh-plugin-console/ 源拷贝到 src-tauri/resources/plugin/，但 #15（去悬浮按钮/改全局接口）只提交了源文件，仓库里跟踪的拷贝仍带旧版 .dshc-btn（18 处）。功能无碍（每次构建自动覆盖），但仓库两份不一致，长期会让 diff 混乱、误导排查。为什么现在：本轮在 D 盘重建时发现了这个不一致。",
-      "rejected": "不放当前 PR：与本轮 UI 反馈无关、且 PR #18 已合并，单独开一个小 PR 更干净。也可以选择把 resources/plugin 改为 gitignore + 强制构建生成，但那会改变仓库约定，需要先讨论。",
+      "rationale": "board 遗留的 repo-hygiene 跟进：commit 375712d (#15) 改了 plugins/dsh-plugin-console/client.js 但没跑 sync-resources，打包副本带旧版悬浮按钮代码；本次全量更新顺手通过统一同步脚本修复，避免继续手工拷一处漏一处。",
+      "rejected": "放弃单独手工拷贝 plugin-console 副本——正解是跑 sync-resources.mjs 统一同步，杜绝「改一处、拷一处」易漏模式（本次滞后正是该模式造成的）。",
       "sourceSessionId": "session-2022bc96-7d1e-49fd-8ada-307acaff05a9",
-      "status": "todo",
+      "status": "done",
       "tags": [
         "repo-hygiene",
         "plugins",
         "follow-up"
       ],
       "createdAt": 1788267731908,
-      "updatedAt": 1788267731908
+      "updatedAt": 1788706433945,
+      "summary": "已修复：重跑 scripts/sync-resources.mjs 后 diff 确认 src-tauri/resources/plugin/@dsh-desktop/plugin-console 与 plugins/dsh-plugin-console 源树完全一致（#15 去悬浮按钮改动随 918673b 提交）。client-notifications/manager/proxy 副本同样一致。"
     },
     {
       "id": "card-4298568a-a066-430f-a3ec-a0c14f8419b5",
@@ -704,17 +705,18 @@
     {
       "id": "card-681f4c15-d575-40ca-8a95-b0652ecf4d07",
       "title": "预装插件同步至 latest：kanban 0.2.5 / model-reasoning 0.2.4 / turn-navigator 0.4.3 + 发布新版本",
-      "rationale": "用户要求更新壳的所有内容；audit 显示 3 个预装插件落后 npm latest，且 plugin-console 打包副本滞后（board 已有跟进卡片）。同步后按用户选择发布新版本（release-please CI 出包）。",
-      "rejected": "放弃只做预装插件（用户选了全量+发布）；放弃运行时 dsh 更新（用户选了只做仓库侧，dsh 本体由应用内门控更新）。",
+      "rationale": "用户要求更新壳的所有内容；audit 显示 3 个预装插件落后 npm latest，且 board 跟进卡片确认 plugin-console 打包副本滞后（#15 改源树未重新同步）。用户选择「同步 + 发布新版本」，conventional commit 推 main 由 release-please 自动开发布 PR 出包。",
+      "rejected": "放弃只做预装插件（用户选全量+发布）；放弃运行时 dsh 更新（用户选只做仓库侧，dsh 本体由应用内门控更新）；turn-navigator 的 docs/turn-nav-rail.png 确认仅 files 声明非运行时资产，按精简约定不随包。",
       "sourceSessionId": "session-f518f553-46ee-4f47-a711-19d9e4d669d5",
-      "status": "in_progress",
+      "status": "done",
       "tags": [
         "preinstalled",
         "plugins",
         "release"
       ],
       "createdAt": 1788706217021,
-      "updatedAt": 1788706217021
+      "updatedAt": 1788706433930,
+      "summary": "3 个预装插件同步至 npm latest 并已提交推送（918673b，main）：kanban 0.2.1→0.2.5、model-reasoning 0.2.1→0.2.4、turn-navigator 0.1.1→0.4.3；kanban 继续随包带技能资产；plugin-console 打包副本滞后一并修复（重跑 sync-resources.mjs）；npm test 8 套全绿；已写 Agent Note（2026-09-06-preinstalled-plugin-sync-v063.md）。"
     }
   ]
 }
