@@ -203,3 +203,16 @@ Start-Process "C:\Users\<u>\AppData\Local\DSH Smoothly Desktop\dsh-desktop.exe"
 3. **杀壳进程要连树**：`Stop-Process` 只杀 exe，manager/web node 树会残留成孤儿（两个 dsh web 并存
    → 导航目标混乱）。用 `taskkill /T /F` 或遍历 `node.exe CommandLine -match "dsh.smoothly"` 全杀。
 4. `powershell.exe -EncodedCommand` 的 bash 命令默认 60s 超时——构建用后台 job 或加 timeout。
+
+### 9.11 孤儿进程防驻留（2026-09-07 实现并 dev 验证）
+
+**问题**：壳被强杀/崩溃时 manager/web 的 node 树无父死子清 → 残留（多个 dsh web 并存干扰
+导航、占端口）。**修复**：壳 setup 早期 `cleanup_stale_service_tree`——按本身份 runtime 路径
+（`%APPDATA%\<identifier>\runtime`）匹配 `node.exe` 命令行 → `taskkill /T /F` 连树清理；
+dev/正式各自只清自己（标识隔离）；幂等（正常退出后无残留为空操作）。session.log 留痕
+`stale service node <pid> killed (startup cleanup)`。
+
+**dev 验证方法**（D:\Dev\dsh-desktop-dev 构建 → 装 dev 版）：循环"杀壳 exe（只杀壳留孤儿）→
+重启"多次，断言：每轮 `stale service node` +2、`client-ready` +1（新壳导航正常）、最终
+进程数恒为 3（1 壳+2 node）——无驻留累积、无导航异常。dev/正式互不误伤（正式 session.log
+无 stale 记录）。
