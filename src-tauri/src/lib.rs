@@ -2612,22 +2612,12 @@ pub fn run() {
                     .app_data_dir()
                     .unwrap_or_else(|_| std::path::PathBuf::from("."));
                 std::thread::spawn(move || {
-                    log_line(&nav_data_dir, "nav-fallback: thread started");
                     let mut last_nav = std::time::Instant::now()
                         .checked_sub(std::time::Duration::from_secs(60))
                         .unwrap_or(std::time::Instant::now());
-                    let mut diag_n = 0;
                     loop {
                         std::thread::sleep(std::time::Duration::from_millis(1500));
                         let live = LIVE_DSH_URL.lock().unwrap().clone();
-                        let ready = CLIENT_READY.load(std::sync::atomic::Ordering::SeqCst);
-                        if diag_n < 6 {
-                            diag_n += 1;
-                            log_line(&nav_data_dir, &format!(
-                                "nav-fallback: diag live={} ready={ready}",
-                                live.as_deref().unwrap_or("(none)")
-                            ));
-                        }
                         let Some(live) = live else { continue };
                         // 以"页面真正可用"（桥收到 /alive）为准：已 alive → 成功，撒手。
                         // on_page_load/URL 层都可能"空转"（navigate 生效但 WebView 未
