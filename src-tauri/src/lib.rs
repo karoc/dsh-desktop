@@ -186,6 +186,10 @@ static LIVE_DSH_URL: Mutex<Option<String>> = Mutex::new(None);
 /// 比 `window.url()` 可靠——后者在导航"空转"（URL 已变但 WebView 未渲染）时
 /// 会误报已到达 dsh 页，导致导航兜底过早撒手 → 黑屏）。
 static LAST_MAIN_LOADED: Mutex<Option<String>> = Mutex::new(None);
+/// 页面"真正可用"信号：桥收到 client 的 /alive（= 页面 JS 已运行并回连）。
+/// 只有这个能证明 webview 渲染完成；URL 层/on_page_load 都可能"空转"。
+/// 每次 server-url 事件（新 dsh web 地址）时 reset，由导航兜底驱动重试。
+static CLIENT_READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Deterministic 64-bit FNV-1a — used to derive a per-build-identity toast
 /// activator CLSID without pulling in a hash/uuid crate.
@@ -1259,6 +1263,8 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
                 .path()
                 .app_data_dir()
                 .unwrap_or_else(|_| std::path::PathBuf::from("."));
+            // 页面 JS 已运行：导航兜底以此作为"真正渲染完成"信号。
+            CLIENT_READY.store(true, std::sync::atomic::Ordering::SeqCst);
             log_line(&data, &format!("client-ready (http): {body}"));
             eprintln!("[dsh-desktop] client-ready (http): {body}");
             ("200 OK", String::new())
@@ -1781,6 +1787,9 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
                             *handle.state::<ServerState>().last_error.lock().unwrap() = None;
                             let _ = handle.emit("server-url", url);
                             *LIVE_DSH_URL.lock().unwrap() = Some(url.to_string());
+                            // 新地址到来：页面可用信号重置，导航兜底会持续驱动
+                            // 到新页面的 /alive 出现（旧 alive 不代表新页面就绪）。
+                            CLIENT_READY.store(false, std::sync::atomic::Ordering::SeqCst);
                             // Reconnect: the launcher page's JS listener is gone
                             // once the webview is on the dsh page, so a dsh /
                             // manager restart (new random port) must be driven by
@@ -2610,19 +2619,14 @@ pub fn run() {
                         std::thread::sleep(std::time::Duration::from_millis(1500));
                         let live = LIVE_DSH_URL.lock().unwrap().clone();
                         let Some(live) = live else { continue };
-                        // 以"真实加载完成"为准：on_page_load 已到 live 同源 → 成功，撒手。
-                        let loaded = LAST_MAIN_LOADED.lock().unwrap().clone();
-                        if let Some(loaded_url) = loaded {
-                            let same_origin = |u: &str| {
-                                tauri::Url::parse(u).ok().map(|x| x.origin().ascii_serialization())
-                            };
-                            if same_origin(&loaded_url) == same_origin(&live) {
-                                continue; // 已成功到达 dsh 页
-                            }
+                        // 以"页面真正可用"（桥收到 /alive）为准：已 alive → 成功，撒手。
+                        // on_page_load/URL 层都可能"空转"（navigate 生效但 WebView 未
+                        // 渲染），只有 client JS 回连才证明渲染完成。
+                        if CLIENT_READY.load(std::sync::atomic::Ordering::SeqCst) {
+                            continue;
                         }
                         let Some(w) = nav_app.get_webview_window("main") else { continue };
-                        // 页面尚未真实加载到 live（含"URL 已变但 WebView 空转"的情况）
-                        // → 强制导航。节流：同一 URL 至少间隔 3s 重试一次。
+                        // 尚未收到 /alive → 持续强制导航（节流 3s），直到页面真渲染。
                         if last_nav.elapsed().as_secs() < 3 {
                             continue;
                         }
