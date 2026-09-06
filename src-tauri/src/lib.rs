@@ -1968,7 +1968,8 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
                 if LIVE_DSH_URL.lock().unwrap().is_some() {
                     break;
                 }
-                let mut stdin = app2.state::<ServerState>().stdin.lock().unwrap();
+                let state = app2.state::<ServerState>();
+                let mut stdin = state.stdin.lock().unwrap();
                 send_line(&mut stdin, r#"{"cmd":"report-url"}"#);
             }
         });
