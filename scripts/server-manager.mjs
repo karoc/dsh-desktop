@@ -450,6 +450,14 @@ function ensureStorePathsMatch(runtimeDir) {
 async function installDshUpdate({ force = false, version } = {}) {
   const current = installedVersion(args.runtimeDir)
   const fullyInstalled = dshInstalled(args.runtimeDir)
+  // 升级前快照 web profile 的 bundle 启用状态（2026-09-07 实测故障：升级
+  // 期间 profiles/web/package.json 缺失 → dsh web 启动时 initProfile 用模板
+  // 重建 → 用户启用的预装插件（dsh-kanban 等）从 bundles 全部丢失。升级后
+  // 必须校验并补回，不能升级了就丢升级前的状态）。
+  const profileBundlesBefore = snapshotWebProfileBundles(args.runtimeDir)
+  if (profileBundlesBefore !== null) {
+    log(`profile bundles snapshot: ${profileBundlesBefore.join(', ')}`)
+  }
   try {
     await resolveRemoteVersions()
   } catch (err) {
@@ -568,6 +576,15 @@ async function installDshUpdate({ force = false, version } = {}) {
     })
   }
   if (installError) throw new Error(`所有 registry 安装失败：${installError.message}`)
+  // 升级完成校验：pnpm install / dsh web 重建 manifest 可能让用户升级前
+  // 启用的 bundle（预装插件、自定义插件）从 profiles/web/package.json 丢失
+  // （2026-09-07 dev 实测：manifest 缺失 → initProfile 模板重建 → 插件全丢）。
+  // 用升级前快照补回，保证"升级不丢升级前状态"。自动安装/布局迁移也走这里。
+  try {
+    restoreProfileBundlesAfterUpdate(args.runtimeDir, profileBundlesBefore)
+  } catch (err) {
+    log(`profile bundles restore threw: ${err.message}`)
+  }
   emitUpdateStatus(false)
   return true
 }
@@ -728,6 +745,70 @@ function readShellManifest(runtimeDir) {
 
 function writeShellManifest(runtimeDir, manifest) {
   writeFileSync(join(runtimeDir, SHELL_MANIFEST), JSON.stringify(manifest, null, 2) + '\n')
+}
+
+/** Web profile manifest 路径（dsh-home/profiles/web/package.json）。 */
+function webProfileManifestPath(runtimeDir) {
+  return join(runtimeDir, 'dsh-home', 'profiles', 'web', 'package.json')
+}
+
+/**
+ * 读 web profile 的 bundles（dsh.profile.bundles）。manifest 缺失/损坏返回
+ * null（与"空列表"区分：null = 快照不可用，调用方跳过校验恢复）。
+ */
+function snapshotWebProfileBundles(runtimeDir) {
+  const p = webProfileManifestPath(runtimeDir)
+  if (!existsSync(p)) return null
+  try {
+    const doc = JSON.parse(readFileSync(p, 'utf8'))
+    const bundles = doc?.dsh?.profile?.bundles
+    return Array.isArray(bundles) ? bundles : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 升级后校验恢复：pnpm install / dsh web 重建 manifest 时，如果用户升级前
+ * 启用的 bundle（预装插件 dsh-kanban 等，以及自定义插件）从 bundles 丢失，
+ * 补回并写回（保留 manifest 其它字段）。2026-09-07 dev 实测：升级期间
+ * profiles/web/package.json 缺失 → initProfile 用模板重建 → 预装插件全丢；
+ * 本函数让"升级前已启用"的插件在升级后依然启用。
+ *
+ * 只恢复"升级前快照里有、升级后没有"的条目——不触碰模板自带 bundle
+ * （@deepseek-ai/*）与升级后新增的条目，避免覆盖升级意图。
+ */
+function restoreProfileBundlesAfterUpdate(runtimeDir, before) {
+  if (before === null) return false
+  const p = webProfileManifestPath(runtimeDir)
+  let afterDoc = null
+  let after = []
+  if (existsSync(p)) {
+    try {
+      afterDoc = JSON.parse(readFileSync(p, 'utf8'))
+      const b = afterDoc?.dsh?.profile?.bundles
+      after = Array.isArray(b) ? b : []
+    } catch {
+      afterDoc = null // 损坏：整体重建
+    }
+  }
+  const missing = before.filter((name) => !after.includes(name))
+  if (missing.length === 0) return false
+  // 写回：保留现有 doc 的其它字段（dependencies / patchReload / name 等），
+  // 只补 bundles。manifest 缺失/损坏时从快照重建完整 doc。
+  const doc = afterDoc ?? { name: 'dsh-profile-web', private: true, dependencies: {} }
+  doc.dsh = doc.dsh ?? {}
+  doc.dsh.profile = doc.dsh.profile ?? {}
+  doc.dsh.profile.bundles = [...after, ...missing]
+  try {
+    mkdirSync(dirname(p), { recursive: true })
+    writeFileSync(p, JSON.stringify(doc, null, 2) + '\n')
+    log(`profile bundles restored after update: ${missing.join(', ')}`)
+    return true
+  } catch (err) {
+    log(`profile bundles restore FAILED: ${err.message}`)
+    return false
+  }
 }
 
 /** Installed version of a package dir, or null. */
