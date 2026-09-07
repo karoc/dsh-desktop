@@ -203,6 +203,14 @@ Start-Process "C:\Users\<u>\AppData\Local\DSH Smoothly Desktop\dsh-desktop.exe"
 3. **杀壳进程要连树**：`Stop-Process` 只杀 exe，manager/web node 树会残留成孤儿（两个 dsh web 并存
    → 导航目标混乱）。用 `taskkill /T /F` 或遍历 `node.exe CommandLine -match "dsh.smoothly"` 全杀。
 4. `powershell.exe -EncodedCommand` 的 bash 命令默认 60s 超时——构建用后台 job 或加 timeout。
+5. **覆盖 exe 后必须同步安装目录的 `resources/`**（2026-09-07 实测又踩）：壳运行时从
+   `安装目录\resources\manager\server-manager.mjs` 加载 manager（不是从 exe 内提取）！
+   `Copy-Item` 覆盖 exe 后，安装目录 resources 仍是**旧安装快照** → 新 manager 逻辑
+   （如升级后 bundles 恢复）不生效，且 exe 与 manager 版本错位。部署步骤：
+   杀进程 → 覆盖 exe → `Copy-Item src-tauri\resources\manager\* 安装目录\resources\manager\`
+   （server-manager.mjs + proxy.mjs；patch/plugin/preinstalled/node 目录构建时若资源变过
+   也应同步，比对 hash 决定）→ 重启验证 manager.log 行为。构建产物
+   `src-tauri\resources\` 是 tauri 打包副本（含全部打包资源），与安装目录一一对应。
 
 ### 9.11 孤儿进程防驻留（2026-09-07 实现并 dev 验证）
 

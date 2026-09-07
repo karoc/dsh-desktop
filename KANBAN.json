@@ -754,22 +754,21 @@
     },
     {
       "id": "card-a773be32-d35a-4411-baff-f5a53cc0984d",
-      "title": "启动页前黑屏：cleanup 移出 setup 主线程（e3c9336）——dev 验证通过，待用户指示上正式版",
-      "description": "dev 版验证全部通过：1) 首启时序干净（bridge 即首条日志、无 6s gap、client-ready 3s、无 data-migration backup）2) 制造孤儿（只杀壳）→ 重启后 cleanup 精确命中孤儿 PID、新树不误杀 3) 连续 3 轮 kill-restart 零意外（每轮清理 PID 精确对应上轮新树）。结论：e3c9336 在 dev 验证完成，可上正式版——但上正式版需用户明确指示。",
-      "rationale": "10:29 启动 backup→bridge 6s gap = setup 主线程同步 PowerShell Get-CimInstance 全进程扫描阻塞 WebView2 首帧 → 启动页前黑屏。修复已提交 e3c9336 并在 dev 版完整验证。",
-      "rejected": "换更快进程枚举 API（tasklist/wmic）未采纳——匹配逻辑是审计过的正则，只做 -Filter 下推（已验证返回 PID 集一致）。曾违反 dev 先行纪律直接覆盖正式版（用户严厉指正，正式版不得擅动）。",
+      "title": "正式版合并最新版（76b8c6a）：黑屏/闪窗/插件恢复/GPU 开关全部生效",
+      "description": "正式版已合并到 76b8c6a（含 e3c9336 黑屏 + 2617804 闪窗 + cdd8a15 插件恢复 + 8fe9cbd~76b8c6a GPU 开关）。宿主机构建 NSIS + 覆盖 exe + 同步 resources/manager（关键！安装目录 manager 是旧快照，不同步会导致新逻辑不生效）+ 重启验证通过：bridge 首条日志无 gap、client-ready 1s、GPU 开启（WebView2 无 --disable-gpu）、插件 bundles 齐全、manager 含恢复逻辑、进程树正常。",
+      "rationale": "用户明确指示\"合并到正式版，并同步好正式版到最新版\"——所有 dev 验证通过的修复正式生效。",
+      "rejected": "不采用直接跑 NSIS 安装器（同版本不覆盖 exe + 可能触发卸载逻辑）；沿用 Copy-Item 覆盖 exe + 手动同步 resources（本次还发现并修复了 manager 不同步的问题）。",
       "sourceSessionId": "session-788be97d-7ef1-480f-9552-d09ab4eaf37b",
       "status": "done",
       "tags": [
         "windows",
-        "shell",
-        "black-screen",
-        "urgent",
-        "dev-verify"
+        "build",
+        "prod",
+        "done"
       ],
       "createdAt": 1788749075192,
-      "updatedAt": 1788751062486,
-      "summary": "修复 e3c9336 完成并在 dev 版验证通过：cleanup_stale_service_tree 移出 setup 主线程（后台线程 + STARTUP_CLEANUP_DONE 门闩 + wait_for_startup_cleanup），WMI -Filter 下推（5.5s→0.44s），migrate 备份仅在实际迁移时执行。dev 验证：首启 bridge 首条日志无 6s gap、client-ready 3s；孤儿制造-清理-不误杀循环 3 轮零意外。"
+      "updatedAt": 1788802498706,
+      "summary": "正式版同步到 76b8c6a，构建 NSIS，覆盖 exe，同步 resources/manager（旧快照问题已修），重启验证：黑屏修复（bridge 首条日志）、闪窗修复、GPU 默认开、插件 bundles 齐全、manager 恢复逻辑生效。"
     },
     {
       "id": "card-6987f455-e6bb-4c74-85f3-9680816a6877",
