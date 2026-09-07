@@ -791,12 +791,12 @@
     },
     {
       "id": "card-c3379848-7d34-4553-b727-0f91d7961f03",
-      "title": "dev 预装插件丢失：升级时 profile manifest 缺失被模板重建（已恢复，加固待定）",
-      "description": "已修复（dev）：通过桥 /plugins/enable 逐个启用三个预装插件，bundles 与正式版一致。验证：重启后 client-ready 正常、manager.log 出现 [dsh-kanban] skill 同步日志 = 插件实际加载。根因：dsh 0.1.1-rc.2→0.1.2-rc.1 升级时 profiles/web/package.json 缺失（9/6-9/7 崩溃测试期间被中断写入/丢失）→ initProfile 用模板重建 → 用户启用的插件 bundles 全丢。对照：正式版同升级未丢（manifest 完好）。产品缺陷：升级流程不备份/不校验 profiles/web/package.json，丢失后静默重建模板。待用户决定是否加固（manager updateDsh 前后备份/恢复 manifest，或升级后校验 bundles）。",
-      "rationale": "用户报告\"dev 版预装插件都没了\"。调查确认：升级 dsh 时 profiles/web/package.json 已缺失 → initProfile 模板重建 → 插件启用配置丢失。已在 dev 恢复并验证。",
-      "rejected": "不自动补 bundles（预装插件设计为 default OFF，无法区分\"从未启用\"与\"启用后丢失\"）；不直接改文件而是走桥 /plugins/enable 与 UI 等价。",
+      "title": "升级后校验恢复 profile bundles——不丢用户已启用插件（cdd8a15 已实现，dev 验证通过）",
+      "description": "已实现并 dev 验证通过。核心：升级前 snapshotWebProfileBundles 快照 → 升级成功后 restoreProfileBundlesAfterUpdate 校验补回（快照里有、升级后没有的条目写回，保留 manifest 其它字段；manifest 缺失时从快照重建）。自动安装/布局迁移路径同样覆盖。单元 5 场景 + 端到端真实路径 PASS（精确只补回丢失的 3 个插件）。dev 运行正常、插件加载确认。待用户视觉确认插件功能回归。",
+      "rationale": "用户要求\"升级后要做好校验，不能升级了就丢失未升级前的状态\"。产品缺陷：升级流程不校验 profiles/web/package.json，manifest 缺失/损坏时 dsh web 用模板静默重建 → 用户启用的插件 bundles 全丢。",
+      "rejected": "不采用\"仅备份 manifest 整体覆盖\"——会覆盖升级意图（如新版本模板变化）；改为差量补回（快照有/升级后无才写），保留升级后的新增条目。",
       "sourceSessionId": "session-788be97d-7ef1-480f-9552-d09ab4eaf37b",
-      "status": "todo",
+      "status": "done",
       "tags": [
         "windows",
         "dev-verify",
@@ -804,7 +804,8 @@
         "upgrade"
       ],
       "createdAt": 1788759158478,
-      "updatedAt": 1788759158478
+      "updatedAt": 1788762021874,
+      "summary": "manager updateDsh 流程加入升级前后校验：快照 dsh.profile.bundles → 升级成功 restoreProfileBundlesAfterUpdate 差量补回（缺失条目+保留其它字段，manifest 缺失时从快照重建）。cdd8a15 提交推送，dev 构建安装验证：单元 5 场景 PASS + 真实路径端到端 PASS（精确恢复 3 个插件）+ dev 运行正常插件加载。"
     }
   ]
 }
