@@ -773,12 +773,12 @@
     },
     {
       "id": "card-6987f455-e6bb-4c74-85f3-9680816a6877",
-      "title": "dev 版启动闪命令窗口：powershell.exe/taskkill 补 CREATE_NO_WINDOW",
-      "description": "dev 版启动闪命令窗口：Rust 侧 powershell.exe（powershell_lines，cleanup 后台扫描 + launcher checkLegacy 每次启动跑）和 taskkill（cleanup 清残留时）没加 CREATE_NO_WINDOW。修复：两处都加 no_console_window。Node 侧 manager 已全部 windowsHide:true（已排查无遗漏）。待 dev 构建验证。",
-      "rationale": "用户报告 dev 版启动闪几个命令窗口——是子进程未隐藏控制台的回归。闪窗来源：cleanup 后台线程的 PowerShell 扫描 + checkLegacy 的 legacy_process_running + 有残留时的 taskkill。需修复并在 dev 版验证无窗口闪现。",
-      "rejected": "不采用\"改用非 PowerShell 的进程枚举 API\"——匹配逻辑是审计过的正则，仅补 CREATE_NO_WINDOW 即可根除闪窗且不改变语义。",
+      "title": "dev 版启动闪命令窗口：powershell.exe/taskkill 补 CREATE_NO_WINDOW（已修复，待用户视觉确认）",
+      "description": "修复 2617804 已提交并构建。dev 版安装验证：bridge 首条日志无 gap、cleanup 照常执行（stale killed ×2）、client-ready 正常、进程树干净、无残留 powershell/taskkill。代码层面 CREATE_NO_WINDOW 覆盖全部 9 个 Rust 调用点 + manager 侧 windowsHide 已全。视觉确认待用户亲测。",
+      "rationale": "用户报告 dev 版启动闪几个命令窗口——子进程未隐藏控制台。来源：cleanup 后台 PowerShell 扫描 + checkLegacy 的 legacy_process_running + 有残留时的 taskkill。修复并已在 dev 版验证。",
+      "rejected": "不采用\"改用非 PowerShell 进程枚举 API\"——匹配逻辑是审计过的正则，仅补 CREATE_NO_WINDOW 根除闪窗且不改变语义。",
       "sourceSessionId": "session-788be97d-7ef1-480f-9552-d09ab4eaf37b",
-      "status": "todo",
+      "status": "in_progress",
       "tags": [
         "windows",
         "shell",
@@ -786,7 +786,8 @@
         "dev-verify"
       ],
       "createdAt": 1788751937642,
-      "updatedAt": 1788751937642
+      "updatedAt": 1788752180091,
+      "summary": "2617804：powershell_lines() 与 cleanup 的 taskkill 补 no_console_window（CREATE_NO_WINDOW）。Rust 侧 9 个 Command::new 全部覆盖，manager 侧 spawn 已全部 windowsHide:true。dev 构建+安装验证：cleanup 照常执行、时序正常、进程树干净。视觉确认待用户。"
     }
   ]
 }
