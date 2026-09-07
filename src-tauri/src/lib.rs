@@ -2659,7 +2659,7 @@ pub fn run() {
     // 供排查"大模型执行中黑屏"类 GPU 问题（原用户级 --disable-gpu 的用途）。
     #[cfg(windows)]
     {
-        let cfg = tauri::generate_context!();
+        let cfg: tauri::Context<tauri::Wry> = tauri::generate_context!();
         let ident = cfg.config().identifier.clone();
         let home = std::env::var_os("APPDATA").map(std::path::PathBuf::from);
         if let Some(home) = home {
