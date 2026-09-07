@@ -2570,6 +2570,12 @@ fn toggle_dev_mode(app: AppHandle) -> Result<serde_json::Value, String> {
     toggle_dev_mode_impl(&app)
 }
 
+/// Toggle GPU acceleration (see toggle_gpu_accel_impl).
+#[tauri::command]
+fn toggle_gpu_accel(app: AppHandle) -> Result<serde_json::Value, String> {
+    toggle_gpu_accel_impl(&app)
+}
+
 /// Chrome menu bar entry: open (or focus) the proxy settings window.
 #[tauri::command]
 fn open_settings(app: AppHandle) -> Result<(), String> {
@@ -3062,6 +3068,7 @@ pub fn run() {
             window_control,
             get_shell_state,
             toggle_dev_mode,
+            toggle_gpu_accel,
             open_settings,
             open_plugins,
             get_shell_status,
