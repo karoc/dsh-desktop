@@ -659,12 +659,14 @@ fn legacy_shortcut_candidates(home: &std::path::Path) -> Vec<std::path::PathBuf>
 }
 
 /// 跑一条 PowerShell 并取 stdout 非空行（Windows 专用；跨平台编译安全）。
+/// CREATE_NO_WINDOW：powershell.exe 是控制台程序，不加会在启动页出现前/后
+/// 闪一个黑命令窗（cleanup 后台扫描 + launcher checkLegacy 每次启动都会跑）。
 fn powershell_lines(script: &str) -> Vec<String> {
     #[cfg(windows)]
     {
-        let out = std::process::Command::new("powershell.exe")
-            .args(["-NoProfile", "-Command", script])
-            .output();
+        let mut cmd = std::process::Command::new("powershell.exe");
+        no_console_window(&mut cmd);
+        let out = cmd.args(["-NoProfile", "-Command", script]).output();
         if let Ok(out) = out {
             return String::from_utf8_lossy(&out.stdout)
                 .lines()
@@ -727,9 +729,9 @@ fn cleanup_stale_service_tree(app: &AppHandle) {
                 continue;
             }
         }
-        let _ = std::process::Command::new("taskkill")
-            .args(["/PID", pid, "/T", "/F"])
-            .output();
+        let mut kill = std::process::Command::new("taskkill");
+        no_console_window(&mut kill);
+        let _ = kill.args(["/PID", pid, "/T", "/F"]).output();
         log_line(&data, &format!("stale service node {pid} killed (startup cleanup)"));
     }
 }

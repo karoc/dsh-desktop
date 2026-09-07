@@ -754,20 +754,39 @@
     },
     {
       "id": "card-a773be32-d35a-4411-baff-f5a53cc0984d",
-      "title": "启动页前黑屏：setup 主线程同步 PowerShell 孤儿清理阻塞 WebView2 首帧",
-      "description": "修复：把 cleanup_stale_service_tree 移入后台线程（仍在 start_server 之前执行，保持不误杀新服务树）；migrate_legacy_data 备份改为仅在实际迁移时执行（消除每次启动的空备份目录）。",
-      "rationale": "用户报告加固版\"启动页之前有一段黑屏无输出\"。日志实锤：10:29 启动 backup saved→bridge on 间隔 6s（09:53 同代码仅 1s）；这两步之间唯一重活是 cleanup_stale_service_tree 的 PowerShell Get-CimInstance 全进程扫描（冷启动 + WMI + Defender 可达数秒）。它跑在 setup 主线程上，阻塞了 WebView2 首帧导航/渲染 → 启动页前纯黑屏。代码 2698 行注释已记录同类教训（reg.exe 阻塞首帧），孤儿清理把反模式带回来了。",
-      "rejected": "考虑过：1) 换更快的进程枚举 API（tasklist/wmic）——但匹配逻辑是刚审计加固过的 PowerShell 正则，换枚举方式有误杀/漏杀回归风险，最小改动原则下先只挪线程；2) 完全去掉启动清理——孤儿防驻留是已确认的刚需，不能删。",
+      "title": "启动页前黑屏：cleanup 移出 setup 主线程（e3c9336）——dev 验证通过，待用户指示上正式版",
+      "description": "dev 版验证全部通过：1) 首启时序干净（bridge 即首条日志、无 6s gap、client-ready 3s、无 data-migration backup）2) 制造孤儿（只杀壳）→ 重启后 cleanup 精确命中孤儿 PID、新树不误杀 3) 连续 3 轮 kill-restart 零意外（每轮清理 PID 精确对应上轮新树）。结论：e3c9336 在 dev 验证完成，可上正式版——但上正式版需用户明确指示。",
+      "rationale": "10:29 启动 backup→bridge 6s gap = setup 主线程同步 PowerShell Get-CimInstance 全进程扫描阻塞 WebView2 首帧 → 启动页前黑屏。修复已提交 e3c9336 并在 dev 版完整验证。",
+      "rejected": "换更快进程枚举 API（tasklist/wmic）未采纳——匹配逻辑是审计过的正则，只做 -Filter 下推（已验证返回 PID 集一致）。曾违反 dev 先行纪律直接覆盖正式版（用户严厉指正，正式版不得擅动）。",
       "sourceSessionId": "session-788be97d-7ef1-480f-9552-d09ab4eaf37b",
-      "status": "in_progress",
+      "status": "done",
       "tags": [
         "windows",
         "shell",
         "black-screen",
-        "urgent"
+        "urgent",
+        "dev-verify"
       ],
       "createdAt": 1788749075192,
-      "updatedAt": 1788749075192
+      "updatedAt": 1788751062486,
+      "summary": "修复 e3c9336 完成并在 dev 版验证通过：cleanup_stale_service_tree 移出 setup 主线程（后台线程 + STARTUP_CLEANUP_DONE 门闩 + wait_for_startup_cleanup），WMI -Filter 下推（5.5s→0.44s），migrate 备份仅在实际迁移时执行。dev 验证：首启 bridge 首条日志无 6s gap、client-ready 3s；孤儿制造-清理-不误杀循环 3 轮零意外。"
+    },
+    {
+      "id": "card-6987f455-e6bb-4c74-85f3-9680816a6877",
+      "title": "dev 版启动闪命令窗口：powershell.exe/taskkill 补 CREATE_NO_WINDOW",
+      "description": "dev 版启动闪命令窗口：Rust 侧 powershell.exe（powershell_lines，cleanup 后台扫描 + launcher checkLegacy 每次启动跑）和 taskkill（cleanup 清残留时）没加 CREATE_NO_WINDOW。修复：两处都加 no_console_window。Node 侧 manager 已全部 windowsHide:true（已排查无遗漏）。待 dev 构建验证。",
+      "rationale": "用户报告 dev 版启动闪几个命令窗口——是子进程未隐藏控制台的回归。闪窗来源：cleanup 后台线程的 PowerShell 扫描 + checkLegacy 的 legacy_process_running + 有残留时的 taskkill。需修复并在 dev 版验证无窗口闪现。",
+      "rejected": "不采用\"改用非 PowerShell 的进程枚举 API\"——匹配逻辑是审计过的正则，仅补 CREATE_NO_WINDOW 即可根除闪窗且不改变语义。",
+      "sourceSessionId": "session-788be97d-7ef1-480f-9552-d09ab4eaf37b",
+      "status": "todo",
+      "tags": [
+        "windows",
+        "shell",
+        "flash-window",
+        "dev-verify"
+      ],
+      "createdAt": 1788751937642,
+      "updatedAt": 1788751937642
     }
   ]
 }
