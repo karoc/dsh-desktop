@@ -1699,6 +1699,13 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
                 serde_json::json!({ "ok": false, "error": e }).to_string(),
             ),
         },
+        ("POST", "/shell/gpu-accel-toggle") => match toggle_gpu_accel_impl(app) {
+            Ok(v) => ("200 OK", v.to_string()),
+            Err(e) => (
+                "500 Internal Server Error",
+                serde_json::json!({ "ok": false, "error": e }).to_string(),
+            ),
+        },
         ("POST", "/shell/open-data-dir") => {
             let _ = open_data_dir(app.clone());
             ("200 OK", serde_json::json!({ "ok": true }).to_string())

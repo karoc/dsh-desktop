@@ -44,6 +44,7 @@
         { id: 'plugins', label: '插件管理…' }, // 打开壳内独立管理窗口（dsh 崩溃时也可用）
         { id: 'check-update', label: '检查更新…' }, // 有更新时翻转为「有更新 vX」
         { id: 'dev-mode', label: '开发者模式', type: 'checkbox' },
+        { id: 'gpu-accel', label: 'GPU 加速', type: 'checkbox' },
         { type: 'sep' },
         { id: 'refresh', label: '刷新页面' },
         { id: 'restart', label: '重启服务' },
@@ -68,6 +69,7 @@
     'check-update': { ipc: 'check_update', bridge: '/check-update' },
     'update-now': { ipc: 'update_now', bridge: '/update-dsh' },
     'dev-mode': { ipc: 'toggle_dev_mode', bridge: '/shell/dev-mode-toggle' },
+    'gpu-accel': { ipc: 'toggle_gpu_accel', bridge: '/shell/gpu-accel-toggle' },
     refresh: { ipc: 'refresh_page', bridge: '/refresh' },
     restart: { ipc: 'restart_server', bridge: '/restart' },
     'open-data': { ipc: 'open_data_dir', bridge: '/shell/open-data-dir' },
@@ -621,6 +623,16 @@
     if (row) row.setAttribute('aria-checked', String(devMode));
   }
 
+  let gpuAccel = true; // 默认 GPU 开启（与 dsh.json webview.gpu 默认一致）
+  function setGpuAccel(on) {
+    gpuAccel = !!on;
+    for (const el of root.querySelectorAll('[data-check="gpu-accel"]')) {
+      el.textContent = gpuAccel ? '✓' : '';
+    }
+    const row = root.querySelector('[data-item="gpu-accel"]');
+    if (row) row.setAttribute('aria-checked', String(gpuAccel));
+  }
+
   function setMaximized(on) {
     maximized = !!on;
     if (!maximizeBtn.el) return;
@@ -962,6 +974,10 @@
       call('dev-mode').then((r) => {
         if (r && typeof r.devMode === 'boolean') setDevMode(r.devMode);
       });
+    } else if (id === 'gpu-accel') {
+      call('gpu-accel').then((r) => {
+        if (r && typeof r.gpu === 'boolean') setGpuAccel(r.gpu);
+      });
     } else {
       call(id);
     }
@@ -1072,6 +1088,7 @@
   getShellState().then((r) => {
     if (!r) return;
     if (typeof r.devMode === 'boolean') setDevMode(r.devMode);
+    if (typeof r.gpu === 'boolean') setGpuAccel(r.gpu);
     if (r.update && typeof r.update.updateAvailable === 'boolean') {
       updateInfo = r.update;
       renderUpdateItem();
