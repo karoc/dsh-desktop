@@ -37,6 +37,8 @@ struct ServerState {
     update_item: Mutex<Option<MenuItem<tauri::Wry>>>,
     /// Tray checkbox mirroring the dsh.json devMode flag.
     dev_item: Mutex<Option<CheckMenuItem<tauri::Wry>>>,
+    /// Tray checkbox mirroring the dsh.json webview.gpu flag (GPU 加速开关).
+    gpu_item: Mutex<Option<CheckMenuItem<tauri::Wry>>>,
     /// Latest plugin operation status reported by the manager.
     op: Mutex<OpStatus>,
     /// Cached per-preinstalled update state, mirrored from the manager's
@@ -1259,6 +1261,64 @@ fn set_dev_mode(runtime: &std::path::Path, on: bool) -> Result<(), String> {
     std::fs::write(&path, out).map_err(|e| e.to_string())
 }
 
+// ── GPU 加速开关（P4）──────────────────────────────────────────────────────
+// 2026-09-07 实测：用户级 WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--disable-gpu
+// 让 WebView2 全部走软件渲染 → dsh 设置页（复杂 SPA）滚动/切换极卡；但该变量
+// 当初是为排查"大模型执行中黑屏"而设，不能简单删。方案：开关收进壳——
+// <runtime>/dsh.json `webview.gpu`（默认 true=开启），壳在窗口创建前按配置
+// 注入进程级浏览器参数，用户可在壳菜单随时切换（排查黑屏时关，平时开）。
+// 进程级 set_var 只影响本进程，不污染用户全局环境；WebView2 子进程继承。
+
+/// Whether GPU acceleration is enabled (dsh.json `webview.gpu`, default true).
+fn gpu_accel(runtime: &std::path::Path) -> bool {
+    let raw = std::fs::read_to_string(runtime.join("dsh.json")).unwrap_or_default();
+    serde_json::from_str::<serde_json::Value>(&raw)
+        .ok()
+        .and_then(|v| v.get("webview").and_then(|w| w.get("gpu").and_then(|g| g.as_bool())))
+        .unwrap_or(true)
+}
+
+/// Persist dsh.json webview.gpu, preserving every other field.
+fn set_gpu_accel(runtime: &std::path::Path, on: bool) -> Result<(), String> {
+    let path = runtime.join("dsh.json");
+    let mut value: serde_json::Value = if let Ok(raw) = std::fs::read_to_string(&path) {
+        serde_json::from_str(&raw).unwrap_or(serde_json::Value::Object(Default::default()))
+    } else {
+        serde_json::Value::Object(Default::default())
+    };
+    if let Some(obj) = value.as_object_mut() {
+        let webview = obj
+            .entry("webview")
+            .or_insert_with(|| serde_json::json!({}));
+        if let Some(w) = webview.as_object_mut() {
+            w.insert("gpu".into(), serde_json::json!(on));
+        }
+    }
+    let out = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())? + "\n";
+    std::fs::write(&path, out).map_err(|e| e.to_string())
+}
+
+/// Flip dsh.json webview.gpu, mirroring the tray checkbox, with a toast.
+/// Shared by the tray and the bridge endpoint so the two surfaces never drift.
+fn toggle_gpu_accel_impl(app: &AppHandle) -> Result<serde_json::Value, String> {
+    let runtime = runtime_dir(app);
+    let on = gpu_accel(&runtime);
+    set_gpu_accel(&runtime, !on)?;
+    if let Some(item) = app.state::<ServerState>().gpu_item.lock().unwrap().as_ref() {
+        let _ = item.set_checked(!on);
+    }
+    show_toast(
+        app,
+        "GPU 加速".into(),
+        if !on {
+            "已开启（页面渲染流畅），重启应用后生效".into()
+        } else {
+            "已关闭（软件渲染，排查黑屏用），重启应用后生效".into()
+        },
+    );
+    Ok(serde_json::json!({ "gpu": !on }))
+}
+
 /// Minimal loopback HTTP server (std only): the injected client page POSTs
 /// `/notify` (raise a toast) and `/alive` (loading canary). CORS-open, binds
 /// 127.0.0.1:0 only — same attack surface as dsh web itself.
@@ -1657,6 +1717,7 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
                 serde_json::json!({
                     "version": env!("CARGO_PKG_VERSION"),
                     "devMode": dev_mode(&runtime_dir(app)),
+                    "gpu": gpu_accel(&runtime_dir(app)),
                     "update": {
                         "current": upd.current,
                         "latest": upd.latest,
@@ -2492,6 +2553,7 @@ fn get_shell_state(app: AppHandle, state: State<'_, ServerState>) -> serde_json:
         "version": env!("CARGO_PKG_VERSION"),
         "liveUrl": live_url,
         "devMode": dev_mode(&runtime_dir(&app)),
+        "gpu": gpu_accel(&runtime_dir(&app)),
         "update": {
             "current": upd.current,
             "latest": upd.latest,
@@ -2590,6 +2652,27 @@ fn get_shell_status(state: State<'_, ServerState>) -> serde_json::Value {
 }
 
 pub fn run() {
+    // ── GPU 加速开关：窗口创建前按 dsh.json webview.gpu 注入 WebView2 参数 ──
+    // WebView2 的浏览器参数在创建 environment 时读取，必须在此（Builder 构建
+    // 窗口之前）设置进程级环境变量；子进程继承，不影响用户全局环境。
+    // 默认开启（设置页等复杂 SPA 需要 GPU 渲染流畅）；关闭 = 软件渲染，
+    // 供排查"大模型执行中黑屏"类 GPU 问题（原用户级 --disable-gpu 的用途）。
+    #[cfg(windows)]
+    {
+        let cfg = tauri::generate_context!();
+        let ident = cfg.config().identifier.clone();
+        let home = std::env::var_os("APPDATA").map(std::path::PathBuf::from);
+        if let Some(home) = home {
+            let runtime = home.join(&ident).join("runtime");
+            let gpu = gpu_accel(&runtime);
+            let var = "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS";
+            if gpu {
+                std::env::remove_var(var);
+            } else {
+                std::env::set_var(var, "--disable-gpu");
+            }
+        }
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         // 窗口状态记忆（位置/大小/最大化）：上次最大化关闭、下次启动还原；
@@ -2620,6 +2703,7 @@ pub fn run() {
             update: Mutex::new(UpdateStatus::default()),
             update_item: Mutex::new(None),
             dev_item: Mutex::new(None),
+            gpu_item: Mutex::new(None),
             op: Mutex::new(OpStatus::default()),
             preinstalled_updates: Mutex::new(serde_json::json!({})),
             proxy: Mutex::new(ProxyState::default()),
@@ -2765,11 +2849,12 @@ pub fn run() {
             let proxy_settings = MenuItem::with_id(app, "proxy-settings", "代理设置…", true, None::<&str>)?;
             let check_update = MenuItem::with_id(app, "check-update", "检查更新…", true, None::<&str>)?;
             let dev = CheckMenuItem::with_id(app, "dev-mode", "开发者模式", true, dev_mode(&runtime_dir(app.handle())), None::<&str>)?;
+            let gpu = CheckMenuItem::with_id(app, "gpu-accel", "GPU 加速", true, gpu_accel(&runtime_dir(app.handle())), None::<&str>)?;
             let data = MenuItem::with_id(app, "data", "打开数据目录", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
             let menu = Menu::with_items(
                 app,
-                &[&show, &refresh, &restart, &proxy_settings, &check_update, &dev, &data, &quit],
+                &[&show, &refresh, &restart, &proxy_settings, &check_update, &dev, &gpu, &data, &quit],
             )?;
             // Keep the check-update item handle: its text flips to "有更新 vX…"
             // when the manager reports an available update. Same for the dev
@@ -2777,6 +2862,7 @@ pub fn run() {
             let state = app.state::<ServerState>();
             *state.update_item.lock().unwrap() = Some(check_update.clone());
             *state.dev_item.lock().unwrap() = Some(dev.clone());
+            *state.gpu_item.lock().unwrap() = Some(gpu.clone());
 
             let _tray = tauri::tray::TrayIconBuilder::with_id("dsh-tray")
                 .icon(app.default_window_icon().expect("app icon").clone())
@@ -2831,6 +2917,11 @@ pub fn run() {
                     "dev-mode" => {
                         if let Err(e) = toggle_dev_mode_impl(app) {
                             show_toast(app, "开发者模式".into(), format!("切换失败：{e}"));
+                        }
+                    }
+                    "gpu-accel" => {
+                        if let Err(e) = toggle_gpu_accel_impl(app) {
+                            show_toast(app, "GPU 加速".into(), format!("切换失败：{e}"));
                         }
                     }
                     "data" => {
