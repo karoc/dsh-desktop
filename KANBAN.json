@@ -806,6 +806,24 @@
       "createdAt": 1788759158478,
       "updatedAt": 1788762021874,
       "summary": "manager updateDsh 流程加入升级前后校验：快照 dsh.profile.bundles → 升级成功 restoreProfileBundlesAfterUpdate 差量补回（缺失条目+保留其它字段，manifest 缺失时从快照重建）。cdd8a15 提交推送，dev 构建安装验证：单元 5 场景 PASS + 真实路径端到端 PASS（精确恢复 3 个插件）+ dev 运行正常插件加载。"
+    },
+    {
+      "id": "card-ec7b3f4c-7a93-4f30-af3f-87ead57c48ed",
+      "title": "GPU 加速开关收进壳（托盘菜单可切换，替代全局 --disable-gpu）——已完成",
+      "description": "8fe9cbd + 46d09e7 已实现，dev 验证通过。托盘菜单「GPU 加速」CheckMenuItem 切换 dsh.json webview.gpu（默认 true）；run() 开头按配置 set/remove 进程级 WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS（覆盖用户全局变量，不影响其他应用）；toggle_gpu_accel command 供 IPC 复用；状态暴露 /shell/state + get_shell_state。三轮往返验证：默认/true→GPU 开（WebView2 无 --disable-gpu），false→软件渲染。用户级全局 --disable-gpu 已移除（其他 WebView2 应用恢复 GPU）。",
+      "rationale": "用户全局 --disable-gpu 导致 dsh 设置页（复杂 SPA）软件渲染极卡，但该变量是为排查\"大模型执行中黑屏\"而设。方案：GPU 开关收进壳（默认开），平时流畅、排查黑屏时菜单一键关。",
+      "rejected": "不采用\"直接删全局变量了事\"——黑屏排查仍需要禁用 GPU 的手段；不采用\"按窗口 additional_browser_args\"——WebView2 环境是进程级创建，开关要全局生效。进程级 set_var 方案最简单且覆盖全局变量。",
+      "sourceSessionId": "session-788be97d-7ef1-480f-9552-d09ab4eaf37b",
+      "status": "done",
+      "tags": [
+        "windows",
+        "shell",
+        "gpu",
+        "feature"
+      ],
+      "createdAt": 1788798087284,
+      "updatedAt": 1788798122247,
+      "summary": "托盘「GPU 加速」开关 + run() 开头进程级注入 WebView2 参数 + dsh.json webview.gpu 持久化（默认 true）+ toggle_gpu_accel command + 状态暴露。三轮往返验证通过，用户级全局 --disable-gpu 已移除。dev 版 46d09e7 运行正常。"
     }
   ]
 }
