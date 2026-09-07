@@ -190,6 +190,11 @@ static LAST_MAIN_LOADED: Mutex<Option<String>> = Mutex::new(None);
 /// 只有这个能证明 webview 渲染完成；URL 层/on_page_load 都可能"空转"。
 /// 每次 server-url 事件（新 dsh web 地址）时 reset，由导航兜底驱动重试。
 static CLIENT_READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// 启动期孤儿清理（cleanup_stale_service_tree）是否已完成。它在后台线程
+/// 跑 PowerShell 全进程扫描（冷启动实测 5-6 秒），必须在 setup 主线程之外
+/// 执行，否则阻塞 WebView2 首帧 → 启动页前黑屏。boot 线程与 restart_server
+/// 拉起新服务前都等待此标志，防止清理把刚拉起的 manager/web 树误杀。
+static STARTUP_CLEANUP_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Deterministic 64-bit FNV-1a — used to derive a per-build-identity toast
 /// activator CLSID without pulling in a hash/uuid crate.
@@ -566,6 +571,13 @@ fn migrate_legacy_data(app: &AppHandle) {
     let log_sink = new_dir.clone();
     let Some(base) = new_dir.parent() else { return };
     let old_dir = base.join(old_name);
+    // 迁移是否会发生（镜像 migrate_legacy_data_dir 的早退条件：旧目录存在、
+    // 新目录无迁移标记、新目录不存在）。只有"本次确实会迁移"才做迁移前
+    // 备份——否则已迁移完成后每次启动都会复制一份空备份（2026-09-07 观察：
+    // %LOCALAPPDATA%\dsh-backup 下已积累 20 个 migration-<ts> 空目录）。
+    let will_migrate = old_dir.is_dir()
+        && !new_dir.join(MIGRATION_MARKER).exists()
+        && !new_dir.exists();
     // 备份优先：rename 之前先把旧 dsh-home 的关键数据复制到
     // %LOCALAPPDATA%\dsh-backup\migration-<ts>\（双保险——即使 rename 失败或
     // 后续任何意外，都有一份独立副本；备份失败仅记日志，不阻断迁移）。
@@ -575,7 +587,7 @@ fn migrate_legacy_data(app: &AppHandle) {
         .app_local_data_dir()
         .unwrap_or_else(|_| new_dir.join(BACKUP_ROOT_DIR_NAME))
         .join(BACKUP_ROOT_DIR_NAME);
-    if old_home.is_dir() {
+    if will_migrate && old_home.is_dir() {
         let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
@@ -697,7 +709,7 @@ fn cleanup_stale_service_tree(app: &AppHandle) {
     // 正则前瞻：runtime 路径后随 \ / 引号 / 空白 / 行尾 才算命中（排除
     // runtime-backup、runtime_old、runtime-extra 等子串延续）。
     let script = format!(
-        r#"$m = [regex]::Escape('{marker}'); Get-CimInstance Win32_Process | Where-Object {{ $_.Name -eq 'node.exe' -and $null -ne $_.CommandLine -and $_.CommandLine -match ($m + '(?=[\\"''\s]|$)') }} | ForEach-Object {{ $_.ProcessId }}"#
+        r#"$m = [regex]::Escape('{marker}'); Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object {{ $null -ne $_.CommandLine -and $_.CommandLine -match ($m + '(?=[\\"''\s]|$)') }} | ForEach-Object {{ $_.ProcessId }}"#
     );
     let stale = powershell_lines(&script);
     if stale.is_empty() {
@@ -719,6 +731,19 @@ fn cleanup_stale_service_tree(app: &AppHandle) {
             .args(["/PID", pid, "/T", "/F"])
             .output();
         log_line(&data, &format!("stale service node {pid} killed (startup cleanup)"));
+    }
+}
+
+/// 等待启动期孤儿清理完成（最多 20 秒，超时继续——清理挂死不应阻塞启动）。
+/// 任何 start_server 路径（首启/托盘重启/launcher 重试）都在拉起新服务树
+/// 前调用，防止后台 cleanup 线程把刚拉起的 manager/web 误杀。
+fn wait_for_startup_cleanup() {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while !STARTUP_CLEANUP_DONE.load(std::sync::atomic::Ordering::SeqCst) {
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
     }
 }
 
@@ -1742,6 +1767,9 @@ fn resource_paths(app: &AppHandle) -> Result<(std::path::PathBuf, std::path::Pat
 
 /// Spawn the server-manager under the bundled Node and stream its events.
 fn start_server(app: &AppHandle) -> Result<(), String> {
+    // 等启动期孤儿清理完成再拉起新服务树（防止后台 cleanup 误杀新起的
+    // manager/web）。首启 boot 线程、托盘重启、launcher 重试都走这里。
+    wait_for_startup_cleanup();
     stop_child(&app.state::<ServerState>());
 
     let (res, node_exe) = resource_paths(app)?;
@@ -2893,8 +2921,21 @@ pub fn run() {
             // 崩溃时 manager/web 的 node 树无父死子清机制会残留（多个 dsh
             // web 并存干扰导航、占端口）。按本身份 runtime 路径精确清理
             // （dev/正式各自只清自己；taskkill /T /F 连树）；幂等。
+            // 2026-09-07 修复：从 setup 主线程移入后台线程——PowerShell
+            // 全进程扫描冷启动可达 5-6 秒（WMI 冷 + Defender 扫 powershell.exe），
+            // 阻塞主线程会让 WebView2 首帧延迟 → 启动页前黑屏（10:29 启动
+            // backup→bridge 间隔 6s 实锤）。清理完成置 STARTUP_CLEANUP_DONE；
+            // start_server 通过 wait_for_startup_cleanup() 保证新树不被误杀。
             #[cfg(windows)]
-            cleanup_stale_service_tree(app.handle());
+            {
+                let c_app = app.handle().clone();
+                std::thread::spawn(move || {
+                    cleanup_stale_service_tree(&c_app);
+                    STARTUP_CLEANUP_DONE.store(true, std::sync::atomic::Ordering::SeqCst);
+                });
+            }
+            #[cfg(not(windows))]
+            STARTUP_CLEANUP_DONE.store(true, std::sync::atomic::Ordering::SeqCst);
             // loopback notification bridge (see start_bridge)
             start_bridge(app.handle().clone());
 

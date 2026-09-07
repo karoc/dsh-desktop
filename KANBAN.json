@@ -734,6 +734,40 @@
       "createdAt": 1788708447442,
       "updatedAt": 1788711800990,
       "summary": "已通过 git 直推完成发布，无需用户在 Web 合并：PAT 无 PR 合并权限 → 本地 git merge release 分支到 main（6245332）直推 → release-please 检测 release commit 打 tag v0.6.3 + 建 Release；tag 未触发构建（API 建 tag）→ 删 tag 重推强制触发 build，windows/linux/release 全绿，3 个安装包已挂载到 Release v0.6.3。PR #26 已自动标记 MERGED（mergedBy karoc、mergeCommit 6245332，GitHub 识别到其 head 提交已进入 main），无需手动关闭。"
+    },
+    {
+      "id": "card-2122b372-598f-4997-abed-f238e4ee681c",
+      "title": "正式版合入加固版：本地构建+覆盖安装+首启验证通过",
+      "summary": "宿主机 D:\\Dev\\dsh-desktop 同步至 4a35be7，本地构建正式版 NSIS，同步 resources/manager + Copy-Item 覆盖 exe；启动验证：首启 5 秒导航成功（nav-fallback→client-ready）、watchdog 零误判、进程数 3 无残留。正式版现运行全部修复（黑屏根治+孤儿防驻留+导航兜底）。",
+      "rationale": "正式版合入加固版（4a35be7：CLIENT_READY 导航兜底 + report-url + 孤儿清理正则边界 + pnpm 固定等全部修复），本地构建并覆盖安装验证通过。",
+      "rejected": "放弃发新版本号（本地构建版本仍 0.6.3，用 Copy-Item 覆盖 exe 绕开 NSIS 同版本跳过；功能正确性优先于版本号，正式发版后续再说）。",
+      "sourceSessionId": "session-788be97d-7ef1-480f-9552-d09ab4eaf37b",
+      "status": "done",
+      "tags": [
+        "windows",
+        "build",
+        "prod",
+        "done"
+      ],
+      "createdAt": 1788746073926,
+      "updatedAt": 1788746073926
+    },
+    {
+      "id": "card-a773be32-d35a-4411-baff-f5a53cc0984d",
+      "title": "启动页前黑屏：setup 主线程同步 PowerShell 孤儿清理阻塞 WebView2 首帧",
+      "description": "修复：把 cleanup_stale_service_tree 移入后台线程（仍在 start_server 之前执行，保持不误杀新服务树）；migrate_legacy_data 备份改为仅在实际迁移时执行（消除每次启动的空备份目录）。",
+      "rationale": "用户报告加固版\"启动页之前有一段黑屏无输出\"。日志实锤：10:29 启动 backup saved→bridge on 间隔 6s（09:53 同代码仅 1s）；这两步之间唯一重活是 cleanup_stale_service_tree 的 PowerShell Get-CimInstance 全进程扫描（冷启动 + WMI + Defender 可达数秒）。它跑在 setup 主线程上，阻塞了 WebView2 首帧导航/渲染 → 启动页前纯黑屏。代码 2698 行注释已记录同类教训（reg.exe 阻塞首帧），孤儿清理把反模式带回来了。",
+      "rejected": "考虑过：1) 换更快的进程枚举 API（tasklist/wmic）——但匹配逻辑是刚审计加固过的 PowerShell 正则，换枚举方式有误杀/漏杀回归风险，最小改动原则下先只挪线程；2) 完全去掉启动清理——孤儿防驻留是已确认的刚需，不能删。",
+      "sourceSessionId": "session-788be97d-7ef1-480f-9552-d09ab4eaf37b",
+      "status": "in_progress",
+      "tags": [
+        "windows",
+        "shell",
+        "black-screen",
+        "urgent"
+      ],
+      "createdAt": 1788749075192,
+      "updatedAt": 1788749075192
     }
   ]
 }
