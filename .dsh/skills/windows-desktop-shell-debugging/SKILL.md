@@ -216,3 +216,12 @@ dev/正式各自只清自己（标识隔离）；幂等（正常退出后无残�
 重启"多次，断言：每轮 `stale service node` +2、`client-ready` +1（新壳导航正常）、最终
 进程数恒为 3（1 壳+2 node）——无驻留累积、无导航异常。dev/正式互不误伤（正式 session.log
 无 stale 记录）。
+
+**准确性审计（2026-09-07 加固版）**：子串匹配 `-like '*<runtime>*'` 会把
+`runtime-backup` / `runtime_old` / `runtime-extra` 等相似路径误命中（实测 5 例全误判）→
+改为 `[regex]::Escape` 转义路径 + 正则前瞻边界 `(?=[\\"'\s]|$)`（runtime 后随
+`\`/引号/空白/行尾才算命中）。验证矩阵：manager(`--runtime-dir ...\runtime ` 后空格)、
+web(`runtime\node_modules\` 后反斜杠)、`...\runtime` 结尾 → 全部命中；runtime-backup/
+_old/-extra/desktopX → 全部不命中。CommandLine null 显式排除。**测试坑**：tasklist 的
+`grep "^PID "` 会因 PID 列对齐空格误报"进程死了"——精确检查用
+`Get-CimInstance Win32_Process -Filter "ProcessId=N"`。
