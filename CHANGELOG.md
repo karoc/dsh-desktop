@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.7.0](https://github.com/karoc/dsh-desktop/compare/v0.6.3...v0.7.0) (2026-09-07)
+
+
+### Features
+
+* **shell:** GPU 加速开关收进壳——托盘菜单可切换，替代全局 --disable-gpu ([8fe9cbd](https://github.com/karoc/dsh-desktop/commit/8fe9cbd977292803fab457311d9df59b9b0f1212))
+* **shell:** GPU 开关暴露 toggle_gpu_accel command（与 toggle_dev_mode 同模式，供 IPC/桥复用） ([46d09e7](https://github.com/karoc/dsh-desktop/commit/46d09e7a4211ea86d845f641a3a7189377068ae0))
+* **shell:** 启动清理本身份残留 node 树（孤儿防驻留） ([d848a3b](https://github.com/karoc/dsh-desktop/commit/d848a3bb8ca9cc9fd022b71e13ce48b197cdc085))
+* **shell:** 壳菜单栏加「GPU 加速」勾选项——与托盘开关同一 impl，双通道（IPC+桥） ([379635e](https://github.com/karoc/dsh-desktop/commit/379635eeadbfc5388d6d25c4342ef0f2d20c585b))
+
+
+### Bug Fixes
+
+* **manager:** 升级后校验恢复 profile bundles——升级不丢用户已启用的插件 ([cdd8a15](https://github.com/karoc/dsh-desktop/commit/cdd8a15a5206d57f529d4e33542d8e4da5eb5717))
+* **shell:** generate_context 显式类型标注 Context&lt;Wry&gt;（E0283） ([3e5554f](https://github.com/karoc/dsh-desktop/commit/3e5554fa81ef70ecd0a6786f5b0f4fd9000255bc))
+* **shell:** 启动闪命令窗口——powershell.exe/taskkill 补 CREATE_NO_WINDOW ([2617804](https://github.com/karoc/dsh-desktop/commit/2617804bd0dd57218166d62d69de041b0c54310d))
+* **shell:** 启动页前黑屏——孤儿清理移出 setup 主线程 + WMI 过滤下推 + 迁移备份条件收紧 ([e3c9336](https://github.com/karoc/dsh-desktop/commit/e3c9336b6c4a8a1000a083158c8ea166dcbbc0ee))
+* **shell:** 孤儿清理精确匹配加固——正则边界防误杀（runtime-backup 等） ([2a96fa6](https://github.com/karoc/dsh-desktop/commit/2a96fa64b38f2e0fdd01b0db553c9b0b901f2251))
+* **shell:** 导航兜底以 /alive（client-ready）为页面可用信号 ([6570e0d](https://github.com/karoc/dsh-desktop/commit/6570e0d3c46345082b8546b5c455bd4d6c1cadb8))
+* **shell:** 导航兜底以 on_page_load 为准——修复 navigate 空转导致的首启黑屏 ([6d37632](https://github.com/karoc/dsh-desktop/commit/6d37632dab13326393a2c55deebc9e515b1adf7a))
+
 ## [0.6.3](https://github.com/karoc/dsh-desktop/compare/v0.6.2...v0.6.3) (2026-09-06)
 
 
