@@ -596,8 +596,8 @@
     },
     {
       "id": "card-6c051fbe-a4b2-48ea-a3de-f114d68ba6f9",
-      "title": "第三次复现（00:04:10）已恢复——需壳层进程守护（manager 层 watchdog 盲区）",
-      "summary": "第三次事故已取证并恢复服务（桥 /restart，00:09 web 49447）；三次模式对照+工具清单+事件日志全空=排除\"调用不存在的东西\"；根因收敛为 dsh 0.1.1-rc.2 的 Windows 进程树管理缺陷；待办：壳层 Rust 进程守护（心跳+dump+自动重启）+ 建议升级 dsh 0.1.2-rc.1。",
+      "title": "壳层进程守护（孤儿清理已完成；manager 崩溃自动重启待做）",
+      "summary": "孤儿防驻留部分已完成并 dev 验证（d848a3b：启动清理本身份残留 node 树，三轮崩溃-重启循环零驻留、dev/正式互不误伤）。剩余：manager 崩溃时壳自动重启（进程级 watchdog）未实现——manager 是壳子进程，壳可在 manager stdout EOF/异常退出时自动 respawn（当前只导航回 launcher 让用户手动重试）。",
       "rationale": "2026-09-04 00:04:10 第三次同模式事故（s86 turn16 派发 `npm run test:engine` 后 manager+dsh web 整树静默消失）。三杀模式收敛：同为 pwsh 测试套件派发边界、无 WER/无日志/无 watchdog 记录（manager 同刻死）、工具调用全为标准工具（排除\"调用不存在的东西\"）。暴露 manager 内置 watchdog 架构盲区：manager 自身死亡时无守护者。需在壳（Rust）层加进程级守护（壳是孤儿树的父，永远可用作兜底）。",
       "rejected": "放弃继续追 dsh-subprocess 内部行级根因（三次均无 dump，koffi/taskkill 路径嫌疑已收敛但需 0.1.2-rc.1 或 dump 才能实锤）；放弃依赖 manager 内置 watchdog 单层方案（本次证明 manager 一起死时它无效）。",
       "sourceSessionId": "session-788be97d-7ef1-480f-9552-d09ab4eaf37b",
@@ -610,7 +610,7 @@
         "urgent"
       ],
       "createdAt": 1788451764154,
-      "updatedAt": 1788451764154
+      "updatedAt": 1788718787965
     },
     {
       "id": "card-8c035264-29ba-452b-93cd-77a70f2449b0",

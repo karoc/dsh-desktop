@@ -677,15 +677,27 @@ fn legacy_process_running(legacy_dir: &std::path::Path) -> bool {
 
 /// 启动时清理本身份 runtime 的残留 node 树（孤儿防驻留）。
 /// 壳被强杀/崩溃后，manager 与 dsh web 的 node 进程没有父死子清机制会残留
-/// （多个 dsh web 并存干扰导航、占端口）。按"命令行含本身份 runtime 路径"
-/// 精确匹配 node.exe（dev/正式各自只清自己），taskkill /T /F 连树杀掉。
-/// 幂等：正常退出后无残留，扫描为空操作。Windows 专用。
+/// （多个 dsh web 并存干扰导航、占端口）。
+///
+/// 匹配精确性（防误杀/防漏杀，2026-09-07 审计加固）：
+/// - 目标：node.exe 且 CommandLine 含"本身份 runtime 目录路径"
+/// - 边界：runtime 路径后必须是 `\`（web: `runtime\node_modules\…`）、空白或
+///   引号（manager: `--runtime-dir C:\…\runtime` 后跟空格/引号）或行尾。
+///   子串匹配会把 `runtime-backup` / `runtime_old` / `runtime-extra` 等
+///   相似路径误命中（实测确认），因此用正则前瞻排除字母数字以外的延续。
+/// - 路径中的 `.` 等正则元字符用 [regex]::Escape 转义，防误匹配相似目录名。
+/// - CommandLine 为 null 的进程不匹配（不误杀；此类进程为初始化中的极短命
+///   进程，漏杀无实质影响）。
+/// - dev/正式各自只清自己（runtime 路径含 identifier，天然隔离）。
+/// - 幂等：正常退出后无残留，扫描为空操作。taskkill /T /F 连树清理。
 #[cfg(windows)]
 fn cleanup_stale_service_tree(app: &AppHandle) {
     let runtime_dir = runtime_dir(app); // <app_data>/runtime
     let marker = runtime_dir.to_string_lossy().replace('/', "\\");
+    // 正则前瞻：runtime 路径后随 \ / 引号 / 空白 / 行尾 才算命中（排除
+    // runtime-backup、runtime_old、runtime-extra 等子串延续）。
     let script = format!(
-        r#"Get-CimInstance Win32_Process | Where-Object {{ $_.Name -eq 'node.exe' -and $_.CommandLine -like '*{marker}*' }} | ForEach-Object {{ $_.ProcessId }}"#
+        r#"$m = [regex]::Escape('{marker}'); Get-CimInstance Win32_Process | Where-Object {{ $_.Name -eq 'node.exe' -and $null -ne $_.CommandLine -and $_.CommandLine -match ($m + '(?=[\\"''\s]|$)') }} | ForEach-Object {{ $_.ProcessId }}"#
     );
     let stale = powershell_lines(&script);
     if stale.is_empty() {
@@ -696,9 +708,10 @@ fn cleanup_stale_service_tree(app: &AppHandle) {
         .app_data_dir()
         .unwrap_or_else(|_| std::path::PathBuf::from("."));
     for pid in &stale {
-        // 跳过自身（壳不是 node，理论上不会命中；防御）。
-        if let Ok(cur) = std::process::id().to_string().parse::<u32>() {
-            if pid.parse::<u32>().ok() == Some(cur) {
+        // 壳是 dsh-desktop.exe 而非 node.exe，自身永不会被命中；此循环仅
+        // 处理扫描到的残留 node。防御性跳过自身 PID（成本可忽略）。
+        if let Ok(me) = std::process::id().to_string().parse::<u32>() {
+            if pid.parse::<u32>().ok() == Some(me) {
                 continue;
             }
         }
