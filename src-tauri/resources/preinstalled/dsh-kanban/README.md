@@ -269,6 +269,7 @@ src/index.ts            # host half: 4 model tools + /kanban/api webServer route
 src/client/index.ts     # client apply: sidebar entry + full-screen board page
 src/client/BoardPage.tsx       # three-column board component (+ missing-field hints)
 src/client/KanbanSurface.tsx   # sidebar button + overlay wrapper
+src/client/workspace-pick.ts   # most-recently-active workspace derivation (pure, unit-tested)
 src/client/board-state.ts      # module-level page visibility observable
 src/client/locales.ts          # zh/en copy
 src/client/styles.ts           # --dsw-alias-* design-token styles
@@ -305,7 +306,8 @@ pnpm bundle    # emits lib/index.js + lib/client.js
 ## Verification
 
 ```sh
-pnpm test       # tsc --noEmit typecheck + 14 KANBAN.json domain unit tests + host tool smoke
+pnpm test       # tsc --noEmit typecheck + 14 KANBAN.json domain unit tests
+                #   + 8 workspace-pick derivation tests + host tool smoke
 pnpm typecheck  # typecheck only (tsc --noEmit)
 pnpm verify     # 4 board tools registered + board_add persisted end-to-end
 pnpm accept     # GUI acceptance against a running dsh web (http://127.0.0.1:3080):
@@ -319,6 +321,10 @@ themselves through the `/?token=` handshake. Point them at the token `dsh web`
 printed on launch via `DSH_WEB_TOKEN`, or pass the full launch URL (including
 `?token=...`) as `DSH_GUI_URL`; on instances where auth is off they run
 unchanged.
+
+Since DSH 0.1.3-alpha.1 the composer input is a contenteditable div (0.1.2 used
+`<textarea>`); the live-GUI scripts match both (`textarea, [contenteditable="true"]`),
+so the same scripts run against either version.
 
 External plugins get no compile-time typechecking by default (tsdown only
 transpiles); `tsc --noEmit` in `pnpm test` catches "used-but-not-imported"

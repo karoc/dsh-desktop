@@ -185,7 +185,12 @@ node scripts/server-manager.mjs \
   有更新时菜单按钮出现橙色角标、条目翻转为「有更新 vX」；
 - 右上角窗口三键：最小化 / 最大化(还原) / 关闭（关闭=隐藏到托盘，语义不变）；
 - 空白区拖动窗口、双击切换最大化；dsh 页面内路由切换不丢失（MutationObserver 自愈）；
-- 下拉与弹窗随系统深浅色，支持全键盘导航（↑↓/Home/End/Enter/Esc）。
+- 下拉与弹窗随系统深浅色，支持全键盘导航（↑↓/Home/End/Enter/Esc）；
+- **插件全屏页自动让位**：插件打开全屏浮层（`position: fixed` 覆盖视口，如看板全屏页）
+  时，壳自动把菜单栏收进顶缘只留 4px 悬停条——全屏页顶部信息与右上角按钮不再被遮挡；
+  悬停窗口顶缘唤出菜单栏（无操作 ~3s 自动收起），浮层关闭后自动恢复。**无需插件感知壳**；
+  另向 `:root` 注入 `--dsh-shell-menubar-h`（36px）CSS 变量，供顶部悬浮类 UI 显式适配。
+  行为回归由 `scripts/verify-fullscreen-adaptation.mjs` 守护（需 playwright，可选）。
 
 **后续壳独有的菜单就在 `SHELL_MENUS` 数组里定义**（该文件顶部）。动作分两类：
 跨壳动作（开窗/服务/设置…）映射到 `ACTIONS` 双通道——本地页走 IPC 命令，远程 dsh 页走

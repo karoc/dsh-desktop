@@ -960,6 +960,29 @@ window.__ModuleLoader__.load({
 			});
 		}
 		//#endregion
+		//#region src/client/workspace-pick.ts
+		/** Pick the most-recently-active workspace id, or undefined when empty. */
+		function recentWorkspaceId(items, byId) {
+			let selected;
+			let selectedTime = Number.NEGATIVE_INFINITY;
+			for (const workspace of items) {
+				let latest = Number.NEGATIVE_INFINITY;
+				for (const sessionId of workspace.sessionIds ?? []) {
+					const session = byId?.[sessionId];
+					if (session !== void 0 && typeof session.updatedAt === "number") latest = Math.max(latest, session.updatedAt);
+				}
+				if (latest === Number.NEGATIVE_INFINITY && workspace.createdAt !== void 0) {
+					const parsed = Date.parse(workspace.createdAt);
+					if (!Number.isNaN(parsed)) latest = parsed;
+				}
+				if (selected === void 0 || latest > selectedTime) {
+					selected = workspace.workspaceId;
+					selectedTime = latest;
+				}
+			}
+			return selected;
+		}
+		//#endregion
 		//#region src/client/KanbanSurface.tsx
 		/**
 		* Sidebar entry button and overlay wrapper for the kanban board page.
@@ -1001,11 +1024,12 @@ window.__ModuleLoader__.load({
 		/**
 		* Build the full workspace list plus the default (current-session) workspace
 		* from the framework seats. Default: the current session's cwd, then the most
-		* recent workspace, then the first workspace. The list drives the board page's
-		* workspace switcher.
+		* recently active workspace, then the first workspace. The list drives the
+		* board page's workspace switcher.
 		*/
 		function resolveWorkspaces(sessionList, workspaceList) {
-			const all = (workspaceList.items ?? []).map((item) => ({
+			const items = workspaceList.items ?? [];
+			const all = items.map((item) => ({
 				workspaceId: item.workspaceId,
 				cwd: item.path,
 				title: item.title ?? item.path
@@ -1025,7 +1049,7 @@ window.__ModuleLoader__.load({
 					};
 				}
 			}
-			const recentId = workspaceList.recentWorkspaceId;
+			const recentId = recentWorkspaceId(items, sessionList.byId);
 			return {
 				all,
 				current: all.find((ws) => ws.workspaceId === recentId) ?? all[0]
@@ -1651,17 +1675,19 @@ body .kb-detail-modal { width: min(560px, 100%); }
 			ctx.effect(() => {
 				const stop = startCountsPolling(() => {
 					const sessions = ctx.get("sessions");
+					let sessionBy;
 					try {
 						const sessionState = sessions?.list?.getSnapshot();
 						const currentId = sessionState?.current;
+						sessionBy = sessionState?.byId;
 						const currentCwd = currentId === void 0 ? void 0 : sessionState?.byId?.[currentId]?.cwd;
 						if (currentCwd !== void 0 && currentCwd !== "") return currentCwd;
 					} catch {}
 					const workspaces = ctx.get("workspaces");
 					try {
-						const state = workspaces?.list?.getSnapshot();
-						const items = state?.items ?? [];
-						return items.find((item) => item.workspaceId === state?.recentWorkspaceId)?.path ?? items[0]?.path;
+						const items = (workspaces?.list?.getSnapshot())?.items ?? [];
+						const recentId = recentWorkspaceId(items, sessionBy);
+						return items.find((item) => item.workspaceId === recentId)?.path ?? items[0]?.path;
 					} catch {
 						return;
 					}

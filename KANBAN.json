@@ -772,12 +772,12 @@
     },
     {
       "id": "card-6987f455-e6bb-4c74-85f3-9680816a6877",
-      "title": "dev 版启动闪命令窗口：powershell.exe/taskkill 补 CREATE_NO_WINDOW（已修复，待用户视觉确认）",
-      "description": "修复 2617804 已提交并构建。dev 版安装验证：bridge 首条日志无 gap、cleanup 照常执行（stale killed ×2）、client-ready 正常、进程树干净、无残留 powershell/taskkill。代码层面 CREATE_NO_WINDOW 覆盖全部 9 个 Rust 调用点 + manager 侧 windowsHide 已全。视觉确认待用户亲测。",
-      "rationale": "用户报告 dev 版启动闪几个命令窗口——子进程未隐藏控制台。来源：cleanup 后台 PowerShell 扫描 + checkLegacy 的 legacy_process_running + 有残留时的 taskkill。修复并已在 dev 版验证。",
-      "rejected": "不采用\"改用非 PowerShell 进程枚举 API\"——匹配逻辑是审计过的正则，仅补 CREATE_NO_WINDOW 根除闪窗且不改变语义。",
+      "title": "dev 版启动闪命令窗口：powershell.exe/taskkill 补 CREATE_NO_WINDOW（已修复，用户确认）",
+      "description": "用户视觉确认：闪窗已修复（\"目前看已经修复了，没再出现了\"）。dev 版 2617804 验证通过后并入正式版，随 v0.7.0 发布。经验已沉淀技能 §9.10。",
+      "rationale": "启动闪命令窗口是用户报告的视觉问题（powershell.exe/taskkill 未配 CREATE_NO_WINDOW），需修复并验证。",
+      "rejected": "不采用\"改用非 PowerShell 进程枚举\"——匹配逻辑是审计过的正则，仅补 CREATE_NO_WINDOW 根除闪窗且不改变语义。",
       "sourceSessionId": "session-788be97d-7ef1-480f-9552-d09ab4eaf37b",
-      "status": "in_progress",
+      "status": "done",
       "tags": [
         "windows",
         "shell",
@@ -785,8 +785,8 @@
         "dev-verify"
       ],
       "createdAt": 1788751937642,
-      "updatedAt": 1788752180091,
-      "summary": "2617804：powershell_lines() 与 cleanup 的 taskkill 补 no_console_window（CREATE_NO_WINDOW）。Rust 侧 9 个 Command::new 全部覆盖，manager 侧 spawn 已全部 windowsHide:true。dev 构建+安装验证：cleanup 照常执行、时序正常、进程树干净。视觉确认待用户。"
+      "updatedAt": 1788846932901,
+      "summary": "2617804：powershell_lines() 与 cleanup 的 taskkill 补 no_console_window（CREATE_NO_WINDOW）；Rust 侧全部 Command::new 覆盖 + manager windowsHide 已全；dev 构建验证 + 用户视觉确认通过；随 v0.7.0 发布。"
     },
     {
       "id": "card-c3379848-7d34-4553-b727-0f91d7961f03",
@@ -840,6 +840,40 @@
       "createdAt": 1788846421348,
       "updatedAt": 1788846449827,
       "summary": "v0.7.0 发布完成：PR #27 MERGED、tag v0.7.0、CI 出包（windows NSIS 28MB + linux deb/AppImage）、GitHub Release published。main = 07ae31d。"
+    },
+    {
+      "id": "card-01354722-42d8-4138-a50f-95bf15da0ba2",
+      "title": "修复：壳菜单栏遮挡插件全屏页顶部（壳侧自动让位方案）",
+      "description": "壳注入的 36px 固定菜单栏（z-index max）盖住插件 position:fixed;inset:0 的全屏 overlay（预装 dsh-kanban .kb-overlay z-index 50）：顶部信息（标题/副标题）被遮、右上关闭按钮被壳窗口三键盖住难点。根因：壳的 html padding-top 推挤只作用于普通流，fixed 相对视口不受 padding 影响。方案：壳在远程页 :root 注入 --dsh-shell-menubar-h:36px 契约；看板 .kb-overlay 消费 var（fallback 0，纯 dsh 不变）；预装 bundle 同步补丁 + 源仓库修复。涉及三方：dsh-desktop 壳（shell-chrome.js + 契约测试）、dsh-kanban 源仓库（styles.ts + CHANGELOG + lib 重建）、预装 vendored bundle（client.js 补丁 + sync-resources）。",
+      "rationale": "用户报告壳菜单栏遮挡看板全屏页顶部（信息不可见、右上按钮难点），并明确指出正确方向是改壳适配而非逐个改插件（第三方插件无法修改）。壳原有 html padding 推挤只作用于普通流，fixed 全屏浮层相对视口定位，必须壳侧通用机制自动让位。",
+      "sourceSessionId": "session-9f06f767-640a-4cdc-9a05-afb32d45bcb4",
+      "status": "done",
+      "tags": [
+        "shell",
+        "plugins",
+        "bug-fix",
+        "dsh-web"
+      ],
+      "createdAt": 1788854773886,
+      "updatedAt": 1788863848865,
+      "summary": "shell-chrome.js 新增「全屏浮层自适应」：800ms 轮询在菜单栏下方 48px 两条采样点 elementFromPoint，探测到覆盖视口 ≥90% 的 position:fixed 浮层（任何第三方插件全屏页）→ 菜单栏收进顶缘只留 4px 常驻悬停条，悬停唤出、3s 无操作自动收起、浮层关闭自动恢复；插件零改动（预装 kanban bundle 保持原样，初版插件补丁已撤销）。另向 :root 注入 --dsh-shell-menubar-h:36px 作非全屏悬浮 UI 显式契约。验证：契约测试加断言（PASS）；新增 scripts/verify-fullscreen-adaptation.mjs 真实 Chromium 桩页五组断言 ALL PASS（含 no-loop 修复：:host(.x) 函数式、悬停条常驻）；SKILL.md/README 补充机制与两个新坑。顺带：预装 kanban 同步至 npm latest 0.2.6（tarball 流 + README 精简 + 技能资产，audit up-to-date）；sync-resources 顺手对齐滞后的 resources/manager/server-manager.mjs 副本（cmp 一致）。",
+      "rejected": "1) CSS 变量契约 + 改 dsh-kanban .kb-overlay padding-top：用户否决——第三方插件不可扩展（初版方案已弃，vendored bundle 补丁已撤销）。2) documentElement transform 整体下移 fixed：containing block 语义全变、壳自身位移，风险过高。3) Webview bounds 内嵌 + 独立透明浮层窗画菜单栏：Tauri 双窗口架构改动过大，Windows 行为无法本环境验证。4) 悬停条按状态切 display：实测触发合成 mouseenter 无限显示↔隐藏循环，改为常驻 4px 条；5) :host.cls 复合选择器：Chromium 实测不匹配，改用 :host(.cls) 函数式。"
+    },
+    {
+      "id": "card-16ba8d4e-4c86-4788-ae9d-caebaa30c5fa",
+      "title": "Windows 实机验收：全屏看板顶部让位 + 顶缘悬停唤出菜单栏",
+      "description": "新构建（开发版 bundle:dev 或下个正式版）装到 Windows 后亲测：1) 打开预装看板全屏页 → 菜单栏自动收起、标题/信息完整可见、右上关闭按钮可点；2) 悬停窗口顶缘 4px → 菜单栏唤出，3s 无操作自动收起；3) 关掉看板 → 菜单栏恢复；4) 普通页面菜单栏不受影响（无假阳性）。本环境仅 Linux Chromium 桩页验证（scripts/verify-fullscreen-adaptation.mjs 全过），真实 WebView2 交互必须用户确认。",
+      "rationale": "修复已合入代码但视觉现象无法在 WSL/容器验证（dsh-desktop-shell-dev 技能纪律：最终视觉确认必须请用户亲测）；Windows 实机是新行为唯一权威验收点。",
+      "sourceSessionId": "session-9f06f767-640a-4cdc-9a05-afb32d45bcb4",
+      "status": "todo",
+      "tags": [
+        "shell",
+        "windows",
+        "verify",
+        "waiting-user"
+      ],
+      "createdAt": 1788863820946,
+      "updatedAt": 1788863820946
     }
   ]
 }

@@ -110,6 +110,11 @@ assert.ok(chromeSrc.includes("type: 'brand'"), 'chrome renders the brand (app na
 assert.ok(chromeSrc.includes('__DSH_LOGO__'), 'chrome uses the injected real logo')
 assert.ok(libRs.includes('__DSH_LOGO__'), 'lib.rs injects the real logo data URI')
 assert.ok(chromeSrc.includes('dsh-chrome-push') || chromeSrc.includes('paddingTop'), 'chrome pushes page content below the title bar without extra scrollbar')
+assert.ok(chromeSrc.includes('--dsh-shell-menubar-h'), 'chrome exposes --dsh-shell-menubar-h so fullscreen plugin overlays clear the menubar')
+// ── 全屏浮层自适应：菜单栏自动收起（壳侧通用，插件无需配合）──
+assert.ok(chromeSrc.includes('fullscreen-hidden'), 'chrome auto-hides the menubar over fullscreen plugin overlays')
+assert.ok(chromeSrc.includes('edge-strip'), 'chrome keeps a 4px top hover strip to reveal the hidden menubar')
+assert.ok(chromeSrc.includes('elementFromPoint'), 'chrome probes the viewport to detect fullscreen fixed overlays')
 assert.ok(chromeSrc.includes('mini-toast'), 'chrome shows in-shell transient toasts (no flash, no silent actions)')
 assert.ok(!chromeSrc.includes('flashHit'), 'chrome has no diagnostic red-ring flash anymore')
 assert.ok(chromeSrc.includes('errbanner'), 'chrome renders the failure-disclosure banner (no more blank screen)')

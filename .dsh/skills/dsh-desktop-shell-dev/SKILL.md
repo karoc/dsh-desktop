@@ -56,6 +56,20 @@ feat/shell-menu-bar 分支）。本技能是"改壳自身功能"的操作手册�
   就重挂（shadow root 跟随宿主元素，重挂不丢）。
 - **防重复**：`if (document.getElementById('dsh-shell-chrome')) return;`。
 - 顶栏是**浮层**（fixed 36px + 半透明 + backdrop-filter），盖住页面顶部 36px，不推挤第三方布局。
+- **全屏浮层自适应（插件无需感知壳）**：第三方插件全屏页（`position: fixed; inset: 0`，
+  如 dsh-kanban 看板 .kb-overlay）相对视口、不受 html padding 推挤 → 菜单栏会遮住其顶部
+  信息与右上角按钮。壳侧通用解法（shell-chrome.js「全屏浮层自适应」段）：
+  - 每 800ms 在菜单栏下方 48px 两条采样点 `document.elementFromPoint`，向上找
+    `position:fixed` 且覆盖视口 ≥90% 的祖先（壳自身不算；壳内模态 dialog 打开/页面
+    document.hidden 时跳过探测）；
+  - 命中 → `host.classList.add('fullscreen-hidden')`：host `pointer-events:none`、bar
+    `translateY(-100%)`，全屏页顶部完全露出可点；
+  - 顶缘 **4px 常驻悬停条**（`.edge-strip`）→ mouseenter 唤出菜单栏（盖在浮层上），
+    无操作/菜单弹窗关闭 ~3s 自动收起；浮层关闭 → 探测不命中 → 自动恢复；
+  - 另向 dsh 远程页 `:root` 注入 `--dsh-shell-menubar-h: 36px`，供「顶部悬浮但非全屏」
+    的 UI 显式 `padding-top: var(--dsh-shell-menubar-h, 0px)` 适配（纯 dsh 无壳时回退 0）。
+  - 回归用 `scripts/verify-fullscreen-adaptation.mjs`（真实 Chromium 桩页，需 playwright，
+    可选不进 npm test）。
 
 ### 2.3 窗口控制（无边框）
 
@@ -186,6 +200,8 @@ Start-Process "C:\Users\<u>\AppData\Local\DSH Smoothly Desktop\dsh-desktop.exe"
 | 单实例互斥名 | `{identifier}-sim`（Windows），改 identifier 即隔离 |
 | 启动闪命令窗口 | **任何**从壳 spawn 的控制台程序（powershell.exe / taskkill / reg.exe / node.exe / 卸载器）都必须 `no_console_window()`（`creation_flags(0x08000000)` = CREATE_NO_WINDOW）。`powershell_lines()` 是重灾区——cleanup 后台扫描 + launcher `checkLegacy`（`legacy_process_running`/`shortcut_target`）每次启动都会跑，漏配就闪黑窗。Node 侧（manager）对应 `windowsHide: true`。新增任何 `Command::new` 后 grep 自查：`grep -n "Command::new" src-tauri/src/lib.rs` 逐个确认已配 |
 | 视觉现象无法远程确认 | 窗口闪现/黑屏等桌面视觉问题，agent 在 WSL 只能验证代码与日志（时序、进程树、无残留），**最终视觉确认必须请用户亲测**；先把可验证的（CREATE_NO_WINDOW 覆盖、进程树干净、时序正常）做完再请用户看 |
+| `:host.cls` 复合选择器在 Chromium 不匹配 | 实测 `:host.fullscreen-hidden { ... }` 完全不生效（`getComputedStyle(host)` 仍是基础值），**只有 `:host(.cls)` 函数式可靠** —— 壳内所有 host 状态样式一律用函数式 |
+| 收起把手按状态切 `display` → 无限显示↔隐藏循环 | 收起瞬间把手（`.edge-strip`）在静止鼠标下重新出现会触发**合成 mouseenter** → 唤出 → 3s 收起 → 又出现 → ……死循环（Chromium 实测）。**把手必须常驻**（不切 display/pointer-events），只在收起态给悬停底色提示 |
 
 ## 6. 验证与门禁
 

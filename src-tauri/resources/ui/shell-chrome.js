@@ -33,6 +33,11 @@
   const SHELL_VERSION = globalThis.__DSH_SHELL_VERSION__ || '?';
   const BUILD_DATE = globalThis.__DSH_BUILD_DATE__ || '?';
 
+  // 壳菜单栏高度（px）：顶栏浮层固定高度。远程页普通流内容由 html padding
+  // 推挤让出；position:fixed 全屏浮层（插件 overlay）相对视口、不受 padding
+  // 影响，须读取 --dsh-shell-menubar-h 自行让出顶部（见下方「自适应推挤」）。
+  const SHELL_BAR_H = 36;
+
   const SHELL_MENUS = [
     {
       // 唯一菜单：顶栏左侧 icon 触发；首项显示应用名。
@@ -408,8 +413,27 @@
       z-index: 2147483646;
     }
     .mini-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+    /* ── 全屏浮层自适应：菜单栏自动收起 ─────────────────────────
+       插件全屏页（position:fixed 覆盖视口）打开时，菜单栏收进顶缘只留
+       4px 悬停条；悬停展开、无操作自动收起（详见脚本「全屏浮层自适应」）。 */
+    .bar { transition: transform 0.18s ease; }
+    /* 注意：只用 :host(...) 函数式，不用 :host.cls 复合选择器 —— WebView2/
+       Chromium 对复合式 :host.cls 匹配不可靠（实测不生效），函数式才稳定。 */
+    :host(.fullscreen-hidden) { pointer-events: none; }
+    :host(.fullscreen-hidden) .bar { transform: translateY(-100%); }
+    /* 顶缘 4px 悬停条**常驻**（收起时是唤出把手，展开时顶部 4px 死区）。
+       绝不能按状态切换它的 display/pointer-events —— 收起瞬间把手在静止鼠标
+       下重新出现会触发合成 mouseenter，和 3s 自动收起形成无限 显示↔隐藏 循环
+       （Chromium 实测）。 */
+    .edge-strip {
+      position: absolute; top: 0; left: 0; right: 0;
+      height: 4px;
+      pointer-events: auto;
+      cursor: default;
+    }
+    :host(.fullscreen-hidden) .edge-strip:hover { background: rgba(127, 127, 127, 0.16); }
     @media (prefers-reduced-motion: reduce) {
-      .dropdown, .dialog-backdrop, .dialog-card, .dsh-spin { animation: none; }
+      .dropdown, .dialog-backdrop, .dialog-card, .dsh-spin, .bar { animation: none; transition: none; }
     }
   `;
 
@@ -458,16 +482,26 @@
 
   bar.append(menusWrap, spacer, controls);
   root.append(styleEl, bar);
+  // 全屏浮层自适应用的顶缘 4px 悬停条（菜单栏收起时可见；脚本底部接逻辑）。
+  const edgeStrip = document.createElement('div');
+  edgeStrip.className = 'edge-strip';
+  edgeStrip.setAttribute('aria-label', '显示菜单栏');
+  root.appendChild(edgeStrip);
   document.body.appendChild(host);
 
-  // ── 自适应推挤（不产生滚动条）：dsh 远程页 html 顶部补 36px padding，
-  // border-box 下内容区减少 36、总高不变 → 内容下移不被顶栏遮挡、无额外
-  // 滚动条。启动页（tauri://）居中布局无需推挤。
+  // ── 自适应推挤（不产生滚动条）：dsh 远程页 html 顶部补 SHELL_BAR_H px
+  // padding，border-box 下内容区减少同高、总高不变 → 内容下移不被顶栏遮挡、
+  // 无额外滚动条。启动页（tauri://）居中布局无需推挤。
+  // 另在 :root 注入 --dsh-shell-menubar-h 契约：position:fixed 全屏 overlay
+  // （插件全屏页，如看板 .kb-overlay）相对视口定位、不受 html padding 影响，
+  // 插件应 `padding-top: var(--dsh-shell-menubar-h, 0px)` 让出顶部——纯 dsh
+  // （无壳）时变量不存在，回退 0、行为不变。
   let pushActive = false;
   if (typeof location !== 'undefined' && location.protocol !== 'tauri:') {
     const rootEl = document.documentElement;
-    rootEl.style.paddingTop = '36px';
+    rootEl.style.paddingTop = SHELL_BAR_H + 'px';
     rootEl.style.boxSizing = 'border-box';
+    rootEl.style.setProperty('--dsh-shell-menubar-h', SHELL_BAR_H + 'px');
     pushActive = true;
   }
 
@@ -694,6 +728,85 @@
     dialog = bd;
     build(card, closeDialog);
   }
+
+  // ── 全屏浮层自适应（壳侧通用，插件无需配合）────────────────────
+  // 第三方插件全屏页（预装看板等）多为 position:fixed;inset:0 浮层：相对视口
+  // 定位、不受 html padding 推挤，菜单栏若仍浮在其上会遮住顶部信息与右上角
+  // 按钮。通用解法：周期性探测「覆盖视口 ≥90% 的 fixed 元素」，命中即把
+  // 菜单栏收进顶缘（只留 4px 悬停条，悬停展开、无操作自动收起）；浮层关闭后
+  // 自动恢复。任何插件的全屏页都生效，无需插件感知壳。非全屏的顶部悬浮条/
+  // 浮层可用 --dsh-shell-menubar-h 变量显式适配（见「自适应推挤」）。
+  const FULLSCREEN_PROBE_MS = 800;
+  const FULLSCREEN_REVEAL_IDLE_MS = 3000;
+  let fullscreenActive = false;
+  let fullscreenHintShown = false;
+  let revealIdleTimer = null;
+
+  // 从命中点向上找 position:fixed 的覆盖容器（壳自身不计）。
+  function findFullscreenCover(el) {
+    let node = el;
+    while (node && node !== document.documentElement) {
+      if (node === host) return null;
+      if (getComputedStyle(node).position === 'fixed') {
+        const r = node.getBoundingClientRect();
+        return (r.top <= 0.5 && r.left <= 0.5 &&
+                r.width >= window.innerWidth - 60 &&
+                r.height >= window.innerHeight - 60) ? node : null;
+      }
+      node = node.parentElement;
+    }
+    return null;
+  }
+
+  // 菜单栏（36px）下方的采样点探测；壳内模态打开时 / 页面隐藏时不收起。
+  function probeFullscreen() {
+    if (dialog || document.hidden) return false;
+    const y = 48;
+    const xs = [Math.round(window.innerWidth / 2), Math.round(window.innerWidth * 0.8)];
+    for (const x of xs) {
+      const hit = document.elementFromPoint(x, y);
+      if (hit && findFullscreenCover(hit)) return true;
+    }
+    return false;
+  }
+
+  function scheduleRehide() {
+    clearTimeout(revealIdleTimer);
+    revealIdleTimer = setTimeout(() => {
+      if (openMenuId || dialog) {
+        scheduleRehide(); // 菜单/弹窗开着：继续等
+      } else {
+        // 直接收起（fullscreenActive 保持 true，不能再走 setFullscreenMode(true)
+        // —— 它会因状态未变而短路，导致菜单栏一直盖在全屏页上）。
+        host.classList.add('fullscreen-hidden');
+      }
+    }, FULLSCREEN_REVEAL_IDLE_MS);
+  }
+
+  function setFullscreenMode(active) {
+    if (fullscreenActive === active) return;
+    fullscreenActive = active;
+    clearTimeout(revealIdleTimer);
+    if (active) {
+      closeMenus();
+      host.classList.add('fullscreen-hidden');
+      if (!fullscreenHintShown) {
+        fullscreenHintShown = true;
+        miniToast('全屏页已让位，悬停窗口顶缘可唤出菜单栏');
+      }
+    } else {
+      host.classList.remove('fullscreen-hidden');
+    }
+  }
+
+  // 顶缘 4px 悬停条：展开菜单栏（盖在浮层上），无操作自动收起。
+  edgeStrip.addEventListener('mouseenter', () => {
+    if (!fullscreenActive) return;
+    host.classList.remove('fullscreen-hidden');
+    scheduleRehide();
+  });
+
+  setInterval(() => setFullscreenMode(probeFullscreen()), FULLSCREEN_PROBE_MS);
 
   // 「关于」弹窗：软件名称 / 版本 / 构建日期 / dsh 本体版本 + 确定。
   function openAboutDialog() {

@@ -1,6 +1,6 @@
 {
   "name": "dsh-kanban",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "Smoothly Kanban (思磨力看板): external DeepSeek Harness plugin — a cross-session, workspace-scoped kanban board for plans and todos, persisted to a git-trackable KANBAN.json. Model-facing tools (board_list/board_add/board_update/board_remove) plus a sidebar '思磨力看板' entry with a full-screen three-column board page.",
   "type": "module",
   "main": "lib/index.js",
@@ -46,7 +46,7 @@
     "bundle": "tsdown --config ./tsdown.config.ts",
     "prepare": "tsdown --config ./tsdown.config.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsc --noEmit && node --test scripts/board-core.spec.mjs && node scripts/check-card-discipline.mjs && node scripts/verify-tools.mjs && node scripts/verify-spec.mjs && node scripts/verify-context.mjs && node scripts/verify-skill-sync.mjs",
+    "test": "tsc --noEmit && node --test scripts/board-core.spec.mjs scripts/workspace-pick.spec.mjs && node scripts/check-card-discipline.mjs && node scripts/verify-tools.mjs && node scripts/verify-spec.mjs && node scripts/verify-context.mjs && node scripts/verify-skill-sync.mjs",
     "check:spec": "node scripts/check-note-spec.mjs",
     "check:cards": "node scripts/check-card-discipline.mjs",
     "audit:cards": "node scripts/audit-cards.mjs",
