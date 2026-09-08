@@ -897,6 +897,38 @@
       "updatedAt": 1788888203568,
       "summary": "已修复（a8297ac，已推送 origin/main）。三路独立只读审计 + 自审 + 实测：① NSIS 层审计：根因链逐条实证，并发现本机 Win11 24H2 无 WMIC → 旧 wmic 探测 exit=9009 fail-open 必然放行；② Rust 层审计：清理路径唯一执行体 lib.rs:895-902，前置 legacy_process_running 按路径前缀判定、对\"按名杀\"恒为假 → 正式版壳点「旧版清理」= 自杀、dev 版壳 = 杀正式版；③ 历史/机制审计：静态解压旧卸载器（0.3.9）NSIS 字符串表，物证命中 dsh-desktop.exe / FindProcessCurrentUser / KillProcessCurrentUser / Click OK to kill it；v0.1.0–v0.7.0 同 tauri-cli 2.11.4；危害窗口自 v0.5.0（钩子 58611bf 9-02）起；10 条竞争假设全部排除（孤儿签名判别器：正式版全会话日志仅本次 2 条 stale service node）；_?= 未加引号导致旧卸载器从不自删 → 孤儿残留长期存在。修复：钩子只留 PREINSTALL + 正向 !if MAINBINARYNAME==dsh-desktop（dev 版不接管）+ 孤儿 uninstall.exe 删除 + FindProcessCurrentUser 同谓词门禁 + _?= 补引号；lib.rs 清理永不 spawn 旧卸载器（legacy-app-present 拒绝 + 删孤儿/快捷方式/空目录）；UI 文案 4 处；防回归断言进 test-shell-chrome.mjs + 新增 scripts/verify-legacy-hook.{ps1,nsi}。实测：makensis 编译通过；模拟目录三分支（孤儿→删/旧版在+同名进程在跑→不执行/无残留→无操作）全过；真实安装 dev 包（正式版在跑）→ 正式版 PID 56040 + StartTime 00:48:15 完全不变（修复前同操作必杀）；正式版克隆 D:\\Dev\\dsh-desktop 已同步到 a8297ac（原持旧钩子，构建会重新产出易受攻击包）。",
       "rejected": "1) 保留无条件 ExecWait、只把检测换成 wmic/PowerShell 按任意路径查同名进程：仍 fail-open 且检测谓词与 kill 谓词不同源——否决（改用 nsis_tauri_utils::FindProcessCurrentUser，与卸载器同谓词，实测在钩子位置可用）。2) 壳内保留执行卸载器但排除自身 PID：放行后卸载器仍按名杀壳自己——否决。3) 只让 dev 版跳过接管：不修根因，仅作纵深防御保留。4) 旧版在跑时弹窗 Abort：静默模式 MessageBox 不显示且返回 0 → 静默安装以退出码 2 失败且无可见原因——否决。5) 让 dev 版也做孤儿清理：越界且无必要，保持 fail-safe（dev 版完全不接管）。6) 主动删除用户机器上的孤儿卸载器：未执行（避免动用户文件），下次正式版安装时钩子会自动清理；但它是\"活雷\"（用户手动跑仍会杀正式版），已如实告知。"
+    },
+    {
+      "id": "card-29b6f966-de46-495c-a44d-8ecbb0fe11c0",
+      "title": "安全：环回桥端点无鉴权（CORS-open）——页内第三方插件可调用壳动作",
+      "description": "审计发现（Rust 层审计 R3）：环回桥是 CORS-open（`Access-Control-Allow-Origin: *`，lib.rs:1348-1376）且无 Origin/Token 校验，端口经 `__DSH_BRIDGE_PORT__` 注入到 dsh 远程页与插件管理窗（lib.rs:2261-2264/2284-2287）。因此**页内任何第三方插件**都能 fetch 壳动作端点：`POST /shell/quit`（退出应用）、`/restart`（重启服务）、`/shell/open-data-dir`、`/shell/dev-mode-toggle`、`/shell/gpu-accel-toggle`、`/window/close`、`/shell/legacy-cleanup`（本次修复后破坏面已从\"spawn 旧版卸载器\"降到\"删孤儿卸载器 + 已校验 lnk\"，但仍是越权文件操作）。修法候选：① 桥端点要求携带每次启动生成的一次性 token（注入 chrome 前缀，shell-chrome.js 请求头带上；CORS 仍需放开但无 token 一律 403）；② 用 Origin 白名单（只接受 `tauri://localhost` 与 dsh 页面 origin，但插件与 dsh 同源 → 不解决插件越权，只能挡外部网页）；③ 敏感端点（quit/restart/legacy-cleanup/open-data-dir）单独加 token。推荐 ①（token 对同源插件也生效），并给只读端点（GET /shell/state、/update-status、/window/state）保留无 token 可读或同样加 token。",
+      "rationale": "本次事故审计（Rust 层）顺带发现的越权面：桥是 CORS-open 且无鉴权，页内第三方插件可调用任意壳动作端点。修复本次安装器 bug 后，最危险的那条（执行旧版卸载器）已消除，但\"插件可让壳退出/重启/开目录/删文件\"仍是真实权限缺口，值得独立跟进。",
+      "sourceSessionId": "session-9f06f767-640a-4cdc-9a05-afb32d45bcb4",
+      "status": "todo",
+      "tags": [
+        "security",
+        "bridge",
+        "dsh-web",
+        "follow-up"
+      ],
+      "createdAt": 1788893072651,
+      "updatedAt": 1788893072651
+    },
+    {
+      "id": "card-2506a383-e1d8-44fb-8170-3ba98be9f07a",
+      "title": "旧版接管剩余加固：lnk 目标校验/前缀匹配边界/快捷方式名/dataRecreated 口径",
+      "description": "本次审计（NSIS/Rust 两层）发现的次要遗留，与\"按名杀进程\"同属旧版接管路径，但不在本次修复范围：① NSIS 钩子 `Delete \"$DESKTOP\\DSH Desktop.lnk\"` / `$SMPROGRAMS` 未校验 lnk 目标（Rust 侧 should_delete_shortcut 有校验，规则不一致，legacy-takeover.nsh）；② Rust `should_delete_shortcut` 用 `starts_with` 前缀匹配无边界（lib.rs:764-769，对照同文件 :713-717 的 runtime 清理已用正则前瞻防 `runtime-backup` 类误匹配）；③ 快捷方式名不一致——Rust 只认 `DSH Desktop.lnk`，而 0.1.0 产物是 `dsh Desktop.lnk`（大小写/命名历史差异，可能漏删）；④ `legacy_check_json.dataRecreated` 对 dev 版查错目录（lib.rs:851-856 用 app_data_dir 的 parent 拼 `dev.dsh.desktop`，与 migrate_legacy_data 的 :520-523 判定口径不一致）。均为低危（误删需用户恰好有同名 lnk；前缀匹配的相似目录名概率极低），合并成一张卡收口，避免散落。",
+      "rationale": "审计中发现但刻意未纳入本次修复（避免扩大改动面、影响\"误杀\"这个主线的可验证性）。记录在案以免遗忘——下次动旧版接管代码时一起处理。",
+      "sourceSessionId": "session-9f06f767-640a-4cdc-9a05-afb32d45bcb4",
+      "status": "todo",
+      "tags": [
+        "windows",
+        "installer",
+        "cleanup",
+        "follow-up"
+      ],
+      "createdAt": 1788893072677,
+      "updatedAt": 1788893072677
     }
   ]
 }
