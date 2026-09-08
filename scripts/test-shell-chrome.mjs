@@ -140,5 +140,24 @@ assert.ok(libRs.includes('"settings"') && libRs.includes('"plugins"'), 'settings
 assert.ok(libRs.includes('__DSH_BUILD_DATE__'), 'lib.rs injects the build date into the chrome preamble')
 assert.ok(readFileSync(join(root, 'src-tauri', 'build.rs'), 'utf8').includes('DSH_BUILD_DATE'), 'build.rs emits the DSH_BUILD_DATE env (About build date)')
 
+// ── 9. 旧版接管安全契约（2026-09-09 事故防回归）────────────────────────────
+// 旧版卸载器（0.3.9）的 Section Uninstall 首句是 CheckIfAppIsRunning
+// "dsh-desktop.exe"，静默模式直接 TerminateProcess **按 exe 名匹配的所有进程**
+// （不看路径）—— 与正式版同名。因此装包钩子与壳内清理都绝不能无条件执行它。
+const nsh = readFileSync(join(root, 'src-tauri', 'resources', 'nsis', 'legacy-takeover.nsh'), 'utf8')
+// 只看代码行（NSIS 注释以 ';' 开头），避免注释里的字样干扰断言
+const nshCode = nsh.split('\n').filter((l) => !l.trim().startsWith(';')).join('\n')
+assert.ok(!/ExecToStack[^\n]*wmic/i.test(nshCode), 'legacy hook no longer runs a wmic probe (absent on Win11 24H2+, failed open)')
+assert.ok(
+  nshCode.includes('nsis_tauri_utils::FindProcessCurrentUser "dsh-desktop.exe"'),
+  'legacy hook gates the legacy uninstaller behind a same-name process check',
+)
+const gateIdx = nshCode.indexOf('FindProcessCurrentUser "dsh-desktop.exe"')
+const execIdx = nshCode.indexOf('ExecWait')
+assert.ok(gateIdx > 0 && execIdx > gateIdx, 'ExecWait only appears AFTER the same-name process gate')
+assert.ok(nshCode.includes('legacy_pre_orphan'), 'legacy hook deletes an orphan uninstaller when the legacy main exe is gone')
+assert.ok(libRs.includes('legacy-app-present'), 'rust cleanup refuses when the legacy main exe is still present')
+assert.ok(!libRs.includes('Command::new(&uninstaller)'), 'rust cleanup never spawns the legacy uninstaller')
+
 console.log('PASS — shell chrome contract (menus, actions, bridge, IPC)')
 process.exit(0)

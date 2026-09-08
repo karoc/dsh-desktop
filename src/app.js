@@ -299,14 +299,18 @@ async function checkLegacy() {
       legacyCleanBtn.textContent = '清理中…';
       try {
         const res = await tauri.core.invoke('cleanup_legacy_install');
-        legacyBannerText.textContent = res && res.ok
-          ? `清理完成：快捷方式已删 ${res.removedShortcuts ?? 0} 个，旧目录${res.removedDir ? '已移除' : '留有残留'}。`
-          : `清理未完成（${(res && res.reason) || '未知原因'}）。请从「旧版清理…」菜单重试。`;
+        if (res && res.ok) {
+          legacyBannerText.textContent = `清理完成：孤儿卸载器${res.removedUninstaller ? '已删' : '未删'}，快捷方式已删 ${res.removedShortcuts ?? 0} 个，旧目录${res.removedDir ? '已移除' : '留有残留'}。`;
+        } else if (res && res.reason === 'legacy-app-present') {
+          legacyBannerText.textContent = '旧版主程序仍在：其卸载器会按程序名结束同名的正式版进程，已跳过。请在「设置 → 应用」中手动卸载 DSH Desktop。';
+        } else {
+          legacyBannerText.textContent = `清理未完成（${(res && res.reason) || '未知原因'}）。请从「旧版清理…」菜单重试。`;
+        }
         legacyCleanBtn.hidden = true;
       } catch (err) {
         legacyBannerText.textContent = '清理失败：' + String(err);
         legacyCleanBtn.disabled = false;
-        legacyCleanBtn.textContent = '清理并卸载旧版';
+        legacyCleanBtn.textContent = '清理旧版残留';
       }
     };
     legacyLaterBtn.onclick = () => {

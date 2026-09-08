@@ -108,6 +108,18 @@ legacy_done:
 ```
 
 > 说明：`wmic` 在 Win11 24H2+ 可能缺省，稳妥做法是 `tasklist /fi "IMAGENAME eq dsh-desktop.exe" /fo csv` 后无法直接比对路径 —— 因此在 L2（Rust）中做权威的"运行中"检测（按 exe 真实路径），安装器里 wmic 失败（exit code $0 != 0）时按"未运行"继续（卸载器对运行中的 exe 会失败且不删文件，风险可控，安装器随后正常装新）。**L1 是"尽力接管"，L2 是"权威兜底"**：即便 L1 全部跳过，L2 仍会在首启完成检测与清理。
+>
+> ⚠️ **2026-09-09 更正（事故后，勿沿用上面这段的两个假设）**：
+> 1. 旧版卸载器的 `Section Uninstall` 首句是 `!insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe"`，
+>    静默模式（`/S`）下 `utils.nsh` 的宏直接 `IfSilent` → `KillProcessCurrentUser`
+>    → **按 exe 名** `TerminateProcess`（不是"失败且不删文件"，也不看路径）；
+>    旧版 `MAINBINARYNAME = dsh-desktop`，与**正式版同名**。
+> 2. "L2 按 exe 真实路径做权威检测"同样拦不住：危害按**名字**发生，路径前缀判定恒不成立；
+>    而且壳自身就是 `dsh-desktop.exe`，执行旧版卸载器 = **自杀**（dev 版壳执行 = 杀掉正在跑的正式版）。
+> 现方案（已实现）：安装器钩子用 `nsis_tauri_utils::FindProcessCurrentUser "dsh-desktop.exe"`
+> （与卸载器同谓词：同名 + 同用户 SID）做门禁，并删除孤儿 `uninstall.exe` 切断复发；
+> 壳内清理**永不执行**旧版卸载器，只删孤儿卸载器/快捷方式/空目录。
+> 详见 `.agents/notes/implemented/bug-fix/2026-09-08-legacy-uninstaller-name-kill.md`。
 
 **5.1.2 配置**：`tauri.conf.json`
 

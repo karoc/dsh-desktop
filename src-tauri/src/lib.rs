@@ -682,7 +682,11 @@ fn powershell_lines(script: &str) -> Vec<String> {
     Vec::new()
 }
 
-/// 旧 dsh-desktop.exe 是否仍在运行（按可执行文件路径前缀精确匹配）。
+/// 旧版 dsh-desktop.exe 是否仍在运行（按可执行文件路径前缀精确匹配）。
+///
+/// ⚠️ 只用于检测/展示（`legacy_check_json.running`）；**绝不能**用它决定是否
+/// 执行旧版卸载器 —— 那个卸载器按 **exe 名**（不含路径）静默 kill，路径前缀
+/// 判定对它恒不成立（2026-09-09 事故：静默安装 dev 版时正式版被静默杀掉）。
 fn legacy_process_running(legacy_dir: &std::path::Path) -> bool {
     let want = legacy_dir.to_string_lossy().replace('/', "\\");
     let script = r#"Get-CimInstance Win32_Process -Filter "Name='dsh-desktop.exe'" | ForEach-Object { $_.ExecutablePath }"#;
@@ -865,6 +869,16 @@ fn legacy_check_json(app: &AppHandle) -> serde_json::Value {
 }
 
 /// 清理动作（cleanup_legacy_install command 与桥 POST /shell/legacy-cleanup 共用）。
+///
+/// ⚠️ 绝不执行旧版卸载器（2026-09-09 事故）：旧版卸载器（0.3.9）的 Section
+/// Uninstall 首句是 `CheckIfAppIsRunning "dsh-desktop.exe"`，静默模式直接
+/// TerminateProcess **按 exe 名匹配的所有进程**（不看路径）。壳自身就是
+/// dsh-desktop.exe（dev 版是 dsh-desktop-dev.exe），所以：
+///   - 正式版壳执行它 = 杀掉自己（随后 manager/dsh web 变孤儿进程）；
+///   - dev 版壳执行它 = 杀掉用户正在用的正式版，还会回报"清理完成"。
+/// 因此这里只做无副作用的残留清理（孤儿卸载器 / 快捷方式 / 空目录）；旧版主
+/// 程序仍在时拒绝清理并让用户手动卸载。`legacy_process_running` 的路径前缀判定
+/// **不能**用作"能否执行卸载器"的门禁——危害是按 exe 名匹配的。
 fn legacy_cleanup_json(app: &AppHandle) -> serde_json::Value {
     let data = app.path().app_data_dir().unwrap_or_default();
     let local = app.path().app_local_data_dir().unwrap_or_default();
@@ -873,10 +887,13 @@ fn legacy_cleanup_json(app: &AppHandle) -> serde_json::Value {
         log_line(&data, &format!("legacy-cleanup: {m}"));
     };
     let Some(legacy) = legacy_install_dir(&local) else {
-        return serde_json::json!({ "ok": false, "reason": "no-legacy", "removedDir": false, "removedShortcuts": 0 });
+        return serde_json::json!({ "ok": false, "reason": "no-legacy", "removedUninstaller": false, "removedDir": false, "removedShortcuts": 0 });
     };
-    if legacy_process_running(&legacy) {
-        return serde_json::json!({ "ok": false, "reason": "running", "removedDir": false, "removedShortcuts": 0 });
+    // 旧版主程序仍在：它的卸载器按 exe 名静默 kill（含壳自身 / 正在跑的正式版），
+    // 绝不能执行；改由用户手动卸载。
+    if legacy.join("dsh-desktop.exe").is_file() {
+        log("legacy main exe present — refusing to run its uninstaller (kills same-named exe)");
+        return serde_json::json!({ "ok": false, "reason": "legacy-app-present", "removedUninstaller": false, "removedDir": false, "removedShortcuts": 0 });
     }
     // 1) 旧数据目录若已被旧壳重建（空壳产物），先备份其关键数据（纯保险，大概率空）。
     let old_home = data.parent().map(|b| b.join("dev.dsh.desktop").join("runtime").join("dsh-home"));
@@ -890,17 +907,15 @@ fn legacy_cleanup_json(app: &AppHandle) -> serde_json::Value {
             let _ = backup_home_data(&old_home, &back, &mut log);
         }
     }
-    // 2) 静默卸载旧版：/S 静默（不触发"删除应用数据"页，数据目录不动）；
-    //    _?= 让卸载器不删除自身；沿用统一的无窗口启动。
+    // 2) 删除孤儿卸载器：旧版主程序已不在（上面已确认），它没有任何用途，留着
+    //    只会让下次安装（或用户点 ARP 里的旧条目）重跑"按 exe 名杀进程"的危险路径。
     let uninstaller = legacy.join("uninstall.exe");
-    log(&format!("uninstalling legacy via {}", uninstaller.display()));
-    let mut cmd = std::process::Command::new(&uninstaller);
-    let silent_arg = format!("_?={}", legacy.to_string_lossy());
-    cmd.arg("/S").arg(&silent_arg);
-    #[cfg(windows)]
-    no_console_window(&mut cmd);
-    let exit = cmd.status();
-    log(&format!("uninstaller finished: {exit:?}"));
+    let removed_uninstaller = std::fs::remove_file(&uninstaller).is_ok();
+    log(&format!(
+        "orphan uninstaller {}: {}",
+        if removed_uninstaller { "removed" } else { "remove failed" },
+        uninstaller.display()
+    ));
     // 3) 快捷方式删除（target 校验通过才删）。
     let home = user_home();
     let mut removed = 0usize;
@@ -927,7 +942,7 @@ fn legacy_cleanup_json(app: &AppHandle) -> serde_json::Value {
     }
     serde_json::json!({
         "ok": true,
-        "uninstallerExit": exit.ok().and_then(|s| s.code()),
+        "removedUninstaller": removed_uninstaller,
         "removedDir": emptied,
         "removedShortcuts": removed,
     })

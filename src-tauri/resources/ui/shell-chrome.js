@@ -842,7 +842,10 @@
   }
 
   // 「旧版清理」弹窗：检测 0.3.x 残留（安装目录/运行中/快捷方式/空壳重建），
-  // 说明备份位置，提供「清理并卸载旧版」（静默调用 uninstall.exe）+ 确定。
+  // 说明备份位置，提供「清理旧版残留」+ 确定。
+  // ⚠️ 绝不运行旧版卸载器（2026-09-09 事故）：它按 exe 名静默 kill，会杀掉同名
+  // 的正式版（正式版壳自己也是 dsh-desktop.exe）。清理只做无副作用的部分：
+  // 删除孤儿卸载器 + 指向旧版的快捷方式 + 空目录回收。
   // 数据的备份策略：迁移/清理前自动备份至 %LOCALAPPDATA%\dsh-backup\，
   // 本弹窗只展示备份根目录，不做任何数据目录操作。
   function openLegacyDialog() {
@@ -867,7 +870,7 @@
           }
           rows.appendChild(dlgRow('快捷方式', info.shortcuts && info.shortcuts.length ? `${info.shortcuts.length} 个待清理` : '无'));
           rows.appendChild(dlgRow('备份位置', info.backupRoot || '—'));
-          rows.appendChild(el('div', '清理前会自动备份旧数据目录的关键数据到上述备份位置；数据永不删除。清理动作：静默卸载旧版 + 删除指向旧版的快捷方式。', 'dlg-note'));
+          rows.appendChild(el('div', '清理前会自动备份旧数据目录的关键数据到上述备份位置；数据永不删除。清理动作：删除旧版残留的孤儿卸载器 + 指向旧版的快捷方式（不再运行旧版卸载器——它会按程序名静默结束同名的正式版）。', 'dlg-note'));
         }
         body.appendChild(rows);
         card.appendChild(body);
@@ -877,24 +880,29 @@
         btnClose.addEventListener('click', close);
         actions.appendChild(btnClose);
         if (legacyDir && !info.running) {
-          const btnClean = mkDlgBtn('清理并卸载旧版', true);
+          const btnClean = mkDlgBtn('清理旧版残留', true);
           btnClean.addEventListener('click', async () => {
             btnClean.disabled = true;
             btnClean.textContent = '清理中…';
             try {
               const res = await legacyCleanup();
               rows.replaceChildren();
-              rows.appendChild(dlgRow('清理结果', res && res.ok ? '完成' : '未完成'));
+              const appPresent = res && res.reason === 'legacy-app-present';
+              rows.appendChild(dlgRow('清理结果', res && res.ok ? '完成' : (appPresent ? '未清理' : '未完成')));
               if (res) {
-                rows.appendChild(dlgRow('卸载器退出码', String(res.uninstallerExit ?? '—')));
-                rows.appendChild(dlgRow('旧目录已移除', String(res.removedDir ?? false)));
-                rows.appendChild(dlgRow('快捷方式已删', String(res.removedShortcuts ?? 0)));
+                if (appPresent) {
+                  rows.appendChild(el('div', '旧版主程序仍在：其卸载器会按程序名静默结束同名的正式版进程，壳内不再代为执行。请在「设置 → 应用」中手动卸载 DSH Desktop。', 'dlg-note'));
+                } else {
+                  rows.appendChild(dlgRow('孤儿卸载器已删', String(res.removedUninstaller ?? false)));
+                  rows.appendChild(dlgRow('旧目录已移除', String(res.removedDir ?? false)));
+                  rows.appendChild(dlgRow('快捷方式已删', String(res.removedShortcuts ?? 0)));
+                }
               }
               btnClean.hidden = true;
             } catch (err) {
               rows.appendChild(dlgRow('清理失败', String(err)));
               btnClean.disabled = false;
-              btnClean.textContent = '清理并卸载旧版';
+              btnClean.textContent = '清理旧版残留';
             }
           });
           actions.appendChild(btnClean);
