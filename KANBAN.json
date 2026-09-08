@@ -823,6 +823,23 @@
       "createdAt": 1788798087284,
       "updatedAt": 1788798122247,
       "summary": "托盘「GPU 加速」开关 + run() 开头进程级注入 WebView2 参数 + dsh.json webview.gpu 持久化（默认 true）+ toggle_gpu_accel command + 状态暴露。三轮往返验证通过，用户级全局 --disable-gpu 已移除。dev 版 46d09e7 运行正常。"
+    },
+    {
+      "id": "card-7b70230c-f574-460e-9ecb-88dd7eca6352",
+      "title": "发布 v0.7.0：PR #27 合并 + CI 出包 + Release 三平台产物（完成）",
+      "description": "release-please 自动开 PR #27（0.6.3→0.7.0）；PAT 无 merge 权限 → 本地 merge release-please 分支等效合并（PR 显示 MERGED）；push tag v0.7.0 触发 CI；build：test/check/windows/linux 全绿（linux-smoke 为记录过的既有失败不阻塞）；Release v0.7.0 published（github-actions[bot]），含 DSH.Smoothly.Desktop_0.7.0_x64-setup.exe 28MB + deb + AppImage。手动 push tag 与 release-please 创建 Release 有竞态误报一次，build 内 release job 正确创建，最终成功。",
+      "rationale": "用户指示\"打包并发布新的版本\"——0.7.0 包含本轮全部修复（黑屏/闪窗/插件恢复/GPU 开关）。",
+      "rejected": "不用 Web 手动合并 PR（本地 merge release-please 分支等效且 PR 自动显示 merged）；不 bump 到 0.8.0（release-please 按 conventional commits 自动定 0.7.0 正确）。",
+      "sourceSessionId": "session-788be97d-7ef1-480f-9552-d09ab4eaf37b",
+      "status": "done",
+      "tags": [
+        "release",
+        "v0.7.0",
+        "done"
+      ],
+      "createdAt": 1788846421348,
+      "updatedAt": 1788846449827,
+      "summary": "v0.7.0 发布完成：PR #27 MERGED、tag v0.7.0、CI 出包（windows NSIS 28MB + linux deb/AppImage）、GitHub Release published。main = 07ae31d。"
     }
   ]
 }

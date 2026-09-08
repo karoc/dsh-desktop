@@ -16,3 +16,9 @@ Status: implemented
 
 本次发布全链路完成，v0.6.3 三个安装包可下载。代价/后续义务：① 环境 PAT 权限偏窄，未来若需 Web 合并且无用户在场，可沿用「git merge release 分支直推 + 必要时删 tag 重推」路径；② release-please API 建 tag 不触发构建是行为事实，若官方修复此问题可简化；③ PR #26 残留 open 状态，用户可在 Web 顺手关闭，但不影响已产出物。
 
+## 2026-09-08 v0.7.0 追加：手动 tag 的时序注意（重要）
+
+v0.6.3 路径（release-please 打 tag 被吞 → 删 tag 重建）在 v0.7.0 出现了**反向竞态**：这次我 `git push main` 后**立刻手动 `git tag v0.7.0 && git push origin v0.7.0`**，此时 release-please 的 main-push workflow 还在跑（它要自己打 tag + 建 Release）。结果 release-please workflow 报 `Published releases must have a valid tag`（它尝试建 Release 时发现 tag 已被外部创建），但 build.yml 的 release job（`on: push tags`）正确挂载了安装包，最终 Release v0.7.0 仍是完整三平台产物，无实际影响。
+
+**正确时序（避免误报）**：`git push main` 后先等 release-please workflow 完成（它打 tag + 建 Release，约 1-2 分钟），**确认 Release 出现**后再决定是否手动干预。只有出现「Release 已建但 assets 为空 / tag 构建没跑」（v0.6.3 症状）时才用「删 tag 重建 repush」路径；若 release-please 正常完成则**不需要**手动 push tag。判断依据：`gh run list` 看 release-please run 是否 success + `gh release view v0.7.0` 看 assets 是否挂上。手动 push tag 与 release-please 建 Release 的竞态是无害的（build release job 兜底），但会造成一次 workflow 失败红标，干扰判断。
+
