@@ -181,11 +181,40 @@ Start-Process "C:\Users\<u>\AppData\Local\DSH Smoothly Desktop\dsh-desktop.exe"
   LIVE_DSH_URL 空 → 发 `report-url` 给 manager，manager 重发当前 URL）；③ launcher 页轮询
   `get_shell_state.liveUrl`。
 - **dsh 0.1.2-rc.1 起**：URL 带 `?token=`（URL_RE 必须 `\d+[^\s]*` 保留 token，watchdog/导航
-  快照都靠它）；`--patch` 空格路径截断（manager 复制到 `<runtime>/dsh-desktop.patch.yml`
-  无空格镜像）。
+  快照都靠它）；`--patch` 空格路径截断（manager 复制到 `<runtime>/dsh-desktop.patch.yml` 无空格镜像）。
+
+### 4.4 开发版 UI 自动验收（WSL interop，不必等用户肉眼）
+
+dev 版**就是给 agent 做验证的**（用户明确要求）：装包 → 启动 → 用 `scripts/verify-dev-ui.ps1`
+（Windows 侧执行，WSL 里经 `powershell.exe -File "$(wslpath -w ...)"` 调用）驱动真实 WebView2：
+
+```sh
+PS=/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe
+S="$(wslpath -w scripts/verify-dev-ui.ps1)"
+# 静默安装 + 启动（产物路径见 §4）
+"$PS" -NoProfile -Command "Start-Process -FilePath '<setup.exe>' -ArgumentList /S -Wait"
+"$PS" -NoProfile -Command "Start-Process 'C:\Users\<u>\AppData\Local\DSH Smoothly Desktop Dev\dsh-desktop-dev.exe'"
+"$PS" -NoProfile -ExecutionPolicy Bypass -File "$S" -Action dump          # 元素/坐标快照
+"$PS" -NoProfile -ExecutionPolicy Bypass -File "$S" -Action shot -Out "D:\Dev\_shots\x.png"
+"$PS" -NoProfile -ExecutionPolicy Bypass -File "$S" -Action invoke -Key kanban
+"$PS" -NoProfile -ExecutionPolicy Bypass -File "$S" -Action click  -Key close
+"$PS" -NoProfile -ExecutionPolicy Bypass -File "$S" -Action hover         # 顶缘悬停唤出
+```
+
+要点（都是实测结论）：
+- **UIAutomation 能穿透 WebView2**：DOM 按钮（新建会话/看板入口…）与壳注入的菜单栏按钮、
+  `.edge-strip` 悬停条（`[Group] 显示菜单栏`）都在 UIA 树里；坐标是**物理像素**，菜单栏
+  收起时其按钮 `BoundingRectangle.Y` 为负（实测 -55）——这就是"收起/恢复"的判据。
+- **`PrintWindow(hwnd,hdc,2)` 可在不抢焦点**的前提下截窗口（DWM 合成内容，WebView2 有效）；
+  截图落在 D 盘，WSL 侧 `/mnt/d` 只读可读，配 `read_image` 直接看。
+- **真实点击验证**用 `SetCursorPos + mouse_event`（脚本自动复位鼠标）；同名控件（看板的"关闭"
+  vs 壳窗口的"关闭"）必须用坐标区分——壳三键固定在右侧 x≈2495 起，取 `x < 2490` 即页面自己的按钮。
+- PowerShell 脚本**保持纯 ASCII**（中文用 `[regex]::Unescape("\uXXXX")` 构造）：PS 5.1 按 ANSI
+  解码无 BOM 的 UTF-8 文件，脚本里的中文注释/字面量会乱码甚至引发 ParserError。
+- `[string]::Concat([char]...)` 在 PS 5.1 会抛 ArgumentNullException → 用 `[regex]::Unescape` 或 `+`。
+- 置前不可靠（`AppActivate`/`UIA SetFocus` 实测失败），**不要靠抢焦点**，用 PrintWindow + UIA。
 
 ## 5. Tauri 2 踩坑速查（本轮新踩，先查再写）
-
 | 坑 | 真相 |
 |---|---|
 | Windows 菜单栏 | `Menu` 只在 macOS 渲染窗口菜单栏；Windows 仅托盘/上下文 → 自绘注入 |
@@ -199,7 +228,7 @@ Start-Process "C:\Users\<u>\AppData\Local\DSH Smoothly Desktop\dsh-desktop.exe"
 | dev 配置合并 | `--config` 深合并数组整体替换；version 不许覆盖（与 Cargo.toml 强制一致） |
 | 单实例互斥名 | `{identifier}-sim`（Windows），改 identifier 即隔离 |
 | 启动闪命令窗口 | **任何**从壳 spawn 的控制台程序（powershell.exe / taskkill / reg.exe / node.exe / 卸载器）都必须 `no_console_window()`（`creation_flags(0x08000000)` = CREATE_NO_WINDOW）。`powershell_lines()` 是重灾区——cleanup 后台扫描 + launcher `checkLegacy`（`legacy_process_running`/`shortcut_target`）每次启动都会跑，漏配就闪黑窗。Node 侧（manager）对应 `windowsHide: true`。新增任何 `Command::new` 后 grep 自查：`grep -n "Command::new" src-tauri/src/lib.rs` 逐个确认已配 |
-| 视觉现象无法远程确认 | 窗口闪现/黑屏等桌面视觉问题，agent 在 WSL 只能验证代码与日志（时序、进程树、无残留），**最终视觉确认必须请用户亲测**；先把可验证的（CREATE_NO_WINDOW 覆盖、进程树干净、时序正常）做完再请用户看 |
+| 视觉现象"无法远程确认"（部分已证伪） | 壳窗口的**布局/遮挡/点击命中**可经 interop 自动验证，不必等用户：`scripts/verify-dev-ui.ps1 -Action dump\|shot\|invoke\|click\|hover`。关键事实：**UIAutomation 能穿透 WebView2**（DOM 按钮、壳注入的菜单栏按钮/悬停条都在 UIA 树里，坐标为物理像素，收起时 y 为负值）；`PrintWindow(hwnd,hdc,2)` 能在**不抢焦点**的前提下截 DWM 合成内容。仍须用户亲测的只剩：动效观感、多显示器/DPI 差异、真实拖拽手感、黑屏时序类现象 |
 | `:host.cls` 复合选择器在 Chromium 不匹配 | 实测 `:host.fullscreen-hidden { ... }` 完全不生效（`getComputedStyle(host)` 仍是基础值），**只有 `:host(.cls)` 函数式可靠** —— 壳内所有 host 状态样式一律用函数式 |
 | 收起把手按状态切 `display` → 无限显示↔隐藏循环 | 收起瞬间把手（`.edge-strip`）在静止鼠标下重新出现会触发**合成 mouseenter** → 唤出 → 3s 收起 → 又出现 → ……死循环（Chromium 实测）。**把手必须常驻**（不切 display/pointer-events），只在收起态给悬停底色提示 |
 
