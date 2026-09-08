@@ -877,6 +877,26 @@
       "updatedAt": 1788884734759,
       "summary": "agent 自行完成 Windows 实机验收（不再推给用户）：dev 版 bundle:dev 出包 → 静默安装 /S → 启动 dsh-desktop-dev → scripts/verify-dev-ui.ps1 驱动真实 WebView2 断言。硬证据：① 打开看板后壳菜单栏按钮 UIA Y=-55（移出屏幕=收起），看板标题可见 @30,27、看板关闭按钮 @2417,18 114x54；② 顶缘悬停 (1280,2) → 菜单按钮 Y=-55→0（唤出）；③ 真实鼠标点击看板关闭按钮中心 (2474,45) → 看板关闭、菜单栏 Y=0 自动恢复；④ 跳过 onboarding 遮罩后菜单栏 Y 从 -55 恢复 0（浮层关闭恢复路径同样验证）；⑤ PrintWindow 截图确认看板顶部标题完整无遮挡。",
       "rejected": "1) 让用户装包后肉眼验收（原计划）：用户否决——dev 版就是给 agent 用的。2) AppActivate/UIA SetFocus 置前后截全屏：实测失败（异常 + 截到遮挡在前的浏览器窗口），改用 PrintWindow 免抢焦点截图。3) 仅靠 UIA Invoke 判定\"可点击\"：不足以防\"绕过命中测试\"，补真实鼠标点击验证。4) 用同名\"关闭\"控件首个匹配：会误选壳窗口关闭键，改为按 x<2490 区分页面按钮。"
+    },
+    {
+      "id": "card-7ef649ed-4bc7-413a-b299-20ebf1de5250",
+      "title": "修复：dev 版安装器误杀正式版（旧版卸载器按同名 exe kill dsh-desktop.exe）",
+      "description": "根因链（证据齐全）：① 我们的 NSIS 钩子 src-tauri/resources/nsis/legacy-takeover.nsh 检测到 %LOCALAPPDATA%\\dsh Desktop\\uninstall.exe 存在（该目录只剩 uninstall.exe + resources，主程序早被删）→ ExecWait 静默执行旧版卸载器；② 钩子自己的进程检测只查旧版路径（$LOCALAPPDATA\\dsh Desktop\\dsh-desktop.exe）→ 判定\"旧版未运行\"→ 放行；③ 旧版卸载器的 Section Uninstall 第 3200 行 !insertmacro CheckIfAppIsRunning \"${MAINBINARYNAME}.exe\"，旧版 MAINBINARYNAME = dsh-desktop，与正式版 exe 同名；④ utils.nsh 宏里 IfSilent kill_... → 静默模式直接 TerminateProcess；⑤ Tauri 插件 nsis-process 的 get_processes 按 exe 名精确匹配（大小写不敏感）→ 命中正在运行的正式版。实测：00:19 静默安装 dev 版后正式版进程 39772 消失（无崩溃/WER 事件、无自启项、无计划任务），00:48:15 新进程 56040 的父进程是 explorer.exe（shell 交互启动，非脚本/守护）。影响：任何安装包都会跑该钩子，只要旧版残留 uninstall.exe 在 + 正式版在运行 → 正式版被静默杀掉。修复方向：执行旧版卸载器前先检测任意路径的 dsh-desktop.exe 是否在运行（在运行则跳过 ExecWait 只做快捷方式清理）；旧版主程序已不存在时直接跳过卸载器只清残渣；可选：dev 版安装器不跑旧版接管。",
+      "rationale": "用户报告\"正式版关了又开、自己没操作\"——根因是本次 dev 版安装（agent 执行）触发的安装器钩子执行旧版卸载器、按同名 exe 静默 TerminateProcess 正式版。用户要求\"做多角度审计，确定修复方案真实可靠，不能有其他的副作用\"，故采用三路独立只读审计 + 我的实测验证，并修掉同根因的 Rust 自杀路径。",
+      "sourceSessionId": "session-9f06f767-640a-4cdc-9a05-afb32d45bcb4",
+      "status": "done",
+      "tags": [
+        "windows",
+        "installer",
+        "nsis",
+        "bug-fix",
+        "audited",
+        "done"
+      ],
+      "createdAt": 1788887160738,
+      "updatedAt": 1788888203568,
+      "summary": "已修复（a8297ac，已推送 origin/main）。三路独立只读审计 + 自审 + 实测：① NSIS 层审计：根因链逐条实证，并发现本机 Win11 24H2 无 WMIC → 旧 wmic 探测 exit=9009 fail-open 必然放行；② Rust 层审计：清理路径唯一执行体 lib.rs:895-902，前置 legacy_process_running 按路径前缀判定、对\"按名杀\"恒为假 → 正式版壳点「旧版清理」= 自杀、dev 版壳 = 杀正式版；③ 历史/机制审计：静态解压旧卸载器（0.3.9）NSIS 字符串表，物证命中 dsh-desktop.exe / FindProcessCurrentUser / KillProcessCurrentUser / Click OK to kill it；v0.1.0–v0.7.0 同 tauri-cli 2.11.4；危害窗口自 v0.5.0（钩子 58611bf 9-02）起；10 条竞争假设全部排除（孤儿签名判别器：正式版全会话日志仅本次 2 条 stale service node）；_?= 未加引号导致旧卸载器从不自删 → 孤儿残留长期存在。修复：钩子只留 PREINSTALL + 正向 !if MAINBINARYNAME==dsh-desktop（dev 版不接管）+ 孤儿 uninstall.exe 删除 + FindProcessCurrentUser 同谓词门禁 + _?= 补引号；lib.rs 清理永不 spawn 旧卸载器（legacy-app-present 拒绝 + 删孤儿/快捷方式/空目录）；UI 文案 4 处；防回归断言进 test-shell-chrome.mjs + 新增 scripts/verify-legacy-hook.{ps1,nsi}。实测：makensis 编译通过；模拟目录三分支（孤儿→删/旧版在+同名进程在跑→不执行/无残留→无操作）全过；真实安装 dev 包（正式版在跑）→ 正式版 PID 56040 + StartTime 00:48:15 完全不变（修复前同操作必杀）；正式版克隆 D:\\Dev\\dsh-desktop 已同步到 a8297ac（原持旧钩子，构建会重新产出易受攻击包）。",
+      "rejected": "1) 保留无条件 ExecWait、只把检测换成 wmic/PowerShell 按任意路径查同名进程：仍 fail-open 且检测谓词与 kill 谓词不同源——否决（改用 nsis_tauri_utils::FindProcessCurrentUser，与卸载器同谓词，实测在钩子位置可用）。2) 壳内保留执行卸载器但排除自身 PID：放行后卸载器仍按名杀壳自己——否决。3) 只让 dev 版跳过接管：不修根因，仅作纵深防御保留。4) 旧版在跑时弹窗 Abort：静默模式 MessageBox 不显示且返回 0 → 静默安装以退出码 2 失败且无可见原因——否决。5) 让 dev 版也做孤儿清理：越界且无必要，保持 fail-safe（dev 版完全不接管）。6) 主动删除用户机器上的孤儿卸载器：未执行（避免动用户文件），下次正式版安装时钩子会自动清理；但它是\"活雷\"（用户手动跑仍会杀正式版），已如实告知。"
     }
   ]
 }
