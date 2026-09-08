@@ -543,10 +543,10 @@
     },
     {
       "id": "card-7c04d1eb-c49a-4ea9-a541-ecfe0fd720a4",
-      "title": "第二次复现（21:02:27）已恢复——用户需装 instrumentation 前不再跑全量测试套件",
+      "title": "事故取证：让\"下次复现\"自动留下证据（L1 无效/L3 零 dump 的真相 + 方案 S/G）",
       "summary": "第二次复现已记录并主动恢复服务；交付\"黑屏即时抓 dump\"三命令；待用户装 L1/L2/L3 并规避全量测试套件工具调用，直至拿到 dump 定位。",
-      "rationale": "2026-09-01 21:02:27 正式版第二次黑屏（同一会话 session-86c3f3d5，同一工具场景\"pwsh npm 测试套件\"），且本次整树消失（无任何 WER/事件日志）——已通过桥 POST /restart 现场恢复（21:07:41 新 web 56065 存活）。两次复现模式确认\"工具派发边界 + 杀进程树误杀\"嫌疑，但无 dump 仍无法钉死。用户仍未装任何 instrumentation（L1/L2/L3 均未落地），第三次复现前必须装上；同时给出零前置的黑屏即时抓 dump 命令。",
-      "rejected": "不再继续推测具体杀树代码行（两次均无 dump，猜测会误导）；test:engine 源码已排除测试内杀祖先逻辑。",
+      "rationale": "原卡依据\"用户未装任何 instrumentation\"待办；2026-09-09 四路只读调研实测后修正：L1 已装但结构性无效、L3 已装但零 dump 且会误杀，真正缺的是\"进程退出瞬间的证据\"与\"壳内可靠的挂起取证\"。方案 S 与 card-6c051fbe 共用同一处代码（EOF 取退出码 + 自动重启），建议合并实施。",
+      "rejected": "1) 依赖 WER LocalDumps 抓本案证据：结构性无效（只抓崩溃）——保留但降级为崩溃场景用；2) HKCU 版 LocalDumps：官方文档明确只支持 HKLM 且需管理员——不可行；3) 继续用 rundll32/comsvcs MiniDump：本机实测 20s 挂死零产出——弃用，改壳内 MiniDumpWriteDump；4) schtasks /ru 当前用户做守护：文档明确总是提示密码、无人值守不可靠——改用启动文件夹/HKCU Run。",
       "sourceSessionId": "session-788be97d-7ef1-480f-9552-d09ab4eaf37b",
       "status": "todo",
       "tags": [
@@ -557,7 +557,8 @@
         "urgent"
       ],
       "createdAt": 1788268219936,
-      "updatedAt": 1788268219936
+      "updatedAt": 1788895470033,
+      "description": "【方案（2026-09-09 调研，未实施）】详见 docs/2026-09-09-pending-cards-solutions.md §1。\n\n认知修正（实测，重要）：卡里\"L1/L2/L3 均未落地\"已过时——L1 早已配好（HKLM WER LocalDumps 含 dsh-desktop.exe/node.exe/msedgewebview2.exe，DumpType=2），但 CrashDumps 目录 09-01 创建至今 0 文件：**WER 只对崩溃生效，抓不到 TerminateProcess 式静默杀**（第三次事故发生在 L1 配好之后仍零 dump）；L3 已落地且真实触发 6 次（09-05 14:14:52Z→14:18:15Z），但**零 dump**（每轮间隔恰好 ~20.0s = server-manager.mjs:1087 spawnSync timeout → rundll32/comsvcs 本机被挂死/拦截）且**无启动宽限期 → 3 分钟重启风暴、误杀健康实例**；L2 确认未落地（启动文件夹/HKCU Run/计划任务皆无）。\n\n物理边界：进程被 TerminateProcess 终止后地址空间销毁，**事后不可能再 dump**；dump 只对\"挂起\"有意义。\"manager 被杀\"的自动证据只能来自持有句柄的一方在死亡瞬间拿到的东西——主线实测：taskkill /F 杀死 → 父进程退出码=1，正常退出=0，**壳持有 Child 句柄即可区分**。\n\n方案 S（零用户操作，纯壳内，覆盖挂起/manager 死/dsh web 死）：S1 stdout EOF 处 child.wait() 取退出码+时刻写 session.log；S2 同处冷却+退避自动重启（同时兑现 card-6c051fbe）；S3 壳内 watchdog 线程探 LIVE_DSH_URL → 连续失败 → CIM 定位 node PID → Rust MiniDumpWriteDump（实测非管理员 VM_READ 可得、无需 SeDebugPrivilege），加 30s 启动宽限期；S4 Job Object + 完成端口（KILL_ON_JOB_CLOSE 消灭孤儿，勿设 BREAKAWAY）。\n方案 G（一次最小操作，覆盖\"壳也死\"）：启动文件夹/HKCU Run 装守护（免管理员免密码，父进程 explorer 不在 dsh 树内），且守护脚本必须先改三处：弃用 comsvcs dump、加启动宽限期、500ms 采样抓消失前 2s 内新出现的 taskkill.exe/powershell.exe 命令行（唯一免管理员指认凶手的机会）。\n\n待决策：09-09 00:47–00:48 是第 4 次复现还是手动关闭；是否装 Sysmon；火绒日志人工核对三次事故时刻；是否接受退避自动重启可能掩盖复现。"
     },
     {
       "id": "card-d689c8c2-29c0-46ca-86f6-a6163046ae56",
@@ -596,10 +597,10 @@
     },
     {
       "id": "card-6c051fbe-a4b2-48ea-a3de-f114d68ba6f9",
-      "title": "壳层进程守护（孤儿清理已完成；manager 崩溃自动重启待做）",
+      "title": "壳层进程守护：try_wait 主信号 + 世代状态机 + 先取证后退避重启（含两个真 bug 修复）",
       "summary": "孤儿防驻留部分已完成并 dev 验证（d848a3b：启动清理本身份残留 node 树，三轮崩溃-重启循环零驻留、dev/正式互不误伤）。剩余：manager 崩溃时壳自动重启（进程级 watchdog）未实现——manager 是壳子进程，壳可在 manager stdout EOF/异常退出时自动 respawn（当前只导航回 launcher 让用户手动重试）。",
-      "rationale": "2026-09-04 00:04:10 第三次同模式事故（s86 turn16 派发 `npm run test:engine` 后 manager+dsh web 整树静默消失）。三杀模式收敛：同为 pwsh 测试套件派发边界、无 WER/无日志/无 watchdog 记录（manager 同刻死）、工具调用全为标准工具（排除\"调用不存在的东西\"）。暴露 manager 内置 watchdog 架构盲区：manager 自身死亡时无守护者。需在壳（Rust）层加进程级守护（壳是孤儿树的父，永远可用作兜底）。",
-      "rejected": "放弃继续追 dsh-subprocess 内部行级根因（三次均无 dump，koffi/taskkill 路径嫌疑已收敛但需 0.1.2-rc.1 或 dump 才能实锤）；放弃依赖 manager 内置 watchdog 单层方案（本次证明 manager 一起死时它无效）。",
+      "rationale": "三次事故证明 manager 自身死亡时无守护者（内置 watchdog 在 manager 自己的事件循环里）。2026-09-09 调研确认：壳已持有 Child 句柄却从不查询，最小实现即可获得\"权威判死 + 退出码证据 + 自动恢复\"三重收益；与 card-7c04d1eb 的 S1/S2 是同一处代码，建议合并实施。",
+      "rejected": "1) 外部独立守护进程：第三个进程装/卸成本 + 与壳双杀——否；2) Windows 服务：session 0 无 UI、需管理员、与单实例/托盘语义冲突——否；3) 计划任务：schtasks 已被拒、与主动退出无法协调——否；4) manager 心跳文件作主信号：同步阻塞会误判、manager 无法自救——仅作诊断；5) 只检测+提示不自动重启：= 放弃态降级，不满足卡片目标——否；6) 用 dsh web URL 探测当触发信号：与 manager 内置 watchdog 双杀且互毁证据——禁止。",
       "sourceSessionId": "session-788be97d-7ef1-480f-9552-d09ab4eaf37b",
       "status": "todo",
       "tags": [
@@ -610,7 +611,8 @@
         "urgent"
       ],
       "createdAt": 1788451764154,
-      "updatedAt": 1788718787965
+      "updatedAt": 1788895470056,
+      "description": "【方案（2026-09-09 调研，未实施）】详见 docs/2026-09-09-pending-cards-solutions.md §2。\n\n现状：壳对 manager 的唯一存活信号是 stdout EOF（lib.rs:2071-2097），**全仓无 try_wait()**，但 Child 句柄一直留在 ServerState.child（:2130）——判死能力已在手。manager 死后只写 last_error + emit server-down + 导航回 launcher，**恢复只能靠人**。另发现两个真 bug：① hasServer（lib.rs:1757/2678）在 manager 死后恒 true（Child 从不清空）→ UI 分不清死活；② stop_child（:111-129）对已退出 PID 仍无条件 taskkill（PID 复用面）。manager 内置 watchdog 只管 dsh web，且 dsh web 异常退出时 manager 自己 process.exit(2) → 都需壳兜底。\n\n设计：主信号 Child::try_wait()（权威/零误判/零依赖）+ EOF 提前唤醒；**dsh web URL 探测只准展示、禁止触发重启**（与 manager watchdog 双杀）；状态机 MgrPhase{Down,Starting,Running,Stopping,Recovering} + generation（每次 spawn+1，旧读线程事件丢弃）+ intentional_stop（只在 stop_child 置位）；恢复序列 = 先取证 → 世代校验 → 临界区清孤儿 dsh web → 退避(0/5/15/30s) → 重拉；证据目录 <runtime>/reports/manager-crash-<ts>-gen<N>/（summary.json/manager.log.tail 64KiB/shell-session.log.tail/orphans.txt/**对孤儿 dsh web 跑 MiniDumpWriteDump**/node-reports/wer.txt，保留 5 份）；预算 3 次/10 分钟 + 会话上限 10 → 放弃态（errbanner + 一键重试）；边界：壳只管 manager、manager 只管 dsh web、壳是唯一 spawner；UI 复用现有 url→navigate→nav-fallback 链路，/shell/status 补 managerAlive（修掉假 hasServer）/managerRestarts/managerGivenUp/evidenceDir。\n\n落点：新增 ~10 处（SHUTTING_DOWN、ManagerGuard/MgrPhase/Decision、ServerState.guard、next_generation、manager_alive、decide/backoff_delay/should_give_up、start_manager_watchdog、collect_manager_crash_evidence、orphan_service_node_pids 抽取、kill_orphan/dump_process/prune）；改动 ~10 处（stop_child:111-129、start_server:1854-2150 + 两个读线程世代围栏 + 给 manager 注入 NODE_OPTIONS=--report-*、EOF:2071-2097、restart_server:2153、quit_app:2445、run():3100 改 .build().run()、/shell/status:1754 + get_shell_status:2675、cleanup:714-743 抽取、shell-chrome.js:560-587、两个契约测试）。MVP = 全部必做 + 证据链；缓做：manager 心跳、manager 侧自愈、Job Object。\n\n待决策：是否把 dsh web 意外退出的自愈下沉到 manager（phase 2，需同时改 scripts/ 真源 + resources/ 副本，有漂移前科）。"
     },
     {
       "id": "card-8c035264-29ba-452b-93cd-77a70f2449b0",
@@ -900,9 +902,9 @@
     },
     {
       "id": "card-29b6f966-de46-495c-a44d-8ecbb0fe11c0",
-      "title": "安全：环回桥端点无鉴权（CORS-open）——页内第三方插件可调用壳动作",
-      "description": "审计发现（Rust 层审计 R3）：环回桥是 CORS-open（`Access-Control-Allow-Origin: *`，lib.rs:1348-1376）且无 Origin/Token 校验，端口经 `__DSH_BRIDGE_PORT__` 注入到 dsh 远程页与插件管理窗（lib.rs:2261-2264/2284-2287）。因此**页内任何第三方插件**都能 fetch 壳动作端点：`POST /shell/quit`（退出应用）、`/restart`（重启服务）、`/shell/open-data-dir`、`/shell/dev-mode-toggle`、`/shell/gpu-accel-toggle`、`/window/close`、`/shell/legacy-cleanup`（本次修复后破坏面已从\"spawn 旧版卸载器\"降到\"删孤儿卸载器 + 已校验 lnk\"，但仍是越权文件操作）。修法候选：① 桥端点要求携带每次启动生成的一次性 token（注入 chrome 前缀，shell-chrome.js 请求头带上；CORS 仍需放开但无 token 一律 403）；② 用 Origin 白名单（只接受 `tauri://localhost` 与 dsh 页面 origin，但插件与 dsh 同源 → 不解决插件越权，只能挡外部网页）；③ 敏感端点（quit/restart/legacy-cleanup/open-data-dir）单独加 token。推荐 ①（token 对同源插件也生效），并给只读端点（GET /shell/state、/update-status、/window/state）保留无 token 可读或同样加 token。",
-      "rationale": "本次事故审计（Rust 层）顺带发现的越权面：桥是 CORS-open 且无鉴权，页内第三方插件可调用任意壳动作端点。修复本次安装器 bug 后，最危险的那条（执行旧版卸载器）已消除，但\"插件可让壳退出/重启/开目录/删文件\"仍是真实权限缺口，值得独立跟进。",
+      "title": "安全：桥端点鉴权（token 挡不住同源插件 → 危险动作改壳内确认窗 + IPC）",
+      "description": "【方案（2026-09-09 调研，未实施）】详见 docs/2026-09-09-pending-cards-solutions.md §3。\n\n**核心结论（有证据）：token 挡不住同源插件。** 注入通道是页面主世界（inject_shell_chrome 用 w.eval，lib.rs:2281 → wry 0.55.1 实现为 ICoreWebView2::ExecuteScript）；项目自己依赖\"同世界\"——server-manager.mjs:988-997 把桥端口烘焙进预装插件 client.js，注释明说保留 globalThis 读取路径\"给外部注入者\"，插件侧读的正是 globalThis.__DSH_BRIDGE_PORT__；放 header 不改变泄露面（值仍必须来自全局才能被 bridge() 读取，同世界插件还能直接 patch fetch）→ 只要秘密交给页面，就属于页面。与 dsh 现状一致：dsh web URL 自带 ?token=，同源插件可读 location.search。\n\n其他事实：桥零校验（lib.rs:1371-1389 只看 content-length，**不看 Origin/Host/peer_addr**）→ DNS rebinding 当前可实现；OPTIONS 已处理（:1392 返回 204）但 Allow-Headers 仅 content-type（:1772）→ 加 token 头必须同步改这一行否则预检失败；端点 38 个，危险集 9 个（/shell/quit、/restart、/shell/legacy-cleanup、/update-dsh、/plugins/install、/plugins/remove、/shell/open-data-dir、/shell/dev-mode-toggle、/shell/gpu-accel-toggle）；兼容性硬约束——/notify /log /pending-open /alive 的调用方是预装通知插件（只有被烘焙的端口、无 token）→ 不能一刀切，且**绝不把 token 烘焙进 client.js**；\"危险动作改 IPC-only\"不可行（远程页无 __TAURI__、capabilities 无 core:default，放开等于把整个 invoke_handler 暴露给页面）；\"壳内弹窗确认\"当前不够（弹窗渲染在页面 DOM 的 shadow root，同世界插件可伪造/点击）→ 必须改成壳拥有的独立 webview（照 open_plugins_window 模式）。\n\n推荐分阶段：**阶段 0**（半天，零行为变更）Host 校验（须 127.0.0.1:<port>/localhost:<port>）+ Origin 白名单（tauri://localhost、http://127.0.0.1:*、http://localhost:*）否则 403 → 挡外部网页与 DNS rebinding；**阶段 1**（对同源插件唯一有效）9 个危险端点从\"执行\"改为\"登记 Rust 侧一次性槽位 PENDING_CONFIRM + 打开壳拥有的 confirm 窗口\"，真正执行移到新 IPC resolve_pending_action(nonce)，动作描述必须由 Rust 生成（防\"确认框写刷新、实际 quit\"），槽位一次一个 + 60s 过期，shell-chrome.js:71-91 ACTIONS 给危险项加 confirm:true；**阶段 2** token 每次页面加载轮换（只宣称防外部，豁免通知插件四端点）；**阶段 3** CORS 从 * 收窄（可选）。测试：test-shell-chrome.mjs 断言危险集必须 confirm:true 等；新增 test-bridge-guards.mjs 做源码级 Host/Origin 判定断言。\n\n待决策：阶段 1 的\"危险动作多一次确认\"是否可接受——这是**唯一能挡同源插件**的方案。",
+      "rationale": "原卡已列三个候选但未验证可行性。2026-09-09 调研用证据否掉了\"token 能挡同源插件\"的隐含假设（注入在页面主世界、项目自己依赖 globalThis 读取），因此把主方案收敛为\"危险动作 → 壳拥有独立确认窗 + IPC 执行\"，token/Origin 降级为防外部网页的纵深防御。",
       "sourceSessionId": "session-9f06f767-640a-4cdc-9a05-afb32d45bcb4",
       "status": "todo",
       "tags": [
@@ -912,13 +914,14 @@
         "follow-up"
       ],
       "createdAt": 1788893072651,
-      "updatedAt": 1788893072651
+      "updatedAt": 1788895480469,
+      "rejected": "1) 敏感端点单独 token：同源插件照样能读到 token → 无效；2) Origin 白名单单独用：挡不住同源插件（只能挡外部网页）→ 保留为阶段 0；3) 危险动作改 IPC-only：远程页无 __TAURI__ 且 capabilities 无 core:default，放开等于暴露整个 invoke_handler → 不可行；4) 用现有壳内模态弹窗做确认：渲染在页面 DOM，同世界插件可伪造/点击 → 不够，必须独立 webview；5) 端口随机化当主防线：端口在日志与 manager 命令行可见，对同用户本机进程无效；6) 给预装通知插件烘焙 token：落盘且违背其调用方无 token 的现实 → 禁止。"
     },
     {
       "id": "card-2506a383-e1d8-44fb-8170-3ba98be9f07a",
-      "title": "旧版接管剩余加固：lnk 目标校验/前缀匹配边界/快捷方式名/dataRecreated 口径",
-      "description": "本次审计（NSIS/Rust 两层）发现的次要遗留，与\"按名杀进程\"同属旧版接管路径，但不在本次修复范围：① NSIS 钩子 `Delete \"$DESKTOP\\DSH Desktop.lnk\"` / `$SMPROGRAMS` 未校验 lnk 目标（Rust 侧 should_delete_shortcut 有校验，规则不一致，legacy-takeover.nsh）；② Rust `should_delete_shortcut` 用 `starts_with` 前缀匹配无边界（lib.rs:764-769，对照同文件 :713-717 的 runtime 清理已用正则前瞻防 `runtime-backup` 类误匹配）；③ 快捷方式名不一致——Rust 只认 `DSH Desktop.lnk`，而 0.1.0 产物是 `dsh Desktop.lnk`（大小写/命名历史差异，可能漏删）；④ `legacy_check_json.dataRecreated` 对 dev 版查错目录（lib.rs:851-856 用 app_data_dir 的 parent 拼 `dev.dsh.desktop`，与 migrate_legacy_data 的 :520-523 判定口径不一致）。均为低危（误删需用户恰好有同名 lnk；前缀匹配的相似目录名概率极低），合并成一张卡收口，避免散落。",
-      "rationale": "审计中发现但刻意未纳入本次修复（避免扩大改动面、影响\"误杀\"这个主线的可验证性）。记录在案以免遗忘——下次动旧版接管代码时一起处理。",
+      "title": "旧版接管加固：① lnk 校验+分支修正 ② path_under 归一化 ④ legacy_ident_for 口径（③ 结论性关闭）",
+      "description": "【方案（2026-09-09 调研，未实施）】详见 docs/2026-09-09-pending-cards-solutions.md §4。四项逐项结论：\n\n**① NSIS 钩子删 lnk 未校验（P2，含真实行为缺陷）**：共享尾标签无条件删两条 lnk，三个分支（孤儿/旧版在跑→拒绝卸载/无残留）全走到这里；除\"误删用户自建同名 lnk\"外更实的问题是——**\"旧版仍在跑、我们有意拒绝执行其卸载器\"时仍把它的快捷方式删了**（旧版程序与卸载器原封不动，但入口消失，症状同本次事故的\"应用凭空消失\"）。修法：只在孤儿分支删 + 用模板自带 IsShortcutTarget（utils.nsh:160-184，纯 NSIS COM 调用；模板自己的卸载器 installer.nsi:5723-5740 就这么做）+ !ifmacrodef 守卫（独立编译 harness 无该宏 → 自动跳过，不编译失败也不盲删）；has_app 分支不动 lnk。否掉：nsExec 调 PowerShell 读 target（引入外部进程 + 与 wmic fail-open 同类风险）、NSIS 自解析 .lnk 二进制（~30 行 + 代码页边界，收益不如）。\n\n**② should_delete_shortcut 前缀匹配（P2，除边界外还有大小写漏删）**：lib.rs:768-773 用 starts_with、want 来自常量小写 \"dsh Desktop\"；a) 无边界 → dsh Desktop-dev/Desktop2/Desktop.bak 均命中（对照 :713-722 的 runtime 清理已用 (?=[\\\\\"'\\s]|$) 前瞻）；b) **大小写敏感漏删**——lnk target 存创建时真实大小写（本机实测 ...\\DSH Smoothly Desktop\\...），而 0.3.x 起所有 tag 的安装目录名是 \"DSH Desktop\" → starts_with 失败 → 漏删（fail-safe 但留死链）。修法：抽 win_path_key（统一分隔符+去尾\\ +to_lowercase）+ path_under（组件边界），should_delete_shortcut 与 legacy_process_running 共用（后者现在把 dsh Desktop-dev\\... 算作\"旧版在跑\" → canCleanup=false 误报）。\n\n**③ 快捷方式名不一致（P3，核实后无需改动，结论性关闭）**：git 核实小写 \"dsh Desktop\" 只存在于 a7f479e→da2e2ec，而 da2e2ec 是 v0.1.0 的祖先 → **发布版一律大写**；本机旧目录创建于 2026-08-15 07:34（早于 da2e2ec）证实小写构建装过，但 **NTFS 大小写不敏感** → NSIS Delete 与 Rust is_file() 都命中同一文件，两种拼写都不漏（代码 lib.rs:335-347 早有此注释）。→ 不加候选名；③ 的真实解在 ②。顺带发现（卡外，建议另开 P3 卡）：legacy_shortcut_candidates（lib.rs:649-661）用 user_home()/Desktop 硬拼、忽略桌面重定向（OneDrive 接管常见）→ 桌面 lnk 漏检。\n\n**④ dataRecreated 口径错误（P2，当前正在误报）**：lib.rs:855-860 用 app_data_dir().parent().join(\"dev.dsh.desktop\")，与身份无关；正确口径是 dev 版查 %APPDATA%\\dev.dsh.desktop.dev（复用 :520-523 的 LEGACY_IDENT_MIGRATIONS）。本机可复现：dev.dsh.desktop 存在、dev.dsh.desktop.dev 不存在 → dev 版 dataRecreated=true 假警报（横幅/设置页/壳菜单弹窗全触发），反之漏报；另 lib.rs:899 同一硬编码 → dev 版清理会误备份正式版旧目录的 dsh-home（只复制不删）。修法：抽 legacy_ident_for(ident) 三处统一。\n\n**排序**：② = ④（P2，纯 Rust、10 行级、可单测，先做）> ①（P2 分支修正 + P3 校验，需 makensis + 真机）> ③（P3 关闭）。②④ 合成一个 Rust 提交；① 单独一个 NSIS 提交（可独立 revert）。",
+      "rationale": "四项性质不同：②④是纯 Rust 正确性缺陷（可单测、零安装器风险），①含一个真实行为缺陷（拒绝卸载旧版却删其快捷方式）与一个一致性项，③经 git + 本机物证核实**无需代码**（发布版一律大写 + NTFS 大小写不敏感），把它的真实解归到 ② 的 target 归一化。",
       "sourceSessionId": "session-9f06f767-640a-4cdc-9a05-afb32d45bcb4",
       "status": "todo",
       "tags": [
@@ -928,7 +931,8 @@
         "follow-up"
       ],
       "createdAt": 1788893072677,
-      "updatedAt": 1788893072677
+      "updatedAt": 1788895480493,
+      "rejected": "1) ③ 增加 \"dsh Desktop.lnk\" 候选名：Windows 上是死代码（NSIS Delete 与 Rust is_file 都大小写不敏感）→ 不加；2) ① 在 NSIS 里用 nsExec 调 PowerShell 读 lnk 目标：引入外部进程 + 编码/执行策略/CLM 失败面，与本次 wmic fail-open 同类 → 否，改用模板自带 IsShortcutTarget；3) ① 在 NSIS 里自解析 .lnk 二进制：~30 行 + ANSI 代码页/相对链接边界，收益不如 → 否；4) ① 把删 lnk 完全交给 Rust：壳内清理不是自动的（启动只检测+横幅）→ 孤儿 lnk 会留到用户手动清理，体验回退 → 否；5) 把桌面重定向（OneDrive）漏检塞进本卡：性质不同（探测面而非加固）→ 建议另开 P3 卡。"
     }
   ]
 }
