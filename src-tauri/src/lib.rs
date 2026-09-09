@@ -2536,7 +2536,11 @@ fn dump_dsh_web(app: &AppHandle, url: &str) {
         return;
     }
     let finish = |app: &AppHandle| {
-        app.state::<ServerState>().hang_dump.lock().unwrap() = HangDump::Done(url.to_string());
+        {
+            let state = app.state::<ServerState>();
+            let mut slot = state.hang_dump.lock().unwrap();
+            *slot = HangDump::Done(url.to_string());
+        }
         ack_dump_done(app);
     };
     let Some(pid) = web_dump::dsh_web_pid_for_url(url, &runtime) else {
