@@ -159,5 +159,47 @@ assert.ok(nshCode.includes('legacy_pre_orphan'), 'legacy hook deletes an orphan 
 assert.ok(libRs.includes('legacy-app-present'), 'rust cleanup refuses when the legacy main exe is still present')
 assert.ok(!libRs.includes('Command::new(&uninstaller)'), 'rust cleanup never spawns the legacy uninstaller')
 
+// ── 10. manager 退出看护契约（2026-09-09：退出无证据 + UI 分不清死活）──────
+// 只检测 + 取证 + 提示，**绝不自动重启**（决定 D1：自动重启会掩盖复现）。
+// 两条检测路径（stdout EOF / try_wait 看护线程）共享世代围栏，先到者登记。
+const guardRsPath = join(root, 'src-tauri', 'src', 'manager_guard.rs')
+assert.ok(existsSync(guardRsPath), 'manager_guard.rs exists (lifecycle guard module)')
+const guardRs = readFileSync(guardRsPath, 'utf8')
+assert.ok(libRs.includes('mod manager_guard'), 'lib.rs declares the manager_guard module')
+assert.ok(libRs.includes('fn handle_manager_exit'), 'lib.rs has the manager exit handler')
+assert.ok(libRs.includes('fn start_manager_watchdog'), 'lib.rs has the try_wait watchdog thread')
+assert.ok(libRs.includes('try_wait'), 'lib.rs uses try_wait (authoritative liveness/exit code)')
+assert.ok(libRs.includes('reported_generation'), 'exit reporting is idempotent across the two detectors')
+assert.ok(libRs.includes('"managerAlive": alive'), '/shell/status exposes the real managerAlive')
+assert.ok(libRs.includes('"hasServer": alive'), 'hasServer is derived from the real liveness (bug ① fixed)')
+assert.ok(libRs.includes('"lastManagerExit"'), '/shell/status exposes lastManagerExit (code + evidence dir)')
+assert.ok(libRs.includes('"/shell/open-evidence"'), 'bridge has the /shell/open-evidence arm')
+assert.ok(libRs.includes('fn open_evidence_dir'), 'lib.rs opens the latest evidence directory')
+assert.ok(guardRs.includes('manager-crash-'), 'evidence dirs are named manager-crash-<ts>-gen<N>')
+assert.ok(guardRs.includes('EVIDENCE_KEEP'), 'evidence dirs are pruned to a bounded count')
+assert.ok(guardRs.includes('orphans.txt') && guardRs.includes('wer.txt'), 'evidence includes orphans + WER state')
+// 不自动重启：退出处理区域（handle_manager_exit / watchdog / status）不得拉起服务。
+const crashStart = libRs.indexOf('fn handle_manager_exit')
+const crashEnd = libRs.indexOf('fn restart_server')
+assert.ok(crashStart > 0 && crashEnd > crashStart, 'locate the crash-handling region in lib.rs')
+const crashRegion = libRs.slice(crashStart, crashEnd)
+assert.ok(!/start_server\(|restart_server\(/.test(crashRegion), 'manager exit path never restarts the service (D1)')
+assert.ok(!/Command::new/.test(crashRegion), 'manager exit path spawns nothing (forensics only)')
+assert.ok(!/start_server|restart_server/.test(guardRs), 'manager_guard.rs never spawns/restarts the manager')
+// bug ②：stop_child 必须先 try_wait，已退出的 PID 绝不再 taskkill（PID 复用面）。
+const stopStart = libRs.indexOf('fn stop_child(')
+const stopEnd = libRs.indexOf('fn no_console_window')
+const stopRegion = libRs.slice(stopStart, stopEnd)
+assert.ok(stopRegion.includes('try_wait'), 'stop_child checks try_wait before killing')
+assert.ok(
+  stopRegion.indexOf('try_wait') < stopRegion.indexOf('taskkill'),
+  'stop_child only taskkills a process that is still alive',
+)
+// UI：条幅常驻显示退出码/证据目录 + 手动「重启服务」。
+assert.ok(chromeSrc.includes('open-evidence'), 'chrome can open the evidence dir from the banner')
+assert.ok(chromeSrc.includes('evidenceDir'), 'chrome reads the evidence dir from shell-status')
+assert.ok(chromeSrc.includes('重启服务'), 'chrome banner offers a manual restart button')
+assert.ok(readFileSync(join(root, 'src', 'app.js'), 'utf8').includes('lastManagerExit'), 'launcher shows the exit code + evidence hint')
+
 console.log('PASS — shell chrome contract (menus, actions, bridge, IPC)')
 process.exit(0)

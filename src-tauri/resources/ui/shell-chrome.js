@@ -78,6 +78,8 @@
     refresh: { ipc: 'refresh_page', bridge: '/refresh' },
     restart: { ipc: 'restart_server', bridge: '/restart' },
     'open-data': { ipc: 'open_data_dir', bridge: '/shell/open-data-dir' },
+    // 服务异常退出后，条幅上的「打开证据目录」按钮（Rust 侧定位最近一次取证）。
+    'open-evidence': { ipc: 'open_evidence_dir', bridge: '/shell/open-evidence' },
     'shell-status': { ipc: 'get_shell_status', bridge: '/shell/status', method: 'GET' },
     quit: { ipc: 'quit_app', bridge: '/shell/quit' },
     // 窗口控制（本地页走 IPC 命令 window_control；远程页走桥端点）。
@@ -558,29 +560,42 @@
   }
 
   // ── 故障披露条幅：服务/启动异常时显示原因 + 重试/开日志（不再一片黑）──
+  // 服务异常退出时由 Rust 侧写入 lastError（含退出码与证据目录），并附
+  // lastManagerExit；条幅常驻到服务重新起来（新 URL 清空 lastError）。
+  // **不自动重启**：重启只能由用户点按钮（决定 D1，保证每次复现都留证据）。
   const errBanner = document.createElement('div');
   errBanner.className = 'errbanner';
   errBanner.hidden = true;
   const errText = document.createElement('span');
   errText.className = 'err-text';
   const errRetryBtn = document.createElement('button');
-  errRetryBtn.textContent = '重试';
+  errRetryBtn.textContent = '重启服务';
+  const errEvidenceBtn = document.createElement('button');
+  errEvidenceBtn.textContent = '打开证据目录';
+  errEvidenceBtn.hidden = true;
   const errDataBtn = document.createElement('button');
   errDataBtn.textContent = '打开数据目录';
   const errDismissBtn = document.createElement('button');
   errDismissBtn.textContent = '✕';
-  errBanner.append(errText, errRetryBtn, errDataBtn, errDismissBtn);
+  errBanner.append(errText, errRetryBtn, errEvidenceBtn, errDataBtn, errDismissBtn);
   root.appendChild(errBanner);
   let errDismissed = false;
   function updateErrorBanner() {
     call('shell-status').then((r) => {
       if (!r) return;
       const hasErr = !!r.lastError;
+      const exit = r.lastManagerExit || null;
+      const evidenceDir = exit && exit.evidenceDir ? String(exit.evidenceDir) : '';
+      errEvidenceBtn.hidden = !evidenceDir;
       errBanner.hidden = !(hasErr && !errDismissed);
-      if (hasErr && !errDismissed) errText.textContent = '⚠ ' + r.lastError;
+      if (hasErr && !errDismissed) {
+        errText.textContent = '⚠ ' + r.lastError;
+        errText.title = r.lastError + (evidenceDir ? `\n证据目录：${evidenceDir}` : '');
+      }
     });
   }
   errRetryBtn.addEventListener('click', () => call('restart'));
+  errEvidenceBtn.addEventListener('click', () => call('open-evidence'));
   errDataBtn.addEventListener('click', () => call('open-data'));
   errDismissBtn.addEventListener('click', () => { errDismissed = true; errBanner.hidden = true; });
   setInterval(updateErrorBanner, 3000);

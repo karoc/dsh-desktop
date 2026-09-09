@@ -168,9 +168,11 @@ pub(crate) fn tail_bytes(path: &Path, max: usize) -> String {
     let _ = f.take(max as u64).read_to_end(&mut buf);
     let text = String::from_utf8_lossy(&buf).to_string();
     if truncated {
-        if let Some(idx) = text.find('\n') {
-            return text[idx + 1..].to_string();
-        }
+        // Started mid-file: drop the partial first line.
+        return match text.find('\n') {
+            Some(idx) => text[idx + 1..].to_string(),
+            None => text,
+        };
     }
     text
 }
@@ -334,21 +336,32 @@ fn wer_report() -> String {
     out
 }
 
-/// Copy node diagnostic reports already present at `<runtime>/reports/node`
-/// (produced by `--report-on-fatalerror` when the environment sets it). The
-/// shell does not inject `NODE_OPTIONS` itself: an unsupported flag there would
-/// break every node process in the tree, so that stays a separate decision.
+/// Copy node diagnostic reports into the evidence dir. The manager already runs
+/// the `dsh web` child with `--report-on-fatalerror --report-uncaught-exception
+/// --report-dir=<runtime>/reports` (server-manager.mjs), so fatal V8/OOM deaths
+/// leave `report.<date>.<pid>.<seq>.json` there. The shell itself never injects
+/// `NODE_OPTIONS`: one unsupported flag would break every node process in the
+/// tree, and this round deliberately avoids that blast radius.
 fn copy_node_reports(runtime: &Path, dir: &Path) {
-    let Ok(rd) = std::fs::read_dir(runtime.join("reports").join("node")) else {
+    let Ok(rd) = std::fs::read_dir(runtime.join("reports")) else {
         return;
     };
+    let mut files: Vec<PathBuf> = rd
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.is_file())
+        .filter(|p| {
+            p.file_name()
+                .map(|n| n.to_string_lossy().starts_with("report."))
+                .unwrap_or(false)
+        })
+        .filter(|p| p.metadata().map(|m| m.len() <= NODE_REPORT_LIMIT).unwrap_or(false))
+        .collect();
+    files.sort();
+    files.reverse(); // report.<date>.<pid>.<seq>.json sorts newest-last
     let dst = dir.join("node-reports");
     let mut copied = 0usize;
-    for entry in rd.filter_map(Result::ok) {
-        let p = entry.path();
-        if !p.is_file() || p.metadata().map(|m| m.len() > NODE_REPORT_LIMIT).unwrap_or(true) {
-            continue;
-        }
+    for p in files {
         if std::fs::create_dir_all(&dst).is_err() {
             return;
         }

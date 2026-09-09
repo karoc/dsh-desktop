@@ -904,6 +904,7 @@ fn legacy_check_json(app: &AppHandle) -> serde_json::Value {
 /// dsh-desktop.exe（dev 版是 dsh-desktop-dev.exe），所以：
 ///   - 正式版壳执行它 = 杀掉自己（随后 manager/dsh web 变孤儿进程）；
 ///   - dev 版壳执行它 = 杀掉用户正在用的正式版，还会回报"清理完成"。
+///
 /// 因此这里只做无副作用的残留清理（孤儿卸载器 / 快捷方式 / 空目录）；旧版主
 /// 程序仍在时拒绝清理并让用户手动卸载。`legacy_process_running` 的路径前缀判定
 /// **不能**用作"能否执行卸载器"的门禁——危害是按 exe 名匹配的。

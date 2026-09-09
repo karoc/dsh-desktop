@@ -165,7 +165,24 @@ if (tauri && tauri.event) {
     installProgress.hidden = true;
     sweepDisabled = true;
     stopSweep();
-    showActionable('dsh 服务已退出。', '完整日志见数据目录里的 manager.log');
+    // 退出码与证据目录由壳的 manager 看护线程写入（lastManagerExit）。
+    // 壳不自动重启（决定 D1）：确认原因后由用户点「重试」手动拉起。
+    const generic = () => showActionable('dsh 服务已退出。', '完整日志见数据目录里的 manager.log');
+    try {
+      tauri.core.invoke('get_shell_status').then((st) => {
+        const exit = (st && st.lastManagerExit) || null;
+        if (!exit) return generic();
+        const where = exit.evidenceDir
+          ? `证据已保存到 ${exit.evidenceDir}`
+          : '证据目录写入失败，完整日志见数据目录';
+        showActionable(
+          `dsh 服务异常退出（退出码 ${exit.hex || '?'}）。`,
+          `${where}；点「重试」手动重启服务。`,
+        );
+      }).catch(generic);
+    } catch (_) {
+      generic();
+    }
   });
 
   // 安装/更新 dsh 的进度反馈：阶段事件 + 秒数心跳 + 卡住处理。
