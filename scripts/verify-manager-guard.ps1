@@ -83,7 +83,11 @@ function Invoke-Check {
       Say (Test-Path (Join-Path $d $f)) ("evidence file " + $f)
     }
     $orphans = [IO.File]::ReadAllText((Join-Path $d "orphans.txt"), [Text.Encoding]::UTF8)
-    Say ($orphans -match "pid=") "orphans.txt lists the surviving dsh web node(s)"
+    # No orphan is a legitimate outcome (dsh web may die with the manager via a
+    # kill-on-close job); the evidence file must still say which it was.
+    if ($orphans -match "pid=") { Write-Output "INFO  orphans.txt lists surviving dsh web node(s)" }
+    else { Write-Output "INFO  orphans.txt reports no orphan (dsh web died with the manager)" }
+    Say ($orphans.Trim().Length -gt 0) "orphans.txt is non-empty"
   }
 
   $hit = $null

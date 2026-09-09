@@ -2191,8 +2191,11 @@ fn navigate_back_to_launcher(app: &AppHandle) {
     }
     if let Some(url) = LAUNCHER_URL.lock().unwrap().clone() {
         if let Ok(u) = tauri::Url::parse(&url) {
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.navigate(u);
+            // 只接受真实本地页；about:blank 会让故障回退变成黑屏（见 setup 注释）。
+            if u.scheme() == "tauri" {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.navigate(u);
+                }
             }
         }
     }
@@ -3015,7 +3018,13 @@ pub fn run() {
         // on; see WindowConfig having no icon field in Tauri v2).
         .on_page_load(|webview, payload| {
             if webview.label() == "main" {
-                *LAST_MAIN_LOADED.lock().unwrap() = Some(payload.url().to_string());
+                let loaded = payload.url().to_string();
+                *LAST_MAIN_LOADED.lock().unwrap() = Some(loaded.clone());
+                // 本地启动页加载完成 = 权威的 LAUNCHER_URL（setup 时可能拿到
+                // about:blank，见那里的注释）。故障后回退导航依赖它。
+                if payload.url().scheme() == "tauri" {
+                    *LAUNCHER_URL.lock().unwrap() = Some(loaded);
+                }
                 inject_shell_chrome(webview.app_handle());
             } else if webview.label() == "plugins" {
                 // 插件管理窗口：注入环回桥端口（窗口页数据走桥，不依赖 dsh）。
@@ -3139,8 +3148,15 @@ pub fn run() {
                 let _ = w.set_title(app.package_info().name.as_str());
                 // Capture the launcher URL for post-restart reconnection (the
                 // page itself is replaced by the dsh page on the first boot).
+                // Guard: at setup time the webview has not navigated yet, so
+                // `w.url()` can be `about:blank` — capturing that made the
+                // crash fallback navigate to a black about:blank (2026-09-09
+                // real-machine verification). Only a real tauri:// page counts;
+                // on_page_load updates it again with the loaded URL.
                 if let Ok(u) = w.url() {
-                    *LAUNCHER_URL.lock().unwrap() = Some(u.to_string());
+                    if u.scheme() == "tauri" {
+                        *LAUNCHER_URL.lock().unwrap() = Some(u.to_string());
+                    }
                 }
             }
             // ── tray menu ────────────────────────────────────────────────
