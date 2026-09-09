@@ -548,7 +548,7 @@
       "rationale": "原卡依据\"用户未装任何 instrumentation\"；2026-09-09 四路只读调研实测后修正：L1 已装但结构性无效、L3 已装但零 dump 且会误杀，真正缺的是\"进程退出瞬间的证据\"与\"壳内可靠的挂起取证\"。用户 2026-09-09 决定 D1（不自动重启，优先保住复现现场）与 D2（可接受 Sysmon）。方案 S 与 card-6c051fbe 共用同一处代码，建议合并实施。",
       "rejected": "1) 依赖 WER LocalDumps 抓本案证据：结构性无效（只抓崩溃）——保留但降级为崩溃场景用；2) HKCU 版 LocalDumps：官方文档只支持 HKLM 且需管理员——不可行；3) 继续用 rundll32/comsvcs MiniDump：本机实测 20s 挂死零产出——弃用，改壳内 MiniDumpWriteDump；4) schtasks /ru 当前用户做守护：文档明确总是提示密码——改用启动文件夹/HKCU Run；5) 自动重启（含退避/预算/放弃态）：用户 D1 否决——会掩盖复现，且重启风暴本身污染证据。",
       "sourceSessionId": "session-788be97d-7ef1-480f-9552-d09ab4eaf37b",
-      "status": "todo",
+      "status": "in_progress",
       "tags": [
         "windows",
         "waiting-user",
@@ -557,7 +557,7 @@
         "urgent"
       ],
       "createdAt": 1788268219936,
-      "updatedAt": 1788952302841,
+      "updatedAt": 1788957750365,
       "description": "【决策（用户 2026-09-09，详见 docs/2026-09-09-pending-cards-solutions.md §0.1/§1）】\n- **D1 不做自动重启**（\"要确保复现\"）→ S2 改为「取证 + 显著提示 + 用户手动重启」，S3 改为「只 dump，不 kill、不 respawn」。\n- **D2** 可接受 Sysmon 极简配置：只开 EID1 进程创建（含完整命令行 + 父进程）+ EID5 进程终止；下载包 4.6MB、需管理员、与火绒可能冲突。\n- **D6** 00:47–00:48 第 4 次复现**未确认**（用户不记得）；03:04 退出已确认是用户操作；火绒日志用户反馈无任何相关记录 → **AV 拦截线索基本排除**。\n\n【认知修正（实测，重要）】卡里\"L1/L2/L3 均未落地\"已过时：L1 早已配好（HKLM WER LocalDumps 含 dsh-desktop/node/msedgewebview2，DumpType=2），但 **WER 只对崩溃生效、抓不到 TerminateProcess 式静默杀**（第三次事故发生在 L1 配好之后，仍零 dump）；L3 已落地且**真实触发 6 次**（09-05 14:14:52Z→14:18:15Z）却**零 dump**（每轮间隔恰好 ~20.0s = server-manager.mjs:1087 的 spawnSync timeout → rundll32/comsvcs 本机被挂死/拦截），且无启动宽限期 → 重启风暴、误杀健康实例；L2 确认未落地。\n\n【物理边界】被杀后地址空间销毁，**事后不可能 dump**；dump 只对\"挂起\"有意义。\"manager 被杀\"的证据只能来自持有句柄的一方——主线实测：taskkill /F → 父进程退出码 **1**，正常退出 **0**。\n\n【方案 S（纯壳内）】S1 stdout EOF 处 child.wait() 取退出码 + 时刻写 session.log；S2 取证（证据目录）+ errbanner 提示退出码与证据位置 + 用户手动「重启服务」（**不自动重启**）；S3 壳内 watchdog 探 LIVE_DSH_URL → 连续失败 → CIM 定位 node PID → Rust `MiniDumpWriteDump`（实测非管理员 VM_READ 可得、无需 SeDebugPrivilege）→ **只 dump 不 kill**，加 30s 启动宽限期；S4 Job Object（KILL_ON_JOB_CLOSE 灭孤儿，勿设 BREAKAWAY）。\n【方案 G（覆盖\"壳也死\"）】启动文件夹/HKCU Run 免管理员守护；守护脚本须先改三处：弃用 comsvcs、加宽限期、500ms 采样抓消失前 2s 内 taskkill/powershell 命令行；G4 = Sysmon（D2）。"
     },
     {
@@ -602,7 +602,7 @@
       "rationale": "三次事故证明 manager 自身死亡时无守护者（内置 watchdog 在 manager 自己的事件循环里）。调研确认壳已持有 Child 句柄却从不查询，最小实现即可获得\"权威判死 + 退出码证据\"；用户 D1 决定不做自动重启（优先保住复现现场），D3 否决下沉 manager 自愈。与 card-7c04d1eb 的 S1/S2 是同一处代码，建议合并实施。",
       "rejected": "1) 自动重启（含退避/预算/放弃态）：用户 D1 否决——会掩盖复现、重启风暴污染证据；2) dsh web 自愈下沉到 manager（D3）：对主问题无效 + 与 D1 冲突 + 需改双份文件（漂移前科）；3) 外部独立守护进程：装/卸成本 + 与壳双杀；4) Windows 服务：session 0 无 UI、需管理员；5) 计划任务：schtasks 已被拒；6) manager 心跳作主信号：同步阻塞会误判，仅作诊断；7) 用 dsh web URL 探测当触发信号：与 manager 内置 watchdog 双杀且互毁证据——禁止。",
       "sourceSessionId": "session-788be97d-7ef1-480f-9552-d09ab4eaf37b",
-      "status": "todo",
+      "status": "in_progress",
       "tags": [
         "windows",
         "dsh-web",
@@ -611,7 +611,7 @@
         "urgent"
       ],
       "createdAt": 1788451764154,
-      "updatedAt": 1788952302860,
+      "updatedAt": 1788957750344,
       "description": "【决策（用户 2026-09-09，详见文档 §0.1/§2）】\n- **D1 不做自动重启** → 方案降级为「检测 + 取证 + 显著提示，用户手动重启」；**去掉退避/重启预算/放弃态**（自动重启会掩盖复现，且重启风暴污染证据）。\n- **D3 不下沉 dsh web 自愈到 manager**：① 对主问题无效（三次事故 manager 同刻死，\"manager 活着\"前提不成立）；② 本质是自动重启 dsh web，与 D1 冲突；③ 需改 `scripts/` 真源 + `resources/manager/` 副本两份（有 0.5.0/0.6.0 漂移前科），增量收益仅\"dsh web 异常退出\"一条（挂起已被内置 watchdog 覆盖）。\n\n【现状（含两个真 bug）】壳对 manager 的唯一存活信号是 stdout EOF（lib.rs:2071-2097），**全仓无 try_wait**，但 Child 句柄一直在 `ServerState.child`（:2130）→ 判死能力已在手。manager 死后只写 last_error + emit server-down + 导航回 launcher，恢复只能靠人。**bug ①** `hasServer`（:1757/2678）死后恒 true（Child 从不清空）→ UI 分不清死活；**bug ②** `stop_child`（:111-129）对已退出 PID 仍无条件 taskkill（PID 复用面）。dsh web 异常退出时 manager 自己 `process.exit(2)`（supervise:1215-1241 → main:1624）。\n\n【方案】主信号 `Child::try_wait()`（权威/零误判/零依赖）+ EOF 提前唤醒；**dsh web URL 探测只用于展示/取证，禁止触发重启**（与 manager watchdog 双杀）；状态机 `MgrPhase{Down,Starting,Running,Stopping}` + `generation`（旧读线程事件丢弃）+ `intentional_stop`（只在 stop_child 置位）；检测到\"非意图退出\" → 取证（`<runtime>/reports/manager-crash-<ts>-gen<N>/`：summary.json 含退出码/时刻/壳 uptime、manager.log.tail 64KiB、shell-session.log.tail、orphans.txt、**对孤儿 dsh web 跑 MiniDumpWriteDump**、node-reports/、wer.txt；保留 5 份）→ 写 last_error → errbanner + toast 提示 → **等用户手动重启**（`/restart` 或托盘）。\n落点：新增 ~8 处（SHUTTING_DOWN、ManagerGuard/MgrPhase、ServerState.guard、next_generation/manager_alive、start_manager_watchdog、collect_manager_crash_evidence、orphan_service_node_pids 抽取、dump_process/prune_evidence_dirs）；改动 ~10 处（stop_child:111-129、start_server:1854-2150 + 读线程世代围栏 + manager 注入 NODE_OPTIONS=--report-*、EOF:2071-2097、restart_server:2153、quit_app:2445、run():3100 改 .build().run()、/shell/status:1754 + get_shell_status:2675、cleanup:714-743 抽取、shell-chrome.js:560-587、两个契约测试）。\nMVP = 检测 + 退出码取证 + 提示 + 证据目录 + 修两个 bug；缓做：Job Object、Sysmon 联动、manager 心跳。"
     },
     {

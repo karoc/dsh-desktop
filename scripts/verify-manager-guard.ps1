@@ -32,6 +32,8 @@ function Say([bool]$ok, [string]$msg) {
 }
 
 function Get-ManagerProcs {
+  # NOTE: call sites MUST wrap this in @(): PowerShell 5.1 CimInstance scalars
+  # have no .Count, so a single match would otherwise read as "none".
   $marker = $runtime.Replace("/", "\")
   return @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue | Where-Object {
       $_.CommandLine -and $_.CommandLine -match "server-manager\.mjs" -and $_.CommandLine -like ("*" + $marker + "*")
@@ -52,7 +54,7 @@ function Get-ShellStatus {
 }
 
 function Invoke-Kill {
-  $procs = Get-ManagerProcs
+  $procs = @(Get-ManagerProcs)
   if ($procs.Count -ne 1) { Write-Output ("MANAGER-COUNT " + $procs.Count); exit 1 }
   $mgrPid = $procs[0].ProcessId
   Write-Output ("MANAGER pid=" + $mgrPid)
@@ -62,7 +64,7 @@ function Invoke-Kill {
 
 function Invoke-Check {
   Start-Sleep -Seconds $WaitSec
-  $procs = Get-ManagerProcs
+  $procs = @(Get-ManagerProcs)
   Say ($procs.Count -eq 0) ("no auto-restart: manager processes now = " + $procs.Count)
 
   $dirs = @(Get-ChildItem $reports -Directory -Filter "manager-crash-*" -ErrorAction SilentlyContinue | Sort-Object Name)
@@ -112,7 +114,7 @@ switch ($Action) {
   "cleanup" {
     # Orphans left by the kill (dsh web) - kill them BEFORE a restart so the
     # new tree does not coexist with a stale port holder.
-    $procs = Get-ManagerProcs
+    $procs = @(Get-ManagerProcs)
     $killed = 0
     foreach ($p in $procs) { taskkill /PID $p.ProcessId /T /F | Out-Null; $killed++ }
     Write-Output ("CLEANUP killed " + $killed + " node process tree(s) for " + $Ident)
@@ -126,7 +128,7 @@ switch ($Action) {
     $ok = $false
     for ($i = 0; $i -lt 30; $i++) {
       Start-Sleep -Seconds 1
-      if ((Get-ManagerProcs).Count -ge 1) { $ok = $true; break }
+      if ((@(Get-ManagerProcs)).Count -ge 1) { $ok = $true; break }
     }
     Say $ok "POST /restart brought the manager back"
     if (-not $ok) { exit 1 }
