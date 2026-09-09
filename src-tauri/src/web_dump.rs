@@ -88,8 +88,7 @@ pub(crate) fn dsh_web_pid_for_url(url: &str, runtime: &Path) -> Option<u32> {
 /// `manager_guard.rs`). Returns the dump size in bytes.
 #[cfg(windows)]
 pub(crate) fn dump_process(pid: u32, path: &Path) -> Result<u64, String> {
-    use windows::core::BOOL;
-    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::Storage::FileSystem::{
         CreateFileW, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_NONE, GENERIC_WRITE,
     };
@@ -102,7 +101,7 @@ pub(crate) fn dump_process(pid: u32, path: &Path) -> Result<u64, String> {
     unsafe {
         // PROCESS_VM_READ is enough for same-user processes (verified: a
         // non-elevated shell can read explorer's modules); no SeDebugPrivilege.
-        let process = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, BOOL(0), pid)
+        let process = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, pid)
             .map_err(|e| format!("OpenProcess(pid={pid}): {e}"))?;
         let file = match CreateFileW(
             windows::core::PCWSTR(wide.as_ptr()),

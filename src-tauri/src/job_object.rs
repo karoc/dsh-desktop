@@ -54,12 +54,11 @@ pub(crate) fn create_kill_on_close_job() -> Result<usize, String> {
 #[cfg(windows)]
 pub(crate) fn assign(job: usize, pid: u32) -> Result<(), String> {
     use std::ffi::c_void;
-    use windows::core::BOOL;
     use windows::Win32::Foundation::{CloseHandle, HANDLE};
     use windows::Win32::System::JobObjects::AssignProcessToJobObject;
     use windows::Win32::System::Threading::{OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE};
     unsafe {
-        let process = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, BOOL(0), pid)
+        let process = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, false, pid)
             .map_err(|e| format!("OpenProcess(pid={pid}): {e}"))?;
         let result = AssignProcessToJobObject(HANDLE(job as *mut c_void), process)
             .map_err(|e| format!("AssignProcessToJobObject(pid={pid}): {e}"));
