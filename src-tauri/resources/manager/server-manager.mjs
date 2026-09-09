@@ -1060,7 +1060,11 @@ const WATCHDOG_STARTUP_GRACE_MS = 30000
 const WATCHDOG_DUMP_WAIT_MS = 30000
 
 let dumpDoneResolve = null
+let dumpDoneAt = 0
 function waitDumpDone(ms) {
+  // 壳可能已经抓完并回过 dump-done（壳内 watchdog 与 manager 的相位不同），
+  // 最近一次回执直接算数，不必再等满上限。
+  if (Date.now() - dumpDoneAt < 60000) return Promise.resolve(true)
   return new Promise((resolve) => {
     dumpDoneResolve = resolve
     setTimeout(() => {
@@ -1289,6 +1293,7 @@ function handleCommand(cmd) {
       break
     case 'dump-done':
       // 壳已抓完挂起现场（或该 URL 早已抓过）：立刻允许 watchdog 重启 dsh。
+      dumpDoneAt = Date.now()
       if (dumpDoneResolve) { const resolve = dumpDoneResolve; dumpDoneResolve = null; resolve(true) }
       break
     case 'plugins-install':

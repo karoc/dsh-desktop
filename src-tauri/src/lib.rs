@@ -60,8 +60,18 @@ struct ServerState {
     guard: Mutex<ManagerGuard>,
     /// 本壳进程启动时刻（unix 秒），取证时记入 shellUptimeSecs。
     shell_started_at: u64,
-    /// 已抓过挂起 dump 的 dsh web URL（同一 URL 只抓一次，见 dump_dsh_web）。
-    hang_dumped: Mutex<Option<String>>,
+    /// 挂起 dump 状态（按 dsh web URL 去重，见 HangDump / dump_dsh_web）。
+    hang_dump: Mutex<HangDump>,
+}
+
+/// 挂起 dump 的认领状态：壳内 watchdog 与 manager 的 dump-web 请求会几乎同时
+/// 到达，两条路径必须收敛到一次 dump，且**回执只能在本轮 dump 结束后发**——
+/// 否则 manager 会在 dump 还没写完时就杀掉进程，现场直接消失（2026-09-09 实测）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum HangDump {
+    Idle,
+    InProgress(String),
+    Done(String),
 }
 
 /// Proxy panel data mirrored from manager protocol lines (see ServerState.proxy).
@@ -2483,8 +2493,11 @@ fn start_hang_watchdog(app: &AppHandle) {
                 misses = 0;
                 continue;
             }
-            misses += 1;
-            log_line(&data, &format!("dsh web probe miss {misses}/{HANG_MISS_LIMIT}"));
+            let before = misses;
+            misses = (misses + 1).min(HANG_MISS_LIMIT);
+            if misses != before {
+                log_line(&data, &format!("dsh web probe miss {misses}/{HANG_MISS_LIMIT}"));
+            }
             if misses >= HANG_MISS_LIMIT && dumped_for.as_deref() != Some(url.as_str()) {
                 dumped_for = Some(url.clone());
                 let app2 = app.clone();
@@ -2494,32 +2507,41 @@ fn start_hang_watchdog(app: &AppHandle) {
     });
 }
 
-/// 抓一份 dsh web 的挂起 dump 并披露。**同一 URL 只抓一次**：壳内 watchdog 与
-/// manager 的 dump-web 请求会几乎同时到达，两条路径必须收敛到一次 dump。
+/// 抓一份 dsh web 的挂起 dump 并披露。**同一 URL 只抓一次**，且认领与回执分离：
+/// 壳内 watchdog 与 manager 的 dump-web 请求几乎同时到达，先到者抓、后到者直接
+/// 返回；**只有抓完的那条路径回 dump-done**，否则 manager 会在 dump 写盘前就重启
+/// （实测：进程先被杀，OpenProcess 报 0x80070057，现场归零）。
 fn dump_dsh_web(app: &AppHandle, url: &str) {
     let runtime = runtime_dir(app);
     let data = app
         .path()
         .app_data_dir()
         .unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let already = {
+    let claim = {
         let state = app.state::<ServerState>();
-        let mut done = state.hang_dumped.lock().unwrap();
-        if done.as_deref() == Some(url) {
-            true
-        } else {
-            *done = Some(url.to_string());
-            false
+        let mut slot = state.hang_dump.lock().unwrap();
+        match &*slot {
+            HangDump::Done(u) if u == url => false,
+            HangDump::InProgress(u) if u == url => false,
+            _ => {
+                *slot = HangDump::InProgress(url.to_string());
+                true
+            }
         }
     };
-    if already {
-        log_line(&data, "dsh web hang: dump already captured for this url");
-        ack_dump_done(app);
+    if !claim {
+        // 已有同一 URL 的 dump（进行中或已完成）：不重复抓，也**不回执**——
+        // 抓完的那条路径会回执（若它已经回过，manager 侧也已记录）。
+        log_line(&data, "dsh web hang: dump already claimed for this url");
         return;
     }
+    let finish = |app: &AppHandle| {
+        app.state::<ServerState>().hang_dump.lock().unwrap() = HangDump::Done(url.to_string());
+        ack_dump_done(app);
+    };
     let Some(pid) = web_dump::dsh_web_pid_for_url(url, &runtime) else {
         log_line(&data, "dsh web hang: cannot locate pid for the live url");
-        ack_dump_done(app);
+        finish(app);
         return;
     };
     let reports = runtime.join("reports");
@@ -2546,7 +2568,7 @@ fn dump_dsh_web(app: &AppHandle, url: &str) {
         serde_json::json!({ "pid": pid, "dump": path, "summary": summary }),
     );
     web_dump::prune_dumps(&reports, "dshweb-hang-", HANG_DUMP_KEEP);
-    ack_dump_done(app);
+    finish(app);
 }
 
 /// 告诉 manager 现场已抓完（成功、失败或早已抓过都要回执，否则它会等满上限）。
@@ -3199,7 +3221,7 @@ pub fn run() {
             last_error: Mutex::new(None),
             guard: Mutex::new(ManagerGuard::default()),
             shell_started_at: manager_guard::now_unix(),
-            hang_dumped: Mutex::new(None),
+            hang_dump: Mutex::new(HangDump::Idle),
         })
         // Belt-and-suspenders for the taskbar icon: re-apply the bundled icon
         // on every page load (window existence/creation timing is not relied
