@@ -207,5 +207,39 @@ assert.ok(appJs.includes("invoke('get_shell_status')"), 'launcher re-checks shel
 assert.ok(libRs.includes('fn is_shell_local_url'), 'launcher URL accepts both tauri:// and http://tauri.localhost (Windows)')
 assert.ok(libRs.includes('fn navigate_back_to_launcher'), 'crash fallback navigates back to the launcher page')
 
+// ── 11. 挂起取证 + Job Object 契约（卡 1 剩余项）────────────────────────────
+// S3：壳探活 → MiniDumpWriteDump（只 dump 不重启）；manager 不再用 comsvcs
+// （本机 20s 超时零产出，是 L3 重启风暴的根因）。
+const webDumpRs = readFileSync(join(root, 'src-tauri', 'src', 'web_dump.rs'), 'utf8')
+const jobRs = readFileSync(join(root, 'src-tauri', 'src', 'job_object.rs'), 'utf8')
+assert.ok(libRs.includes('mod web_dump'), 'lib.rs declares the web_dump module')
+assert.ok(libRs.includes('fn start_hang_watchdog'), 'lib.rs has the dsh web hang watchdog')
+assert.ok(libRs.includes('fn dump_dsh_web') && libRs.includes('ack_dump_done'), 'hang dump is idempotent and acks the manager')
+assert.ok(webDumpRs.includes('MiniDumpWriteDump'), 'web_dump uses MiniDumpWriteDump directly (no rundll32/comsvcs)')
+assert.ok(webDumpRs.includes('MiniDumpWithFullMemory'), 'hang dumps are full-memory (debugger-ready)')
+assert.ok(webDumpRs.includes('OpenProcess') && webDumpRs.includes('PROCESS_VM_READ'), 'dump opens the process with VM_READ only')
+assert.ok(libRs.includes('HANG_STARTUP_GRACE_SECS'), 'hang probing has a startup grace (no false hang during boot)')
+assert.ok(libRs.includes('"dump-web"'), 'manager protocol line dump-web is handled by the shell')
+const mgrRs = readFileSync(join(root, 'scripts', 'server-manager.mjs'), 'utf8')
+const mgrCopy = readFileSync(join(root, 'src-tauri', 'resources', 'manager', 'server-manager.mjs'), 'utf8')
+for (const [name, src] of [['scripts/server-manager.mjs', mgrRs], ['resources/manager copy', mgrCopy]]) {
+  assert.ok(!src.includes('comsvcs.dll'), `${name} no longer calls comsvcs (proven broken on this machine)`)
+  assert.ok(!src.includes('spawnSync'), `${name} no longer blocks on spawnSync`)
+  assert.ok(src.includes('WATCHDOG_STARTUP_GRACE_MS'), `${name} has the watchdog startup grace`)
+  assert.ok(src.includes("t: 'dump-web'"), `${name} asks the shell for the dump`)
+  assert.ok(src.includes("case 'dump-done'"), `${name} waits for the shell's dump ack before restarting`)
+}
+// 挂起处理同样不得自动重启（D1：manager 的重启是既有行为，壳不参与）。
+const hangStart = libRs.indexOf('fn start_hang_watchdog')
+const hangEnd = libRs.indexOf('fn shell_status_json')
+assert.ok(hangStart > 0 && hangEnd > hangStart, 'locate the hang-watchdog region in lib.rs')
+const hangRegion = libRs.slice(hangStart, hangEnd)
+assert.ok(!/start_server\(|restart_server\(/.test(hangRegion), 'hang path only dumps; it never restarts the service (D1)')
+// S4：Job Object（kill-on-close）——壳死则整棵服务树被系统清掉。
+assert.ok(libRs.includes('mod job_object') && libRs.includes('SERVICE_JOB'), 'lib.rs creates and keeps the service job object')
+assert.ok(jobRs.includes('JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE'), 'job kills the tree when the shell dies')
+assert.ok(jobRs.includes('JOB_OBJECT_LIMIT_BREAKAWAY_OK'), 'job allows breakaway/nested jobs (dsh sandbox compatibility)')
+assert.ok(libRs.includes('job_object::assign'), 'manager is assigned to the job right after spawn')
+
 console.log('PASS — shell chrome contract (menus, actions, bridge, IPC)')
 process.exit(0)

@@ -18,7 +18,9 @@ use std::sync::Mutex;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem};
 use tauri::{AppHandle, Emitter, Listener, Manager, State};
 
+mod job_object;
 mod manager_guard;
+mod web_dump;
 use manager_guard::{MgrPhase, ManagerExit, ManagerGuard};
 
 /// The shell chrome (custom title bar + menu bar), injected into the MAIN
@@ -58,6 +60,8 @@ struct ServerState {
     guard: Mutex<ManagerGuard>,
     /// 本壳进程启动时刻（unix 秒），取证时记入 shellUptimeSecs。
     shell_started_at: u64,
+    /// 已抓过挂起 dump 的 dsh web URL（同一 URL 只抓一次，见 dump_dsh_web）。
+    hang_dumped: Mutex<Option<String>>,
 }
 
 /// Proxy panel data mirrored from manager protocol lines (see ServerState.proxy).
@@ -183,6 +187,12 @@ fn log_line(data_dir: &std::path::Path, msg: &str) {
 
 /// Port of the loopback notification bridge, shared with the manager child.
 static BRIDGE_PORT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
+
+/// Windows Job Object handle (raw value) holding the whole service tree with
+/// kill-on-close. 0 = unavailable (job creation failed; orphan cleanup remains
+/// the fallback). Kept for the process lifetime — closing it would kill the
+/// service.
+static SERVICE_JOB: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// Session id of the most recent notification — a toast click re-opens it.
 static LAST_SESSION: Mutex<Option<String>> = Mutex::new(None);
@@ -1932,6 +1942,22 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
     }
 
     let mut child = cmd.spawn().map_err(|e| format!("spawn manager: {e}"))?;
+    // 把 manager（及其后代）放进 kill-on-close job：壳进程死亡时系统整树清理，
+    // 不留孤儿 node 与下次启动抢端口/文件。失败只记日志（启动期孤儿清理兜底）。
+    #[cfg(windows)]
+    {
+        let job = SERVICE_JOB.load(std::sync::atomic::Ordering::SeqCst);
+        if job != 0 {
+            if let Err(e) = job_object::assign(job, child.id()) {
+                let data = app
+                    .path()
+                    .app_data_dir()
+                    .unwrap_or_else(|_| std::path::PathBuf::from("."));
+                log_line(&data, &format!("job assign failed: {e}"));
+                eprintln!("[dsh-desktop] job assign failed: {e}");
+            }
+        }
+    }
     let generation: u64;
     {
         // Fresh manager: reset every mirrored state and the tray item text.
@@ -2006,6 +2032,30 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
                                 if let Some(w) = handle.get_webview_window("main") {
                                     let _ = w.navigate(u);
                                 }
+                            }
+                        }
+                    }
+                    Some("dump-web") => {
+                        // manager 判定 dsh web 挂起：壳负责抓现场（MiniDumpWriteDump），
+                        // 抓完回 dump-done 让 manager 立刻重启（见 dump_dsh_web）。
+                        let url = ev
+                            .get("url")
+                            .and_then(|v| v.as_str())
+                            .filter(|s| !s.is_empty())
+                            .map(String::from)
+                            .or_else(|| LIVE_DSH_URL.lock().unwrap().clone());
+                        match url {
+                            Some(url) => {
+                                let app2 = handle.clone();
+                                std::thread::spawn(move || dump_dsh_web(&app2, &url));
+                            }
+                            None => {
+                                let data = handle
+                                    .path()
+                                    .app_data_dir()
+                                    .unwrap_or_else(|_| std::path::PathBuf::from("."));
+                                log_line(&data, "dump-web requested but no live url");
+                                ack_dump_done(&handle);
                             }
                         }
                     }
@@ -2379,6 +2429,130 @@ fn start_manager_watchdog(app: &AppHandle, generation: u64) {
             return;
         }
     });
+}
+
+/// dsh web 挂起探测间隔（秒）。
+const HANG_PROBE_SECS: u64 = 3;
+/// 连续 miss 达到该值 → 抓 dump（约 9 秒无响应）。
+const HANG_MISS_LIMIT: u32 = 3;
+/// 新 URL 到达后的启动宽限（秒）：启动/重载期慢响应不算挂起（与 L3 风暴同类误判）。
+const HANG_STARTUP_GRACE_SECS: u64 = 30;
+/// 保留最近几份挂起 dump（全内存 dump 体积大）。
+const HANG_DUMP_KEEP: usize = 3;
+
+/// dsh web 挂起看护：**只探测 + dump，不 kill、不重启**（决定 D1）。挂起是唯一
+/// 还能拿到内存现场的故障（被杀进程地址空间已销毁）。manager 的 watchdog 负责
+/// 恢复，壳负责现场；两者同时触发时 manager 会先等一段宽限再重启（见 manager）。
+fn start_hang_watchdog(app: &AppHandle) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let data = app
+            .path()
+            .app_data_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let mut misses = 0u32;
+        let mut current: Option<String> = None;
+        let mut armed_at = std::time::Instant::now();
+        let mut dumped_for: Option<String> = None;
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(HANG_PROBE_SECS));
+            if manager_guard::shutting_down() {
+                return;
+            }
+            let Some(url) = LIVE_DSH_URL.lock().unwrap().clone() else {
+                misses = 0;
+                current = None;
+                continue;
+            };
+            if current.as_deref() != Some(url.as_str()) {
+                // 新 URL（首启 / manager 重启 / dsh web 重生）：重置计数并进入
+                // 启动宽限。
+                current = Some(url.clone());
+                armed_at = std::time::Instant::now();
+                misses = 0;
+                dumped_for = None;
+                continue;
+            }
+            if armed_at.elapsed() < std::time::Duration::from_secs(HANG_STARTUP_GRACE_SECS) {
+                continue;
+            }
+            if web_dump::probe_url(&url, std::time::Duration::from_millis(1500)) {
+                if misses > 0 {
+                    log_line(&data, &format!("dsh web probe recovered after {misses} miss(es)"));
+                }
+                misses = 0;
+                continue;
+            }
+            misses += 1;
+            log_line(&data, &format!("dsh web probe miss {misses}/{HANG_MISS_LIMIT}"));
+            if misses >= HANG_MISS_LIMIT && dumped_for.as_deref() != Some(url.as_str()) {
+                dumped_for = Some(url.clone());
+                let app2 = app.clone();
+                std::thread::spawn(move || dump_dsh_web(&app2, &url));
+            }
+        }
+    });
+}
+
+/// 抓一份 dsh web 的挂起 dump 并披露。**同一 URL 只抓一次**：壳内 watchdog 与
+/// manager 的 dump-web 请求会几乎同时到达，两条路径必须收敛到一次 dump。
+fn dump_dsh_web(app: &AppHandle, url: &str) {
+    let runtime = runtime_dir(app);
+    let data = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let already = {
+        let state = app.state::<ServerState>();
+        let mut done = state.hang_dumped.lock().unwrap();
+        if done.as_deref() == Some(url) {
+            true
+        } else {
+            *done = Some(url.to_string());
+            false
+        }
+    };
+    if already {
+        log_line(&data, "dsh web hang: dump already captured for this url");
+        ack_dump_done(app);
+        return;
+    }
+    let Some(pid) = web_dump::dsh_web_pid_for_url(url, &runtime) else {
+        log_line(&data, "dsh web hang: cannot locate pid for the live url");
+        ack_dump_done(app);
+        return;
+    };
+    let reports = runtime.join("reports");
+    let _ = std::fs::create_dir_all(&reports);
+    let out = reports.join(format!("dshweb-hang-{}-{}.dmp", pid, manager_guard::now_unix()));
+    let path = out.display().to_string();
+    log_line(&data, &format!("dsh web hang: dumping pid {pid} -> {path}"));
+    let summary = match web_dump::dump_process(pid, &out) {
+        Ok(bytes) => {
+            log_line(&data, &format!("dsh web hang: dump saved {path} ({bytes} bytes)"));
+            format!(
+                "dsh web 无响应（已保存现场 dump：{path}，{} MiB）——若服务未自行恢复，点「重启服务」",
+                bytes / (1024 * 1024)
+            )
+        }
+        Err(e) => {
+            log_line(&data, &format!("dsh web hang: dump FAILED for pid {pid}: {e}"));
+            format!("dsh web 无响应，且现场 dump 失败（{e}）——点「重启服务」恢复")
+        }
+    };
+    *app.state::<ServerState>().last_error.lock().unwrap() = Some(summary.clone());
+    let _ = app.emit(
+        "web-hang",
+        serde_json::json!({ "pid": pid, "dump": path, "summary": summary }),
+    );
+    web_dump::prune_dumps(&reports, "dshweb-hang-", HANG_DUMP_KEEP);
+    ack_dump_done(app);
+}
+
+/// 告诉 manager 现场已抓完（成功、失败或早已抓过都要回执，否则它会等满上限）。
+fn ack_dump_done(app: &AppHandle) {
+    let state = app.state::<ServerState>();
+    send_line(&mut state.stdin.lock().unwrap(), r#"{"cmd":"dump-done"}"#);
 }
 
 /// 壳健康状态（chrome 故障条幅轮询 / 启动页）：最近故障摘要 + manager 真实
@@ -3025,6 +3199,7 @@ pub fn run() {
             last_error: Mutex::new(None),
             guard: Mutex::new(ManagerGuard::default()),
             shell_started_at: manager_guard::now_unix(),
+            hang_dumped: Mutex::new(None),
         })
         // Belt-and-suspenders for the taskbar icon: re-apply the bundled icon
         // on every page load (window existence/creation timing is not relied
@@ -3346,6 +3521,28 @@ pub fn run() {
                 });
             }
 
+            // ── 服务树 Job Object（Windows）：壳进程死亡 → 系统整树清理 ────
+            // 必须在 manager 首次 spawn 之前创建；assign 在 start_server 里做。
+            // 失败只记日志：启动期孤儿清理仍是兜底。
+            #[cfg(windows)]
+            {
+                let data = app
+                    .path()
+                    .app_data_dir()
+                    .unwrap_or_else(|_| std::path::PathBuf::from("."));
+                match job_object::create_kill_on_close_job() {
+                    Ok(handle) => {
+                        SERVICE_JOB.store(handle, std::sync::atomic::Ordering::SeqCst);
+                        log_line(&data, "service job object active (kill-on-close)");
+                        eprintln!("[dsh-desktop] service job object active");
+                    }
+                    Err(e) => {
+                        log_line(&data, &format!("service job object FAILED: {e}"));
+                        eprintln!("[dsh-desktop] service job object FAILED: {e}");
+                    }
+                }
+            }
+
             // 清理上次异常退出残留的 dsh 服务树（孤儿防驻留）：壳被强杀/
             // 崩溃时 manager/web 的 node 树无父死子清机制会残留（多个 dsh
             // web 并存干扰导航、占端口）。按本身份 runtime 路径精确清理
@@ -3367,6 +3564,8 @@ pub fn run() {
             STARTUP_CLEANUP_DONE.store(true, std::sync::atomic::Ordering::SeqCst);
             // loopback notification bridge (see start_bridge)
             start_bridge(app.handle().clone());
+            // dsh web 挂起看护（只 dump 不重启，见 start_hang_watchdog）
+            start_hang_watchdog(app.handle());
 
             // ── boot the service once the launcher page can listen ────────
             let handle = app.handle().clone();

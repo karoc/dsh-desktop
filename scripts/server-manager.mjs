@@ -18,7 +18,7 @@
 //        {"cmd":"check-update"} / {"cmd":"update-dsh"} / {"cmd":"restart-dsh"}
 //   7. on signal, kill the whole dsh tree (taskkill /T /F on Windows).
 
-import { spawn, spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, appendFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, delimiter as pathDelimiter, join, relative, resolve } from 'node:path'
@@ -1047,10 +1047,27 @@ let pendingTask = null
 // lands in <runtime>/reports (same dir as node --report crash reports).
 let watchdogUrl = null
 let watchdogArmed = false
+let watchdogArmedAt = 0
 let watchdogMisses = 0
 let watchdogTimer = null
+let watchdogRecovering = false
 const WATCHDOG_MS = 3000
 const WATCHDOG_MISS_LIMIT = 3
+// 启动/重载宽限：URL 刚出现时 dsh web 可能仍在加载插件/建索引，慢响应不算
+// 挂起（2026-09-05 重启风暴的同类误判）。
+const WATCHDOG_STARTUP_GRACE_MS = 30000
+// 触发后先请壳抓现场，最多等这么久再重启（壳不在时按上限继续）。
+const WATCHDOG_DUMP_WAIT_MS = 30000
+
+let dumpDoneResolve = null
+function waitDumpDone(ms) {
+  return new Promise((resolve) => {
+    dumpDoneResolve = resolve
+    setTimeout(() => {
+      if (dumpDoneResolve === resolve) { dumpDoneResolve = null; resolve(false) }
+    }, ms)
+  })
+}
 
 function watchdogStart() {
   if (watchdogTimer) return
@@ -1058,7 +1075,7 @@ function watchdogStart() {
   watchdogTimer.unref?.()
 }
 async function watchdogTick() {
-  if (!watchdogUrl || !watchdogArmed) return
+  if (!watchdogUrl || !watchdogArmed || watchdogRecovering) return
   let ok = false
   try {
     const res = await fetch(watchdogUrl, { signal: AbortSignal.timeout(1500) })
@@ -1067,37 +1084,25 @@ async function watchdogTick() {
     ok = res.status >= 200 && res.status < 500
   } catch { /* unresponsive */ }
   if (ok) { watchdogMisses = 0; return }
+  if (Date.now() - watchdogArmedAt < WATCHDOG_STARTUP_GRACE_MS) return
   watchdogMisses += 1
   log(`watchdog: dsh web miss ${watchdogMisses}/${WATCHDOG_MISS_LIMIT} (${watchdogUrl})`)
   if (watchdogMisses >= WATCHDOG_MISS_LIMIT) {
-    log(`watchdog: dsh web UNRESPONSIVE — dumping pid ${currentChildPid ?? '?'} then restarting`)
-    dumpChild(currentChildPid)
-    watchdogMisses = 0
+    const stuckUrl = watchdogUrl
+    watchdogRecovering = true
     watchdogArmed = false
     watchdogUrl = null
+    watchdogMisses = 0
+    // 现场由壳负责：壳用 MiniDumpWriteDump 直接抓（旧的 rundll32 comsvcs 路径
+    // 在本机 20s 超时且零产出，既没证据又把一次挂起拖成重启风暴，已移除）。
+    // 这里发一条 dump-web 协议行，等壳回 dump-done 再重启；壳不在则按上限继续。
+    log('watchdog: dsh web UNRESPONSIVE — asking the shell for a dump before restarting')
+    emit({ t: 'dump-web', pid: currentChildPid ?? 0, url: stuckUrl })
+    const dumped = await waitDumpDone(WATCHDOG_DUMP_WAIT_MS)
+    log(`watchdog: dump ${dumped ? 'ready' : 'not confirmed (shell unavailable?)'} — restarting dsh`)
     if (currentChildPid) { restartRequested = true; killTree(currentChildPid) }
+    watchdogRecovering = false
   }
-}
-function dumpChild(pid) {
-  if (!pid) return
-  try {
-    // Full memory dump via the comsvcs MiniDump path (no external tools); the
-    // debugger then tells us exactly where the event loop is stuck.
-    const out = join(args.runtimeDir, 'reports', `dshweb-${pid}-${Date.now()}.dmp`)
-    const rr = spawnSync('C:\\Windows\\System32\\rundll32.exe', [`c:\\windows\\system32\\comsvcs.dll, MiniDump`, String(pid), out, 'full'], { stdio: 'ignore', timeout: 20000, windowsHide: true })
-    // MiniDump 由 rundll32 异步写盘：spawnSync 返回后再短暂重试读取。
-    let produced = false
-    for (let i = 0; i < 10 && !produced; i++) {
-      produced = existsSync(out)
-      if (!produced) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300)
-    }
-    // 失败必须留痕（实践：多次静默失败，导致 reports/ 空、无法分析）。
-    if (produced) {
-      log(`watchdog: dump saved ${out}`)
-    } else {
-      log(`watchdog: dump NOT produced for pid ${pid} (rundll32 exit=${rr.status ?? '?'})`)
-    }
-  } catch (err) { log(`watchdog: dump failed: ${err.message}`) }
 }
 
 function killTree(pid) {
@@ -1192,6 +1197,7 @@ async function launchDsh(runtimeDir, patchPath, cwd) {
         watchdogUrl = m[1]
         watchdogMisses = 0
         watchdogArmed = true
+        watchdogArmedAt = Date.now()
         watchdogStart()
       }
       log(line)
@@ -1280,6 +1286,10 @@ function handleCommand(cmd) {
       // 壳主动索要：重发当前 dsh web 地址（带 token），让导航兜底能工作。
       if (currentUrl) { emit({ t: 'url', url: currentUrl }); log('report-url: re-emitted current url') }
       else { log('report-url: no current url yet') }
+      break
+    case 'dump-done':
+      // 壳已抓完挂起现场（或该 URL 早已抓过）：立刻允许 watchdog 重启 dsh。
+      if (dumpDoneResolve) { const resolve = dumpDoneResolve; dumpDoneResolve = null; resolve(true) }
       break
     case 'plugins-install':
       if (cmd.spec) {
