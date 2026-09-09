@@ -72,7 +72,9 @@ function Invoke-Check {
   if ($dirs.Count -ge 1) {
     $d = $dirs[-1].FullName
     Write-Output ("EVIDENCE " + $d)
-    $sum = Get-Content (Join-Path $d "summary.json") -Raw | ConvertFrom-Json
+    # Read as UTF-8 explicitly: PowerShell 5.1 Get-Content -Raw decodes as ANSI,
+    # which mangles the Chinese summary and breaks ConvertFrom-Json.
+    $sum = [IO.File]::ReadAllText((Join-Path $d "summary.json"), [Text.Encoding]::UTF8) | ConvertFrom-Json
     Say ($sum.exitCode -eq 1) ("summary exitCode = " + $sum.exitCode)
     Say ($sum.exitCodeHex -eq "0x00000001") ("summary exitCodeHex = " + $sum.exitCodeHex)
     Say (($sum.detectedBy -eq "stdout-eof") -or ($sum.detectedBy -eq "watchdog")) ("detectedBy = " + $sum.detectedBy)
@@ -80,7 +82,7 @@ function Invoke-Check {
     foreach ($f in @("manager.log.tail", "shell-session.log.tail", "orphans.txt", "wer.txt")) {
       Say (Test-Path (Join-Path $d $f)) ("evidence file " + $f)
     }
-    $orphans = Get-Content (Join-Path $d "orphans.txt") -Raw
+    $orphans = [IO.File]::ReadAllText((Join-Path $d "orphans.txt"), [Text.Encoding]::UTF8)
     Say ($orphans -match "pid=") "orphans.txt lists the surviving dsh web node(s)"
   }
 
