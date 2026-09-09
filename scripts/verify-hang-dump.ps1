@@ -5,7 +5,7 @@
 #   2. the shell writes a full-memory dump (session.log "dump saved" + a
 #      dshweb-hang-*.dmp file in <runtime>\reports)
 #   3. the manager asked the shell and waited for the ack, then restarted dsh
-#      (manager.log "dump ready — restarting dsh" + a NEW dsh web pid/url)
+#      (manager.log "dump ready -- restarting dsh" + a NEW dsh web pid/url)
 #   4. the shell itself stayed alive (bridge still answers /shell/status)
 #
 # ASCII only: PowerShell 5.1 decodes BOM-less UTF-8 as ANSI.
@@ -98,7 +98,10 @@ switch ($Action) {
       Say ($d.Length -gt 1MB) "dump is non-trivial (>1 MiB)"
     }
     Say ($mgr -match "asking the shell for a dump") "manager asked the shell for the dump"
-    Say ($mgr -match "dump ready — restarting dsh") "manager waited for the dump ack, then restarted dsh"
+    # The manager log line contains a U+2014 em dash; build it from an escape so
+    # this file stays pure ASCII (PowerShell 5.1 ANSI decoding).
+    $dash = [regex]::Unescape("\u2014")
+    Say ($mgr -match ("dump ready " + $dash + " restarting dsh")) "manager waited for the dump ack, then restarted dsh"
     $app = @(Get-Process -Name dsh-desktop-dev -ErrorAction SilentlyContinue)
     Say ($app.Count -ge 1) "shell process is still alive after the hang"
     if ($script:fail -gt 0) { Write-Output ("RESULT FAIL (" + $script:fail + ")"); exit 1 }
