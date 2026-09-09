@@ -201,7 +201,8 @@ static BRIDGE_PORT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16:
 /// Windows Job Object handle (raw value) holding the whole service tree with
 /// kill-on-close. 0 = unavailable (job creation failed; orphan cleanup remains
 /// the fallback). Kept for the process lifetime — closing it would kill the
-/// service.
+/// service. Windows-only: on other platforms the field does not exist.
+#[cfg(windows)]
 static SERVICE_JOB: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// Session id of the most recent notification — a toast click re-opens it.

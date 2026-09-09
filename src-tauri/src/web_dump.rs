@@ -57,9 +57,9 @@ pub(crate) fn probe_url(url: &str, timeout: Duration) -> bool {
 /// `Get-NetTCPConnection` (same-user queries need no admin) and falls back to
 /// the runtime-path matcher when the cmdlet is unavailable.
 pub(crate) fn dsh_web_pid_for_url(url: &str, runtime: &Path) -> Option<u32> {
-    let port = tauri::Url::parse(url).ok()?.port_or_known_default()?;
     #[cfg(windows)]
     {
+        let port = tauri::Url::parse(url).ok()?.port_or_known_default()?;
         let script = format!(
             "(Get-NetTCPConnection -LocalPort {port} -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty OwningProcess)"
         );

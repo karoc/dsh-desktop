@@ -18,6 +18,8 @@
 //! shell logs it and keeps running — startup orphan cleanup stays as the
 //! fallback.
 
+#![cfg(windows)]
+
 /// Create the kill-on-close job. Returns the raw handle value, or an error
 /// message. The caller must keep the value for the process lifetime (the job
 /// stays alive while any handle to it is open).
@@ -45,11 +47,6 @@ pub(crate) fn create_kill_on_close_job() -> Result<usize, String> {
     }
 }
 
-#[cfg(not(windows))]
-pub(crate) fn create_kill_on_close_job() -> Result<usize, String> {
-    Err("job objects are windows-only".into())
-}
-
 /// Put `pid` (and every process it spawns later) into the job.
 #[cfg(windows)]
 pub(crate) fn assign(job: usize, pid: u32) -> Result<(), String> {
@@ -65,9 +62,4 @@ pub(crate) fn assign(job: usize, pid: u32) -> Result<(), String> {
         let _ = CloseHandle(process);
         result
     }
-}
-
-#[cfg(not(windows))]
-pub(crate) fn assign(_job: usize, _pid: u32) -> Result<(), String> {
-    Err("job objects are windows-only".into())
 }
