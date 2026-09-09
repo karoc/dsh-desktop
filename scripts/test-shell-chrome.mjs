@@ -202,7 +202,7 @@ assert.ok(chromeSrc.includes('重启服务'), 'chrome banner offers a manual res
 assert.ok(readFileSync(join(root, 'src', 'app.js'), 'utf8').includes('lastManagerExit'), 'launcher shows the exit code + evidence hint')
 // 故障回退导航只认真实本地页：setup 时 w.url() 可能是 about:blank，若被当成
 // 启动页 URL，manager 被杀后窗口会落到 about:blank 黑屏（2026-09-09 实机验证）。
-assert.ok(libRs.includes('payload.url().scheme() == "tauri"'), 'launcher URL is captured from a real tauri:// page load')
+assert.ok(libRs.includes('fn is_shell_local_url'), 'launcher URL accepts both tauri:// and http://tauri.localhost (Windows)')
 assert.ok(libRs.includes('fn navigate_back_to_launcher'), 'crash fallback navigates back to the launcher page')
 
 console.log('PASS — shell chrome contract (menus, actions, bridge, IPC)')

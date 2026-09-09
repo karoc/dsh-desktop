@@ -2176,6 +2176,20 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// 本地壳页面（启动页）URL 判定：macOS/Linux 是 `tauri://localhost`，Windows
+/// 是 `http://tauri.localhost`（WebView2 不支持自定义 scheme，Tauri 用
+/// `<scheme>.localhost` 代管）。故障回退导航只认这两种，否则会落到
+/// `about:blank` 黑屏（2026-09-09 实机验证）。
+fn is_shell_local_url(u: &tauri::Url) -> bool {
+    if u.scheme() == "tauri" {
+        return true;
+    }
+    u.scheme() == "http"
+        && u.host_str()
+            .map(|h| h == "tauri.localhost" || h.ends_with(".localhost"))
+            .unwrap_or(false)
+}
+
 /// 主窗口若停在 dsh 页则退回启动页（故障披露 + 重试入口）。
 fn navigate_back_to_launcher(app: &AppHandle) {
     let Some(cur) = app.get_webview_window("main").and_then(|w| w.url().ok()) else {
@@ -2191,8 +2205,7 @@ fn navigate_back_to_launcher(app: &AppHandle) {
     }
     if let Some(url) = LAUNCHER_URL.lock().unwrap().clone() {
         if let Ok(u) = tauri::Url::parse(&url) {
-            // 只接受真实本地页；about:blank 会让故障回退变成黑屏（见 setup 注释）。
-            if u.scheme() == "tauri" {
+            if is_shell_local_url(&u) {
                 if let Some(w) = app.get_webview_window("main") {
                     let _ = w.navigate(u);
                 }
@@ -3022,9 +3035,15 @@ pub fn run() {
                 *LAST_MAIN_LOADED.lock().unwrap() = Some(loaded.clone());
                 // 本地启动页加载完成 = 权威的 LAUNCHER_URL（setup 时可能拿到
                 // about:blank，见那里的注释）。故障后回退导航依赖它。
-                if payload.url().scheme() == "tauri" {
-                    *LAUNCHER_URL.lock().unwrap() = Some(loaded);
+                if is_shell_local_url(payload.url()) {
+                    *LAUNCHER_URL.lock().unwrap() = Some(loaded.clone());
                 }
+                let data = webview
+                    .app_handle()
+                    .path()
+                    .app_data_dir()
+                    .unwrap_or_else(|_| std::path::PathBuf::from("."));
+                log_line(&data, &format!("main page load: {loaded}"));
                 inject_shell_chrome(webview.app_handle());
             } else if webview.label() == "plugins" {
                 // 插件管理窗口：注入环回桥端口（窗口页数据走桥，不依赖 dsh）。
@@ -3154,7 +3173,7 @@ pub fn run() {
                 // real-machine verification). Only a real tauri:// page counts;
                 // on_page_load updates it again with the loaded URL.
                 if let Ok(u) = w.url() {
-                    if u.scheme() == "tauri" {
+                    if is_shell_local_url(&u) {
                         *LAUNCHER_URL.lock().unwrap() = Some(u.to_string());
                     }
                 }
