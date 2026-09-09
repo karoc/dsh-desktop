@@ -2233,6 +2233,15 @@ fn wait_exit_code(state: &ServerState, generation: u64, timeout: std::time::Dura
     }
 }
 
+/// 该世代是否仍需要上报退出（世代匹配、非意图停止、尚未登记）。
+fn exit_report_pending_locked(guard: &ManagerGuard, generation: u64) -> bool {
+    guard.generation == generation && !guard.intentional && guard.reported_generation != generation
+}
+
+fn exit_report_pending(state: &ServerState, generation: u64) -> bool {
+    exit_report_pending_locked(&state.guard.lock().unwrap(), generation)
+}
+
 /// manager 退出处理：**只检测 + 取证 + 提示，绝不自动重启**（决定 D1）。
 /// 两条检测路径（stdout EOF / 看护线程）竞争同一世代号，先到者登记，后到者
 /// 空转（`reported_generation` 幂等）。自动重启会掩盖复现并污染证据。
@@ -2241,19 +2250,34 @@ fn handle_manager_exit(app: &AppHandle, generation: u64, detected_by: &str) {
         return; // 壳正在退出，manager 下线是预期行为
     }
     let state = app.state::<ServerState>();
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+    if !exit_report_pending(&state, generation) {
+        return; // 意图停止 / 旧世代 / 已登记
+    }
+    let code = wait_exit_code(&state, generation, std::time::Duration::from_secs(3));
+    if code.is_none() && manager_alive(&state) {
+        // 罕见：stdout 已关闭但进程仍在跑（manager 的 stdout 管道由它自己
+        // 持有，正常退出才会 EOF）。不占用上报槽位，交给看护线程继续观察。
+        log_line(
+            &data_dir,
+            &format!("manager stdout EOF but process still alive (gen={generation}, by={detected_by})"),
+        );
+        return;
+    }
+    // 重新确认并原子登记：两条检测路径可能同时走到这里，也可能期间被 stop_child
+    // 抢走世代号。
     let pid = {
         let mut guard = state.guard.lock().unwrap();
-        if guard.generation != generation
-            || guard.intentional
-            || guard.reported_generation == generation
-        {
+        if !exit_report_pending_locked(&guard, generation) {
             return;
         }
         guard.reported_generation = generation;
         guard.phase = MgrPhase::Down;
         guard.pid
     };
-    let code = wait_exit_code(&state, generation, std::time::Duration::from_secs(3));
     let mut exit = ManagerExit {
         generation,
         pid,
@@ -2264,10 +2288,6 @@ fn handle_manager_exit(app: &AppHandle, generation: u64, detected_by: &str) {
         evidence_dir: None,
     };
     let runtime = runtime_dir(app);
-    let data_dir = app
-        .path()
-        .app_data_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from("."));
     let webview_url = app
         .get_webview_window("main")
         .and_then(|w| w.url().ok())
@@ -2326,11 +2346,7 @@ fn start_manager_watchdog(app: &AppHandle, generation: u64) {
         }
         {
             let state = app.state::<ServerState>();
-            let guard = state.guard.lock().unwrap();
-            if guard.generation != generation
-                || guard.intentional
-                || guard.reported_generation == generation
-            {
+            if !exit_report_pending(&state, generation) {
                 return; // 已由 stop_child / 另一条检测路径处理
             }
         }

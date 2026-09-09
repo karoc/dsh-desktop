@@ -134,7 +134,7 @@ pub(crate) fn describe_exit(code: Option<i32>) -> String {
     };
     let hex = hex_code(Some(code));
     let known = match code {
-        0 => Some("正常退出（不是壳请求的停止）"),
+        0 => Some("正常退出，但不是壳请求的停止（dsh web 干净退出后 manager 的约定退出码）"),
         1 => Some("被强制结束（taskkill /F）或启动期失败"),
         2 => Some("dsh web 异常退出（manager supervise 的约定退出码）"),
         _ => None,
@@ -482,6 +482,15 @@ mod tests {
         std::fs::create_dir_all(&data).unwrap();
         std::fs::write(runtime.join("manager.log"), "boot\nurl http://127.0.0.1:1234\n").unwrap();
         std::fs::write(data.join("dsh-desktop-session.log"), "session\n").unwrap();
+        // The manager already runs dsh web with --report-on-fatalerror into
+        // <runtime>/reports; those reports must be picked up.
+        std::fs::create_dir_all(runtime.join("reports")).unwrap();
+        std::fs::write(
+            runtime.join("reports").join("report.20260909.000000.123.0.001.json"),
+            "{\"header\":{}}",
+        )
+        .unwrap();
+        std::fs::write(runtime.join("reports").join("dshweb-1-2.dmp"), "dump").unwrap();
         let exit = ManagerExit {
             generation: 3,
             pid: 4242,
@@ -511,6 +520,9 @@ mod tests {
         assert!(std::fs::read_to_string(dir.join("shell-session.log.tail")).unwrap().contains("session"));
         assert!(std::fs::read_to_string(dir.join("orphans.txt")).unwrap().contains("orphan"));
         assert!(std::fs::read_to_string(dir.join("wer.txt")).unwrap().contains("WER"));
+        // node reports are copied; the big .dmp next to them is not.
+        assert!(dir.join("node-reports").join("report.20260909.000000.123.0.001.json").is_file());
+        assert!(!dir.join("node-reports").join("dshweb-1-2.dmp").exists());
         let _ = std::fs::remove_dir_all(&base);
     }
 }
