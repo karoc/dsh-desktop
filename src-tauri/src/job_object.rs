@@ -85,7 +85,9 @@ pub(crate) fn watch_job(job: usize, log: impl Fn(&str) + Send + 'static) -> Resu
         let port = CreateIoCompletionPort(INVALID_HANDLE_VALUE, None, 0, 0)
             .map_err(|e| format!("CreateIoCompletionPort: {e}"))?;
         let assoc = JOBOBJECT_ASSOCIATE_COMPLETION_PORT {
-            CompletionKey: 1usize as *mut c_void,
+            // The completion key is unused: the message code (bytes) plus the
+            // PID (lpOverlapped) carry everything we report.
+            CompletionKey: std::ptr::null_mut(),
             CompletionPort: port,
         };
         if let Err(e) = SetInformationJobObject(
