@@ -206,7 +206,14 @@ U="$PS -NoProfile -ExecutionPolicy Bypass -File"
 "$U" 'D:\Dev\dsh-desktop-dev\scripts\verify-dev-ui.ps1' -Action hover         # 顶缘悬停唤出
 # 服务异常退出全链路（kill → 检测/取证/不自动重启 → 手动重启恢复）：
 "$U" 'D:\Dev\dsh-desktop-dev\scripts\verify-manager-guard.ps1' -Action all -WaitSec 10
+# dsh web 挂起全链路（NtSuspendProcess 冻结 → 壳 dump → manager 等回执后重启）：
+"$U" 'D:\Dev\dsh-desktop-dev\scripts\verify-hang-dump.ps1' -Action hang
+"$U" 'D:\Dev\dsh-desktop-dev\scripts\verify-hang-dump.ps1' -Action check -WaitSec 75
 ```
+
+**`verify-hang-dump.ps1`** 用 `Add-Type` 内联 `NtSuspendProcess` 冻结真实 dsh web（免管理员、无需额外工具），
+断言 session.log 的 `probe miss 3/3` + `dump saved` + `dshweb-hang-*.dmp`（实测 313 MiB）+ manager 的
+`dump ready — restarting dsh`；`-Action state` 打印当前 URL/PID/壳状态。挂起 dump 全内存、体积大，壳内保留 3 份。
 
 **`verify-manager-guard.ps1` 动作**：`kill`（taskkill 掉 manager 并打印时间）/ `check`（等待后断言：
 无自动重启、证据目录 + 5 个文件、summary 退出码 1/0x00000001、session.log 有 `manager exit:`、
@@ -252,6 +259,11 @@ dev 数据目录 = `%APPDATA%\dsh.smoothly.desktop.dev`，证据 = `<runtime>\re
 | setup 阶段 `w.url()` 是 `about:blank` | 窗口刚建、尚未导航；把它当启动页 URL 会让"故障回退导航"落到 about:blank 黑屏。权威采集点 = `on_page_load`（真实加载完成） |
 | 判活/取退出码 | `Child::try_wait()` 是权威信号且**状态被缓存**（后续再调用仍返回同一退出码）；`child.is_some()` 判活是错的（进程死了句柄还在）。`stop_child` 必须先 `try_wait`，否则会对已退出（可能被复用）的 PID 再 `taskkill` |
 | 故障事件与页面导航的时序 | `server-down` 之类的 emit 发生在"导航回启动页"之前，新加载的页面**收不到**该事件 → 页面必须主动 `invoke` 一次状态查询，否则停在"正在启动…"的假象上 |
+| windows crate 的 feature 门控 | 函数是否可用由它引用的类型决定：`MiniDumpWriteDump` 需要 `Win32_System_Diagnostics_Debug` **+** `Win32_Storage_FileSystem` + `Win32_System_Kernel` + `Win32_System_Memory`；`CreateFileW`/`CreateJobObjectW` 因 `SECURITY_ATTRIBUTES` 还需要 `Win32_Security`。少一个就报 "no `X` in `Y`"（Linux 侧 cfg 掉，CI 的 ubuntu check 发现不了）→ 改 FFI 后必须在 Windows 本地 `cargo check` |
+| windows 0.61 常量/签名 | `GENERIC_WRITE` 在 `Win32::Foundation`（不在 `Storage::FileSystem`）；`OpenProcess` 第二参是 `bool` 不是 `BOOL`；`MiniDumpWriteDump` 返回 `Result<()>` |
+| HANDLE 不能进 Tauri state | `HANDLE` 是裸指针，非 Send/Sync → 用 `AtomicUsize` 存原始值，用时 `HANDLE(v as *mut c_void)` 还原；job 句柄要活到进程结束（句柄关闭 = kill-on-close 触发） |
+| Job Object 与 dsh 兼容 | 只设 `KILL_ON_JOB_CLOSE` + `BREAKAWAY_OK`，**不设** UI 限制：dsh 自己会 `AssignProcessToJobObject`（嵌套 job）和可能的 breakaway spawn，限制住会让它启动失败。失败只记日志，别让壳起不来 |
+| dump/取证类"回执"必须绑定完成 | 去重命中就回执 → 等待方（manager）会抢先杀掉被挂起进程，dump 归零（实测 OpenProcess 0x80070057）。回执只能在**写盘完成后**发；等待方再配上"最近回执时间"容忍相位差 |
 
 ## 6. 验证与门禁
 

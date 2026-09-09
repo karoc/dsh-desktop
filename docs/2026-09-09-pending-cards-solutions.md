@@ -250,3 +250,22 @@ A 壳内 `try_wait` 检测 + 取证 + 提示 ✅ **主方案（D1 后）**；B J
 - **顺带修复（实机验证发现）**：故障回退导航此前落到 `about:blank` 黑屏——`LAUNCHER_URL` 在 setup 时被采集为 `about:blank`；且 Windows 本地页是 `http://tauri.localhost/`（非 `tauri://`）。现抽 `is_shell_local_url` 三处统一。
 - **实机验证**（dev 版，`scripts/verify-manager-guard.ps1`，全 PASS）：`taskkill /F` manager → 检测到 + 退出码 1（0x00000001）+ 证据目录齐全 + **8 秒内无自动重启** + `/shell/status` 如实；UI 条幅与启动页均显示退出码/证据路径；点「重启服务」恢复且不产生多余证据；`/shell/quit` 退出**不**产生崩溃记录。
 - **未做**（留卡 1）：S3 挂起 dump（`MiniDumpWriteDump`）、S4 Job Object、G 外部守护、Sysmon（D2）；`node-reports/` 只复制 manager 自己产出的报告，壳不注入 `NODE_OPTIONS`（一枚不支持的 flag 会炸整棵树）。
+
+---
+
+## 7. 实施记录（2026-09-09 深夜）：卡 1 的 S3 / S4a / G2
+
+同一分支续做（`ade59f7` → 最新）。**已实施并实机验证：S3 挂起 dump、S4a Job Object、G2 外部守护脚本重写**；**待用户确认：G1（把守护装进登录启动项）、G4（Sysmon）**；**未做：S4b 完成端口通知**。
+
+- **S3 挂起 dump**：新增 `src-tauri/src/web_dump.rs`（HTTP 探活 / `Get-NetTCPConnection` 按端口定位 dsh web PID + CIM 兜底 / `MiniDumpWriteDump` 全内存 dump / dump 保留 3 份）。壳内 watchdog：3s 探测、新 URL 后 30s 启动宽限、连续 3 次 miss → 抓 dump（`<runtime>/reports/dshweb-hang-<pid>-<ts>.dmp`）→ 条幅披露；**只 dump，不 kill、不重启**（D1）。两条触发路径（壳内 watchdog / manager 的 `dump-web` 协议行）由 `HangDump{Idle,InProgress,Done}` 状态机收敛为一次；**回执只在本轮 dump 写完后发**（`dump-done`），manager 收到才重启。
+- **manager 侧**：删除本机实测 20s 超时零产出的 `rundll32 comsvcs` dump（L3 重启风暴根因），加 30s 启动宽限，挂起时改为「请壳抓现场 → 等 `dump-done`（上限 30s）→ 再重启」。
+- **S4a Job Object**：新增 `src-tauri/src/job_object.rs`（`KILL_ON_JOB_CLOSE` + `BREAKAWAY_OK`，不设 UI 限制以兼容 dsh 自己的嵌套 job）；manager spawn 后立即入 job → 壳进程死亡时系统整树清理。失败只记日志（启动期孤儿清理兜底）。
+- **G2 外部守护**：重写 `scripts/dsh-hang-guard.ps1`——身份改 `dsh.smoothly.desktop[.dev]`、删除 comsvcs、500ms 采样进程表（node/dsh-desktop/taskkill/powershell/cmd 消失即记录，并抓消失前 2s 内新出现的 suspect 及其 CommandLine，排除自身与父进程）、30s 启动宽限、**默认 detect-only（D1）**，`-AutoRestart` 才调桥 `/restart` / 重启壳。
+- **实机验证（dev 包，全 PASS）**：
+  - S3：`NtSuspendProcess` 冻结 dsh web → 3 次 miss → **313 MiB 全内存 dump 落盘**（`dshweb-hang-20176-1788966013.dmp`，写盘约 2s）→ manager 等回执 7.4s 后重启 → 服务恢复、壳存活。首次实测曾因「manager 抢先重启」导致 dump 归零（OpenProcess 0x80070057），已修（回执与 dump 完成绑定）。
+  - S4a：`taskkill /F` 壳（不带 /T）→ 4 秒后该身份 node 进程 **0 个**（此前会残留孤儿，靠下次启动清理）。
+  - 回归：崩溃检测（`verify-manager-guard.ps1`）仍全 PASS。
+  - G2：实测抓到 manager 与 dsh web 的消失时刻及窗口内 powershell 命令行。
+- **未做**：S4b（Job 完成端口逐进程退出通知——manager 已在日志记录 dsh web 退出码，增量价值有限）；G1/G4 待确认。
+
+**S3 的使用提示**：dump 是**全内存**（实测 313 MiB，重进程可达 GB 级），保留最近 3 份；同一 URL 只抓一次（避免反复写大文件）。

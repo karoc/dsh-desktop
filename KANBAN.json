@@ -543,10 +543,10 @@
     },
     {
       "id": "card-7c04d1eb-c49a-4ea9-a541-ecfe0fd720a4",
-      "title": "事故取证（续）：S3 挂起 dump + S4 Job Object + G 外部守护 + Sysmon —— S1/S2 已随卡 2 交付",
+      "title": "事故取证（收尾）：G1 安装外部守护 + G4 Sysmon + 可选 S4b —— S1/S2/S3/S4a/G2 已交付",
       "summary": "第二次复现已记录并主动恢复服务；交付\"黑屏即时抓 dump\"三命令；待用户装 L1/L2/L3 并规避全量测试套件工具调用，直至拿到 dump 定位。",
-      "rationale": "S1/S2 是\"下次复现必须留证据\"的最小闭环，已随卡 2 的同一处代码交付（壳持有 Child 句柄即可取退出码，成本最低、价值最高）。剩余项性质不同：S3 需要 dbghelp FFI（只对\"进程仍活着\"的挂起有效，被杀场景物理上无解）；S4 Job Object 需实测与 dsh 自身 job 的嵌套兼容；G 是外部守护（覆盖\"壳也死\"，用户当前更关心根因复现而非自愈）；G4 Sysmon 需管理员且与火绒可能冲突。分开做，避免一次改动面过大。",
-      "rejected": "1) 把 S3/S4/G 与 S1/S2 一起做：改动面与验证成本过大，且 S3 的 dump 在\"被杀\"场景无效（只有挂起才有意义）；2) 用 comsvcs/rundll32 做 dump：本机实测 20s 超时零产出且是 LOLBin；3) HKCU 版 WER LocalDumps：官方只支持 HKLM 且需管理员；4) schtasks /ru：总是提示密码，无人值守不可靠（用户已拒）；5) Windows 服务：session 0 无 UI、需管理员；6) 外部守护进程与壳双杀：与 D1\"确保复现\"冲突（会在我们看不到的地方重启）；7) 现在就装 Sysmon：需管理员、与火绒可能冲突，且 D2 只是\"可接受\"不是\"要求\"，等 S3 落地后再评估。",
+      "rationale": "S3/S4a 是纯壳内改动、无需管理员、风险可控且能直接补上\"挂起无现场\"\"壳死留孤儿\"两个空白，因此先做并已实机验证；G2 是脚本重写（新身份/去 comsvcs/采样抓凶手/默认只检测），不安装到系统，可先交付。S4b 增量价值有限（退出码已在 manager.log），G1/G4 是机器级持久改动（启动项、驱动级 Sysmon），必须用户拍板，故留卡。",
+      "rejected": "1) 继续用 comsvcs：本机 6/6 零产出且阻塞 manager 20s（重启风暴根因）；2) 去重命中即回执：实测 manager 抢先重启导致 dump 归零；3) 壳探测失败自动 kill/重启：与 D1 冲突且与 manager watchdog 双杀；4) 给 job 设 UI 限制或不给 BREAKAWAY_OK：会破坏 dsh 自身嵌套 job / breakaway spawn；5) 外部守护默认自动重启：与 D1 冲突，改为 `-AutoRestart` opt-in；6) 擅自安装 G1/G4：属机器级改动，先征求同意；7) 用 schtasks/Windows 服务做守护：schtasks 总提示密码（用户已拒）、服务在 session 0 无 UI 且需管理员。",
       "sourceSessionId": "session-788be97d-7ef1-480f-9552-d09ab4eaf37b",
       "status": "todo",
       "tags": [
@@ -554,11 +554,11 @@
         "investigate",
         "dsh-web",
         "watchdog",
-        "follow-up"
+        "waiting-user"
       ],
       "createdAt": 1788268219936,
-      "updatedAt": 1788959707407,
-      "description": "【进度（2026-09-09 晚）】**S1（退出码 + 死亡时刻）与 S2（取证 + 显著提示，不自动重启）已随卡 2 交付并实机验证通过**——见 done 卡 `card-6c051fbe`、note `.agents/notes/implemented/feature/2026-09-09-manager-exit-guard-forensics.md`、文档 §6。本卡剩余 = S3 挂起 dump、S4 Job Object、G 外部守护、G4 Sysmon。\n\n【决策（用户 2026-09-09，详见 docs/2026-09-09-pending-cards-solutions.md §0.1/§1）】\n- **D1 不做自动重启**（\"要确保复现\"）→ S2 改为「取证 + 显著提示 + 用户手动重启」（已交付），S3 改为「只 dump，不 kill、不 respawn」。\n- **D2** 可接受 Sysmon 极简配置：只开 EID1 进程创建（含完整命令行 + 父进程）+ EID5 进程终止；下载包 4.6MB、需管理员、与火绒可能冲突。\n- **D6** 00:47–00:48 第 4 次复现**未确认**（用户不记得）；03:04 退出已确认是用户操作；火绒日志用户反馈无任何相关记录 → **AV 拦截线索基本排除**。\n\n【认知修正（实测，重要）】卡里\"L1/L2/L3 均未落地\"已过时：L1 早已配好（HKLM WER LocalDumps 含 dsh-desktop/node/msedgewebview2，DumpType=2），但 **WER 只对崩溃生效、抓不到 TerminateProcess 式静默杀**（第三次事故发生在 L1 配好之后，仍零 dump）；L3 已落地且**真实触发 6 次**（09-05 14:14:52Z→14:18:15Z）却**零 dump**（每轮间隔恰好 ~20.0s = server-manager.mjs:1087 的 spawnSync timeout → rundll32/comsvcs 本机被挂死/拦截），且无启动宽限期 → 重启风暴、误杀健康实例；L2 确认未落地。\n\n【物理边界】被杀后地址空间销毁，**事后不可能 dump**；dump 只对\"挂起\"有意义。\"manager 被杀\"的证据只能来自持有句柄的一方——主线实测：taskkill /F → 父进程退出码 **1**，正常退出 **0**（已由卡 2 落地取证）。\n\n【方案 S（纯壳内）】S1 ✅、S2 ✅（卡 2）；**S3（待做）**壳内 watchdog 探 LIVE_DSH_URL → 连续失败 → CIM 定位 node PID → Rust `MiniDumpWriteDump`（实测非管理员 VM_READ 可得、无需 SeDebugPrivilege）→ **只 dump 不 kill**，加 30s 启动宽限期；**S4（待做）**Job Object（KILL_ON_JOB_CLOSE 灭孤儿，勿设 BREAKAWAY）。\n【方案 G（覆盖\"壳也死\"）】**G（待做）**启动文件夹/HKCU Run 免管理员守护；守护脚本须先改三处：弃用 comsvcs、加宽限期、500ms 采样抓消失前 2s 内 taskkill/powershell 命令行；**G4 = Sysmon（D2，待做）**。"
+      "updatedAt": 1788966271310,
+      "description": "【进度（2026-09-09 深夜）】**S1/S2（卡 2）✅、S3 挂起 dump ✅、S4a Job Object ✅、G2 外部守护脚本 ✅**——均已实机验证（见文档 §6/§7 与 note `feature/2026-09-09-dsh-web-hang-dump-and-service-job.md`）。本卡剩余：\n1. **S4b** Job Object 完成端口（逐进程退出通知）——manager 已在 manager.log 记录 dsh web 退出码，增量价值有限，可选；\n2. **G1** 把 `scripts/dsh-hang-guard.ps1` 装进登录启动项（免管理员）——机器级持久改动，**等用户确认**；\n3. **G4** Sysmon 极简配置（EID1 ProcessCreate + EID5 ProcessTerminate，需管理员、4.6MB、与火绒可能冲突）——D2 已表示\"可接受\"，但属驱动级安装，**等用户确认**。\n\n【已验证结论（本卡）】\n- 挂起是唯一可 dump 的故障；壳内 `MiniDumpWriteDump` 实测落盘 313 MiB / 约 2s，`Get-NetTCPConnection` 按端口定位 PID 可行（免管理员）。\n- 关键时序：manager 必须先请壳抓现场、等 `dump-done` 回执再重启，否则被挂起进程会在 dump 前被杀（首版实测 OpenGroup 0x80070057、零 dump，已修）。\n- comsvcs 路径在本机被证伪（20s 超时零产出，6/6），已从 manager 与外部守护中移除。\n- Job Object（KILL_ON_JOB_CLOSE + BREAKAWAY_OK）实测：`taskkill /F` 壳后 4 秒内该身份 node 进程归零（此前残留孤儿）。\n\n【仍待确认（不阻塞）】\n1. 00:47–00:48 是否第 4 次复现（决定\"壳是否也会死\"）；\n2. 上游 dsh 侧 `dsh-win32-process` 的 job 语义为何没能保护 manager；\n3. G1/G4 是否安装。"
     },
     {
       "id": "card-d689c8c2-29c0-46ca-86f6-a6163046ae56",
