@@ -67,6 +67,10 @@ $suspectNames = @("taskkill", "powershell", "pwsh", "cmd")
 
 function Write-Guard([string]$msg) {
   $line = (Get-Date -Format "yyyy-MM-dd HH:mm:ss") + " " + $msg
+  # Rotate at 2 MB: this file is appended for the whole session lifetime.
+  if ((Test-Path $guardLog) -and ((Get-Item $guardLog -ErrorAction SilentlyContinue).Length -gt 2MB)) {
+    Move-Item $guardLog ($guardLog + ".1") -Force -ErrorAction SilentlyContinue
+  }
   Add-Content -Path $guardLog -Value $line -ErrorAction SilentlyContinue
   Write-Host $line
 }
@@ -144,8 +148,10 @@ function Record-Vanished($gone, $suspects) {
 }
 
 if (-not (Test-Path $managerLog)) {
-  Write-Guard "manager.log not found at $managerLog -- start dsh once, then retry. exiting."
-  exit 1
+  # Started from the login startup folder before the shell ever ran: keep
+  # sampling and wait for the app instead of exiting (the URL probe is skipped
+  # until manager.log exists).
+  Write-Guard "manager.log not found yet at $managerLog -- waiting for the shell"
 }
 
 Write-Guard ("guard start app=$App interval=${IntervalSec}s miss-limit=$MissLimit grace=${GraceSec}s auto-restart=" + [bool]$AutoRestart + " evidence=$evidenceRoot")

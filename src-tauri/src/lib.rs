@@ -3562,6 +3562,22 @@ pub fn run() {
                         SERVICE_JOB.store(handle, std::sync::atomic::Ordering::SeqCst);
                         log_line(&data, "service job object active (kill-on-close)");
                         eprintln!("[dsh-desktop] service job object active");
+                        // S4b：完成端口逐进程通知——manager 自己被杀时，壳仍能
+                        // 记录 dsh web 等后代进程的启动/退出（含异常退出码）。
+                        let log_data = data.clone();
+                        match job_object::watch_job(handle, move |msg| {
+                            log_line(&log_data, msg);
+                            eprintln!("[dsh-desktop] {msg}");
+                        }) {
+                            Ok(()) => {
+                                log_line(&data, "service job completion port active");
+                                eprintln!("[dsh-desktop] service job completion port active");
+                            }
+                            Err(e) => {
+                                log_line(&data, &format!("service job watcher FAILED: {e}"));
+                                eprintln!("[dsh-desktop] service job watcher FAILED: {e}");
+                            }
+                        }
                     }
                     Err(e) => {
                         log_line(&data, &format!("service job object FAILED: {e}"));

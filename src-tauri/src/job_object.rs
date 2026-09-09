@@ -63,3 +63,79 @@ pub(crate) fn assign(job: usize, pid: u32) -> Result<(), String> {
         result
     }
 }
+
+/// Associate an IO completion port with the job and spawn a watcher thread that
+/// reports every process birth/exit inside the job.
+///
+/// This is the shell's own per-process record of the service tree: it keeps
+/// working when the manager is the process that died (the manager's own log
+/// stops there), and it names grandchildren the shell never spawned directly.
+/// `log` receives one line per event; the port handle is kept alive by the
+/// watcher thread for the rest of the process lifetime.
+#[cfg(windows)]
+pub(crate) fn watch_job(job: usize, log: impl Fn(&str) + Send + 'static) -> Result<(), String> {
+    use std::ffi::c_void;
+    use windows::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
+    use windows::Win32::System::IO::{CreateIoCompletionPort, GetQueuedCompletionStatus, OVERLAPPED};
+    use windows::Win32::System::JobObjects::{
+        JobObjectAssociateCompletionPortInformation, SetInformationJobObject,
+        JOBOBJECT_ASSOCIATE_COMPLETION_PORT,
+    };
+    unsafe {
+        let port = CreateIoCompletionPort(INVALID_HANDLE_VALUE, None, 0, 0)
+            .map_err(|e| format!("CreateIoCompletionPort: {e}"))?;
+        let assoc = JOBOBJECT_ASSOCIATE_COMPLETION_PORT {
+            CompletionKey: 1,
+            CompletionPort: port,
+        };
+        if let Err(e) = SetInformationJobObject(
+            HANDLE(job as *mut c_void),
+            JobObjectAssociateCompletionPortInformation,
+            &assoc as *const _ as *const c_void,
+            std::mem::size_of::<JOBOBJECT_ASSOCIATE_COMPLETION_PORT>() as u32,
+        ) {
+            let _ = CloseHandle(port);
+            return Err(format!("SetInformationJobObject(completion port): {e}"));
+        }
+        // HANDLE is a raw pointer (not Send), so hand the raw value to the
+        // thread and rebuild it there.
+        let port_raw = port.0 as usize;
+        std::thread::spawn(move || {
+            let port = HANDLE(port_raw as *mut c_void);
+            loop {
+                let mut bytes = 0u32;
+                let mut key = 0usize;
+                let mut overlapped: *mut OVERLAPPED = std::ptr::null_mut();
+                let ok = GetQueuedCompletionStatus(
+                    port,
+                    &mut bytes,
+                    &mut key,
+                    &mut overlapped,
+                    u32::MAX, // INFINITE
+                );
+                if ok.is_err() {
+                    log(&format!("job: completion port read failed (err={ok:?})"));
+                    break;
+                }
+                // For NEW/EXIT_PROCESS the PID rides in lpOverlapped itself.
+                let pid = overlapped as usize;
+                match bytes {
+                    MSG_NEW_PROCESS => log(&format!("job: process started pid={pid}")),
+                    MSG_EXIT_PROCESS => log(&format!("job: process exited pid={pid}")),
+                    MSG_ABNORMAL_EXIT_PROCESS => {
+                        log(&format!("job: process ABNORMAL exit pid={pid}"))
+                    }
+                    MSG_ACTIVE_PROCESS_ZERO => log("job: active process count reached zero"),
+                    _ => {}
+                }
+            }
+        });
+        Ok(())
+    }
+}
+
+// JOB_OBJECT_MSG_* live in Win32::System::SystemServices.
+const MSG_NEW_PROCESS: u32 = 6;
+const MSG_EXIT_PROCESS: u32 = 7;
+const MSG_ABNORMAL_EXIT_PROCESS: u32 = 8;
+const MSG_ACTIVE_PROCESS_ZERO: u32 = 4;
