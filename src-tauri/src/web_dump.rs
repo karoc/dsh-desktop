@@ -88,9 +88,9 @@ pub(crate) fn dsh_web_pid_for_url(url: &str, runtime: &Path) -> Option<u32> {
 /// `manager_guard.rs`). Returns the dump size in bytes.
 #[cfg(windows)]
 pub(crate) fn dump_process(pid: u32, path: &Path) -> Result<u64, String> {
-    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::Foundation::{CloseHandle, GENERIC_WRITE};
     use windows::Win32::Storage::FileSystem::{
-        CreateFileW, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_NONE, GENERIC_WRITE,
+        CreateFileW, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_NONE,
     };
     use windows::Win32::System::Diagnostics::Debug::{MiniDumpWithFullMemory, MiniDumpWriteDump};
     use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ};
