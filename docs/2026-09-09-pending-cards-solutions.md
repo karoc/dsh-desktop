@@ -268,4 +268,19 @@ A 壳内 `try_wait` 检测 + 取证 + 提示 ✅ **主方案（D1 后）**；B J
   - G2：实测抓到 manager 与 dsh web 的消失时刻及窗口内 powershell 命令行。
 - **未做**：S4b（Job 完成端口逐进程退出通知——manager 已在日志记录 dsh web 退出码，增量价值有限）；G1/G4 待确认。
 
+---
+
+## 8. 实施记录（2026-09-10 凌晨）：S4b + G1
+
+用户拍板：**装 G1（登录启动项，detect-only）、做 S4b；不装 G4（Sysmon）**。
+
+- **S4b 完成端口**：`job_object::watch_job` 用 `CreateIoCompletionPort` + `JobObjectAssociateCompletionPortInformation` 关联 job，独立线程 `GetQueuedCompletionStatus(INFINITE)` 解析 `JOB_OBJECT_MSG_*`（4/6/7/8）→ 每个 job 成员的启动/退出/异常退出写 session.log（`job: process exited pid=…`）。**manager 自己被杀时壳仍留有 dsh web 的退出记录**（实测：杀 manager → job 依次记录 manager、dsh web 等进程退出，随后 manager_guard 记录退出码 1 + 证据目录）。`HANDLE` 非 Send → 传原始 `usize` 到线程内重建；`CompletionKey` 用 `null_mut()`（未使用）。
+- **G1 安装**：新增 `scripts/install-hang-guard.ps1`——把守护拷到 `%LOCALAPPDATA%\dsh-hang-guard\` 并在当前用户启动文件夹建 `dsh-hang-guard-prod.lnk`（隐藏窗口，免管理员，`-Uninstall` 可卸，`-AutoRestart` 可选）。已按用户确认安装（prod 身份，detect-only），实测启动后 `armed on http://127.0.0.1:55404`。
+- **安装后实测又抓出两个守护脚本 bug（已修）**：
+  1. `Test-WebAlive` 用 `Invoke-WebRequest`，PS 5.1 对 4xx/5xx **抛异常** → manager.log 的无 token URL 恒 401 → 守护永远不 arm。改为从异常读状态码，2xx–4xx 都算活着（与 manager watchdog 同一判据）。
+  2. suspect 窗口用 `[DateTime]::UtcNow` 与 `Get-Process.StartTime`（本地时）相减 → 恒为负 → **所有** powershell/cmd 都被当成嫌疑进程（证据被自己的构建命令行淹没）。改为本地时间比较；并把 conhost 从 suspect 名单移除（构建期每秒起落）。
+  3. 顺带：守护日志 2MB 轮转；`manager.log` 尚未生成时不再退出（登录先于壳启动）；只对 node/dsh-desktop/msedgewebview2 触发消失取证（conhost/cmd 仅作上下文）。
+
+**当前状态**：G1 已安装并在跑（prod，detect-only）；G4 未装（用户选择不装）；卡 1 仅剩「是否装 Sysmon」这一个可选决策。
+
 **S3 的使用提示**：dump 是**全内存**（实测 313 MiB，重进程可达 GB 级），保留最近 3 份；同一 URL 只抓一次（避免反复写大文件）。

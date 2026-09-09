@@ -544,21 +544,23 @@
     {
       "id": "card-7c04d1eb-c49a-4ea9-a541-ecfe0fd720a4",
       "title": "事故取证（收尾）：G1 安装外部守护 + G4 Sysmon + 可选 S4b —— S1/S2/S3/S4a/G2 已交付",
-      "summary": "第二次复现已记录并主动恢复服务；交付\"黑屏即时抓 dump\"三命令；待用户装 L1/L2/L3 并规避全量测试套件工具调用，直至拿到 dump 定位。",
+      "summary": "卡 1 全部落地并实机验证。S3：新增 web_dump.rs（裸 TcpStream 探活 / Get-NetTCPConnection 定位 PID / MiniDumpWriteDump 全内存 / 保留 3 份），壳内 watchdog 3s 探测 + 30s 宽限 + 3 次 miss 触发，只 dump 不 kill/不重启；manager 去掉被证伪的 comsvcs dump，改为发 dump-web 协议行等壳 dump-done 回执（上限 30s）再重启。S4a/S4b：新增 job_object.rs（KILL_ON_JOB_CLOSE + BREAKAWAY_OK，manager spawn 后入 job）+ IO 完成端口逐进程退出通知（JOB_OBJECT_MSG_* 写 session.log）。G2：重写 scripts/dsh-hang-guard.ps1（新身份/去 comsvcs/500ms 采样抓消失与 suspect 命令行/默认 detect-only）。G1：新增 scripts/install-hang-guard.ps1 并已安装到当前用户启动项（prod，detect-only）。实测：挂起 dump 313 MiB 落盘且 manager 等回执后重启；taskkill 壳后 node 归零；完成端口记录 manager+dsh web 退出；守护 arm 成功并抓到 node 消失。门禁：npm test 全绿、Windows clippy 0 + 15 单测、Linux CI check+test 全绿。G4 Sysmon 按用户决定不装。",
       "rationale": "S3/S4a 是纯壳内改动、无需管理员、风险可控且能直接补上\"挂起无现场\"\"壳死留孤儿\"两个空白，因此先做并已实机验证；G2 是脚本重写（新身份/去 comsvcs/采样抓凶手/默认只检测），不安装到系统，可先交付。S4b 增量价值有限（退出码已在 manager.log），G1/G4 是机器级持久改动（启动项、驱动级 Sysmon），必须用户拍板，故留卡。",
       "rejected": "1) 继续用 comsvcs：本机 6/6 零产出且阻塞 manager 20s（重启风暴根因）；2) 去重命中即回执：实测 manager 抢先重启导致 dump 归零；3) 壳探测失败自动 kill/重启：与 D1 冲突且与 manager watchdog 双杀；4) 给 job 设 UI 限制或不给 BREAKAWAY_OK：会破坏 dsh 自身嵌套 job / breakaway spawn；5) 外部守护默认自动重启：与 D1 冲突，改为 `-AutoRestart` opt-in；6) 擅自安装 G1/G4：属机器级改动，先征求同意；7) 用 schtasks/Windows 服务做守护：schtasks 总提示密码（用户已拒）、服务在 session 0 无 UI 且需管理员。",
       "sourceSessionId": "session-788be97d-7ef1-480f-9552-d09ab4eaf37b",
-      "status": "todo",
+      "status": "done",
       "tags": [
         "windows",
         "investigate",
         "dsh-web",
         "watchdog",
-        "waiting-user"
+        "feature",
+        "dev-verify",
+        "done"
       ],
       "createdAt": 1788268219936,
-      "updatedAt": 1788966271310,
-      "description": "【进度（2026-09-09 深夜）】**S1/S2（卡 2）✅、S3 挂起 dump ✅、S4a Job Object ✅、G2 外部守护脚本 ✅**——均已实机验证（见文档 §6/§7 与 note `feature/2026-09-09-dsh-web-hang-dump-and-service-job.md`）。本卡剩余：\n1. **S4b** Job Object 完成端口（逐进程退出通知）——manager 已在 manager.log 记录 dsh web 退出码，增量价值有限，可选；\n2. **G1** 把 `scripts/dsh-hang-guard.ps1` 装进登录启动项（免管理员）——机器级持久改动，**等用户确认**；\n3. **G4** Sysmon 极简配置（EID1 ProcessCreate + EID5 ProcessTerminate，需管理员、4.6MB、与火绒可能冲突）——D2 已表示\"可接受\"，但属驱动级安装，**等用户确认**。\n\n【已验证结论（本卡）】\n- 挂起是唯一可 dump 的故障；壳内 `MiniDumpWriteDump` 实测落盘 313 MiB / 约 2s，`Get-NetTCPConnection` 按端口定位 PID 可行（免管理员）。\n- 关键时序：manager 必须先请壳抓现场、等 `dump-done` 回执再重启，否则被挂起进程会在 dump 前被杀（首版实测 OpenGroup 0x80070057、零 dump，已修）。\n- comsvcs 路径在本机被证伪（20s 超时零产出，6/6），已从 manager 与外部守护中移除。\n- Job Object（KILL_ON_JOB_CLOSE + BREAKAWAY_OK）实测：`taskkill /F` 壳后 4 秒内该身份 node 进程归零（此前残留孤儿）。\n\n【仍待确认（不阻塞）】\n1. 00:47–00:48 是否第 4 次复现（决定\"壳是否也会死\"）；\n2. 上游 dsh 侧 `dsh-win32-process` 的 job 语义为何没能保护 manager；\n3. G1/G4 是否安装。"
+      "updatedAt": 1788969857268,
+      "description": "【进度（2026-09-10 凌晨）】**全部完成**：S1/S2（卡 2）✅、S3 挂起 dump ✅、S4a Job Object ✅、S4b 完成端口逐进程通知 ✅、G2 外部守护脚本 ✅、**G1 登录启动项已安装（prod、detect-only）** ✅。**G4 Sysmon 按用户决定不装**（因此\"谁启动了 taskkill\"仍只能靠守护的 500ms 采样窗口）。\n\n【交付与实测（详见文档 §6/§7、note `feature/2026-09-09-dsh-web-hang-dump-and-service-job.md`）】\n- 挂起：`NtSuspendProcess` 冻结真实 dsh web → 3 次 miss → **313 MiB 全内存 dump**（约 2s）→ manager 等 `dump-done` 回执 7.4s 后重启 → 服务恢复；只 dump 不重启（D1）。\n- Job：`taskkill /F` 壳 → 4s 内该身份 node 归零（无孤儿）；完成端口实测记录 manager + dsh web 的逐进程退出。\n- 外部守护：已装登录启动项 `%APPDATA%\\...\\Startup\\dsh-hang-guard-prod.lnk`（脚本副本在 `%LOCALAPPDATA%\\dsh-hang-guard\\`，`install-hang-guard.ps1 -Uninstall` 可卸）；实测 arm 成功并抓到真实 node 消失。\n- 安装后实测又修掉守护两个真 bug：PS 5.1 `Invoke-WebRequest` 对 401 抛异常导致永不 arm；suspect 窗口 UTC/local 混用导致全部进程都算嫌疑。\n\n【仍待确认（不阻塞，与本卡交付无关）】\n1. 00:47–00:48 是否第 4 次复现（决定\"壳是否也会死\"）；\n2. 上游 dsh 侧 `dsh-win32-process` 的 job 语义为何没能保护 manager。"
     },
     {
       "id": "card-d689c8c2-29c0-46ca-86f6-a6163046ae56",

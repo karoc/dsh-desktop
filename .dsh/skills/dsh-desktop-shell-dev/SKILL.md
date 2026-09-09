@@ -215,6 +215,11 @@ U="$PS -NoProfile -ExecutionPolicy Bypass -File"
 断言 session.log 的 `probe miss 3/3` + `dump saved` + `dshweb-hang-*.dmp`（实测 313 MiB）+ manager 的
 `dump ready — restarting dsh`；`-Action state` 打印当前 URL/PID/壳状态。挂起 dump 全内存、体积大，壳内保留 3 份。
 
+**外部守护（G1，已装）**：`scripts/install-hang-guard.ps1 [-App prod|dev] [-AutoRestart] [-Uninstall]` 把
+`dsh-hang-guard.ps1` 拷到 `%LOCALAPPDATA%\dsh-hang-guard\` 并在当前用户启动文件夹建隐藏窗口快捷方式
+（免管理员）。**改了守护脚本要重跑安装器刷新副本**。守护默认 detect-only，日志
+`%LOCALAPPDATA%\dsh-hang-guard-<app>.log`（2MB 轮转），证据 `%LOCALAPPDATA%\dsh-hang-<app>-<ts>\`。
+
 **`verify-manager-guard.ps1` 动作**：`kill`（taskkill 掉 manager 并打印时间）/ `check`（等待后断言：
 无自动重启、证据目录 + 5 个文件、summary 退出码 1/0x00000001、session.log 有 `manager exit:`、
 `/shell/status` 的 `managerAlive=false` 与 `lastManagerExit.hex`）/ `status`（打印桥状态）/
@@ -235,6 +240,10 @@ dev 数据目录 = `%APPDATA%\dsh.smoothly.desktop.dev`，证据 = `<runtime>\re
   命中 1 条时 `.Count` 为空串，判断会误判为 0）→ 调用点一律 `@(...)` 包裹；**`Get-Content -Raw`
   按 ANSI 解码**，读 UTF-8 的 `summary.json` 会乱码并让 `ConvertFrom-Json` 报错 → 用
   `[IO.File]::ReadAllText($p, [Text.Encoding]::UTF8)`。
+- PS 5.1 探活/时间两个陷阱：**`Invoke-WebRequest` 对 4xx/5xx 抛异常**（不像 curl/fetch 返回状态码）
+  ——带 token 的 dsh URL 去掉 token 后恒 401，`catch { return $false }` 会让守护永远不 arm；要在
+  `catch` 里读 `$_.Exception.Response.StatusCode` 判 2xx–4xx 为存活。**`[DateTime]::UtcNow` 不能和
+  `Get-Process.StartTime`（本地时）相减**——差值为负会让"最近 2 秒"过滤命中所有进程。
 - `[string]::Concat([char]...)` 在 PS 5.1 会抛 ArgumentNullException → 用 `[regex]::Unescape` 或 `+`。
 - 置前不可靠（`AppActivate`/`UIA SetFocus` 实测失败），**不要靠抢焦点**，用 PrintWindow + UIA。
 
