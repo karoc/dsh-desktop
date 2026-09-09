@@ -64,7 +64,9 @@ $suspectWindowSec = 2
 # sampled as context only -- they churn constantly and would drown the log.
 $trackNames = @("node", "dsh-desktop", "dsh-desktop-dev", "msedgewebview2")
 # Processes that can be the killer, reported when a tracked process vanishes.
-$suspectNames = @("taskkill", "powershell", "pwsh", "cmd", "conhost")
+# conhost is deliberately absent: it is a console host, not a launcher, and it
+# churns on every console app.
+$suspectNames = @("taskkill", "powershell", "pwsh", "cmd")
 $watchNames = $trackNames + $suspectNames
 
 function Write-Guard([string]$msg) {
@@ -194,10 +196,13 @@ while ($true) {
     }
   }
   if ($gone.Count -gt 0) {
+    # $now is UTC while Get-Process StartTime is LOCAL -- compare in local time
+    # or every suspect matches (the window subtraction goes negative).
+    $localNow = [DateTime]::Now
     $suspects = @($snap | Where-Object {
       ($suspectNames -contains $_.Name) -and
       ($_.Id -ne $selfPid) -and ($_.Id -ne $selfParent) -and
-      ($null -ne $_.Started) -and (($now - $_.Started).TotalSeconds -le $suspectWindowSec)
+      ($null -ne $_.Started) -and (($localNow - $_.Started).TotalSeconds -le $suspectWindowSec)
     })
     foreach ($s in $suspects) { if ($null -eq $s.Cmd) { $s.Cmd = Get-CmdLine ([int]$s.Id) } }
     Record-Vanished $gone $suspects
