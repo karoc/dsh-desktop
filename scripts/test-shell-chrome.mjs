@@ -199,7 +199,9 @@ assert.ok(
 assert.ok(chromeSrc.includes('open-evidence'), 'chrome can open the evidence dir from the banner')
 assert.ok(chromeSrc.includes('evidenceDir'), 'chrome reads the evidence dir from shell-status')
 assert.ok(chromeSrc.includes('重启服务'), 'chrome banner offers a manual restart button')
-assert.ok(readFileSync(join(root, 'src', 'app.js'), 'utf8').includes('lastManagerExit'), 'launcher shows the exit code + evidence hint')
+const appJs = readFileSync(join(root, 'src', 'app.js'), 'utf8')
+assert.ok(appJs.includes('lastManagerExit'), 'launcher shows the exit code + evidence hint')
+assert.ok(appJs.includes("invoke('get_shell_status')"), 'launcher re-checks shell status on load (the crash event precedes the fallback navigation)')
 // 故障回退导航只认真实本地页：setup 时 w.url() 可能是 about:blank，若被当成
 // 启动页 URL，manager 被杀后窗口会落到 about:blank 黑屏（2026-09-09 实机验证）。
 assert.ok(libRs.includes('fn is_shell_local_url'), 'launcher URL accepts both tauri:// and http://tauri.localhost (Windows)')
