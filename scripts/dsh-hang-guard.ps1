@@ -1,71 +1,85 @@
-﻿<#
+<#
 .SYNOPSIS
-  dsh-desktop 挂起守护 + 现场取证（无需重打包壳，今天就能用）
+  dsh-desktop external guard: process-table sampler + dsh web hang watcher.
 
 .DESCRIPTION
-  2026-09-01 排障结论：正式版内嵌 dsh web（node 进程）曾在会话运行中途事件循环挂起
-  （页面黑屏、刷新无响应、单靠"重启 dsh"恢复）。本脚本：
-    1) 每 N 秒探测 dsh web 的 HTTP 存活（URL 从 manager.log 最新一行读取）
-    2) 首次探测成功后才进入武装状态（避免安装期误报）
-    3) 连续 MissLimit 次失败 => 取证：进程快照 + 两端日志尾部 + 会话转录 mtime
-       + rundll32 comsvcs MiniDump 抓 dsh web / manager 的 node 内存转储
-    4) 恢复：优先 POST 桥的 /restart（等价壳内"重启服务"）；桥不通则 taskkill
-       进程树，提示去壳窗口点"重试"
-    5) 壳应用整体退出（用户退出 dsh）时脚本自动退出
-  所有动作写入 %LOCALAPPDATA%\dsh-hang-guard-<app>.log；证据目录
-  %LOCALAPPDATA%\dsh-hang-<app>-<时间戳>\
+  Runs OUTSIDE the dsh tree (started from the login startup folder), so it keeps
+  watching when the shell itself dies. Two jobs:
+
+  1) KILLER CATCHER (500 ms sampler). Keeps a rolling window of the processes
+     that matter (node / dsh-desktop / taskkill / powershell / pwsh / cmd). When
+     one of them vanishes, the window plus the command lines of any suspects
+     that appeared in the previous 2 s are written to the evidence dir. This is
+     the only unprivileged way to answer "who killed the tree?" -- the
+     TerminateProcess itself leaves no OS record.
+
+  2) HANG WATCHER. Probes the live dsh web URL (read from manager.log) every
+     IntervalSec. After MissLimit consecutive misses it snapshots evidence.
+     The shell itself already dumps the hung process (MiniDumpWriteDump) and the
+     manager restarts it, so this guard defaults to DETECT ONLY (decision D1:
+     never restart behind the user's back while we are still hunting the root
+     cause). Pass -AutoRestart to also POST the bridge /restart.
+
+  NOTE: the old rundll32 comsvcs dump path was removed -- on this machine it
+  hung for its full 20 s timeout and produced nothing (6/6 attempts).
 
 .PARAMETER App
-  prod = 正式版（默认）；dev = 开发版（身份 dev.dsh.desktop.dev）
+  prod = production identity (default); dev = development build.
 
 .PARAMETER IntervalSec
-  探测间隔秒数（默认 3）
+  dsh web probe interval in seconds (default 3).
 
 .PARAMETER MissLimit
-  连续失败多少次触发取证+重启（默认 3，即 ~9 秒无响应）
+  consecutive probe misses before evidence is captured (default 3, ~9 s).
+
+.PARAMETER GraceSec
+  startup grace after a (new) URL appears; slow boot is not a hang (default 30).
+
+.PARAMETER AutoRestart
+  Also POST the bridge /restart on a hang, and relaunch the shell exe if the
+  shell process disappeared. OFF by default (D1).
 
 .EXAMPLE
-  powershell -ExecutionPolicy Bypass -File .\dsh-hang-guard.ps1 -App prod
+  powershell -ExecutionPolicy Bypass -File .\dsh-hang-guard.ps1 -App dev
 #>
 param(
-  [ValidateSet('prod','dev')][string]$App = 'prod',
+  [ValidateSet("prod", "dev")][string]$App = "prod",
   [int]$IntervalSec = 3,
-  [int]$MissLimit = 3
+  [int]$MissLimit = 3,
+  [int]$GraceSec = 30,
+  [switch]$AutoRestart
 )
-$ErrorActionPreference = 'Continue'
+$ErrorActionPreference = "Continue"
 
-$Identity   = if ($App -eq 'dev') { 'dev.dsh.desktop.dev' } else { 'dev.dsh.desktop' }
-$APPD       = Join-Path $env:APPDATA $Identity
-$managerLog = Join-Path $APPD 'runtime\manager.log'
-$sessionLog = Join-Path $APPD 'dsh-desktop-session.log'
-$evidenceRoot = Join-Path $env:LOCALAPPDATA ("dsh-hang-" + $App + "-" + (Get-Date -Format 'yyyyMMdd-HHmmss'))
-$guardLog   = Join-Path $env:LOCALAPPDATA ("dsh-hang-guard-" + $App + ".log")
+$Identity = if ($App -eq "dev") { "dsh.smoothly.desktop.dev" } else { "dsh.smoothly.desktop" }
+$ExeName = if ($App -eq "dev") { "dsh-desktop-dev" } else { "dsh-desktop" }
+$APPD = Join-Path $env:APPDATA $Identity
+$managerLog = Join-Path $APPD "runtime\manager.log"
+$sessionLog = Join-Path $APPD "dsh-desktop-session.log"
+$evidenceRoot = Join-Path $env:LOCALAPPDATA ("dsh-hang-" + $App + "-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
+$guardLog = Join-Path $env:LOCALAPPDATA ("dsh-hang-guard-" + $App + ".log")
+$samplerMs = 500
+$suspectWindowSec = 2
+# Processes whose birth/death we care about (CommandLine is only fetched for the
+# suspects, on appearance -- a full CIM sweep every 500 ms would be wasteful).
+$watchNames = @("node", "dsh-desktop", "dsh-desktop-dev", "taskkill", "powershell", "pwsh", "cmd", "conhost", "msedgewebview2")
+$suspectNames = @("taskkill", "powershell", "pwsh", "cmd")
 
 function Write-Guard([string]$msg) {
-  $line = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + ' ' + $msg
+  $line = (Get-Date -Format "yyyy-MM-dd HH:mm:ss") + " " + $msg
   Add-Content -Path $guardLog -Value $line -ErrorAction SilentlyContinue
   Write-Host $line
 }
 
 function Get-LatestDshUrl {
-  $m = Select-String -Path $managerLog -Pattern 'dsh web: http://127\.0\.0\.1:\d+' -ErrorAction SilentlyContinue | Select-Object -Last 1
-  if ($m -and $m.Line -match '(http://127\.0\.0\.1:\d+)') { return $Matches[1] }
+  $m = Select-String -Path $managerLog -Pattern "dsh web: (http://127\.0\.0\.1:\d+)" -ErrorAction SilentlyContinue | Select-Object -Last 1
+  if ($m) { return $m.Matches[0].Groups[1].Value }
   return $null
 }
 function Get-LatestBridgePort {
-  $m = Select-String -Path $sessionLog -Pattern 'bridge on 127\.0\.0\.1:\d+' -ErrorAction SilentlyContinue | Select-Object -Last 1
-  if ($m -and $m.Line -match 'bridge on 127\.0\.0\.1:(\d+)') { return [int]$Matches[1] }
+  $m = Select-String -Path $sessionLog -Pattern "bridge on 127\.0\.0\.1:(\d+)" -ErrorAction SilentlyContinue | Select-Object -Last 1
+  if ($m) { return [int]$m.Matches[0].Groups[1].Value }
   return $null
-}
-function Get-DshWebPids {
-  @(Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'node.exe' -and $_.CommandLine -match 'bin\.js web --patch' } | ForEach-Object { $_.ProcessId })
-}
-function Get-ManagerPids {
-  @(Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'node.exe' -and $_.CommandLine -match 'server-manager\.mjs' } | ForEach-Object { $_.ProcessId })
-}
-function Test-AppRunning {
-  $apps = Get-Process -Name 'dsh-desktop*' -ErrorAction SilentlyContinue
-  return ($null -ne $apps -and $apps.Count -gt 0)
 }
 function Test-WebAlive([string]$url) {
   try {
@@ -75,83 +89,151 @@ function Test-WebAlive([string]$url) {
 }
 function Request-BridgeRestart {
   $port = Get-LatestBridgePort
-  if (-not $port) { return $false }
+  if (-not $port) { Write-Guard "bridge port unknown -- cannot request restart"; return $false }
   try {
     Invoke-WebRequest -Uri ("http://127.0.0.1:" + $port + "/restart") -Method POST -UseBasicParsing -TimeoutSec 3 -ErrorAction Stop | Out-Null
+    Write-Guard "bridge /restart accepted"
     return $true
-  } catch { return $false }
+  } catch {
+    Write-Guard ("bridge /restart FAILED: " + $_.Exception.Message)
+    return $false
+  }
 }
-function Capture-Dump([int]$pid_) {
-  try {
-    $dmp = Join-Path $evidenceDir ("node-" + $pid_ + ".dmp")
-    & rundll32.exe 'c:\windows\system32\comsvcs.dll, MiniDump' $pid_ $dmp 'full' 2>$null | Out-Null
-    Start-Sleep -Milliseconds 800
-    if (Test-Path $dmp) { Write-Guard "dump saved: $dmp" } else { Write-Guard "dump FAILED for pid $pid_ (rundll32 未产出文件)" }
-  } catch { Write-Guard "dump error pid $pid_ : $($_.Exception.Message)" }
+function Get-Snapshot {
+  @(Get-Process -ErrorAction SilentlyContinue |
+    Where-Object { $watchNames -contains $_.ProcessName } |
+    ForEach-Object {
+      $started = $null
+      try { $started = $_.StartTime } catch { }
+      [pscustomobject]@{ Id = $_.Id; Name = $_.ProcessName; Started = $started; Cmd = $null }
+    })
+}
+function Get-CmdLine([int]$processId) {
+  try { return (Get-CimInstance Win32_Process -Filter ("ProcessId=" + $processId) -ErrorAction Stop).CommandLine } catch { return $null }
 }
 function Snapshot-Evidence([string]$reason) {
-  New-Item -ItemType Directory -Path $evidenceDir -Force | Out-Null
+  New-Item -ItemType Directory -Path $evidenceRoot -Force | Out-Null
   try {
-    if (Test-Path $managerLog) { Get-Content $managerLog -Tail 300 | Set-Content (Join-Path $evidenceDir 'manager.log.tail.txt') }
-    if (Test-Path $sessionLog) { Get-Content $sessionLog -Tail 300 | Set-Content (Join-Path $evidenceDir 'session.log.tail.txt') }
+    if (Test-Path $managerLog) { Get-Content $managerLog -Tail 300 | Set-Content (Join-Path $evidenceRoot "manager.log.tail.txt") }
+    if (Test-Path $sessionLog) { Get-Content $sessionLog -Tail 300 | Set-Content (Join-Path $evidenceRoot "session.log.tail.txt") }
     Get-CimInstance Win32_Process |
-      Where-Object { ($_.Name -match 'node|dsh-desktop|msedgewebview2') -and $_.CommandLine -match 'dsh' } |
-      Select-Object ProcessId, ParentProcessId, Name, @{n='Start';e={$_.CreationDate}}, @{n='WS_MB';e={[int]($_.WorkingSetSize/1MB)}} |
-      Format-Table -AutoSize | Out-String -Width 240 | Set-Content (Join-Path $evidenceDir 'processes.txt')
-    Get-ChildItem (Join-Path $APPD 'runtime\dsh-home\sessions') -Recurse -Filter 'session.jsonl.zstd' -ErrorAction SilentlyContinue |
-      Select-Object LastWriteTime, Length, FullName | Sort-Object LastWriteTime -Descending | Select-Object -First 8 |
-      Format-Table -AutoSize | Out-String -Width 240 | Set-Content (Join-Path $evidenceDir 'transcripts.txt')
-    Write-Guard "evidence snapshot -> $evidenceDir (reason: $reason)"
-  } catch { Write-Guard "snapshot error: $($_.Exception.Message)" }
+      Where-Object { ($_.Name -match "node|dsh-desktop|msedgewebview2|taskkill|powershell|pwsh|cmd") } |
+      Select-Object ProcessId, ParentProcessId, Name, CreationDate, CommandLine |
+      Format-List | Out-String -Width 400 | Set-Content (Join-Path $evidenceRoot "processes.txt")
+    Get-ChildItem (Join-Path $APPD "runtime\reports") -ErrorAction SilentlyContinue |
+      Select-Object LastWriteTime, Length, Name |
+      Sort-Object LastWriteTime -Descending | Format-Table -AutoSize | Out-String -Width 200 |
+      Set-Content (Join-Path $evidenceRoot "reports.txt")
+    Write-Guard "evidence snapshot -> $evidenceRoot (reason: $reason)"
+  } catch { Write-Guard ("snapshot error: " + $_.Exception.Message) }
+}
+function Record-Vanished($gone, $suspects) {
+  New-Item -ItemType Directory -Path $evidenceRoot -Force | Out-Null
+  $out = Join-Path $evidenceRoot "vanish.log"
+  $stamp = (Get-Date -Format "yyyy-MM-dd HH:mm:ss.fff")
+  foreach ($g in $gone) {
+    $line = "$stamp VANISHED pid=$($g.Id) name=$($g.Name) started=$($g.Started)"
+    Add-Content -Path $out -Value $line -ErrorAction SilentlyContinue
+    Write-Guard $line
+    foreach ($s in $suspects) {
+      $sline = "        suspect within ${suspectWindowSec}s: pid=$($s.Id) name=$($s.Name) started=$($s.Started) cmd=$($s.Cmd)"
+      Add-Content -Path $out -Value $sline -ErrorAction SilentlyContinue
+      Write-Guard $sline
+    }
+  }
 }
 
 if (-not (Test-Path $managerLog)) {
-  Write-Guard "manager.log not found at $managerLog — app 可能还没运行过；请启动 dsh 后重试。退出。"
+  Write-Guard "manager.log not found at $managerLog -- start dsh once, then retry. exiting."
   exit 1
 }
 
-Write-Guard "watchdog start (app=$App interval=${IntervalSec}s miss-limit=$MissLimit, evidence=$evidenceRoot)"
+Write-Guard ("guard start app=$App interval=${IntervalSec}s miss-limit=$MissLimit grace=${GraceSec}s auto-restart=" + [bool]$AutoRestart + " evidence=$evidenceRoot")
 $armed = $false
+$armedAt = $null
 $misses = 0
 $appGoneCycles = 0
+$prev = @{}
+$nextProbe = [DateTime]::UtcNow
 
 while ($true) {
-  if (-not (Test-AppRunning)) {
-    $appGoneCycles++
-    if ($appGoneCycles -ge 2) { Write-Guard "dsh 应用不在运行（用户已退出?）— 看门狗退出。"; break }
-  } else {
-    $appGoneCycles = 0
-  }
+  $snap = Get-Snapshot
+  $now = [DateTime]::UtcNow
 
-  $url = Get-LatestDshUrl
-  if ($url) {
-    $alive = Test-WebAlive $url
-    if ($alive) {
-      if (-not $armed) { Write-Guard "armed on $url"; $armed = $true }
-      $misses = 0
-    } elseif ($armed) {
-      $misses++
-      Write-Guard "miss $misses/$MissLimit on $url"
-      if ($misses -ge $MissLimit) {
-        Write-Guard "!!! dsh web UNRESPONSIVE ($url) — capturing evidence, then restarting service"
-        Snapshot-Evidence "unresponsive after $MissLimit misses"
-        foreach ($p in Get-DshWebPids)  { Capture-Dump $p }
-        foreach ($p in Get-ManagerPids) { Capture-Dump $p }
-        if (Request-BridgeRestart) {
-          Write-Guard "bridge /restart accepted — 服务应自动恢复（等价壳内重启服务）"
+  # -- killer catcher: detect vanished processes + suspects born in the window -
+  $cur = @{}
+  foreach ($p in $snap) { $cur[[int]$p.Id] = $p }
+  $gone = @()
+  foreach ($id in $prev.Keys) {
+    if (-not $cur.ContainsKey($id)) {
+      $gone += $prev[$id]
+    }
+  }
+  if ($gone.Count -gt 0) {
+    $suspects = @($snap | Where-Object { ($suspectNames -contains $_.Name) -and ($null -ne $_.Started) -and (($now - $_.Started).TotalSeconds -le $suspectWindowSec) })
+    foreach ($s in $suspects) { if ($null -eq $s.Cmd) { $s.Cmd = Get-CmdLine ([int]$s.Id) } }
+    Record-Vanished $gone $suspects
+  }
+  $prev = $cur
+
+  # -- app liveness ------------------------------------------------------------
+  $appRunning = @(Get-Process -Name $ExeName -ErrorAction SilentlyContinue).Count -gt 0
+  if (-not $appRunning) {
+    $appGoneCycles++
+    if ($appGoneCycles -eq 2) {
+      Write-Guard "shell process ($ExeName) is GONE"
+      Snapshot-Evidence "shell process disappeared"
+      if ($AutoRestart) {
+        $exe = Join-Path $env:LOCALAPPDATA ("DSH Smoothly Desktop" + $(if ($App -eq "dev") { " Dev" } else { "" }) + "\" + $ExeName + ".exe")
+        if (Test-Path $exe) {
+          Start-Process -FilePath $exe | Out-Null
+          Write-Guard ("relaunched shell: " + $exe)
         } else {
-          Write-Guard "bridge /restart failed — force-killing node tree；请去壳窗口点「重试」"
-          Get-DshWebPids  | ForEach-Object { & taskkill.exe /PID $_ /T /F 2>$null | Out-Null }
-          Get-ManagerPids | ForEach-Object { & taskkill.exe /PID $_ /T /F 2>$null | Out-Null }
+          Write-Guard ("shell exe not found: " + $exe)
         }
-        $misses = 0
-        $armed = $false
       }
     }
-  } elseif ($armed) {
-    Write-Guard "URL gone（服务重启中?）— 重新武装"
-    $armed = $false
-    $misses = 0
+    if ($appGoneCycles -ge 4) { Write-Guard "shell absent for 4 cycles -- exiting"; break }
+    Start-Sleep -Milliseconds $samplerMs
+    continue
   }
-  Start-Sleep -Seconds $IntervalSec
+  $appGoneCycles = 0
+
+  # -- hang watcher (probe on its own cadence) ---------------------------------
+  if ($now -ge $nextProbe) {
+    $nextProbe = $now.AddSeconds($IntervalSec)
+    $url = Get-LatestDshUrl
+    if ($url) {
+      if (Test-WebAlive $url) {
+        if (-not $armed) { Write-Guard "armed on $url"; $armed = $true; $armedAt = $now }
+        $misses = 0
+      } elseif ($armed) {
+        if ($null -ne $armedAt -and (($now - $armedAt).TotalSeconds -lt $GraceSec)) {
+          # startup/reload grace: slow boot is not a hang
+        } else {
+          $misses++
+          Write-Guard "miss $misses/$MissLimit on $url"
+          if ($misses -ge $MissLimit) {
+            Write-Guard "!!! dsh web UNRESPONSIVE ($url)"
+            Snapshot-Evidence "unresponsive after $MissLimit misses"
+            if ($AutoRestart) {
+              if (-not (Request-BridgeRestart)) {
+                Write-Guard "restart request failed -- shell may be gone; leaving the scene intact"
+              }
+            } else {
+              Write-Guard "detect-only (D1): the shell dumps the scene, the manager restarts; not restarting here"
+            }
+            $misses = 0
+            $armed = $false
+          }
+        }
+      }
+    } elseif ($armed) {
+      Write-Guard "URL gone (service restarting?) -- disarm"
+      $armed = $false
+      $misses = 0
+    }
+  }
+
+  Start-Sleep -Milliseconds $samplerMs
 }
