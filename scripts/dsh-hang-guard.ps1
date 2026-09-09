@@ -149,6 +149,11 @@ if (-not (Test-Path $managerLog)) {
 }
 
 Write-Guard ("guard start app=$App interval=${IntervalSec}s miss-limit=$MissLimit grace=${GraceSec}s auto-restart=" + [bool]$AutoRestart + " evidence=$evidenceRoot")
+# The guard itself (and the shell that launched it) are never "suspects": their
+# command lines would otherwise flood the evidence with our own invocation.
+$selfPid = $PID
+$selfParent = 0
+try { $selfParent = (Get-CimInstance Win32_Process -Filter ("ProcessId=" + $PID) -ErrorAction Stop).ParentProcessId } catch { }
 $armed = $false
 $armedAt = $null
 $misses = 0
@@ -170,7 +175,11 @@ while ($true) {
     }
   }
   if ($gone.Count -gt 0) {
-    $suspects = @($snap | Where-Object { ($suspectNames -contains $_.Name) -and ($null -ne $_.Started) -and (($now - $_.Started).TotalSeconds -le $suspectWindowSec) })
+    $suspects = @($snap | Where-Object {
+      ($suspectNames -contains $_.Name) -and
+      ($_.Id -ne $selfPid) -and ($_.Id -ne $selfParent) -and
+      ($null -ne $_.Started) -and (($now - $_.Started).TotalSeconds -le $suspectWindowSec)
+    })
     foreach ($s in $suspects) { if ($null -eq $s.Cmd) { $s.Cmd = Get-CmdLine ([int]$s.Id) } }
     Record-Vanished $gone $suspects
   }
