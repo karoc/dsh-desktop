@@ -14,6 +14,19 @@
 
 **相互关系**：卡 1 与卡 2 是**同一事故链的两面**——卡 2 的守护机制（持有 `Child` 句柄、检测退出、重启前取证）正是卡 1 缺口的实现载体。建议合并为一个 PR / 一次发版。卡 3、卡 4 相互独立。
 
+## 0.1 决策记录（用户 2026-09-09 拍板）
+
+| # | 决定 | 对方案的影响 |
+|---|---|---|
+| **D1** | **不做自动重启**（"要确保复现"） | 卡 2 方案降级为「检测 + 取证 + 显著提示，用户手动重启」；卡 1 的 S2/S3 同步降级（不自动 kill/respawn）。代价：事故后不自愈、需手动点「重启服务」；收益：每次复现都留完整证据且用户亲眼可见 |
+| **D2** | 取证增强：可接受装 **Sysmon**（极简配置） | 卡 1 方案 G 增补：只开 `ProcessCreate`(EID 1) + `ProcessTerminate`(EID 5)，下载包 4.6 MB、需管理员；能直接抓到"谁启动了 `taskkill.exe`、命令行、父进程"（[官方文档](https://learn.microsoft.com/en-us/sysinternals/downloads/sysmon)） |
+| **D3** | **不做**"dsh web 自愈下沉到 manager" | 卡 2 rejected 记录。理由（按权重）：① 对主问题无效（三次事故 manager 同刻死，下沉前提"manager 活着"不成立）；② 本质是"自动重启 dsh web"，与 D1 冲突、会掩盖复现；③ 需改真源 + 副本两份（有漂移前科），增量收益仅"dsh web 异常退出"一条（挂起已被内置 watchdog 覆盖） |
+| **D4** | 接受"**页面里的壳菜单退出/重启也走确认窗**" | 卡 3 阶段 1 的权衡落定：托盘入口免确认（真正的壳内入口），页面发起的一律确认；不采用"壳 chrome 标记"（插件可伪造，防护归零） |
+| **D5** | 接受卡 4 ① 的取舍（旧版在跑时**不删**其快捷方式） | 卡 4 ① 落定 |
+| **D6** | 03:04 退出 = 用户操作（排除）；00:47–00:48 **第 4 次复现未确认** | 卡 1 记录；"壳是否也会死"仍为开放前提 |
+
+> 决定（D1–D6）**优先于**正文中的推荐表述；正文保留调研原貌（候选对比与依据不变）。
+
 ---
 
 ## 1. `card-7c04d1eb` 事故取证：让"下次复现"自动留下证据
@@ -52,14 +65,15 @@
 
 **方案 S（零用户操作，纯壳内，覆盖挂起 / manager 死 / dsh web 死）**
 - **S1 退出码 + 死亡时刻**：stdout EOF 处 `child.wait()` 取码写 session.log（`manager exited code=0x… at …`）。
-- **S2 自动恢复**：同处做冷却 + 退避（3s 内只重启一次；连续失败退避 30s）调 `start_server`，每轮记 `manager restarted (auto) #n`。**同时兑现 card-6c051fbe**。
-- **S3 挂起 dump（壳内 watchdog 线程，不依赖 manager）**：每 3s 探 `LIVE_DSH_URL` → 连续 N 次失败 → 复用 CIM 命令行匹配定位 node PID → Rust 调 `MiniDumpWriteDump` 落 `<runtime>/reports/`；**只在进程仍存活时调用**；`OpenProcess` 失败必须记错误码；**新 URL 后 30s 启动宽限期**（治 L3 风暴）。
+- **S2 取证 + 显著提示（不自动重启 —— D1）**：同处收集证据（退出码/时刻/快照）→ 写 session.log + `last_error` → errbanner 显示「服务异常退出（退出码 N），现场已保存」+ 一键「重启服务」由**用户手动触发**。**不做自动重启/退避/预算**——避免掩盖复现（"要确保复现"）。
+- **S3 挂起 dump（只 dump，不 kill、不 respawn —— D1）**：每 3s 探 `LIVE_DSH_URL` → 连续 N 次失败 → CIM 定位 node PID → Rust 调 `MiniDumpWriteDump` 落 `<runtime>/reports/` + 提示；**不自动杀树/重启**（与 S2 同一原则）；只在进程仍存活时调用；`OpenProcess` 失败必须记错误码；**新 URL 后 30s 启动宽限期**（治 L3 风暴）。
 - **S4 Job Object**：`CreateJobObject` + `KILL_ON_JOB_CLOSE` + 完成端口，manager 及其后代自动入 job → ①逐进程异常退出通知；②壳真死时自动清树（消灭孤儿）；③可加资源护栏。需实测与 dsh sandbox job 的嵌套兼容。
 
 **方案 G（一次最小操作，覆盖"壳也死"）**
 - **G1** 用启动文件夹快捷方式（或 HKCU Run）安装守护：免管理员、免密码、登录即起。
 - **G2 守护脚本必须先改三处**（不改等于没装）：①**弃用 comsvcs dump**（本机已证伪），改为存活时调桥 `/restart` 并记录失败原因；②**加启动宽限期**；③每 500ms 采进程表，记录 node/dsh-desktop 消失时刻，并抓消失前 2s 内新出现的 `taskkill.exe`/`powershell.exe` **连同 CommandLine**（唯一免管理员指认凶手的机会）。
 - **G3（可选，需管理员）** `HKLM\...\WER\Hangs` 开 hang dump（S3 已覆盖，优先级低）。
+- **G4（可选，需管理员；D2 已接受）** 装 **Sysmon** 极简配置：只开 `ProcessCreate`(EID 1，含完整命令行 + 父进程) 与 `ProcessTerminate`(EID 5)；下载包 **4.6 MB**，默认不开网络/镜像加载 → 开销最小（[官方文档](https://learn.microsoft.com/en-us/sysinternals/downloads/sysmon)）。价值：**唯一能直接指认"谁启动了 `taskkill.exe`、命令行是什么、父进程是谁"** 的手段。注意：与火绒可能冲突；驱动级组件，需接受。
 
 **明确做不到**：杀后 dump（物理不可能）；无管理员组件时拿到权威"凶手"记录；HKCU 配 WER；火绒若参与杀进程只读取证不了（需用户在火绒 UI 查日志/加白）。
 
@@ -78,11 +92,11 @@
 3. **火绒日志人工核对**三次事故时刻是否有拦截记录——命中则根因改写、方案加 AV 排除。
 4. 上游 dsh：`dsh-win32-process` 的 kill-on-close job 只杀 job 内成员，而 manager 不在 job 里 → "manager 为何也死"仍无机制解释，需在 dsh 仓库继续查。
 5. 需实测：非管理员能否订阅 `Win32_ProcessStopTrace`；壳内 `MiniDumpWriteDump` 对 node 的实际成功率（AV 拦截）。
-6. 需拍板：自动重启的退避策略（是否接受它可能掩盖复现）。
+6. ~~需拍板：自动重启的退避策略~~ → **已决 D1：不做自动重启**（改为"检测 + 取证 + 提示"，用户手动重启）。
 
 ---
 
-## 2. `card-6c051fbe` 壳层守护：manager 崩溃自动重启
+## 2. `card-6c051fbe` 壳层守护：manager 退出检测 + 取证 + 提示（**不自动重启**，D1）
 
 ### 2.1 现状（含两个新发现的真 bug）
 
@@ -99,28 +113,30 @@ setup → boot 线程 → start_server
 
 ### 2.2 设计要点
 
-- **主信号**：`Child::try_wait()`（权威、零误判、零依赖）+ EOF 提前唤醒。**dsh web URL 探测只准用于展示，禁止触发重启**（与 manager watchdog 双杀）；心跳文件只做诊断。
-- **状态机**：`MgrPhase{Down,Starting,Running,Stopping,Recovering}` + `generation`（每次 spawn +1，旧读线程/事件一律丢弃）+ `intentional_stop`（**只在 `stop_child` 置位**，spawn 成功后清除）+ `restarts/window_start/given_up`。
-- **恢复序列**：先取证 → 世代校验 → 临界区清孤儿 dsh web → 退避(0/5/15/30s) → 重拉。证据目录 `<runtime>/reports/manager-crash-<ts>-gen<N>/`：`summary.json`（gen/pid/退出码/时刻）、`manager.log.tail`(64KiB 从尾部读)、`shell-session.log.tail`、`orphans.txt`、**对孤儿 dsh web 跑 `MiniDumpWriteDump`（唯一可 dump 的现场）**、`node-reports/`、`wer.txt`；保留 5 份。
-- **预算**：3 次/10 分钟 + 会话上限 10 → 放弃态（last_error 常驻 + errbanner + 一键重试）；用户重启或收到 url 存活即清零。
+- **主信号**：`Child::try_wait()`（权威、零误判、零依赖）+ EOF 提前唤醒。**dsh web URL 探测只准用于展示/取证，禁止触发重启**（与 manager watchdog 双杀）；心跳文件只做诊断。
+- **状态机（简化为「检测 + 取证 + 提示」，不含自动重启 —— D1）**：`MgrPhase{Down,Starting,Running,Stopping}` + `generation`（每次 spawn +1，旧读线程/事件丢弃）+ `intentional_stop`（**只在 `stop_child` 置位**）。检测到"非意图退出"时：取证 → 写 `last_error` → errbanner + toast「服务异常退出（退出码 N），现场已保存」→ **等待用户手动「重启服务」**（`/restart` 或托盘）。
+- **证据目录** `<runtime>/reports/manager-crash-<ts>-gen<N>/`：`summary.json`（gen/pid/退出码/时刻/壳 uptime/webview URL）、`manager.log.tail`(64KiB **从尾部读**，manager.log 无轮转)、`shell-session.log.tail`、`orphans.txt`、**对孤儿 dsh web 跑 `MiniDumpWriteDump`（唯一可 dump 的现场）**、`node-reports/`、`wer.txt`；保留 5 份。
+- **明确不做**：自动重启 / 退避 / 重启预算 / 放弃态 —— D1"要确保复现"：自动重启会掩盖现场，且重启风暴本身会污染证据。
 - **边界**：壳只管 manager，manager 只管 dsh web；壳是唯一 spawner。
-- **UI**：复用现有链路（url→清 last_error→navigate→nav-fallback→/alive），只加 toast「已自动重启第 N 次」+ `/shell/status` 补 `managerAlive`（**修掉假 hasServer**）/`managerPid`/`managerRestarts`/`managerGivenUp`/`evidenceDir`。
+- **UI**：复用现有链路（url→清 last_error→navigate→nav-fallback→/alive）；`/shell/status` 补 `managerAlive`（**修掉假 hasServer**）/`managerPid`/`lastManagerExit`（退出码 + 时刻）/`evidenceDir`；errbanner 常驻显示退出码与证据目录 + 「重启服务」按钮。
 
 ### 2.3 替代方案结论
 
-A 壳内 watchdog + `try_wait` ✅ 主方案；B Job Object 🔶 phase 3 互补（根治壳死后孤儿）；C 外部守护进程 ❌（与壳双杀、装/卸成本）；D Windows 服务 ❌（session 0 无 UI、需管理员）；E 计划任务 ❌（schtasks 已被拒）；F manager 心跳 🔶 仅诊断；G 只提示不重启 ❌（= 放弃态降级）。
+A 壳内 `try_wait` 检测 + 取证 + 提示 ✅ **主方案（D1 后）**；B Job Object 🔶 互补（根治壳死后孤儿，其"逐进程异常退出通知"可与 A 叠加）；C 外部守护进程 ❌（与壳双杀、装/卸成本）；D Windows 服务 ❌（session 0 无 UI、需管理员）；E 计划任务 ❌（schtasks 已被拒）；F manager 心跳 🔶 仅诊断；**H dsh web 自愈下沉到 manager ❌（D3）**。
+
+**H（下沉）为何否决**（D3）：① 对主问题无效——三次事故 manager 同刻死，"manager 活着"这一前提不成立；② 本质是"自动重启 dsh web"，与 D1"要确保复现"直接冲突；③ 需改 `scripts/server-manager.mjs` 真源 + `resources/manager/` 副本两份（有 0.5.0/0.6.0 打包旧 manager 的漂移前科），而增量收益只有"dsh web 异常退出"一条（"挂起"已被内置 watchdog 覆盖）。将来若根因清楚且确认 dsh web 崩溃是独立高频问题，再做成"先 dump/记录 → 上报壳 → 再重启"，而非静默 respawn。
 
 ### 2.4 风险
 
-重启风暴（坏安装）→ 退避 + 预算 + 放弃态；桥 `/restart` 无鉴权狂刷**不得消耗崩溃预算**（否则恶意页可关掉自动恢复）；与 `dsh-hang-guard.ps1` 双杀（须注明关闭其自动重启）；退出竞态（`SHUTTING_DOWN` + spawn 后再校验）；孤儿清理误杀新 manager（世代号 + 短临界区）；`stop_child` 必须先 `try_wait`；取证不得阻塞恢复；dump 体积需限额轮转。
+（D1 后"自动重启"类风险消失）仍须处理：与 `dsh-hang-guard.ps1` 双杀（须注明关闭其自动重启，否则外部守护会替我们重启、污染现场）；退出竞态（`SHUTTING_DOWN` + spawn 后再校验）；孤儿清理误杀新 manager（世代号 + 短临界区）；`stop_child` 必须先 `try_wait`（修 bug ② + 规避 PID 复用）；取证不得阻塞 UI；dump 体积需限额轮转；errbanner 常驻但不得遮挡页面（复用现有布局）。
 
 ### 2.5 落点与 MVP
 
-**新增 ~10 处**（`SHUTTING_DOWN`、`ManagerGuard`/`MgrPhase`/`Decision`、`ServerState.guard`、`next_generation`/`manager_alive`、`decide`/`backoff_delay`/`should_give_up`、`start_manager_watchdog`、`collect_manager_crash_evidence`、`orphan_service_node_pids` 抽取、`kill_orphan`/`dump_process`/`prune`）。
+**新增 ~8 处**（`SHUTTING_DOWN`、`ManagerGuard`/`MgrPhase`、`ServerState.guard`、`next_generation`/`manager_alive`、`start_manager_watchdog`、`collect_manager_crash_evidence`、`orphan_service_node_pids` 抽取、`dump_process`/`prune_evidence_dirs`）。
 **改动 ~10 处**（`stop_child:111-129`、`start_server:1854-2150` + 两个读线程世代围栏 + 给 manager 注入 `NODE_OPTIONS=--report-*`、EOF `:2071-2097`、`restart_server:2153`、`quit_app:2445`、`run():3100` 改 `.build().run()`、`/shell/status:1754` + `get_shell_status:2675`、`cleanup:714-743` 抽取、`shell-chrome.js:560-587`、两个契约测试）。
-**MVP** = 全部必做 + 证据链（含 dump）；缓做：manager 心跳、manager 侧 dsh web 自愈、Job Object。
-**测试**：Rust 纯逻辑 `cargo test --lib`（`decide` 状态机全表、退避、放弃窗口、证据轮转、`needs_kill`）；JS（`test-control-plane` 断言 manager 退出码契约、`test-shell-chrome` 断言新符号/字段）；Windows 实机 10 项（taskkill manager→≤3s 自愈 + 证据目录、坏安装→3 次放弃、只有 1 个 manager、退出零残留、dev/正式互不干扰、强杀壳孤儿清理不回归）。
-**唯一待决策**：是否把"dsh web 意外退出"的自愈下沉到 manager（phase 2，需同时改 `scripts/` 真源 + `resources/` 副本，有漂移前科）。MVP 不动 manager 即可达成卡片目标。
+**MVP** = 检测 + 退出码取证 + 提示 + 证据目录（含孤儿 dump）+ 修两个 bug；缓做：Job Object、Sysmon 联动、manager 心跳。
+**测试**：Rust 纯逻辑 `cargo test --lib`（`decide`/`needs_kill`/证据轮转）；JS（`test-control-plane` 断言 manager 退出码契约、`test-shell-chrome` 断言新符号/字段）；Windows 实机（taskkill manager → **检测到 + 退出码 1 + 证据目录齐全 + 不自动重启**；退出零残留；dev/正式互不干扰；强杀壳孤儿清理不回归）。
+**已决**：不做自动重启（D1）；不下沉 manager 自愈（D3）。
 
 ---
 
@@ -151,6 +167,8 @@ A 壳内 watchdog + `try_wait` ✅ 主方案；B Job Object 🔶 phase 3 互补�
 | **1（对同源插件唯一有效）** | 9 个危险端点从"执行"改为"登记 Rust 侧一次性槽位 `PENDING_CONFIRM` + 打开壳拥有的 confirm 窗口"；真正执行移到新 IPC `resolve_pending_action(nonce)`，confirm 窗走 IPC（capabilities/launcher.json 的 windows 加 `"confirm"`）；**动作描述必须由 Rust 生成**（防"确认框写刷新、实际 quit"）；槽位一次一个 + 60s 过期；`shell-chrome.js:71-91` ACTIONS 给危险项加 `confirm:true` | 同源第三方插件 |
 | **2（只宣称防外部）** | `BRIDGE_TOKEN` 每次页面加载轮换（`:2270-2280`），注入 `__DSH_BRIDGE_TOKEN__`，`bridge()` 加请求头；**豁免** `/alive` 与通知插件四端点；明确不承诺防同源插件 | 外部网页（纵深） |
 | **3（可选）** | CORS 从 `*` 收窄为白名单回显 Origin / 加 `Sec-Fetch-Site` 检查 | 纵深 |
+
+**阶段 1 的权衡（D4 已落定）**：壳菜单里的「退出/重启」在**远程 dsh 页**上也是走桥的（远程页无 `__TAURI__`），所以它**也会**触发确认窗——因为"请求是否来自壳 chrome"在页面主世界里无法区分（插件能读到一切）。**接受**：页面发起的危险动作一律确认；**托盘菜单**是免确认的壳内入口（用户真正的退出/重启通道）。**不采用**"壳 chrome 加标记"（插件可伪造，防护归零）。
 
 **测试扩展**：`test-shell-chrome.mjs` 增断言（危险集必须 `confirm:true`；lib.rs 危险端点 match 臂内不再直接调执行函数；含 `__DSH_BRIDGE_TOKEN__` 且 `bridge()` 设头）；新增 `test-bridge-guards.mjs` 做源码级 Host/Origin 判定断言。**只读验证**：对 `GET /shell/state`、`/window/state` 验证无 token 403 / 有 token 200，**绝不 POST 危险端点**。
 
@@ -195,18 +213,24 @@ A 壳内 watchdog + `try_wait` ✅ 主方案；B Job Object 🔶 phase 3 互补�
 
 ---
 
-## 5. 实施顺序与待决策点
+## 5. 实施顺序与决策状态
 
-**建议顺序**（每项独立可验证，互不阻塞）：
-1. **卡 2（壳层守护）+ 卡 1 的 S1/S2**（同一处代码：EOF 处取退出码 + 退避自动重启）—— 一举解决"无自动恢复"与"无退出证据"。
-2. **卡 1 的 S3**（壳内 watchdog + `MiniDumpWriteDump`）—— 取代失效的 comsvcs 路径，治 L3 风暴。
+**建议顺序**（每项独立可验证，互不阻塞；**均未开始实施**）：
+1. **卡 2（壳层守护）+ 卡 1 的 S1/S2**（同一处代码：EOF/`try_wait` 取退出码 + 取证 + 提示，**不自动重启**）—— 一举解决"无退出证据"与"UI 分不清死活"。
+2. **卡 1 的 S3**（壳内 watchdog + `MiniDumpWriteDump`，**只 dump 不 kill**）—— 取代失效的 comsvcs 路径，治 L3 风暴。
 3. **卡 4 的 ②④**（纯 Rust，低风险）→ **①**（NSIS）。
 4. **卡 3 阶段 0**（Host/Origin 校验，半天）→ 阶段 1（确认窗 + IPC，工作量最大）。
-5. 卡 1 的 S4（Job Object）、卡 3 阶段 2/3 视情况。
+5. 卡 1 的 S4（Job Object）、卡 3 阶段 2/3、G4（Sysmon）视情况。
 
-**待用户决策**：
-1. 卡 1：09-09 00:47–00:48 是第 4 次复现还是手动关闭？（决定"壳是否也会死"）
-2. 卡 1：是否接受自动重启退避策略（可能掩盖复现）；是否装 Sysmon；火绒日志人工核对。
-3. 卡 2：是否把 dsh web 自愈下沉到 manager（phase 2，需改真源 + 副本）。
-4. 卡 3：阶段 1 的"危险动作确认窗"是否可接受（每次危险操作多一次确认）—— 这是**唯一能挡同源插件**的方案。
-5. 卡 4：① 的"旧版在跑时不删快捷方式"是有意的能力取舍，确认接受。
+**决策状态**（用户 2026-09-09）：
+- ✅ **D1** 不做自动重启 → 改为「检测 + 取证 + 提示，用户手动重启」
+- ✅ **D2** 可接受 Sysmon（极简配置 EID1 + EID5）
+- ✅ **D3** 不下沉 dsh web 自愈到 manager
+- ✅ **D4** 接受"页面壳菜单的退出/重启也走确认窗"（托盘免确认）
+- ✅ **D5** 接受卡 4 ① 的取舍（旧版在跑时不删其快捷方式）
+- ✅ **D6** 03:04 退出 = 用户操作；00:47–00:48 第 4 次复现**未确认**
+
+**仍待确认（不阻塞实施）**：
+1. 00:47–00:48 是否第 4 次复现（决定"壳是否也会死"）——用户表示不记得。
+2. WerSvc 7038/7009 是否已恢复；**火绒日志**——用户反馈"正常/异常记录都看不到相关项" → **AV 拦截这条线索可基本排除**。
+3. 上游 dsh 侧 `dsh-win32-process` 的 job 语义为何没能保护 manager（需在 dsh 仓库继续查）。
