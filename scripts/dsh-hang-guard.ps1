@@ -60,10 +60,12 @@ $evidenceRoot = Join-Path $env:LOCALAPPDATA ("dsh-hang-" + $App + "-" + (Get-Dat
 $guardLog = Join-Path $env:LOCALAPPDATA ("dsh-hang-guard-" + $App + ".log")
 $samplerMs = 500
 $suspectWindowSec = 2
-# Processes whose birth/death we care about (CommandLine is only fetched for the
-# suspects, on appearance -- a full CIM sweep every 500 ms would be wasteful).
-$watchNames = @("node", "dsh-desktop", "dsh-desktop-dev", "taskkill", "powershell", "pwsh", "cmd", "conhost", "msedgewebview2")
-$suspectNames = @("taskkill", "powershell", "pwsh", "cmd")
+# Processes whose DISAPPEARANCE is evidence (the service tree). conhost/cmd are
+# sampled as context only -- they churn constantly and would drown the log.
+$trackNames = @("node", "dsh-desktop", "dsh-desktop-dev", "msedgewebview2")
+# Processes that can be the killer, reported when a tracked process vanishes.
+$suspectNames = @("taskkill", "powershell", "pwsh", "cmd", "conhost")
+$watchNames = $trackNames + $suspectNames
 
 function Write-Guard([string]$msg) {
   $line = (Get-Date -Format "yyyy-MM-dd HH:mm:ss") + " " + $msg
@@ -86,10 +88,21 @@ function Get-LatestBridgePort {
   return $null
 }
 function Test-WebAlive([string]$url) {
+  # Any HTTP status counts as alive (a 401/404 still proves the event loop
+  # answers). PS 5.1's Invoke-WebRequest THROWS on 4xx/5xx, so the status has to
+  # be read off the exception -- the manager.log URL has no token, and a bare
+  # probe always gets 401.
   try {
     $r = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
     return ($r.StatusCode -ge 200 -and $r.StatusCode -lt 500)
-  } catch { return $false }
+  } catch {
+    $resp = $_.Exception.Response
+    if ($null -ne $resp) {
+      $code = [int]$resp.StatusCode
+      return ($code -ge 200 -and $code -lt 500)
+    }
+    return $false
+  }
 }
 function Request-BridgeRestart {
   $port = Get-LatestBridgePort
@@ -176,7 +189,7 @@ while ($true) {
   foreach ($p in $snap) { $cur[[int]$p.Id] = $p }
   $gone = @()
   foreach ($id in $prev.Keys) {
-    if (-not $cur.ContainsKey($id)) {
+    if ((-not $cur.ContainsKey($id)) -and ($trackNames -contains $prev[$id].Name)) {
       $gone += $prev[$id]
     }
   }
