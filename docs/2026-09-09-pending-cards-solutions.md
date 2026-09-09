@@ -234,3 +234,19 @@ A 壳内 `try_wait` 检测 + 取证 + 提示 ✅ **主方案（D1 后）**；B J
 1. 00:47–00:48 是否第 4 次复现（决定"壳是否也会死"）——用户表示不记得。
 2. WerSvc 7038/7009 是否已恢复；**火绒日志**——用户反馈"正常/异常记录都看不到相关项" → **AV 拦截这条线索可基本排除**。
 3. 上游 dsh 侧 `dsh-win32-process` 的 job 语义为何没能保护 manager（需在 dsh 仓库继续查）。
+
+---
+
+## 6. 实施记录（2026-09-09 晚）
+
+分支 `fix/manager-watchdog-forensics`（`028b77a` → `a35c3b8`），已实施 **卡 2 全部 + 卡 1 的 S1/S2**：
+
+- **新增** `src-tauri/src/manager_guard.rs`：`MgrPhase`/`ManagerGuard`（世代号 + 意图停止位 + `reported_generation` 幂等 + `last_exit`）、退出码语义化、证据目录写入与保留 5 份、孤儿 node 查询（与启动清理共用同一 matcher）。
+- **检测**：stdout EOF（快路径）+ 2s `try_wait` 看护线程（权威路径）；`handle_manager_exit` 两阶段登记（先确认可上报 → 取退出码 → 仍存活则不占用槽位）。
+- **取证**：`<runtime>/reports/manager-crash-<unix>-gen<N>/` = `summary.json` + `manager.log.tail`(64 KiB) + `shell-session.log.tail` + `orphans.txt` + `wer.txt` + `node-reports/`（复制 manager 已产出的 `report.*.json`）。
+- **不自动重启**（D1）：退出处理区域不含 `start_server`/`restart_server`/`Command::new`（契约测试锁死）。
+- **修 bug ①**：`hasServer` 改由 `try_wait` 判活；**修 bug ②**：`stop_child` 先 `try_wait`，已退出 PID 不再 `taskkill`。
+- **UI**：`/shell/status` 补 `managerAlive`/`managerPid`/`managerPhase`/`lastManagerExit`；新增 `/shell/open-evidence` + `open_evidence_dir`；chrome 条幅常驻显示退出码与证据目录 + 「重启服务」「打开证据目录」；启动页加载后主动查壳状态。
+- **顺带修复（实机验证发现）**：故障回退导航此前落到 `about:blank` 黑屏——`LAUNCHER_URL` 在 setup 时被采集为 `about:blank`；且 Windows 本地页是 `http://tauri.localhost/`（非 `tauri://`）。现抽 `is_shell_local_url` 三处统一。
+- **实机验证**（dev 版，`scripts/verify-manager-guard.ps1`，全 PASS）：`taskkill /F` manager → 检测到 + 退出码 1（0x00000001）+ 证据目录齐全 + **8 秒内无自动重启** + `/shell/status` 如实；UI 条幅与启动页均显示退出码/证据路径；点「重启服务」恢复且不产生多余证据；`/shell/quit` 退出**不**产生崩溃记录。
+- **未做**（留卡 1）：S3 挂起 dump（`MiniDumpWriteDump`）、S4 Job Object、G 外部守护、Sysmon（D2）；`node-reports/` 只复制 manager 自己产出的报告，壳不注入 `NODE_OPTIONS`（一枚不支持的 flag 会炸整棵树）。

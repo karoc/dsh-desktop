@@ -186,20 +186,33 @@ Start-Process "C:\Users\<u>\AppData\Local\DSH Smoothly Desktop\dsh-desktop.exe"
 ### 4.4 开发版 UI 自动验收（WSL interop，不必等用户肉眼）
 
 dev 版**就是给 agent 做验证的**（用户明确要求）：装包 → 启动 → 用 `scripts/verify-dev-ui.ps1`
-（Windows 侧执行，WSL 里经 `powershell.exe -File "$(wslpath -w ...)"` 调用）驱动真实 WebView2：
+（Windows 侧执行）驱动真实 WebView2。
+
+⚠️ **脚本必须在 Windows 可见的路径上执行**：本机 Windows **读不到 WSL 文件系统**——
+`wslpath -w` 给出的 `\\wsl.localhost\Ubuntu-24.04\...` 在 Windows 侧 `Test-Path` 为 False、
+`-File` 报"无法识别"。做法：在 `D:\Dev\dsh-desktop-dev` 里 `git fetch && git checkout -f <branch>`，
+然后跑该 clone 内的脚本（分支已包含脚本本体）：
 
 ```sh
 PS=/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe
-S="$(wslpath -w scripts/verify-dev-ui.ps1)"
-# 静默安装 + 启动（产物路径见 §4）
+U="$PS -NoProfile -ExecutionPolicy Bypass -File"
+# 静默安装 + 启动（产物路径见 §4；旧实例先 Stop-Process -Name dsh-desktop-dev）
 "$PS" -NoProfile -Command "Start-Process -FilePath '<setup.exe>' -ArgumentList /S -Wait"
 "$PS" -NoProfile -Command "Start-Process 'C:\Users\<u>\AppData\Local\DSH Smoothly Desktop Dev\dsh-desktop-dev.exe'"
-"$PS" -NoProfile -ExecutionPolicy Bypass -File "$S" -Action dump          # 元素/坐标快照
-"$PS" -NoProfile -ExecutionPolicy Bypass -File "$S" -Action shot -Out "D:\Dev\_shots\x.png"
-"$PS" -NoProfile -ExecutionPolicy Bypass -File "$S" -Action invoke -Key kanban
-"$PS" -NoProfile -ExecutionPolicy Bypass -File "$S" -Action click  -Key close
-"$PS" -NoProfile -ExecutionPolicy Bypass -File "$S" -Action hover         # 顶缘悬停唤出
+"$U" 'D:\Dev\dsh-desktop-dev\scripts\verify-dev-ui.ps1' -Action dump          # 元素/坐标快照
+"$U" 'D:\Dev\dsh-desktop-dev\scripts\verify-dev-ui.ps1' -Action shot -Out "D:\Dev\_shots\x.png"
+"$U" 'D:\Dev\dsh-desktop-dev\scripts\verify-dev-ui.ps1' -Action invoke -Key kanban
+"$U" 'D:\Dev\dsh-desktop-dev\scripts\verify-dev-ui.ps1' -Action click  -Key close
+"$U" 'D:\Dev\dsh-desktop-dev\scripts\verify-dev-ui.ps1' -Action hover         # 顶缘悬停唤出
+# 服务异常退出全链路（kill → 检测/取证/不自动重启 → 手动重启恢复）：
+"$U" 'D:\Dev\dsh-desktop-dev\scripts\verify-manager-guard.ps1' -Action all -WaitSec 10
 ```
+
+**`verify-manager-guard.ps1` 动作**：`kill`（taskkill 掉 manager 并打印时间）/ `check`（等待后断言：
+无自动重启、证据目录 + 5 个文件、summary 退出码 1/0x00000001、session.log 有 `manager exit:`、
+`/shell/status` 的 `managerAlive=false` 与 `lastManagerExit.hex`）/ `status`（打印桥状态）/
+`restart`（POST /restart 并等 manager 回来）/ `cleanup`（杀残留 node 树）/ `all`（kill+check）。
+dev 数据目录 = `%APPDATA%\dsh.smoothly.desktop.dev`，证据 = `<runtime>\reports\manager-crash-*-genN\`。
 
 要点（都是实测结论）：
 - **UIAutomation 能穿透 WebView2**：DOM 按钮（新建会话/看板入口…）与壳注入的菜单栏按钮、
@@ -211,6 +224,10 @@ S="$(wslpath -w scripts/verify-dev-ui.ps1)"
   vs 壳窗口的"关闭"）必须用坐标区分——壳三键固定在右侧 x≈2495 起，取 `x < 2490` 即页面自己的按钮。
 - PowerShell 脚本**保持纯 ASCII**（中文用 `[regex]::Unescape("\uXXXX")` 构造）：PS 5.1 按 ANSI
   解码无 BOM 的 UTF-8 文件，脚本里的中文注释/字面量会乱码甚至引发 ParserError。
+- PS 5.1 两个数据陷阱（都已在脚本内规避）：**CimInstance 标量没有 `.Count`**（`Get-CimInstance`
+  命中 1 条时 `.Count` 为空串，判断会误判为 0）→ 调用点一律 `@(...)` 包裹；**`Get-Content -Raw`
+  按 ANSI 解码**，读 UTF-8 的 `summary.json` 会乱码并让 `ConvertFrom-Json` 报错 → 用
+  `[IO.File]::ReadAllText($p, [Text.Encoding]::UTF8)`。
 - `[string]::Concat([char]...)` 在 PS 5.1 会抛 ArgumentNullException → 用 `[regex]::Unescape` 或 `+`。
 - 置前不可靠（`AppActivate`/`UIA SetFocus` 实测失败），**不要靠抢焦点**，用 PrintWindow + UIA。
 
@@ -231,19 +248,29 @@ S="$(wslpath -w scripts/verify-dev-ui.ps1)"
 | 视觉现象"无法远程确认"（部分已证伪） | 壳窗口的**布局/遮挡/点击命中**可经 interop 自动验证，不必等用户：`scripts/verify-dev-ui.ps1 -Action dump\|shot\|invoke\|click\|hover`。关键事实：**UIAutomation 能穿透 WebView2**（DOM 按钮、壳注入的菜单栏按钮/悬停条都在 UIA 树里，坐标为物理像素，收起时 y 为负值）；`PrintWindow(hwnd,hdc,2)` 能在**不抢焦点**的前提下截 DWM 合成内容。仍须用户亲测的只剩：动效观感、多显示器/DPI 差异、真实拖拽手感、黑屏时序类现象 |
 | `:host.cls` 复合选择器在 Chromium 不匹配 | 实测 `:host.fullscreen-hidden { ... }` 完全不生效（`getComputedStyle(host)` 仍是基础值），**只有 `:host(.cls)` 函数式可靠** —— 壳内所有 host 状态样式一律用函数式 |
 | 收起把手按状态切 `display` → 无限显示↔隐藏循环 | 收起瞬间把手（`.edge-strip`）在静止鼠标下重新出现会触发**合成 mouseenter** → 唤出 → 3s 收起 → 又出现 → ……死循环（Chromium 实测）。**把手必须常驻**（不切 display/pointer-events），只在收起态给悬停底色提示 |
+| Windows 本地页 URL 是 `http://tauri.localhost/` | WebView2 不支持自定义 scheme，Tauri 2 在 Windows 用 `<scheme>.localhost` 代管；判定本地页必须同时认 `tauri://` 与 `*.localhost`（`is_shell_local_url`）。只写 `scheme()=="tauri"` 在 Windows 恒 false |
+| setup 阶段 `w.url()` 是 `about:blank` | 窗口刚建、尚未导航；把它当启动页 URL 会让"故障回退导航"落到 about:blank 黑屏。权威采集点 = `on_page_load`（真实加载完成） |
+| 判活/取退出码 | `Child::try_wait()` 是权威信号且**状态被缓存**（后续再调用仍返回同一退出码）；`child.is_some()` 判活是错的（进程死了句柄还在）。`stop_child` 必须先 `try_wait`，否则会对已退出（可能被复用）的 PID 再 `taskkill` |
+| 故障事件与页面导航的时序 | `server-down` 之类的 emit 发生在"导航回启动页"之前，新加载的页面**收不到**该事件 → 页面必须主动 `invoke` 一次状态查询，否则停在"正在启动…"的假象上 |
 
 ## 6. 验证与门禁
 
 - 快速契约：`node scripts/test-shell-chrome.mjs`（vm 沙箱加载 chrome 暴露配置——文件内有
   `__DSH_CHROME_TEST__` 测试钩子，命中则只暴露不渲染；断言菜单 id ↔ ACTIONS ↔ lib.rs
-  桥端点/命令注册三方不漂移 + dev identity 配置）。
+  桥端点/命令注册三方不漂移 + dev identity 配置 + **manager 看护契约**：退出处理区域不得出现
+  `start_server`/`restart_server`/`Command::new`（D1 不自动重启）、`stop_child` 必须先 `try_wait`、
+  `/shell/status` 字段名、`is_shell_local_url`）。
 - 全量：`npm test`（7 套，含 manager/代理/通知插件/契约）。
 - 改 chrome 渲染逻辑后：用最小 DOM 桩跑渲染路径（createElement/attachShadow/querySelector 等
   手写桩，注意 createTextNode 也要桩；断言宿主/下拉数/按钮数）。
+- Rust 单测：`cargo test --manifest-path src-tauri/Cargo.toml --lib`（纯逻辑：证据目录写入/保留、
+  退出码语义、ISO 时间、日志尾读；CI 也跑）。**宿主机 Windows 有 cargo**（`%USERPROFILE%\.cargo\bin\cargo.exe`，
+  经 interop 在 `D:\Dev\dsh-desktop-dev` 里跑，不必等 CI）——改 Rust 后先本地 clippy+test 再推。
 - CI：`cargo check`（ubuntu，系统依赖齐全）→ windows（NSIS + 布局断言 + runtime smoke，**真正的
   编译门禁，Windows 专属代码错误在这暴露**）→ linux。`linux-smoke` 是 main 上**既有的失败**
   （空日志，与改动无关，不阻塞），别被它误导。
-- 本容器无 cargo/系统库 → 本地只能跑 node 测试，Rust 编译靠 CI。
+- 行为验证：dev 包实机（§4.4 的 `verify-dev-ui.ps1` + `verify-manager-guard.ps1`），
+  **不要交给用户肉眼验收**——用户明确要求 agent 自己装包、启动、kill、断言。
 
 ## 7. 维护（常用常新）
 
