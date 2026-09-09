@@ -57,9 +57,12 @@ pub(crate) fn probe_url(url: &str, timeout: Duration) -> bool {
 /// `Get-NetTCPConnection` (same-user queries need no admin) and falls back to
 /// the runtime-path matcher when the cmdlet is unavailable.
 pub(crate) fn dsh_web_pid_for_url(url: &str, runtime: &Path) -> Option<u32> {
+    // Parse on every platform (a malformed URL must never resolve to a PID);
+    // only the Windows path needs the port.
+    let parsed = tauri::Url::parse(url).ok()?;
     #[cfg(windows)]
     {
-        let port = tauri::Url::parse(url).ok()?.port_or_known_default()?;
+        let port = parsed.port_or_known_default()?;
         let script = format!(
             "(Get-NetTCPConnection -LocalPort {port} -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty OwningProcess)"
         );
@@ -71,6 +74,8 @@ pub(crate) fn dsh_web_pid_for_url(url: &str, runtime: &Path) -> Option<u32> {
             }
         }
     }
+    #[cfg(not(windows))]
+    let _ = parsed;
     // Fallback: the newest node.exe whose command line carries this runtime and
     // is not the manager itself.
     let marker = runtime.to_string_lossy().replace('/', "\\");
