@@ -18,6 +18,9 @@ use std::sync::Mutex;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem};
 use tauri::{AppHandle, Emitter, Listener, Manager, State};
 
+mod manager_guard;
+use manager_guard::{MgrPhase, ManagerExit, ManagerGuard};
+
 /// The shell chrome (custom title bar + menu bar), injected into the MAIN
 /// webview on every page load. Embedded at compile time (include_str! is a
 /// cargo rebuild dependency): the menu definition point is the `SHELL_MENUS`
@@ -50,6 +53,11 @@ struct ServerState {
     proxy: Mutex<ProxyState>,
     /// 最近一次故障（中文摘要，供 chrome 故障条幅披露）。服务正常启动后清空。
     last_error: Mutex<Option<String>>,
+    /// manager 生命周期看护（阶段/世代/意图停止/最近一次退出）——见
+    /// manager_guard.rs。**只检测+取证+提示，绝不自动重启**（决定 D1）。
+    guard: Mutex<ManagerGuard>,
+    /// 本壳进程启动时刻（unix 秒），取证时记入 shellUptimeSecs。
+    shell_started_at: u64,
 }
 
 /// Proxy panel data mirrored from manager protocol lines (see ServerState.proxy).
@@ -108,24 +116,43 @@ fn send_line(stdin: &mut Option<ChildStdin>, line: &str) {
 }
 
 /// Kill the manager child and, on Windows, its whole process tree.
+///
+/// This is the **only** intentional stop path (tray 重启/退出、restart_server、
+/// quit_app). It marks the current generation intentional and bumps it before
+/// touching the process, so the stdout reader / watchdog treat the exit as
+/// expected instead of reporting a crash.
+///
+/// Bug fix (2026-09-09): never `taskkill /PID` a PID that has already exited —
+/// the PID may have been reused by an unrelated process by then. `try_wait`
+/// first; a reaped child is simply waited on.
 fn stop_child(state: &ServerState) {
+    {
+        let mut guard = state.guard.lock().unwrap();
+        guard.intentional = true;
+        guard.phase = MgrPhase::Stopping;
+        guard.generation += 1; // stale detectors must ignore the coming exit
+    }
     // Drop our stdin handle first: the manager sees EOF and stops reading.
     *state.stdin.lock().unwrap() = None;
     if let Some(mut child) = state.child.lock().unwrap().take() {
-        #[cfg(windows)]
-        {
-            let mut kill = Command::new("taskkill");
-            no_console_window(&mut kill);
-            let _ = kill
-                .arg("/pid")
-                .arg(child.id().to_string())
-                .arg("/T")
-                .arg("/F")
-                .status();
+        let already_exited = matches!(child.try_wait(), Ok(Some(_)));
+        if !already_exited {
+            #[cfg(windows)]
+            {
+                let mut kill = Command::new("taskkill");
+                no_console_window(&mut kill);
+                let _ = kill
+                    .arg("/pid")
+                    .arg(child.id().to_string())
+                    .arg("/T")
+                    .arg("/F")
+                    .status();
+            }
+            let _ = child.kill();
         }
-        let _ = child.kill();
         let _ = child.wait();
     }
+    state.guard.lock().unwrap().phase = MgrPhase::Down;
 }
 
 /// Windows only: spawn console programs without flashing a cmd window
@@ -663,7 +690,7 @@ fn legacy_shortcut_candidates(home: &std::path::Path) -> Vec<std::path::PathBuf>
 /// 跑一条 PowerShell 并取 stdout 非空行（Windows 专用；跨平台编译安全）。
 /// CREATE_NO_WINDOW：powershell.exe 是控制台程序，不加会在启动页出现前/后
 /// 闪一个黑命令窗（cleanup 后台扫描 + launcher checkLegacy 每次启动都会跑）。
-fn powershell_lines(script: &str) -> Vec<String> {
+pub(crate) fn powershell_lines(script: &str) -> Vec<String> {
     #[cfg(windows)]
     {
         let mut cmd = std::process::Command::new("powershell.exe");
@@ -714,12 +741,13 @@ fn legacy_process_running(legacy_dir: &std::path::Path) -> bool {
 fn cleanup_stale_service_tree(app: &AppHandle) {
     let runtime_dir = runtime_dir(app); // <app_data>/runtime
     let marker = runtime_dir.to_string_lossy().replace('/', "\\");
-    // 正则前瞻：runtime 路径后随 \ / 引号 / 空白 / 行尾 才算命中（排除
-    // runtime-backup、runtime_old、runtime-extra 等子串延续）。
-    let script = format!(
-        r#"$m = [regex]::Escape('{marker}'); Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object {{ $null -ne $_.CommandLine -and $_.CommandLine -match ($m + '(?=[\\"''\s]|$)') }} | ForEach-Object {{ $_.ProcessId }}"#
-    );
-    let stale = powershell_lines(&script);
+    // 匹配逻辑与取证共用 manager_guard::orphan_service_node_pids（正则前瞻：
+    // runtime 路径后随 \ / 引号 / 空白 / 行尾，排除 runtime-backup、runtime_old
+    // 等子串延续）。
+    let stale: Vec<String> = manager_guard::orphan_service_node_pids(&marker)
+        .into_iter()
+        .map(|o| o.pid)
+        .collect();
     if stale.is_empty() {
         return;
     }
@@ -1725,6 +1753,11 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
             let _ = open_data_dir(app.clone());
             ("200 OK", serde_json::json!({ "ok": true }).to_string())
         }
+        ("POST", "/shell/open-evidence") => {
+            // 最近一次 manager 故障的证据目录（无故障时开 reports 根目录）。
+            let _ = open_evidence_dir(app.clone());
+            ("200 OK", serde_json::json!({ "ok": true }).to_string())
+        }
         ("POST", "/shell/quit") => {
             let _ = quit_app(app.clone(), app.state::<ServerState>());
             ("200 OK", serde_json::json!({ "ok": true }).to_string())
@@ -1753,12 +1786,7 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
         }
         ("GET", "/shell/status") => {
             let state = app.state::<ServerState>();
-            let last_error = state.last_error.lock().unwrap().clone();
-            let has_server = state.child.lock().unwrap().is_some();
-            (
-                "200 OK",
-                serde_json::json!({ "lastError": last_error, "hasServer": has_server }).to_string(),
-            )
+            ("200 OK", shell_status_json(&state).to_string())
         }
         ("GET", "/shell/legacy") => {
             ("200 OK", legacy_check_json(app).to_string())
@@ -1903,6 +1931,7 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
     }
 
     let mut child = cmd.spawn().map_err(|e| format!("spawn manager: {e}"))?;
+    let generation: u64;
     {
         // Fresh manager: reset every mirrored state and the tray item text.
         // The manager re-reports `update-status`/`preinstalled-updates` after
@@ -1910,6 +1939,16 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
         // the previous manager never re-appears on the freshly loaded page.
         let state = app.state::<ServerState>();
         *state.stdin.lock().unwrap() = child.stdin.take();
+        // 新一代 manager：世代号 +1、清意图停止位、记录 pid。检测线程（stdout
+        // EOF + try_wait 看护）用世代号围栏，旧世代的迟到事件一律丢弃。
+        generation = {
+            let mut guard = state.guard.lock().unwrap();
+            guard.generation += 1;
+            guard.intentional = false;
+            guard.pid = child.id();
+            guard.phase = MgrPhase::Starting;
+            guard.generation
+        };
         *state.update.lock().unwrap() = UpdateStatus::default();
         *state.op.lock().unwrap() = OpStatus::default();
         *state.preinstalled_updates.lock().unwrap() = serde_json::json!({});
@@ -1945,6 +1984,13 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
                         if let Some(url) = ev.get("url").and_then(|v| v.as_str()) {
                             // 服务起来了：清空历史故障提示，条幅不再显示。
                             *handle.state::<ServerState>().last_error.lock().unwrap() = None;
+                            {
+                                let state = handle.state::<ServerState>();
+                                let mut guard = state.guard.lock().unwrap();
+                                if guard.generation == generation && !guard.intentional {
+                                    guard.phase = MgrPhase::Running;
+                                }
+                            }
                             let _ = handle.emit("server-url", url);
                             *LIVE_DSH_URL.lock().unwrap() = Some(url.to_string());
                             // 新地址到来：页面可用信号重置，导航兜底会持续驱动
@@ -2068,32 +2114,9 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
                 }
             }
         }
-        // stdout EOF => manager exited (or the dsh child detached) => tell the
-        // UI and go back to the launcher page so it re-arms for the next boot
-        // (a restart) or shows the error + retry (a crash).
-        // 故障披露：manager 下线时记录根因摘要（chrome 条幅 / 启动页都能读到）。
-        if handle.state::<ServerState>().last_error.lock().unwrap().is_none() {
-            *handle.state::<ServerState>().last_error.lock().unwrap() =
-                Some("dsh 服务已退出（manager 进程下线）——完整日志见数据目录 manager.log".into());
-        }
-        let _ = handle.emit("server-down", ());
-        *LIVE_DSH_URL.lock().unwrap() = None;
-        // Back to the launcher so it re-arms for the next boot (a restart) or
-        // shows the error + retry (a crash). Guard: only when we're actually on
-        // a dsh loopback page, never away from a valid launcher URL.
-        if let Some(cur) = handle.get_webview_window("main").and_then(|w| w.url().ok()) {
-            let is_dsh = cur.scheme() == "http"
-                && cur.host_str().map(|h| h == "127.0.0.1" || h == "localhost").unwrap_or(false);
-            if is_dsh {
-                if let Some(url) = LAUNCHER_URL.lock().unwrap().clone() {
-                    if let Ok(u) = tauri::Url::parse(&url) {
-                        if let Some(w) = handle.get_webview_window("main") {
-                            let _ = w.navigate(u);
-                        }
-                    }
-                }
-            }
-        }
+        // stdout EOF => manager exited (or closed its stdout). Report it through
+        // the lifecycle guard: exit code + evidence, never an auto-restart.
+        handle_manager_exit(&handle, generation, "stdout-eof");
     });
 
     // Manager's stderr: surface in the UI log AND our own stderr so that any
@@ -2128,6 +2151,9 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
     eprintln!("[dsh-desktop] manager spawned (pid {pid})");
     let _ = handle.emit("server-log", format!("manager spawned (pid {pid})"));
     *app.state::<ServerState>().child.lock().unwrap() = Some(child);
+    // 看护线程：stdout EOF 之外的第二条检测路径。若 manager 的某个孙进程继承
+    // 了 stdout 管道，EOF 可能永不出现；`try_wait` 是权威信号（2s 轮询）。
+    start_manager_watchdog(app, generation);
     // ── 首启 URL 索要：manager 的首个 URL 协议事件可能在 shell 的 stdout
     // 读取器就绪前发出而丢失（LIVE_DSH_URL 永远为空 → 黑屏且重启服务才恢复
     // 的根因之一）。启动后按 2s/2s/4s 主动让 manager 重发（report-url）；
@@ -2149,11 +2175,224 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// 主窗口若停在 dsh 页则退回启动页（故障披露 + 重试入口）。
+fn navigate_back_to_launcher(app: &AppHandle) {
+    let Some(cur) = app.get_webview_window("main").and_then(|w| w.url().ok()) else {
+        return;
+    };
+    let is_dsh = cur.scheme() == "http"
+        && cur
+            .host_str()
+            .map(|h| h == "127.0.0.1" || h == "localhost")
+            .unwrap_or(false);
+    if !is_dsh {
+        return;
+    }
+    if let Some(url) = LAUNCHER_URL.lock().unwrap().clone() {
+        if let Ok(u) = tauri::Url::parse(&url) {
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.navigate(u);
+            }
+        }
+    }
+}
+
+/// manager 是否真的还活着：以 `try_wait` 为准（句柄在手，权威、零依赖）。
+/// 修 bug ①（2026-09-09）：旧实现用 `child.is_some()` 判活，manager 死后
+/// Child 从不清空 → UI 永远看到 hasServer=true，分不清死活。
+fn manager_alive(state: &ServerState) -> bool {
+    let mut child = state.child.lock().unwrap();
+    match child.as_mut() {
+        Some(c) => !matches!(c.try_wait(), Ok(Some(_))),
+        None => false,
+    }
+}
+
+/// 取 manager 退出码：stdout EOF 可能比进程真正退出早几毫秒，故有界轮询。
+/// 世代号变化（意图停止 / 新 manager 已起）立即放弃，避免把新世代的结果
+/// 记到旧世代头上。
+fn wait_exit_code(state: &ServerState, generation: u64, timeout: std::time::Duration) -> Option<i32> {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if state.guard.lock().unwrap().generation != generation {
+            return None;
+        }
+        {
+            let mut child = state.child.lock().unwrap();
+            if let Some(c) = child.as_mut() {
+                if let Ok(Some(status)) = c.try_wait() {
+                    return status.code();
+                }
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+/// manager 退出处理：**只检测 + 取证 + 提示，绝不自动重启**（决定 D1）。
+/// 两条检测路径（stdout EOF / 看护线程）竞争同一世代号，先到者登记，后到者
+/// 空转（`reported_generation` 幂等）。自动重启会掩盖复现并污染证据。
+fn handle_manager_exit(app: &AppHandle, generation: u64, detected_by: &str) {
+    if manager_guard::shutting_down() {
+        return; // 壳正在退出，manager 下线是预期行为
+    }
+    let state = app.state::<ServerState>();
+    let pid = {
+        let mut guard = state.guard.lock().unwrap();
+        if guard.generation != generation
+            || guard.intentional
+            || guard.reported_generation == generation
+        {
+            return;
+        }
+        guard.reported_generation = generation;
+        guard.phase = MgrPhase::Down;
+        guard.pid
+    };
+    let code = wait_exit_code(&state, generation, std::time::Duration::from_secs(3));
+    let mut exit = ManagerExit {
+        generation,
+        pid,
+        code,
+        hex: manager_guard::hex_code(code),
+        at: manager_guard::now_unix(),
+        detected_by: detected_by.to_string(),
+        evidence_dir: None,
+    };
+    let runtime = runtime_dir(app);
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let webview_url = app
+        .get_webview_window("main")
+        .and_then(|w| w.url().ok())
+        .map(|u| u.to_string());
+    let input = manager_guard::EvidenceInput {
+        runtime: &runtime,
+        data_dir: &data_dir,
+        exit: &exit,
+        shell_uptime_secs: manager_guard::now_unix().saturating_sub(state.shell_started_at),
+        webview_url,
+        version: env!("CARGO_PKG_VERSION"),
+    };
+    exit.evidence_dir = manager_guard::collect_evidence(&input).map(|p| p.display().to_string());
+    let described = manager_guard::describe_exit(code);
+    let summary = match &exit.evidence_dir {
+        Some(dir) => format!("服务异常退出（{described}）——证据已保存到 {dir}"),
+        None => format!("服务异常退出（{described}）——证据目录写入失败，完整日志见数据目录"),
+    };
+    *state.last_error.lock().unwrap() = Some(summary.clone());
+    state.guard.lock().unwrap().last_exit = Some(exit.clone());
+    log_line(
+        &data_dir,
+        &format!(
+            "manager exit: gen={generation} pid={pid} code={code:?} detectedBy={detected_by} evidence={:?}",
+            exit.evidence_dir
+        ),
+    );
+    eprintln!("[dsh-desktop] manager exit: gen={generation} pid={pid} code={code:?} detectedBy={detected_by}");
+    let _ = app.emit(
+        "manager-exit",
+        serde_json::json!({
+            "generation": exit.generation,
+            "pid": exit.pid,
+            "code": exit.code,
+            "hex": exit.hex,
+            "at": exit.at,
+            "detectedBy": exit.detected_by,
+            "evidenceDir": exit.evidence_dir,
+            "summary": summary,
+        }),
+    );
+    let _ = app.emit("server-down", ());
+    *LIVE_DSH_URL.lock().unwrap() = None;
+    navigate_back_to_launcher(app);
+}
+
+/// manager 看护线程：每 2s `try_wait` 一次。stdout EOF 是快路径，但孙进程继承
+/// stdout 管道时 EOF 可能永不出现；`try_wait` 才是权威信号。检测到非意图退出
+/// 即走 handle_manager_exit（取证 + 提示），**不重启**（D1）。
+fn start_manager_watchdog(app: &AppHandle, generation: u64) {
+    let app = app.clone();
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        if manager_guard::shutting_down() {
+            return;
+        }
+        {
+            let state = app.state::<ServerState>();
+            let guard = state.guard.lock().unwrap();
+            if guard.generation != generation
+                || guard.intentional
+                || guard.reported_generation == generation
+            {
+                return; // 已由 stop_child / 另一条检测路径处理
+            }
+        }
+        let exited = {
+            let state = app.state::<ServerState>();
+            let mut child = state.child.lock().unwrap();
+            match child.as_mut() {
+                Some(c) => matches!(c.try_wait(), Ok(Some(_))),
+                None => false,
+            }
+        };
+        if exited {
+            handle_manager_exit(&app, generation, "watchdog");
+            return;
+        }
+    });
+}
+
+/// 壳健康状态（chrome 故障条幅轮询 / 启动页）：最近故障摘要 + manager 真实
+/// 存活 + 最近一次退出的退出码与证据目录。
+fn shell_status_json(state: &ServerState) -> serde_json::Value {
+    let last_error = state.last_error.lock().unwrap().clone();
+    let alive = manager_alive(state);
+    let (phase, pid, last_exit) = {
+        let guard = state.guard.lock().unwrap();
+        (guard.phase.as_str(), guard.pid, guard.last_exit.clone())
+    };
+    serde_json::json!({
+        "lastError": last_error,
+        // hasServer 保留给既有调用方；语义已修正为"真的还活着"（bug ①）。
+        "hasServer": alive,
+        "managerAlive": alive,
+        "managerPid": pid,
+        "managerPhase": phase,
+        "lastManagerExit": last_exit.map(|e| serde_json::json!({
+            "generation": e.generation,
+            "pid": e.pid,
+            "code": e.code,
+            "hex": e.hex,
+            "at": e.at,
+            "detectedBy": e.detected_by,
+            "evidenceDir": e.evidence_dir,
+            "summary": manager_guard::describe_exit(e.code),
+        })),
+    })
+}
+
 /// Restart the service (used by the tray and the launcher's retry button).
 #[tauri::command]
 fn restart_server(app: AppHandle, state: State<'_, ServerState>) -> Result<(), String> {
     stop_child(&state);
     start_server(&app)
+}
+
+/// Open a directory in the platform file manager.
+fn open_dir(dir: &std::path::Path) -> Result<(), String> {
+    #[cfg(windows)]
+    let res = Command::new("explorer").arg(dir).status();
+    #[cfg(target_os = "macos")]
+    let res = Command::new("open").arg(dir).status();
+    #[cfg(target_os = "linux")]
+    let res = Command::new("xdg-open").arg(dir).status();
+    res.map(|_| ()).map_err(|e| format!("open dir: {e}"))
 }
 
 /// Open the dsh data directory in the platform file manager.
@@ -2164,13 +2403,27 @@ fn open_data_dir(app: AppHandle) -> Result<(), String> {
         .app_data_dir()
         .map_err(|e| format!("app data dir: {e}"))?;
     std::fs::create_dir_all(&data).map_err(|e| format!("mkdir: {e}"))?;
-    #[cfg(windows)]
-    let res = Command::new("explorer").arg(&data).status();
-    #[cfg(target_os = "macos")]
-    let res = Command::new("open").arg(&data).status();
-    #[cfg(target_os = "linux")]
-    let res = Command::new("xdg-open").arg(&data).status();
-    res.map(|_| ()).map_err(|e| format!("open dir: {e}"))
+    open_dir(&data)
+}
+
+/// 打开最近一次 manager 故障的证据目录（无故障记录时打开 reports 根目录）。
+/// chrome 故障条幅的「打开证据目录」按钮走这里（IPC / 环回桥双通道）。
+#[tauri::command]
+fn open_evidence_dir(app: AppHandle) -> Result<(), String> {
+    let state = app.state::<ServerState>();
+    let latest = state
+        .guard
+        .lock()
+        .unwrap()
+        .last_exit
+        .as_ref()
+        .and_then(|e| e.evidence_dir.clone());
+    let dir = latest
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.is_dir())
+        .unwrap_or_else(|| runtime_dir(&app).join("reports"));
+    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir: {e}"))?;
+    open_dir(&dir)
 }
 
 /// Current proxy configuration + the settings panel's candidate host lists.
@@ -2444,6 +2697,8 @@ fn test_proxy(upstream: serde_json::Value) -> Result<serde_json::Value, String> 
 /// Quit: kill the service tree and exit the app.
 #[tauri::command]
 fn quit_app(app: AppHandle, state: State<'_, ServerState>) -> Result<(), String> {
+    // 先置退出标志：manager 下线是预期行为，看护线程不得写成"异常退出"。
+    manager_guard::mark_shutting_down();
     stop_child(&state);
     app.exit(0);
     Ok(())
@@ -2671,12 +2926,11 @@ fn plugins_panel_state(app: &AppHandle) -> serde_json::Value {
     })
 }
 
-/// 壳健康状态（chrome 故障条幅轮询用）：最近故障摘要 + 服务是否在跑。
+/// 壳健康状态（chrome 故障条幅轮询用）：最近故障摘要 + manager 真实存活 +
+/// 最近一次退出的退出码/证据目录。见 shell_status_json。
 #[tauri::command]
 fn get_shell_status(state: State<'_, ServerState>) -> serde_json::Value {
-    let last_error = state.last_error.lock().unwrap().clone();
-    let has_server = state.child.lock().unwrap().is_some();
-    serde_json::json!({ "lastError": last_error, "hasServer": has_server })
+    shell_status_json(&state)
 }
 
 pub fn run() {
@@ -2736,6 +2990,8 @@ pub fn run() {
             preinstalled_updates: Mutex::new(serde_json::json!({})),
             proxy: Mutex::new(ProxyState::default()),
             last_error: Mutex::new(None),
+            guard: Mutex::new(ManagerGuard::default()),
+            shell_started_at: manager_guard::now_unix(),
         })
         // Belt-and-suspenders for the taskbar icon: re-apply the bundled icon
         // on every page load (window existence/creation timing is not relied
@@ -3078,6 +3334,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             restart_server,
             open_data_dir,
+            open_evidence_dir,
             quit_app,
             get_update_status,
             check_update,
