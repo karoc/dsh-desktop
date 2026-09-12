@@ -211,6 +211,16 @@ jobs:
             fi
           fi
           gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets[].name'
+          # Sweep: a tag delete/recreate (移 tag) can leave the OLD release as
+          # an untagged draft that the releases page keeps showing in the
+          # Drafts section. Delete every draft/untagged leftover so a publish
+          # never leaves the repo with visible junk drafts.
+          gh release list --limit 100 --json id,tagName,isDraft \
+            --jq '.[] | select(.isDraft == true or (.tagName | startswith("untagged-"))) | [.id, .tagName] | @tsv' \
+          | while read -r LEFT_ID LEFT_TAG; do
+              echo "sweeping leftover draft/untagged release ${LEFT_ID} (${LEFT_TAG})"
+              gh api -X DELETE "repos/${GITHUB_REPOSITORY}/releases/${LEFT_ID}" >/dev/null
+            done
 
   # Linux AppImage/deb for convenience (unsigned). Windows is the primary
   # target; this job produces Linux bundles so the same repo can be tested on
