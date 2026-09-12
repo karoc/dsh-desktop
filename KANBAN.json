@@ -941,30 +941,32 @@
     {
       "id": "card-da7e7f44-7c7f-4bb7-bd59-902095910a70",
       "title": "更新运行中壳的 dsh 到 latest（0.1.2-rc.1 → 0.1.5-rc.1）",
-      "rationale": "用户要求\"更新壳内的 dsh\"：壳内 dsh 是运行时从 npm 安装的（repo 不 pin 版本），已装的正式版（v0.6.3）运行时 dsh 为 0.1.2-rc.1，npm latest 已到 0.1.5-rc.1。走运行中应用的回环桥 POST /update-dsh（桥端口 61127），由 manager 走 pnpm 安装并重启 dsh web。",
-      "rejected": "不直接对 runtime 目录手工 npm install（绕开 manager 的备份/恢复保护与 preinstalled 恢复逻辑，会破坏运行时状态）；不用插件控制台 UI（agent 无法可靠点击 WebView2 内按钮，桥端点等效且可断言）。",
+      "rationale": "用户要求\"更新壳内的 dsh\"：壳内 dsh 运行时从 npm 安装，已从 0.1.2-rc.1 升到 npm latest 0.1.5-rc.1，验证通过。",
+      "rejected": "不手工改 runtime（绕开 manager 备份/恢复与 profile bundles 保护）；第一轮失败后未放弃桥通道，registry 恢复后二轮成功。",
       "sourceSessionId": "session-21f4aa66-2653-46c3-b528-32abaf5f0a68",
-      "status": "todo",
+      "status": "done",
       "tags": [
         "release",
         "dsh-update"
       ],
       "createdAt": 1789201783953,
-      "updatedAt": 1789201783953
+      "updatedAt": 1789203119640,
+      "summary": "壳内 dsh 已更新 0.1.2-rc.1 → 0.1.5-rc.1（runtime/node_modules/@deepseek-ai/dsh = 0.1.5-rc.1，dsh web 重启后 127.0.0.1:58799，桥 /update-status current==latest==0.1.5-rc.1）。首轮尝试（08:29 UTC）因 registry 抖动 + v0.6.3 manager 中途重启中断；二轮（08:47，pnpm 缓存热）~90s 完成。升级后 profile bundles 校验完好（web 包含 model-reasoning/kanban/turn-navigator + 用户 relay 插件），预装插件未丢。"
     },
     {
       "id": "card-fb6cdbac-a918-4dd5-84c9-5b9ecceb5e1f",
       "title": "预装插件核查：源树已 latest（0.2.6/0.2.4/0.4.3），随新版本发布",
-      "rationale": "用户要求\"更新预装的插件\"：audit-preinstalled.mjs 确认源树三个插件已是 npm latest（dsh-kanban 0.2.6 / dsh-model-reasoning 0.2.4 / dsh-turn-navigator 0.4.3），无需改源树；确认 resources 副本同步一致，随本次发布的新版本进入安装包。",
-      "rejected": "不改动已 latest 的插件（skill 纪律：lib/package.json 一致即已最新，diff 只是壳内精简）；runtime 拷贝由用户门控的控制台更新，不属于本次源树改动范围。",
+      "rationale": "用户要求\"更新预装的插件\"：核查结论是源树已全部 latest，无同步动作；release 随包即最新。",
+      "rejected": "不动已 latest 的插件（skill 纪律：lib/package.json 一致即已最新）；运行时拷贝（kanban 0.2.5，旧安装包 v0.6.3 带来的）由用户门控的控制台更新或装新版后解决，不属于源树改动。",
       "sourceSessionId": "session-21f4aa66-2653-46c3-b528-32abaf5f0a68",
-      "status": "todo",
+      "status": "done",
       "tags": [
         "release",
         "plugins"
       ],
       "createdAt": 1789201783976,
-      "updatedAt": 1789201783976
+      "updatedAt": 1789202946745,
+      "summary": "audit-preinstalled.mjs 确认三插件源树均 npm latest（kanban 0.2.6 / model-reasoning 0.2.4 / turn-navigator 0.4.3），git diff 确认 plugins/preinstalled 与 src-tauri/resources/preinstalled 一致（随包副本已同步），无需改动，随 v0.8.0 进入安装包。"
     },
     {
       "id": "card-131f3aa4-cdad-4043-9b98-30c835f079b5",
@@ -972,13 +974,14 @@
       "rationale": "用户要求\"发布一个版本\"：PR #29（fix/manager-watchdog-forensics，28 个提交，CLEAN 可合并）含 manager 退出检测/取证/挂起 dump 等修复；合并后 release-please 会把 PR #28 更新为含 feat 的新版本（预计 0.8.0），合并发布 PR → tag → build.yml 全量门禁 → release job 挂三平台产物。沿用历史流程：本地 merge + 直推（PAT 无 PR 合并权限）。",
       "rejected": "不先发 0.7.1（PR #28 已存在但分支含 28 个 feat/fix 未合并提交，release-please 会重算版本为 minor 提升）；不用 Web 合并（历史卡证明本地 merge 等效且 PR 自动显示 merged）。",
       "sourceSessionId": "session-21f4aa66-2653-46c3-b528-32abaf5f0a68",
-      "status": "todo",
+      "status": "in_progress",
       "tags": [
         "release",
         "publish"
       ],
       "createdAt": 1789201783998,
-      "updatedAt": 1789201783998
+      "updatedAt": 1789202946771,
+      "summary": "PR #29 已 FF 合并进 main（4ddcaa0 推 origin）；release-please 将 PR #28 更新为 0.8.0 并本地合并直推（b384e4c），PR #28 自动显示 MERGED，release-please 已建 tag v0.8.0 + GitHub Release；API 建 tag 未触发 CI（0.6.3 同款），已删 tag 重推 → tag 事件 run 34684203458 进行中（check/test 已过，windows/linux/release 待跑）。"
     }
   ]
 }
