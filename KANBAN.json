@@ -971,17 +971,17 @@
     {
       "id": "card-131f3aa4-cdad-4043-9b98-30c835f079b5",
       "title": "发布新版本：合并 PR #29 → release-please（0.8.0）→ tag → CI 出包 → Release",
-      "rationale": "用户要求\"发布一个版本\"：PR #29（fix/manager-watchdog-forensics，28 个提交，CLEAN 可合并）含 manager 退出检测/取证/挂起 dump 等修复；合并后 release-please 会把 PR #28 更新为含 feat 的新版本（预计 0.8.0），合并发布 PR → tag → build.yml 全量门禁 → release job 挂三平台产物。沿用历史流程：本地 merge + 直推（PAT 无 PR 合并权限）。",
-      "rejected": "不先发 0.7.1（PR #28 已存在但分支含 28 个 feat/fix 未合并提交，release-please 会重算版本为 minor 提升）；不用 Web 合并（历史卡证明本地 merge 等效且 PR 自动显示 merged）。",
+      "rationale": "用户要求\"发布一个版本\"：v0.8.0 包含 PR #29 的 manager 退出检测/取证/挂起 dump/S4b Job 完成端口等本轮全部修复，release-please 自动定版 0.8.0（feat → minor）。",
+      "rejected": "不发 0.7.1（PR #28 旧版本已被 release-please 重算为 0.8.0）；不用 Web 合并（PAT 无 PR 写权限，本地 merge 直推等效且已验证）；chore(board) 直推触发的空 0.8.1 PR #30 无法用 PAT 关闭，保留待下次真实发版时被 release-please 复用。",
       "sourceSessionId": "session-21f4aa66-2653-46c3-b528-32abaf5f0a68",
-      "status": "in_progress",
+      "status": "done",
       "tags": [
         "release",
         "publish"
       ],
       "createdAt": 1789201783998,
-      "updatedAt": 1789202946771,
-      "summary": "PR #29 已 FF 合并进 main（4ddcaa0 推 origin）；release-please 将 PR #28 更新为 0.8.0 并本地合并直推（b384e4c），PR #28 自动显示 MERGED，release-please 已建 tag v0.8.0 + GitHub Release；API 建 tag 未触发 CI（0.6.3 同款），已删 tag 重推 → tag 事件 run 34684203458 进行中（check/test 已过，windows/linux/release 待跑）。"
+      "updatedAt": 1789203427186,
+      "summary": "v0.8.0 发布完成：PR #29（28 提交）FF 合并 main（4ddcaa0）→ release-please 将 PR #28 更新为 0.8.0 并本地 merge 直推（b384e4c，PR 自动显示 MERGED）→ release-please 建 tag + Release → API 建 tag 不触发构建（0.6.3 同款），删 tag 重推 → tag run 34684203458 全绿（check/test/windows/linux/release success，linux-smoke 为已知 xvfb canary failure）→ 三平台安装包已挂载：exe 28.1MB / AppImage 123.6MB / deb 54.4MB。main=cc08655。"
     }
   ]
 }
