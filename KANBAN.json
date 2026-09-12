@@ -982,6 +982,21 @@
       "createdAt": 1789201783998,
       "updatedAt": 1789203427186,
       "summary": "v0.8.0 发布完成：PR #29（28 提交）FF 合并 main（4ddcaa0）→ release-please 将 PR #28 更新为 0.8.0 并本地 merge 直推（b384e4c，PR 自动显示 MERGED）→ release-please 建 tag + Release → API 建 tag 不触发构建（0.6.3 同款），删 tag 重推 → tag run 34684203458 全绿（check/test/windows/linux/release success，linux-smoke 为已知 xvfb canary failure）→ 三平台安装包已挂载：exe 28.1MB / AppImage 123.6MB / deb 54.4MB。main=cc08655。"
+    },
+    {
+      "id": "card-9dabfbf9-d581-4379-bc4d-fae05a580f1d",
+      "title": "发布说明详细化：release-body.mjs 自动生成 What's Changed + 移 tag 修复 v0.8.0 body",
+      "rationale": "用户反馈发布版 What's Changed 潦草（--generate-notes 只列 2-3 条 PR 标题），要求以后写详细（dsh/插件版本变化 + 主要变更）。需要把「详细发布说明」固化进发布流程：scripts/release-body.mjs 自动生成 body（dsh npm latest + 预装插件版本 + 完整 changelog），build.yml release job 改用该 body 并改为「原地刷新」（upload --clobber + edit），不再 delete+create；v0.8.0 的 body 通过移 tag 重跑 release job 修复。",
+      "rejected": "保留 --generate-notes 然后人工改：PAT 无 Releases 写权限（403 实测），人工改只能靠用户 Web 粘贴，不自动化；脚本只输出 changelog 不查 dsh/插件版本：缺少用户点名要的版本信息；release job 保留 delete+create：会让发布短暂消失，且 re-cut 场景用 edit 更稳。",
+      "sourceSessionId": "session-21f4aa66-2653-46c3-b528-32abaf5f0a68",
+      "status": "todo",
+      "tags": [
+        "release",
+        "process",
+        "ci"
+      ],
+      "createdAt": 1789204813432,
+      "updatedAt": 1789204813432
     }
   ]
 }

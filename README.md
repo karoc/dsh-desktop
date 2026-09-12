@@ -304,6 +304,12 @@ Windows 安装包由 GitHub Actions（`.github/workflows/build.yml`）在 `windo
 3) tag 触发 CI 全量构建 → 自动发 GitHub Release（附 Windows + Linux 安装包）
 ```
 
+**Release 说明（What's Changed）**：发布 job 用 `scripts/release-body.mjs <version>`
+自动生成详细 body——版本概要（发版时 npm 上 `@deepseek-ai/dsh` 的 latest/next 版本 +
+随包预装插件版本）+ 该版本完整 CHANGELOG 提交清单 + Full Changelog 对比链接
+（不再用 `gh release create --generate-notes` 的 PR 标题短列表）。
+发布后若需补充人工撰写的「本次亮点」，可直接在 GitHub 页面编辑该 Release。
+
 （注：installer/exe 未做代码签名，SmartScreen 可能提示"未知发布者"。）
 
 ## Windows 安装 / 升级须知（「删除应用程序数据」勾选框）

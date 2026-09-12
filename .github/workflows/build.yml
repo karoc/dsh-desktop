@@ -150,22 +150,19 @@ jobs:
         with:
           name: dsh-desktop-linux
           path: dist-linux
-      # Deterministic publish: any pre-existing release for this tag (e.g. a
-      # stale draft from a re-cut) is deleted by id via the API — no silent
-      # swallow: if deletion is impossible the step fails loudly and visibly.
+      # Deterministic publish with DETAILED release notes. The body is composed
+      # by scripts/release-body.mjs (dsh npm latest + preinstalled plugin
+      # versions + the full changelog section for this tag) — NOT the terse
+      # PR-title list that `gh release create --generate-notes` produces.
+      # A pre-existing release (created by release-please, or a stale one from
+      # a re-cut) is updated in place: assets are overwritten with --clobber and
+      # the body/title refreshed, so the release is never unpublished.
       - name: Publish GitHub Release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # Guard on gh release view (exit 1 = no release): never parse a 404
-          # response body as an id. If a stale release/draft for this tag
-          # exists (re-cut), delete it loudly; otherwise proceed straight on.
-          if gh release view "${GITHUB_REF_NAME}" --json id >/dev/null 2>&1; then
-            echo "deleting stale release for ${GITHUB_REF_NAME}"
-            gh release delete "${GITHUB_REF_NAME}" --yes
-          fi
           # upload-artifact@v4 nests multi-path artifacts under their least
           # common ancestor directory (e.g. dist-linux/appimage/*.AppImage,
           # dist-linux/deb/*.deb), while single-path artifacts stay flat
@@ -177,8 +174,16 @@ jobs:
             echo "no installers found under dist-win/dist-linux — refusing to publish an empty release"
             exit 1
           fi
-          gh release create "${GITHUB_REF_NAME}" "${FILES[@]}" \
-            --generate-notes --title "${GITHUB_REF_NAME}"
+          node scripts/release-body.mjs "${GITHUB_REF_NAME#v}" > "${RUNNER_TEMP}/release-body.md"
+          if gh release view "${GITHUB_REF_NAME}" --json id >/dev/null 2>&1; then
+            echo "release exists (release-please or re-cut) — refreshing assets + notes"
+            gh release upload "${GITHUB_REF_NAME}" "${FILES[@]}" --clobber
+            gh release edit "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" \
+              --notes-file "${RUNNER_TEMP}/release-body.md"
+          else
+            gh release create "${GITHUB_REF_NAME}" "${FILES[@]}" \
+              --title "${GITHUB_REF_NAME}" --notes-file "${RUNNER_TEMP}/release-body.md"
+          fi
           gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets[].name'
 
   # Linux AppImage/deb for convenience (unsigned). Windows is the primary
