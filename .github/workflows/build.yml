@@ -182,11 +182,33 @@ jobs:
               2>"${RUNNER_TEMP}/create.err"; then
             echo "release created (fresh, attached to ${GITHUB_REF_NAME})"
           else
-            echo "create failed (a release is already attached) — refreshing assets + notes in place"
+            echo "create failed (a release is already attached, or an orphan blocks it)"
             cat "${RUNNER_TEMP}/create.err" >&2 || true
-            gh release upload "${GITHUB_REF_NAME}" "${FILES[@]}" --clobber
-            gh release edit "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" \
-              --notes-file "${RUNNER_TEMP}/release-body.md"
+            # Resolve what blocked us. `gh release view` can match an untagged
+            # orphan left by a tag delete/recreate (其 tag_name 字段保留原值，
+            # 但 URL 是 untagged-*): delete it by id and retry create.
+            if gh release view "${GITHUB_REF_NAME}" --json id,url >"${RUNNER_TEMP}/rel.json" 2>/dev/null; then
+              REL_URL=$(jq -r .url "${RUNNER_TEMP}/rel.json")
+              case "${REL_URL}" in
+                *"untagged-"*)
+                  REL_ID=$(jq -r .id "${RUNNER_TEMP}/rel.json")
+                  echo "orphan release ${REL_ID} (${REL_URL}) — deleting and retrying create"
+                  gh api -X DELETE "repos/${GITHUB_REPOSITORY}/releases/${REL_ID}" >/dev/null
+                  gh release create "${GITHUB_REF_NAME}" "${FILES[@]}" \
+                    --title "${GITHUB_REF_NAME}" --notes-file "${RUNNER_TEMP}/release-body.md"
+                  ;;
+                *)
+                  echo "release attached — refreshing assets + notes in place"
+                  gh release upload "${GITHUB_REF_NAME}" "${FILES[@]}" --clobber
+                  gh release edit "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" \
+                    --notes-file "${RUNNER_TEMP}/release-body.md"
+                  ;;
+              esac
+            else
+              echo "no release resolved — retrying create"
+              gh release create "${GITHUB_REF_NAME}" "${FILES[@]}" \
+                --title "${GITHUB_REF_NAME}" --notes-file "${RUNNER_TEMP}/release-body.md"
+            fi
           fi
           gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets[].name'
 
