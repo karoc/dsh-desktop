@@ -154,13 +154,11 @@ jobs:
       # by scripts/release-body.mjs (dsh npm latest + preinstalled plugin
       # versions + the full changelog section for this tag) — NOT the terse
       # PR-title list that `gh release create --generate-notes` produces.
-      # A pre-existing release (created by release-please, or a stale one from
-      # a re-cut) is updated in place: assets are overwritten with --clobber and
-      # the body/title refreshed, so the release is never unpublished. Guard:
-      # when the tag was deleted/recreated (移 tag), GitHub may leave an
-      # orphaned "untagged-*" release that `gh release view` still resolves —
-      # if the resolved release's real tagName differs from ours, delete it by
-      # id and recreate fresh instead of refreshing the ghost.
+      # Create-first: `gh release create` only fails when a release is already
+      # ATTACHED to the tag; an untagged orphan left behind by a tag
+      # delete/recreate (移 tag) never blocks it, so we always end up with a
+      # properly tagged release. On failure we refresh the attached release in
+      # place (assets overwritten with --clobber, body/title refreshed).
       - name: Publish GitHub Release
         shell: bash
         env:
@@ -179,24 +177,16 @@ jobs:
             exit 1
           fi
           node scripts/release-body.mjs "${GITHUB_REF_NAME#v}" > "${RUNNER_TEMP}/release-body.md"
-          CREATED=""
-          if gh release view "${GITHUB_REF_NAME}" --json id,tagName >"${RUNNER_TEMP}/rel.json" 2>/dev/null; then
-            REL_ID=$(jq -r .id "${RUNNER_TEMP}/rel.json")
-            REL_TAG=$(jq -r .tagName "${RUNNER_TEMP}/rel.json")
-            if [ "${REL_TAG}" != "${GITHUB_REF_NAME}" ]; then
-              echo "existing release is tagged '${REL_TAG}' (orphan from a tag move) — deleting and recreating"
-              gh api -X DELETE "repos/${GITHUB_REPOSITORY}/releases/${REL_ID}" >/dev/null
-            else
-              echo "release exists (release-please or re-cut) — refreshing assets + notes"
-              gh release upload "${GITHUB_REF_NAME}" "${FILES[@]}" --clobber
-              gh release edit "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" \
-                --notes-file "${RUNNER_TEMP}/release-body.md"
-              CREATED="yes"
-            fi
-          fi
-          if [ -z "${CREATED}" ]; then
-            gh release create "${GITHUB_REF_NAME}" "${FILES[@]}" \
-              --title "${GITHUB_REF_NAME}" --notes-file "${RUNNER_TEMP}/release-body.md"
+          if gh release create "${GITHUB_REF_NAME}" "${FILES[@]}" \
+              --title "${GITHUB_REF_NAME}" --notes-file "${RUNNER_TEMP}/release-body.md" \
+              2>"${RUNNER_TEMP}/create.err"; then
+            echo "release created (fresh, attached to ${GITHUB_REF_NAME})"
+          else
+            echo "create failed (a release is already attached) — refreshing assets + notes in place"
+            cat "${RUNNER_TEMP}/create.err" >&2 || true
+            gh release upload "${GITHUB_REF_NAME}" "${FILES[@]}" --clobber
+            gh release edit "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" \
+              --notes-file "${RUNNER_TEMP}/release-body.md"
           fi
           gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets[].name'
 
