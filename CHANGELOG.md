@@ -21,6 +21,48 @@
 >
 > 详情见 `.agents/notes/implemented/bug-fix/2026-09-08-legacy-uninstaller-name-kill.md`。
 
+## [0.8.0](https://github.com/karoc/dsh-desktop/compare/v0.7.0...v0.8.0) (2026-09-12)
+
+
+### Features
+
+* **guard:** 重写外部守护（G2）—— 新身份 / 去 comsvcs / 500ms 采样抓凶手 / 默认只检测 ([4de27c1](https://github.com/karoc/dsh-desktop/commit/4de27c1ada46c512012202076cb28bb3c0f8301b))
+* **shell:** manager 退出检测与取证（try_wait + 证据目录，不自动重启） ([028b77a](https://github.com/karoc/dsh-desktop/commit/028b77aed3fdde91f49138a325d9153ef3b96a6d))
+* **shell:** S4b Job 完成端口逐进程通知 + G1 登录启动项安装器 ([be197d4](https://github.com/karoc/dsh-desktop/commit/be197d463e502660a88482318e6896760d15f345))
+* **shell:** 挂起 dump（S3）+ Job Object（S4a）+ manager watchdog 去 comsvcs ([ade59f7](https://github.com/karoc/dsh-desktop/commit/ade59f7f92df4e469ea411ee8da44b3dbc0a60e6))
+
+
+### Bug Fixes
+
+* **build:** dsh_web_pid_for_url 在 Linux 侧 url 未使用（CI 红）—— 解析保留到公共路径 ([3fb4b0a](https://github.com/karoc/dsh-desktop/commit/3fb4b0a1efecef49089326572170a4b7db916281))
+* **build:** GENERIC_WRITE 在 Win32::Foundation（windows 0.61） ([857f497](https://github.com/karoc/dsh-desktop/commit/857f497aaf9c9b2d29252fbb1c12e1bfb2da2a1f))
+* **build:** JOBOBJECT_ASSOCIATE_COMPLETION_PORT.CompletionKey 是 *mut c_void ([9bee4da](https://github.com/karoc/dsh-desktop/commit/9bee4da7e8977f2552c953c70eacb36862839b73))
+* **build:** windows crate feature 补齐（Security/Kernel/Memory）+ OpenProcess 传 bool ([ff61e21](https://github.com/karoc/dsh-desktop/commit/ff61e2103154f28bd680e06b5f9671510cfec7b7))
+* **build:** 不能对 MutexGuard 临时值整体赋值（E0070）—— 先绑定再解引用 ([130abd7](https://github.com/karoc/dsh-desktop/commit/130abd716b6c2cc3ecc68fba4521b498b7423118))
+* **build:** 消除 Linux 侧 dead_code（CI 红）—— job_object 整模块 cfg(windows)、SERVICE_JOB 同、web_dump 的 port 移入 windows 块 ([37759b8](https://github.com/karoc/dsh-desktop/commit/37759b86478b0959bdc22f2e380ad26c61582665))
+* **clippy:** CompletionKey 用 null_mut（manual_dangling_ptr） ([a543015](https://github.com/karoc/dsh-desktop/commit/a543015ec94306c1da45e5875d3b8689b7e00fa4))
+* **guard:** 401 被当成挂起 + conhost 噪音淹没日志 ([4a6dd48](https://github.com/karoc/dsh-desktop/commit/4a6dd482d779f0aec990039ff7dbfd430758ed23))
+* **guard:** suspect 窗口 UTC/local 混用导致全部命中 + 去掉 conhost 噪音 ([9557bce](https://github.com/karoc/dsh-desktop/commit/9557bce1d82126ba265245d121d951334a852cc8))
+* **guard:** 排除自身与父进程作为 suspect（否则证据被自己的命令行淹没） ([f722288](https://github.com/karoc/dsh-desktop/commit/f7222885d5e5c303785d61e8a155e37671ce9bbb))
+* **hang:** 回执必须等 dump 真正写完（实测 manager 提前重启 → 现场归零） ([64210df](https://github.com/karoc/dsh-desktop/commit/64210dff5ec6914a5460fe4894d534f736b83de1))
+* **installer:** 旧版卸载器按同名 exe 静默杀进程 —— 装 dev 版误杀正式版 ([a8297ac](https://github.com/karoc/dsh-desktop/commit/a8297aca47611c8a04ac8ee4233c2a3995040c50))
+* **launcher:** 故障回退后主动查壳状态，不再停在「正在启动」假象 ([a35c3b8](https://github.com/karoc/dsh-desktop/commit/a35c3b8f59abeeaced97e2f398f056508876510b))
+* **shell:** EOF 但进程仍存活时不占用上报槽位 + 实机验证脚本 + 单测补 node report 拷贝 ([460bdd8](https://github.com/karoc/dsh-desktop/commit/460bdd8b0a69ff26e3de2587f54f6ee497fb2447))
+* **shell:** Windows 本地页是 http://tauri.localhost，不是 tauri:// —— 回退导航仍不生效 ([03592c0](https://github.com/karoc/dsh-desktop/commit/03592c070fadb1cc1ce3a285de9aae1afced840e))
+* **shell:** 全屏浮层自动让位——菜单栏收起只留 4px 悬停条，插件零改动 ([56708b8](https://github.com/karoc/dsh-desktop/commit/56708b8f908102c4da7b6425a5c1db0544169b0f))
+* **shell:** 取证取 manager 已有的 report.*.json + 修 main 上 clippy doc 缩进门禁 ([d76e3c3](https://github.com/karoc/dsh-desktop/commit/d76e3c393ccdc989853436f5a1ab823e253da056))
+* **shell:** 故障回退导航不再落到 about:blank 黑屏（实机验证发现） ([728143a](https://github.com/karoc/dsh-desktop/commit/728143a37ccb8168d1dfb4d2b303d581af04b0aa))
+* **verify:** PowerShell 5.1 CimInstance 标量没有 .Count —— 调用点统一 @() 包裹 ([cf6f6fa](https://github.com/karoc/dsh-desktop/commit/cf6f6fa1b20956634b63473a45e33e8be4cf6e59))
+* **verify:** summary.json/orphans.txt 显式按 UTF-8 读（PS 5.1 -Raw 按 ANSI 解码会破坏中文） ([16c1e04](https://github.com/karoc/dsh-desktop/commit/16c1e04d4d034860b6dd7310ea5bad31cc15c4a9))
+* **verify:** verify-hang-dump.ps1 保持纯 ASCII（em dash 用 [regex]::Unescape 构造） ([6d01fe3](https://github.com/karoc/dsh-desktop/commit/6d01fe3740795a5ffd9d5e970cfecf0e3f7db18b))
+
+
+### Chores
+
+* **board:** 卡 2 done（附三字段）、卡 1 改为 S3/S4/G/Sysmon 续做 ([b99fdc8](https://github.com/karoc/dsh-desktop/commit/b99fdc8617e7c3227f7a0635719e6243d9fae8a7))
+* **board:** 四张待办卡补齐调研结论与决策（D1-D6） ([c03324b](https://github.com/karoc/dsh-desktop/commit/c03324b60ef3dbfe69cb3b37e023f246997de354))
+* **board:** 新版本发布计划三卡（dsh 更新/预装插件核查/发布） ([4ddcaa0](https://github.com/karoc/dsh-desktop/commit/4ddcaa0b9d2ff0b8037b9bbda204ac0be1014e65))
+
 ## [0.7.0](https://github.com/karoc/dsh-desktop/compare/v0.6.3...v0.7.0) (2026-09-07)
 
 
