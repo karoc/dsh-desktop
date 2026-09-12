@@ -986,17 +986,18 @@
     {
       "id": "card-9dabfbf9-d581-4379-bc4d-fae05a580f1d",
       "title": "发布说明详细化：release-body.mjs 自动生成 What's Changed + 移 tag 修复 v0.8.0 body",
-      "rationale": "用户反馈发布版 What's Changed 潦草（--generate-notes 只列 2-3 条 PR 标题），要求以后写详细（dsh/插件版本变化 + 主要变更）。需要把「详细发布说明」固化进发布流程：scripts/release-body.mjs 自动生成 body（dsh npm latest + 预装插件版本 + 完整 changelog），build.yml release job 改用该 body 并改为「原地刷新」（upload --clobber + edit），不再 delete+create；v0.8.0 的 body 通过移 tag 重跑 release job 修复。",
-      "rejected": "保留 --generate-notes 然后人工改：PAT 无 Releases 写权限（403 实测），人工改只能靠用户 Web 粘贴，不自动化；脚本只输出 changelog 不查 dsh/插件版本：缺少用户点名要的版本信息；release job 保留 delete+create：会让发布短暂消失，且 re-cut 场景用 edit 更稳。",
+      "rationale": "用户要求发布版 What's Changed 写详细（dsh/插件版本变化 + 主要变更），不再潦草。自动化保证无人值守也详细，v0.8.0 作为首个修复对象。",
+      "rejected": "保留 --generate-notes + 人工 Web 改：PAT 无 Releases 写权限（403 实测），不自动化；tagName 比对判孤儿：实测 gh view 对孤儿返回原 tag_name，误判；view-exists 判定：实测解析到幽灵导致资产悬空。",
       "sourceSessionId": "session-21f4aa66-2653-46c3-b528-32abaf5f0a68",
-      "status": "todo",
+      "status": "done",
       "tags": [
         "release",
         "process",
         "ci"
       ],
       "createdAt": 1789204813432,
-      "updatedAt": 1789204813432
+      "updatedAt": 1789206956378,
+      "summary": "发布说明详细化完成：① scripts/release-body.mjs 自动生成 body（版本概要：npm @deepseek-ai/dsh latest/next + 预装插件版本 + 完整 changelog section + Full Changelog 链接）；② build.yml release job 改 create-first（create 失败才 fallback：孤儿按 URL untagged-* 识别删除重试，re-cut 原地刷新），不再 --generate-notes；③ v0.8.0 body 已修复并验证（移 tag 到 9e5eb01 重跑，release created fresh，3 资产 + 详细 body 已在页面）。移 tag 丢 release/孤儿解析的坑已记录在 Agent Note。"
     }
   ]
 }

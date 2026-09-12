@@ -2,6 +2,16 @@
 
 Status: implemented
 
+## 2026-09-12 追加：移 tag 会丢 release——孤儿防护（重要，最终版）
+
+v0.8.0 的 body 修复走「移 tag 重跑 release job」时踩坑：`git push origin :refs/tags/v0.8.0` 删除 tag 会让 GitHub **连带把该 tag 的 release 变成 untagged 孤儿（URL 变为 `untagged-<hash>`）甚至直接消失**；而 `gh release view <tag>` 仍可能解析到该孤儿——**其 `tagName` 字段保留原值 "v0.8.0"（用 tagName 比对判孤儿会误判为正常 release），但 URL 是 `untagged-*`**；随后 `gh release list` / `GET /releases/tags/<tag>` / 页面全部查不到——release 从列表消失，资产悬空。实测两轮：upload 打印 `untagged-b085cf…`、`untagged-c927dd9…`，guard 的 tagName 比对均未命中。
+
+最终修复（build.yml release job，create-first）：**先 `gh release create`**——它只会在「release 已 ATTACHED 到 tag」时失败，孤儿（未 attached）不挡 create；create 失败才进入 fallback：`gh release view --json id,url`，URL 含 `untagged-` 判为孤儿 → `DELETE /releases/{id}` 后重试 create；URL 正常 → 原地 upload --clobber + edit（re-cut）。经验：**删/移 tag 后的 release 解析，不要信 tagName，以 URL 的 `untagged-` 前缀为准；create-first 最稳**。v0.8.0 最终 tag 指向 9e5eb01（含此逻辑）。
+
+## 相关链接
+
+- [2026-09-06-release-via-git-merge-and-tag-repush.md](2026-09-06-release-via-git-merge-and-tag-repush.md)：发布流程总览（git merge 直推 + 删 tag 重推路径）；删 tag 重推的 tag 事件触发机制见其 0.6.3 段。
+
 ## Problem
 
 用户反馈 GitHub Release 的 What's Changed 潦草：release job 用 `gh release create --generate-notes`，只把整个版本压成 2-3 条 PR 标题（如 v0.8.0 只有 PR #29/#28 两行），看不到 dsh/插件版本变化和完整提交清单；且 delete+create 会让发布短暂消失。
