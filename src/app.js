@@ -19,13 +19,13 @@ function setState(text, failed = false) {
   openDataBtn.hidden = !failed;
 }
 
-// ── 5 行替换 + 光辉扫过（demo-K 效果）────────────────────
-// 固定 5 行：新行直接替换到顶部，最旧一行移除（直接模式，无动画）。
+// ── 9 行替换 + 光辉扫过（demo-K 效果）────────────────────
+// 固定 9 行：新行直接替换到顶部，最旧一行移除（直接模式，无动画）。
 // 光辉从视口下方向上扫过，扫出顶部后按当前停止时间休息，再扫下一次。
 // 单一逻辑（不分安装/日常）：光辉以停止时间为步进节奏——每次扫完推进，
 // 速度 200→999 分 9 次递增、停止 700→20ms 分 9 次递减，第 9 次到顶点
-// → 停止扫描、所有行全部点亮；时间不足则只看到前面阶段。
-const MAX_ROWS = 5;
+// → 停止扫描、停顿 FINAL_LIGHT_DELAY_MS 后再全部点亮；时间不足则只看到前面阶段。
+const MAX_ROWS = 9;
 const GLOW_RADIUS = 40;
 const GLOW_BASE = 0.28;
 const RAMP_COUNT = 9;
@@ -35,6 +35,9 @@ let rows = [];
 let scanPos = null, restUntil = 0, lastTs = 0, rafId = null;
 let allLit = false, sweepDisabled = false;
 let GLOW_SPEED = 200, REST_MS = 700, step = 0;
+let lightAllTimer = null;
+// 最后一次光辉扫完后、全部点亮前的停顿（毫秒）：让顶点亮灯效果更醒目。
+const FINAL_LIGHT_DELAY_MS = 1700;
 
 function lightRow(el) {
   el.style.opacity = '1';
@@ -42,6 +45,7 @@ function lightRow(el) {
 }
 
 function lightAll() {
+  if (lightAllTimer !== null) { clearTimeout(lightAllTimer); lightAllTimer = null; } // 幂等：任何路径触发都取消挂起定时器
   allLit = true;
   rows.forEach(lightRow);
 }
@@ -52,7 +56,10 @@ function advanceStep() {
   if (step >= RAMP_COUNT) {
     GLOW_SPEED = 999; REST_MS = 20;
     stopSweep();
-    lightAll();
+    // 最后的亮灯前停顿 FINAL_LIGHT_DELAY_MS 再全部点亮；
+    // 等待期被 resetSweep / 失败态（server-down / install error）取消。
+    clearTimeout(lightAllTimer);
+    lightAllTimer = setTimeout(lightAll, FINAL_LIGHT_DELAY_MS);
     return;
   }
   GLOW_SPEED = Math.min(999, Math.round(200 + (799 / RAMP_COUNT) * step));
@@ -73,7 +80,7 @@ function scanTick(ts) {
       scanPos = null;
       restUntil = ts + REST_MS;               // 按当前停止时间休息
       advanceStep();                          // 扫完即推进（单一逻辑，不分安装/日常）
-      if (allLit) return;                     // 顶点：lightAll 已点亮全部 → 不再渲染/调度
+      if (allLit || lightAllTimer !== null) return; // 顶点：立即点亮或等 1.7s 后点亮 → 不再调度
     }
   }
   rows.forEach((el, i) => {
@@ -103,6 +110,7 @@ function stopSweep() {
 // 安装开始时归零：光辉重新从 200/700 起步；错误/退出态解除
 function resetSweep() {
   stopSweep();
+  clearTimeout(lightAllTimer); lightAllTimer = null; // 取消未触发的最终亮灯
   allLit = false;
   sweepDisabled = false;
   step = 0;
@@ -177,6 +185,7 @@ if (tauri && tauri.event) {
   tauri.event.listen('server-down', () => {
     clearTimeout(launchStallTimer);
     clearTimeout(installStallTimer);
+    clearTimeout(lightAllTimer); lightAllTimer = null; // 失败态不亮灯
     installProgress.hidden = true;
     sweepDisabled = true;
     stopSweep();
@@ -224,6 +233,7 @@ if (tauri && tauri.event) {
     } else if (p.phase === 'error') {
       installProgress.hidden = true;
       clearTimeout(installStallTimer);
+      clearTimeout(lightAllTimer); lightAllTimer = null; // 失败态不亮灯
       stopSweep();
       allLit = false;
       sweepDisabled = true;

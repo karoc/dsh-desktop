@@ -77,13 +77,13 @@ h1 { font-size: 18px; margin: 0 0 8px; }
 
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* ── 5 行替换 + 光辉扫过（demo-K 效果）─────────────────────
+/* ── 9 行替换 + 光辉扫过（demo-K 效果）─────────────────────
    无边框 / 无背景 / 无滚动条 / 无遮罩：日志浮在深色背景上，
-   固定 5 行，新行从顶部直接替换，光辉从下向上扫过。 */
+   固定 9 行，新行从顶部直接替换，光辉从下向上扫过。 */
 .credits-viewport {
   position: relative;
   width: min(760px, 90vw);
-  height: calc(5 * 26px);
+  height: calc(9 * 26px);
   overflow: hidden;
 }
 
