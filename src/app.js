@@ -98,7 +98,9 @@ function scanTick(ts) {
 }
 
 function startSweep() {
-  if (REDUCED_MOTION || allLit || rafId !== null) return;
+  // 顶点后（最终亮灯定时器已挂起）不再重启扫动：否则新日志到达会重新推进
+  // advanceStep → clearTimeout + 重新 setTimeout，亮灯被持续涌入的日志无限推迟
+  if (REDUCED_MOTION || allLit || lightAllTimer !== null || rafId !== null) return;
   lastTs = 0;
   rafId = requestAnimationFrame(scanTick);
 }
