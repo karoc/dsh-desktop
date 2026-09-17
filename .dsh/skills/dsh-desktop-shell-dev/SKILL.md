@@ -261,6 +261,7 @@ dev 数据目录 = `%APPDATA%\dsh.smoothly.desktop.dev`，证据 = `<runtime>\re
 | dev 配置合并 | `--config` 深合并数组整体替换；version 不许覆盖（与 Cargo.toml 强制一致） |
 | 单实例互斥名 | `{identifier}-sim`（Windows），改 identifier 即隔离 |
 | 启动闪命令窗口 | **任何**从壳 spawn 的控制台程序（powershell.exe / taskkill / reg.exe / node.exe / 卸载器）都必须 `no_console_window()`（`creation_flags(0x08000000)` = CREATE_NO_WINDOW）。`powershell_lines()` 是重灾区——cleanup 后台扫描 + launcher `checkLegacy`（`legacy_process_running`/`shortcut_target`）每次启动都会跑，漏配就闪黑窗。Node 侧（manager）对应 `windowsHide: true`。新增任何 `Command::new` 后 grep 自查：`grep -n "Command::new" src-tauri/src/lib.rs` 逐个确认已配 |
+| dev 安装后行为没变（装了新版仍是旧行为） | NSIS 静默安装**跳过被占用的 exe**：应用还开着时安装会成功但 exe 不替换（本次实测：安装的 exe 哈希 ≠ 新构建、时间戳更旧）。流程：`Stop-Process -Name dsh-desktop-dev -Force` → 安装 → 核对 `Get-FileHash` 与构建产物一致 → 再启动。临时验证也可直接 `Copy-Item target\release\dsh-desktop-dev.exe <安装目录>` 覆盖（仅 dev）。 |
 | 视觉现象"无法远程确认"（部分已证伪） | 壳窗口的**布局/遮挡/点击命中**可经 interop 自动验证，不必等用户：`scripts/verify-dev-ui.ps1 -Action dump\|shot\|invoke\|click\|hover`。关键事实：**UIAutomation 能穿透 WebView2**（DOM 按钮、壳注入的菜单栏按钮/悬停条都在 UIA 树里，坐标为物理像素，收起时 y 为负值）；`PrintWindow(hwnd,hdc,2)` 能在**不抢焦点**的前提下截 DWM 合成内容。仍须用户亲测的只剩：动效观感、多显示器/DPI 差异、真实拖拽手感、黑屏时序类现象 |
 | `:host.cls` 复合选择器在 Chromium 不匹配 | 实测 `:host.fullscreen-hidden { ... }` 完全不生效（`getComputedStyle(host)` 仍是基础值），**只有 `:host(.cls)` 函数式可靠** —— 壳内所有 host 状态样式一律用函数式 |
 | 收起把手按状态切 `display` → 无限显示↔隐藏循环 | 收起瞬间把手（`.edge-strip`）在静止鼠标下重新出现会触发**合成 mouseenter** → 唤出 → 3s 收起 → 又出现 → ……死循环（Chromium 实测）。**把手必须常驻**（不切 display/pointer-events），只在收起态给悬停底色提示 |
