@@ -773,14 +773,31 @@
     return null;
   }
 
-  // 菜单栏（36px）下方的采样点探测；壳内模态打开时 / 页面隐藏时不收起。
+  // 覆盖视口还不够：页面级模态（首次引导 OnboardingSurface、设置弹窗等）同样
+  // 是 position:fixed;inset:0 的遮罩，但内容盒居中——dsh 引导遮罩更从 top:80px
+  // 起（其 CSS 明确写着「keep the product top bar visible」），菜单栏并不会挡住
+  // 任何内容，此时收起只会让用户以为菜单栏消失了。判据：容器内是否存在越过
+  // 菜单栏区域（top < 36px）的可见子盒。插件全屏页（如看板 .kb-overlay）内容贴顶，
+  // 因此仍按原行为让位。
+  const MENUBAR_H = 36;
+  function blocksMenubarBand(node) {
+    for (const child of node.children) {
+      const r = child.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0 && r.top < MENUBAR_H) return true;
+    }
+    return false;
+  }
+
+  // 菜单栏（36px）下方的采样点探测；壳内模态打开时 / 页面隐藏时不收起；
+  // 覆盖视口但内容不进入菜单栏区域的浮层（页面模态）也不收起。
   function probeFullscreen() {
     if (dialog || document.hidden) return false;
     const y = 48;
     const xs = [Math.round(window.innerWidth / 2), Math.round(window.innerWidth * 0.8)];
     for (const x of xs) {
       const hit = document.elementFromPoint(x, y);
-      if (hit && findFullscreenCover(hit)) return true;
+      const cover = hit ? findFullscreenCover(hit) : null;
+      if (cover && blocksMenubarBand(cover)) return true;
     }
     return false;
   }
