@@ -73,6 +73,10 @@
     'proxy-settings': { ipc: 'open_settings', bridge: '/shell/open-settings' },
     plugins: { ipc: 'open_plugins', bridge: '/shell/open-plugins' },
     'check-update': { ipc: 'check_update', bridge: '/check-update' },
+    // 壳自更新（A-1）：状态查询 + 触发检查。与 dsh 更新严格分开——壳更新只做
+    // 只读展示，绝不触发下载/安装（一期的负向保证）。
+    'shell-update': { ipc: 'get_shell_update_status', bridge: '/shell-update-status', method: 'GET' },
+    'check-shell-update': { ipc: 'check_shell_update', bridge: '/check-shell-update' },
     'update-now': { ipc: 'update_now', bridge: '/update-dsh' },
     'dev-mode': { ipc: 'toggle_dev_mode', bridge: '/shell/dev-mode-toggle' },
     'gpu-accel': { ipc: 'toggle_gpu_accel', bridge: '/shell/gpu-accel-toggle' },
@@ -155,6 +159,8 @@
   // ── 状态 ──────────────────────────────────────────────────────────
   let devMode = false;
   let updateInfo = { updateAvailable: false, latest: '', current: '', next: '', nextAvailable: false };
+  // 壳自更新状态（A-1）：独立于 updateInfo（后者驱动菜单翻转与托盘点击行为）。
+  let shellUpdateInfo = null;
   let maximized = false;
   let openMenuId = null;
 
@@ -366,6 +372,8 @@
     .dlg-k { flex: none; width: 72px; color: var(--dsh-muted); }
     .dlg-v { flex: 1; min-width: 0; word-break: break-all; }
     .dlg-note { color: var(--dsh-muted); font-size: 11.5px; margin-top: 8px; line-height: 1.5; }
+    /* 分区分隔线（检查更新弹窗里 dsh 本体 / 应用（壳）两段之间） */
+    .dlg-sep { border-top: 1px solid var(--dsh-border); margin: 14px 0 10px; }
     .dlg-progress { display: flex; align-items: center; gap: 8px; color: var(--dsh-muted); font-size: 12.5px; padding: 6px 0; }
     .dsh-spin {
       flex: none; width: 12px; height: 12px;
@@ -646,6 +654,10 @@
       if (!r) return;
       if (typeof r.updateAvailable === 'boolean') updateInfo = r;
       renderUpdateItem();
+    });
+    // 壳自更新状态（A-1）：只读镜像，不影响菜单翻转/托盘（那是 dsh 更新的语义）。
+    call('shell-update').then((r) => {
+      if (r && typeof r.hasUpdate === 'boolean') shellUpdateInfo = r;
     });
   }
 
@@ -1044,6 +1056,18 @@
     root.appendChild(bd);
     dialog = bd;
 
+    // 打开弹窗时触发一次壳更新检查（manager 侧有 6 小时缓存，不会打爆限流）。
+    call('check-shell-update').then(() => {
+      setTimeout(() => {
+        call('shell-update').then((r) => {
+          if (r && typeof r.hasUpdate === 'boolean') {
+            shellUpdateInfo = r;
+            if (dialog === bd) render();
+          }
+        });
+      }, 1200);
+    });
+
     function render() {
       body.textContent = '';
       // 更新失败（manager op-status error）：如实显示，避免"显示新版本=升级成功"错觉。
@@ -1089,6 +1113,34 @@
         body.appendChild(el('div', `dsh 已是最新版本（当前 v${info.current || '?'}）。`, 'dlg-note'));
         btnUpdate.hidden = true;
         delete btnUpdate.dataset.version;
+      }
+      renderShellSection();
+    }
+
+    // 壳自更新分区（A-1 一期）：**只读展示**——不下载、不安装、不代为打开 URL。
+    // 与 dsh 分区并列但完全独立（托盘/菜单的"有更新"翻转只反映 dsh 更新）。
+    function renderShellSection() {
+      const sep = document.createElement('div');
+      sep.className = 'dlg-sep';
+      body.appendChild(sep);
+      body.appendChild(el('div', '应用（壳）', 'dlg-note'));
+      const s = shellUpdateInfo;
+      if (!s || s.dev) {
+        body.appendChild(el('div', s && s.dev ? '开发版不检查壳更新。' : '尚未检查。', 'dlg-note'));
+        return;
+      }
+      body.appendChild(dlgRow('当前版本', `v${s.current || '?'}`));
+      if (s.error) {
+        body.appendChild(el('div', `检查失败：${s.error}`, 'dlg-note'));
+        return;
+      }
+      if (s.latest) body.appendChild(dlgRow('最新版本', `v${s.latest}`));
+      if (s.hasUpdate) {
+        body.appendChild(el('div', '有新的应用版本。请到发布页下载安装包（壳不会自动下载或安装）。', 'dlg-note'));
+        // 只展示地址文本：不新增 open_url 能力（避免引入 ShellExecute 攻击面）。
+        if (s.url) body.appendChild(dlgRow('发布页', s.url));
+      } else {
+        body.appendChild(el('div', '应用已是最新版本。', 'dlg-note'));
       }
     }
 

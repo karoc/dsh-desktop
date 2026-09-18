@@ -38,6 +38,11 @@ struct ServerState {
     stdin: Mutex<Option<ChildStdin>>,
     /// Latest dsh update status reported by the manager.
     update: Mutex<UpdateStatus>,
+    /// Latest **shell** update status (A-1). Deliberately separate from `update`:
+    /// the tray's click action keys off `update.update_available` and sends
+    /// `update-dsh`, so mixing shell availability into it would make the user
+    /// update dsh while thinking they update the shell.
+    shell_update: Mutex<ShellUpdateStatus>,
     /// Tray item whose text flips between "检查更新…" and "有更新 vX（点击更新）".
     update_item: Mutex<Option<MenuItem<tauri::Wry>>>,
     /// Tray checkbox mirroring the dsh.json devMode flag.
@@ -95,6 +100,24 @@ struct UpdateStatus {
     /// Which dist-tag the pre-release candidate came from (alpha/beta/next).
     next_tag: Option<String>,
     next_available: bool,
+}
+
+/// 壳自更新状态（A-1），镜像 manager 的 `shell-update` 协议行。
+///
+/// 与 `UpdateStatus` 严格分开：后者的 `update_available` 会翻转托盘文案并让
+/// 点击发 `update-dsh`（更新 dsh 本体）；壳更新只做**只读展示**，不触发任何
+/// 自动动作（一期不下载、不安装、不打开 URL）。
+#[derive(Default, Clone)]
+struct ShellUpdateStatus {
+    current: Option<String>,
+    latest: Option<String>,
+    has_update: bool,
+    /// Release 页面地址（仅展示给用户复制；壳不代为打开）。
+    url: Option<String>,
+    /// 检查失败原因（网络/限流/解析），UI 如实展示。
+    error: Option<String>,
+    /// dev 构建：不检查壳更新。
+    dev: bool,
 }
 
 /// Latest plugin operation status, mirrored from the manager's `op-status`
@@ -1716,6 +1739,29 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
             .to_string();
             ("200 OK", body)
         }
+        // 壳自更新状态（A-1）：独立端点，与 /update-status 无耦合。
+        ("GET", "/shell-update-status") => {
+            let state = app.state::<ServerState>();
+            let s = state.shell_update.lock().unwrap();
+            let body = serde_json::json!({
+                "current": s.current,
+                "latest": s.latest,
+                "hasUpdate": s.has_update,
+                "url": s.url,
+                "error": s.error,
+                "dev": s.dev,
+            })
+            .to_string();
+            ("200 OK", body)
+        }
+        ("POST", "/check-shell-update") => {
+            // 触发 manager 去查 GitHub Releases（只报告，不下载/不安装）。
+            send_manager(
+                &mut app.state::<ServerState>().stdin.lock().unwrap(),
+                "check-shell-update",
+            );
+            ("200 OK", String::new())
+        }
         ("POST", "/check-update") => {
             send_manager(
                 &mut app.state::<ServerState>().stdin.lock().unwrap(),
@@ -2126,6 +2172,12 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
         .arg(&patch)
         .arg("--cwd")
         .arg(&home)
+        // 壳版本与身份：manager 的壳自更新检查需要它们（A-1）。
+        // dev 构建靠 identifier 后缀判定，不提示壳更新。
+        .arg("--shell-version")
+        .arg(env!("CARGO_PKG_VERSION"))
+        .arg("--shell-identifier")
+        .arg(&app.config().identifier)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -2323,6 +2375,20 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
                                 ),
                             );
                         }
+                    }
+                    // 壳自更新检查结果（A-1）：**独立于 update-status**。
+                    // update-status 驱动托盘点击行为（available → 点击发 update-dsh），
+                    // 把壳更新塞进同一布尔会让用户"看到壳有更新、点下去却更新了 dsh"
+                    // （审计 P0）。因此单独存一份，只读展示，不参与任何自动动作。
+                    Some("shell-update") => {
+                        let state = handle.state::<ServerState>();
+                        let mut s = state.shell_update.lock().unwrap();
+                        s.current = ev.get("current").and_then(|v| v.as_str()).map(String::from);
+                        s.latest = ev.get("latest").and_then(|v| v.as_str()).map(String::from);
+                        s.has_update = ev.get("hasUpdate").and_then(|v| v.as_bool()).unwrap_or(false);
+                        s.url = ev.get("url").and_then(|v| v.as_str()).map(String::from);
+                        s.error = ev.get("error").and_then(|v| v.as_str()).map(String::from);
+                        s.dev = ev.get("dev").and_then(|v| v.as_bool()).unwrap_or(false);
                     }
                     Some("op-status") => {
                         let state = handle.state::<ServerState>();
@@ -3157,6 +3223,27 @@ fn check_update(state: State<'_, ServerState>) -> Result<(), String> {
     Ok(())
 }
 
+/// 壳自更新状态（A-1）：只读查询，与 dsh 更新状态完全分开。
+#[tauri::command]
+fn get_shell_update_status(state: State<'_, ServerState>) -> serde_json::Value {
+    let s = state.shell_update.lock().unwrap();
+    serde_json::json!({
+        "current": s.current,
+        "latest": s.latest,
+        "hasUpdate": s.has_update,
+        "url": s.url,
+        "error": s.error,
+        "dev": s.dev,
+    })
+}
+
+/// 触发壳更新检查（manager 侧查 GitHub Releases；只报告，不下载/不安装）。
+#[tauri::command]
+fn check_shell_update(state: State<'_, ServerState>) -> Result<(), String> {
+    send_manager(&mut state.stdin.lock().unwrap(), "check-shell-update");
+    Ok(())
+}
+
 /// One-click: install the newest dsh, then restart the service.
 #[tauri::command]
 fn update_now(state: State<'_, ServerState>) -> Result<(), String> {
@@ -3406,6 +3493,7 @@ pub fn run() {
             child: Mutex::new(None),
             stdin: Mutex::new(None),
             update: Mutex::new(UpdateStatus::default()),
+            shell_update: Mutex::new(ShellUpdateStatus::default()),
             update_item: Mutex::new(None),
             dev_item: Mutex::new(None),
             gpu_item: Mutex::new(None),
@@ -3820,6 +3908,8 @@ pub fn run() {
             open_evidence_dir,
             quit_app,
             get_update_status,
+            get_shell_update_status,
+            check_shell_update,
             check_update,
             update_now,
             refresh_page,

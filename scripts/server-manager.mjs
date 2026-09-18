@@ -50,7 +50,7 @@ const NATIVE_BUILD_PKGS = [
 
 // ── args ───────────────────────────────────────────────────────────────────
 function parseArgs(argv) {
-  const out = { runtimeDir: null, resourceDir: null, patch: null, cwd: null, home: null, registry: undefined, bridgePort: null }
+  const out = { runtimeDir: null, resourceDir: null, patch: null, cwd: null, home: null, registry: undefined, bridgePort: null, shellVersion: null, shellIdentifier: null }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     const val = () => argv[++i]
@@ -61,9 +61,11 @@ function parseArgs(argv) {
     else if (a === '--home') out.home = val()
     else if (a === '--registry') out.registry = val()
     else if (a === '--bridge-port') out.bridgePort = val()
+    else if (a === '--shell-version') out.shellVersion = val()
+    else if (a === '--shell-identifier') out.shellIdentifier = val()
   }
   if (!out.runtimeDir || !out.resourceDir || !out.patch) {
-    throw new Error('usage: server-manager.mjs --runtime-dir <dir> --resource-dir <dir> --patch <file> [--cwd <dir>] [--home <dir>] [--registry <url>] [--bridge-port <port>]')
+    throw new Error('usage: server-manager.mjs --runtime-dir <dir> --resource-dir <dir> --patch <file> [--cwd <dir>] [--home <dir>] [--registry <url>] [--bridge-port <port>] [--shell-version <v>] [--shell-identifier <id>]')
   }
   return out
 }
@@ -85,6 +87,54 @@ function log(line) {
     }
   } catch { /* logging must never break the manager */ }
 }
+
+// ── fatal-exception forensics ──────────────────────────────────────────────
+// 退出码 1 有两种在壳侧无法区分的成因：被外部 TerminateProcess（taskkill /F）
+// 杀掉，或 manager 自己因未捕获异常退出（`manager_guard::describe_exit` 亦如此
+// 如实并列）。没有处理器时，后者只把栈写 stderr——Windows 上 stderr 是管道
+// （异步写），`process.exit` 一到这行栈常常整段丢失，现场就只剩一个 code=1。
+// 2026-09-15 02:11 的正式版事故正是这种"零证据"形态：manager.log 停在死亡前
+// 49 秒、无 fatal 行、无 WER、无 node report。
+// 因此显式接管：同步落一份证据再按原语义退出 1。区分规则——
+//   有 manager-exception-*.txt = 自身异常崩溃（栈可读）；
+//   没有任何标记文件而退出码为 1 = 被外部强制结束。
+function recordFatalException(kind, err) {
+  const text = [
+    `kind: ${kind}`,
+    `at: ${new Date().toISOString()}`,
+    `pid: ${process.pid}`,
+    `node: ${process.version}`,
+    `uptimeSec: ${Math.round(process.uptime())}`,
+    '',
+    err?.stack ?? String(err),
+  ].join('\n')
+  let file = null
+  let reports = '.'
+  try {
+    reports = join(args.runtimeDir ?? '.', 'reports')
+    mkdirSync(reports, { recursive: true })
+    file = join(reports, `manager-exception-${Math.floor(Date.now() / 1000)}.txt`)
+    writeFileSync(file, text)
+  } catch { /* 取证失败不得改变退出语义 */ }
+  try {
+    log(`fatal(${kind}) 未捕获异常 → 证据 ${file ?? '(落盘失败)'}`)
+    for (const line of text.split('\n').slice(5, 9)) log(`fatal(${kind}) ${line}`)
+  } catch { /* stdout 可能已断（壳退出），继续落盘 */ }
+  // 完整 node 诊断报告（栈 + 句柄/资源 + libuv 状态），best-effort。
+  // writeReport 收的是**文件名**（传目录会 EISDIR 并在 stderr 留噪音）。
+  try {
+    process.report?.writeReport?.(join(reports, `manager-report-${process.pid}-${Math.floor(Date.now() / 1000)}.json`))
+  } catch { /* optional */ }
+}
+
+process.on('uncaughtException', (err) => {
+  recordFatalException('uncaughtException', err)
+  process.exit(1)
+})
+process.on('unhandledRejection', (reason) => {
+  recordFatalException('unhandledRejection', reason)
+  process.exit(1)
+})
 
 // ── node + npm resolution ──────────────────────────────────────────────────
 const nodeDir = dirname(process.execPath)
@@ -369,6 +419,82 @@ function emitUpdateStatus(updateAvailable) {
     nextTag: nextVersion ? nextTag : null,
     nextAvailable: nextVersion !== null && nextVersion !== latestVersion && current !== nextVersion && versionGt(nextVersion, current),
   })
+}
+
+/**
+ * 壳自更新检查（A-1 一期）：**只报告，不下载、不安装**。
+ *
+ * 设计要点（方案 v2 + 审计修订）：
+ *   - 数据源直接用 GitHub `/releases/latest` 响应（含 tag_name + assets），
+ *     **不产出也不依赖 latest.json**（避免"移 tag 后遗留旧文件"整类回归）；
+ *   - 只有 prerelease 时 `/releases/latest` 返回 404 → 回退 `/releases` 取第一个
+ *     非 draft；
+ *   - 未认证 GitHub API 限流 60 次/小时/IP → 结果**缓存 6 小时**；
+ *   - 版本比较复用 versionGt（semver 语义 + 预发布感知）；**低于或等于当前一律
+ *     不提示**（防降级）；
+ *   - dev 构建不检查（dev 与正式版同一份代码，靠 identifier 区分）；
+ *   - 走 Node 内置 fetch（继承用户代理环境变量），与 dsh 更新检查互不影响。
+ */
+const SHELL_REPO = 'karoc/dsh-desktop'
+const SHELL_UPDATE_TTL_MS = 6 * 60 * 60 * 1000
+let shellUpdateCache = null // { at, payload }
+
+async function checkShellUpdate({ force = false } = {}) {
+  // 壳版本/身份由壳启动 manager 时经 --shell-version / --shell-identifier 传入
+  // （dsh.json 只有 devMode/preinstalled/webview，不含这两项）。
+  const identifier = args.shellIdentifier ?? null
+  // dev 版不检查壳更新：dev 与正式版同版本号（同一份代码 --config 构建），
+  // 检查出来会把正式版的版本号当作"可升级"，误导开发验证。
+  if (identifier !== null && String(identifier).endsWith('.dev')) {
+    emit({ t: 'shell-update', dev: true, current: args.shellVersion ?? null, latest: null, hasUpdate: false, url: null })
+    log('shell update check skipped (dev build)')
+    return
+  }
+  const now = Date.now()
+  if (!force && shellUpdateCache !== null && now - shellUpdateCache.at < SHELL_UPDATE_TTL_MS) {
+    emit({ t: 'shell-update', cached: true, ...shellUpdateCache.payload })
+    return
+  }
+  const current = args.shellVersion ?? null
+  const headers = { 'User-Agent': 'dsh-desktop-shell-update-check', Accept: 'application/vnd.github+json' }
+  let release = null
+  try {
+    const res = await fetch(`https://api.github.com/repos/${SHELL_REPO}/releases/latest`, {
+      headers, signal: AbortSignal.timeout(10_000),
+    })
+    if (res.ok) release = await res.json()
+    else if (res.status === 404) {
+      // 只有预发布时 latest 为 404：退回列表取第一个非 draft 的 release。
+      const list = await fetch(`https://api.github.com/repos/${SHELL_REPO}/releases?per_page=10`, {
+        headers, signal: AbortSignal.timeout(10_000),
+      })
+      if (list.ok) {
+        const arr = await list.json()
+        release = Array.isArray(arr) ? arr.find((r) => r && r.draft !== true) ?? null : null
+      }
+    }
+  } catch (err) {
+    log(`shell update check failed: ${err.message}`)
+    emit({ t: 'shell-update', current, latest: null, hasUpdate: false, url: null, error: String(err.message ?? err) })
+    return
+  }
+  if (release === null) {
+    emit({ t: 'shell-update', current, latest: null, hasUpdate: false, url: null, error: 'no release found' })
+    return
+  }
+  const tag = String(release.tag_name ?? '').replace(/^v/, '')
+  // 版本比较：semver 语义；低于或等于当前一律不提示（防降级/误标）。
+  const hasUpdate = tag !== '' && current !== null && versionGt(tag, current)
+  const payload = {
+    current,
+    latest: tag || null,
+    hasUpdate,
+    url: typeof release.html_url === 'string' ? release.html_url : null,
+    publishedAt: typeof release.published_at === 'string' ? release.published_at : null,
+  }
+  shellUpdateCache = { at: now, payload }
+  emit({ t: 'shell-update', ...payload })
+  log(`shell update: current=${current ?? '?'} latest=${tag || '?'} hasUpdate=${hasUpdate}`)
 }
 
 /**
@@ -1283,6 +1409,7 @@ async function updateDshAndRestart(version) {
 function handleCommand(cmd) {
   switch (cmd?.cmd) {
     case 'check-update': void checkDshUpdate({ frozen: shellManifest.devMode === true }); break
+    case 'check-shell-update': void checkShellUpdate(); break
     case 'update-dsh': void updateDshAndRestart(cmd?.version); break
     case 'restart-dsh': log('restart-dsh requested'); requestRestart(); break
     case 'report-url':
