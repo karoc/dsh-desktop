@@ -54,5 +54,12 @@ assert.ok(src.includes('function showConfirm'), 'window has an in-shell confirm 
 assert.ok(src.includes('dshc-confirm-backdrop'), 'confirm uses the unified modal backdrop')
 assert.ok(!src.includes('globalThis.confirm'), 'no native confirm() left in the window')
 
+// ── 4. bridge port is read lazily ──────────────────────────────────────────
+// 壳在 on_page_load 注入 __DSH_BRIDGE_PORT__，可能晚于本脚本执行：若在顶层缓存成
+// 常量，注入晚了就永远是空串 → ready() 恒 false → 页面停在空白（实测踩过）。
+assert.ok(src.includes('const bridgePort = ()'), 'bridge port is read through a function (injection can land after this script)')
+assert.ok(!/^\s*const BRIDGE_PORT\s*=/m.test(src), 'bridge port is NOT cached in a top-level constant')
+assert.ok(src.includes('桥端口未就绪'), 'window shows an actionable message when the bridge never becomes ready')
+
 console.log('PASS — plugins window structure (layout order + unified style + in-shell confirm)')
 process.exit(0)

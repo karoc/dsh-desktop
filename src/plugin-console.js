@@ -12,8 +12,14 @@
 (() => {
   'use strict';
 
-  const BRIDGE_PORT = globalThis.__DSH_BRIDGE_PORT__ || ''
-  const ready = () => Boolean(BRIDGE_PORT) && !String(BRIDGE_PORT).startsWith('__DSH')
+  // 桥端口由壳在页面加载后注入（on_page_load → eval），可能晚于本脚本执行：
+  // 因此每次读都取全局当前值，不能在最顶层缓存成常量（否则注入晚了永远是空串，
+  // ready() 恒 false → 页面停在空白）。下方 setInterval 轮询依赖这一点。
+  const bridgePort = () => {
+    const p = globalThis.__DSH_BRIDGE_PORT__
+    return (p && !String(p).startsWith('__DSH')) ? String(p) : ''
+  }
+  const ready = () => bridgePort() !== ''
 
   // ── i18n（与页内原面板同文案，中文默认，可切英文）──────────────────
   const ZH = {
@@ -213,8 +219,9 @@
 
   // ── 桥（与页内面板同：环回桥 /plugins/*，壳提供，不依赖 dsh）───────
   function bridge(path, opts) {
-    if (!ready()) return Promise.resolve(null)
-    return fetch(`http://127.0.0.1:${BRIDGE_PORT}${path}`, {
+    const port = bridgePort()
+    if (!port) return Promise.resolve(null)
+    return fetch(`http://127.0.0.1:${port}${path}`, {
       method: opts?.method || 'GET',
       headers: { 'Content-Type': 'application/json' },
       body: opts?.body ? JSON.stringify(opts.body) : undefined,
@@ -910,9 +917,13 @@
     let tries = 0
     const timer = setInterval(() => {
       tries += 1
-      if (ready() || tries > 50) {
+      if (ready()) {
         clearInterval(timer)
         init()
+      } else if (tries > 50) {
+        // 5 秒内壳没注入桥端口：不要停在空白页，给出可操作提示（壳可能刚重启）。
+        clearInterval(timer)
+        boot.textContent = '无法连接壳（桥端口未就绪）。请关闭本窗口后重试；若仍失败，请在主窗口菜单「打开数据目录」查看日志。'
       }
     }, 100)
   }
