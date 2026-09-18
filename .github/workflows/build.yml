@@ -84,6 +84,15 @@ jobs:
         with:
           workspaces: src-tauri
 
+      # Windows-only Rust unit tests. `path_under` / `strip_verbatim` and the
+      # dump / job-object code are `#[cfg(windows)]`: the ubuntu `check` job
+      # compiles a DIFFERENT variant, so platform logic would otherwise ship
+      # untested (the 2026-09 path-guard work depends on exactly these).
+      # Runs before `npm run bundle` so a failure does not burn the ~20 min
+      # packaging round-trip.
+      - name: Rust unit tests (Windows-specific code paths)
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib
+
       - run: npm ci
 
       # beforeBuildCommand fetches the pinned Node runtime and syncs resources
