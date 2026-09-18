@@ -76,3 +76,30 @@
     legacy_pre_skip:
   !endif
 !macroend
+
+; ── 卸载时告知「数据被保留」（A-3 L0）────────────────────────────────────────
+; 卸载器只删程序目录与快捷方式，**不删** %APPDATA%\<identifier>（会话/设置/凭据）
+; 与 %LOCALAPPDATA%\<identifier>（WebView2 缓存、备份）。用户不知道这点时会以为
+; "卸载=清干净"，或反过来担心数据丢失。这里在卸载流程里把保留路径与手动清理方式
+; 说清楚（DetailPrint 进日志；MessageBox 在非静默卸载时可见）。
+; 静默卸载（/S）不弹窗——避免无人值守场景被阻塞，只写日志。
+;
+; 目录名不依赖模板 define：identifier 由 tauri.conf.json 决定（本版为
+; dsh.smoothly.desktop / dev 版 dsh.smoothly.desktop.dev），而模板是否提供
+; ${IDENTIFIER} 未经验证 → 用 MAINBINARYNAME 反推（dev 版 exe 名为
+; dsh-desktop-dev，两版数据目录不同名），避免引用不存在的 define 导致构建失败。
+!macro NSIS_HOOK_PREUNINSTALL
+  !if "${MAINBINARYNAME}" == "dsh-desktop-dev"
+    !define /redef APP_DATA_DIR "dsh.smoothly.desktop.dev"
+  !else
+    !define /redef APP_DATA_DIR "dsh.smoothly.desktop"
+  !endif
+  DetailPrint "DSH Smoothly Desktop: user data is preserved on uninstall."
+  DetailPrint "  Data:    $APPDATA\${APP_DATA_DIR}"
+  DetailPrint "  Cache:   $LOCALAPPDATA\${APP_DATA_DIR}"
+  DetailPrint "  To remove them, delete those folders manually after uninstalling."
+  IfSilent legacy_uninst_quiet
+  MessageBox MB_OK|MB_ICONINFORMATION \
+    "会话、设置与凭据不会被删除。$\r$\n$\r$\n数据目录：$APPDATA\${APP_DATA_DIR}$\r$\n缓存目录：$LOCALAPPDATA\${APP_DATA_DIR}$\r$\n$\r$\n如需彻底清理，请在卸载后手动删除上述目录。"
+  legacy_uninst_quiet:
+!macroend
