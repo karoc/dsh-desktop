@@ -27,6 +27,14 @@
 !ifndef LEGACY_DIR
   !define LEGACY_DIR "$LOCALAPPDATA\dsh Desktop"
 !endif
+; 快捷方式位置：默认 NSIS 内置的桌面与开始菜单；verify-legacy-hook.nsi 会覆盖成
+; 模拟目录，以便断言"旧版在跑时不得删 lnk"这条分支（真实桌面永不被测试触碰）。
+!ifndef LEGACY_DESKTOP
+  !define LEGACY_DESKTOP "$DESKTOP"
+!endif
+!ifndef LEGACY_PROGRAMS
+  !define LEGACY_PROGRAMS "$SMPROGRAMS"
+!endif
 
 !macro NSIS_HOOK_PREINSTALL
   ; 仅正式版安装器接管旧版：正向匹配，名字被改坏时退化为"不接管"（fail-safe）；
@@ -38,22 +46,33 @@
     IfFileExists "${LEGACY_DIR}\dsh-desktop.exe" legacy_pre_has_app legacy_pre_orphan
 
     ; ── 旧版主程序仍在：只有确认"没有同名进程在跑"才执行旧版卸载器 ──
+    ; 实测语义（probe-fp.nsi）：nsis_tauri_utils::FindProcessCurrentUser 返回
+    ; 0 = 该镜像名有进程在跑，1 = 没有。
     legacy_pre_has_app:
       nsis_tauri_utils::FindProcessCurrentUser "dsh-desktop.exe"
       Pop $R0
-      StrCmp $R0 0 legacy_pre_done
+      StrCmp $R0 0 legacy_pre_running
       ; 到这里才安全：旧版装过、主程序在、且没有任何 dsh-desktop.exe 在运行
       ExecWait '"${LEGACY_DIR}\uninstall.exe" /S "_?=${LEGACY_DIR}"' $R1
       Goto legacy_pre_done
+
+    ; ── 旧版正在运行：拒绝接管，且**不碰它的任何东西**（含快捷方式）──
+    ; 旧版程序与入口必须原样保留：用户可能正在用它，删 lnk 会让程序"凭空消失"
+    ; （症状同 2026-09-09 事故）。下次安装时若旧版已退出，再正常接管。
+    legacy_pre_running:
+      Goto legacy_pre_skip
 
     ; ── 旧版主程序已不存在：卸载器是孤儿，删除它切断"每次安装按名杀进程" ──
     legacy_pre_orphan:
       Delete "${LEGACY_DIR}\uninstall.exe"
 
     legacy_pre_done:
-      ; 兜底删除已知旧快捷方式（存在才删）；空目录才回收，非空保留现场
-      Delete "$DESKTOP\DSH Desktop.lnk"
-      Delete "$SMPROGRAMS\DSH Desktop.lnk"
+      ; 兜底删除已知旧快捷方式（存在才删）；空目录才回收，非空保留现场。
+      ; 仅在"旧版已退出/已不存在"路径可达——legacy_pre_running 不走这里。
+      Delete "${LEGACY_DESKTOP}\DSH Desktop.lnk"
+      Delete "${LEGACY_PROGRAMS}\DSH Desktop.lnk"
       RMDir "${LEGACY_DIR}"
+
+    legacy_pre_skip:
   !endif
 !macroend
