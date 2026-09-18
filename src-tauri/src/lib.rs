@@ -730,17 +730,67 @@ pub(crate) fn powershell_lines(script: &str) -> Vec<String> {
     Vec::new()
 }
 
+/// 路径是否位于 `base` 之下（**组件级**比较，不是字符串前缀）。
+///
+/// 为什么不能只用 `starts_with`：`C:\a\dsh Desktop-evil` 会被
+/// `C:\a\dsh Desktop` 前缀命中（缺分隔符边界）；Windows 路径大小写不敏感而
+/// 字符串比较敏感（`...\DSH Smoothly Desktop\...` 会漏判）。
+///
+/// 已知局限（A-2 方案记录在案，未在本轮处理）：
+///   - `\\?\C:\...`（VerbatimDisk 前缀）与 `C:\...` 的 `Path::components()`
+///     不相等 → 调用方需先经 [`simplify_path`] 去掉该前缀；
+///   - 8.3 短名（`DSHDES~1`）与 junction/symlink 目标不在此判定范围；
+///   - 不做 canonicalize（会触发 I/O，且目标可能不存在）。
+#[cfg(windows)]
+fn path_under(path: &std::path::Path, base: &std::path::Path) -> bool {
+    use std::path::Component;
+    fn norm(c: Component<'_>) -> String {
+        // Windows 路径比较大小写不敏感；统一小写后逐段比。
+        c.as_os_str().to_string_lossy().to_ascii_lowercase()
+    }
+    let p: Vec<String> = path.components().map(norm).collect();
+    let b: Vec<String> = base.components().map(norm).collect();
+    // 必须严格长于 base（相等不算"之下"），且前缀逐段相同。
+    p.len() > b.len() && p[..b.len()] == b[..]
+}
+
+#[cfg(not(windows))]
+fn path_under(path: &std::path::Path, base: &std::path::Path) -> bool {
+    use std::path::Component;
+    fn norm(c: Component<'_>) -> String {
+        c.as_os_str().to_string_lossy().to_string()
+    }
+    let p: Vec<String> = path.components().map(norm).collect();
+    let b: Vec<String> = base.components().map(norm).collect();
+    p.len() > b.len() && p[..b.len()] == b[..]
+}
+
+/// 去掉 Windows 的 `\\?\` / `\\?\UNC\` 前缀（`current_exe()` 等系统 API 会带）。
+/// `simplify_path` 已在别处用于同一目的（Node 模块加载器不认该前缀）；这里复用
+/// 其思路，保证路径判定与其它路径处理口径一致。
+fn strip_verbatim(p: &std::path::Path) -> std::path::PathBuf {
+    let s = p.to_string_lossy();
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        std::path::PathBuf::from(format!(r"\\{rest}"))
+    } else if let Some(rest) = s.strip_prefix(r"\\?\") {
+        std::path::PathBuf::from(rest.to_string())
+    } else {
+        p.to_path_buf()
+    }
+}
+
 /// 旧版 dsh-desktop.exe 是否仍在运行（按可执行文件路径前缀精确匹配）。
 ///
 /// ⚠️ 只用于检测/展示（`legacy_check_json.running`）；**绝不能**用它决定是否
 /// 执行旧版卸载器 —— 那个卸载器按 **exe 名**（不含路径）静默 kill，路径前缀
 /// 判定对它恒不成立（2026-09-09 事故：静默安装 dev 版时正式版被静默杀掉）。
 fn legacy_process_running(legacy_dir: &std::path::Path) -> bool {
-    let want = legacy_dir.to_string_lossy().replace('/', "\\");
+    let want = strip_verbatim(legacy_dir);
     let script = r#"Get-CimInstance Win32_Process -Filter "Name='dsh-desktop.exe'" | ForEach-Object { $_.ExecutablePath }"#;
     powershell_lines(script)
         .into_iter()
-        .any(|p| p.replace('/', "\\").starts_with(&want))
+        .map(|p| std::path::PathBuf::from(p.replace('/', "\\")))
+        .any(|p| path_under(&strip_verbatim(&p), &want))
 }
 
 /// 启动时清理本身份 runtime 的残留 node 树（孤儿防驻留）。
@@ -814,10 +864,16 @@ fn shortcut_target(lnk: &std::path::Path) -> Option<std::path::PathBuf> {
 }
 
 /// 快捷方式是否指向旧安装目录（校验通过才删除，防误删同名 lnk）。
+///
+/// 用组件级 `path_under` 而非字符串前缀：后者会把 `dsh Desktop-evil` 判为命中，
+/// 也会因大小写差异漏判（本机实测 lnk target 存创建时的真实大小写）。
 fn should_delete_shortcut(lnk: &std::path::Path, legacy_dir: &std::path::Path) -> bool {
-    let want = legacy_dir.to_string_lossy().replace('/', "\\");
+    let want = strip_verbatim(legacy_dir);
     shortcut_target(lnk)
-        .map(|t| t.to_string_lossy().replace('/', "\\").starts_with(&want))
+        .map(|t| {
+            let target = std::path::PathBuf::from(t.to_string_lossy().replace('/', "\\"));
+            path_under(&strip_verbatim(&target), &want)
+        })
         .unwrap_or(false)
 }
 
@@ -983,9 +1039,19 @@ fn legacy_cleanup_json(app: &AppHandle) -> serde_json::Value {
         }
     }
     // 4) 旧目录回收：仅当已空（卸载器清理后）；非空保留现场不递归删除。
-    let emptied = std::fs::read_dir(&legacy)
-        .map(|mut d| d.next().is_none())
-        .unwrap_or(false)
+    //    回收前额外确认它**不是** reparse point（junction/symlink）：若旧目录被
+    //    替换成指向别处的链接，`remove_dir` 会删掉链接本身（Windows 语义下不进
+    //    目标树），但保留该判定能防住"链接被后续工具跟随"的连锁误删。
+    let is_reparse = std::fs::symlink_metadata(&legacy)
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false);
+    if is_reparse {
+        log("legacy install dir is a reparse point — keeping it in place (not removing)");
+    }
+    let emptied = !is_reparse
+        && std::fs::read_dir(&legacy)
+            .map(|mut d| d.next().is_none())
+            .unwrap_or(false)
         && std::fs::remove_dir(&legacy).is_ok();
     if emptied {
         log(&format!("legacy install dir removed: {}", legacy.display()));
@@ -1206,14 +1272,61 @@ mod migration_tests {
     }
 
     #[test]
-    fn should_delete_shortcut_requires_matching_target_via_fn() {
-        // 纯路径前缀判定（lnk target 读取走 PowerShell，此处测前缀逻辑复用于
-        // shortcut_target 之后调用的判定表达式——直接验证 starts_with 语义）。
-        let legacy = std::path::Path::new(r"C:\Users\u\AppData\Local\dsh Desktop");
-        let target = std::path::PathBuf::from(r"C:\Users\u\AppData\Local\dsh Desktop\dsh-desktop.exe");
-        assert!(target.to_string_lossy().replace('/', "\\").starts_with(&legacy.to_string_lossy().replace('/', "\\")));
-        let unrelated = std::path::PathBuf::from(r"C:\Users\u\AppData\Local\DSH Smoothly Desktop\dsh-desktop.exe");
-        assert!(!unrelated.to_string_lossy().replace('/', "\\").starts_with(&legacy.to_string_lossy().replace('/', "\\")));
+    fn path_under_uses_component_boundaries_not_string_prefix() {
+        let base = std::path::Path::new(r"C:\Users\u\AppData\Local\dsh Desktop");
+        // 正常命中：真正的子路径
+        assert!(path_under(
+            std::path::Path::new(r"C:\Users\u\AppData\Local\dsh Desktop\dsh-desktop.exe"),
+            base
+        ));
+        // 边界：相似名字不得命中（字符串前缀会误判为命中）
+        assert!(!path_under(
+            std::path::Path::new(r"C:\Users\u\AppData\Local\dsh Desktop-evil\x.exe"),
+            base
+        ));
+        // 大小写不敏感（Windows 语义）：字符串比较会漏判
+        assert!(path_under(
+            std::path::Path::new(r"C:\Users\u\AppData\Local\DSH DESKTOP\x.exe"),
+            base
+        ));
+        // 不同目录不得命中
+        assert!(!path_under(
+            std::path::Path::new(r"C:\Users\u\AppData\Local\DSH Smoothly Desktop\dsh-desktop.exe"),
+            base
+        ));
+        // 相等不算"之下"（避免把 base 自身当子项删除）
+        assert!(!path_under(base, base));
+        // 父路径不得命中
+        assert!(!path_under(
+            std::path::Path::new(r"C:\Users\u\AppData\Local"),
+            base
+        ));
+    }
+
+    #[test]
+    fn strip_verbatim_removes_windows_prefix() {
+        // current_exe() 等 API 会返回 \\?\ 前缀（仓库里 simplify_path 就是为此存在）
+        assert_eq!(
+            strip_verbatim(std::path::Path::new(r"\\?\C:\Users\u\AppData\Local\dsh Desktop")),
+            std::path::PathBuf::from(r"C:\Users\u\AppData\Local\dsh Desktop")
+        );
+        assert_eq!(
+            strip_verbatim(std::path::Path::new(r"\\?\UNC\server\share\x")),
+            std::path::PathBuf::from(r"\\server\share\x")
+        );
+        // 无前缀时原样返回
+        assert_eq!(
+            strip_verbatim(std::path::Path::new(r"C:\plain\path")),
+            std::path::PathBuf::from(r"C:\plain\path")
+        );
+    }
+
+    #[test]
+    fn verbatim_prefixed_target_still_matches_after_stripping() {
+        // 端到端语义：带 \\?\ 的进程路径经 strip 后仍能被 path_under 判中
+        let base = std::path::Path::new(r"C:\Users\u\AppData\Local\dsh Desktop");
+        let verbatim = std::path::Path::new(r"\\?\C:\Users\u\AppData\Local\dsh Desktop\dsh-desktop.exe");
+        assert!(path_under(&strip_verbatim(verbatim), &strip_verbatim(base)));
     }
 }
 
