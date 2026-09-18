@@ -84,6 +84,12 @@ jobs:
         with:
           workspaces: src-tauri
 
+      # tauri-build validates bundle.resources at compile time (see the check
+      # job), so the gitignored resources must exist before ANY cargo command —
+      # including the unit tests below. Same prep the check job runs.
+      - run: node scripts/fetch-node.mjs
+      - run: node scripts/sync-resources.mjs
+
       # Windows-only Rust unit tests. `path_under` / `strip_verbatim` and the
       # dump / job-object code are `#[cfg(windows)]`: the ubuntu `check` job
       # compiles a DIFFERENT variant, so platform logic would otherwise ship
