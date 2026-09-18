@@ -1078,6 +1078,8 @@
         btnUpdate.hidden = false;
         btnUpdate.disabled = false;
         btnUpdate.textContent = '重试更新';
+        // dsh 分区失败不影响壳分区：两个更新通道互相独立，都要展示。
+        renderShellSection();
         return;
       }
       if (busy) {
@@ -1087,6 +1089,8 @@
         line.appendChild(document.createTextNode('正在检查 dsh 更新…'));
         body.appendChild(line);
         btnUpdate.hidden = true;
+        // dsh 检查在飞（最长 15s）时也要看到壳分区——两个检查互不依赖。
+        renderShellSection();
         return;
       }
       if (info.updateAvailable) {
