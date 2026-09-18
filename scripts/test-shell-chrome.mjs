@@ -229,6 +229,9 @@ for (const [name, src] of [['scripts/server-manager.mjs', mgrRs], ['resources/ma
   assert.ok(src.includes("t: 'dump-web'"), `${name} asks the shell for the dump`)
   assert.ok(src.includes("case 'dump-done'"), `${name} waits for the shell's dump ack before restarting`)
 }
+// 真源/副本必须逐字节一致：上面是逐项子串检查，新增内容漏同步时仍然全绿——而 tauri
+// 打包只带 resources/manager 副本，漂移会让新命令在安装包里不存在（0.5.0/0.6.0 事故同类）。
+assert.strictEqual(mgrCopy, mgrRs, 'resources/manager/server-manager.mjs is byte-identical to scripts/server-manager.mjs (run: npm run sync:resources)')
 // 挂起处理同样不得自动重启（D1：manager 的重启是既有行为，壳不参与）。
 const hangStart = libRs.indexOf('fn start_hang_watchdog')
 const hangEnd = libRs.indexOf('fn shell_status_json')
