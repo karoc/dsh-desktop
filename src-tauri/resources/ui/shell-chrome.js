@@ -56,6 +56,7 @@
         { type: 'sep' },
         { id: 'open-data', label: '打开数据目录' },
         { id: 'legacy-cleanup', label: '旧版清理…' },
+        { id: 'cache-cleanup', label: '清理缓存…' },
         { id: 'about', label: `关于 ${PRODUCT_NAME}` },
         { type: 'sep' },
         { id: 'quit', label: '退出' },
@@ -78,6 +79,8 @@
     refresh: { ipc: 'refresh_page', bridge: '/refresh' },
     restart: { ipc: 'restart_server', bridge: '/restart' },
     'open-data': { ipc: 'open_data_dir', bridge: '/shell/open-data-dir' },
+    // 缓存清理（A-3 L1）：清可重建缓存，弹窗确认后调用（结果如实展示，不假成功）。
+    'cache-cleanup': { ipc: 'cleanup_caches', bridge: '/shell/cleanup-caches' },
     // 服务异常退出后，条幅上的「打开证据目录」按钮（Rust 侧定位最近一次取证）。
     'open-evidence': { ipc: 'open_evidence_dir', bridge: '/shell/open-evidence' },
     'shell-status': { ipc: 'get_shell_status', bridge: '/shell/status', method: 'GET' },
@@ -951,6 +954,66 @@
     });
   }
 
+  // 缓存清理（A-3 L1）：只清可重建的缓存。实测数据（正式版）：
+  //   node_modules 257MB（可重建，删后首次启动需联网重装）
+  //   .pnpm-store  620MB（保留：暖 store 重建约 6s）
+  //   reports     1381MB（保留：崩溃/挂起取证，可能正是排障要的证据；仅清历史 dump）
+  //   dsh-home      75MB（保留：会话/设置/凭据）
+  // 弹窗必须如实列出"将删除/将保留"，并在删除前告知需联网，避免用户离线后起不来。
+  function openCacheCleanupDialog() {
+    openDialog((card, close) => {
+      card.appendChild(el('div', '清理缓存', 'dialog-title'));
+      const body = document.createElement('div');
+      body.className = 'dialog-body';
+      const rows = document.createElement('div');
+      rows.appendChild(el('div', '将删除（可重建）：', 'dlg-note'));
+      rows.appendChild(dlgRow('runtime/node_modules', '依赖树（约 250MB）— 下次启动自动重装'));
+      rows.appendChild(dlgRow('历史挂起 dump', '仅保留最新 3 份'));
+      rows.appendChild(el('div', '将保留：', 'dlg-note'));
+      rows.appendChild(dlgRow('会话 / 设置 / 凭据', 'runtime/dsh-home'));
+      rows.appendChild(dlgRow('依赖缓存 .pnpm-store', '保留以加速重建'));
+      rows.appendChild(dlgRow('取证目录 reports', '保留最新证据（崩溃/挂起排障用）'));
+      rows.appendChild(el('div', '注意：清理后首次启动需要联网重新安装依赖（离线时会启动失败，直到网络恢复）。', 'dlg-note'));
+      body.appendChild(rows);
+      card.appendChild(body);
+      const actions = document.createElement('div');
+      actions.className = 'dialog-actions';
+      const btnClose = mkDlgBtn('取消');
+      btnClose.addEventListener('click', close);
+      const btnClean = mkDlgBtn('清理', true);
+      actions.append(btnClose, btnClean);
+      btnClean.addEventListener('click', async () => {
+        btnClean.disabled = true;
+        btnClean.textContent = '清理中…';
+        try {
+          const res = await call('cache-cleanup');
+          rows.replaceChildren();
+          if (!res) {
+            rows.appendChild(el('div', '清理失败：壳未响应。', 'dlg-note'));
+          } else {
+            rows.appendChild(dlgRow('清理结果', res.ok ? '完成' : '部分完成'));
+            rows.appendChild(dlgRow('历史 dump 已清', String(res.prunedDumps ?? 0) + ' 份'));
+            rows.appendChild(dlgRow('node_modules 已删', String(res.removedNodeModules ?? false)));
+            const blocked = Array.isArray(res.blocked) ? res.blocked : [];
+            if (blocked.length) {
+              rows.appendChild(dlgRow('被占用未删除', blocked.join('、')));
+              rows.appendChild(el('div', '请关闭占用程序（或重启壳）后重试。', 'dlg-note'));
+            }
+            if (res.needsNetworkOnNextStart) {
+              rows.appendChild(el('div', '下次启动需要联网重新安装依赖。', 'dlg-note'));
+            }
+          }
+          btnClean.hidden = true;
+        } catch (err) {
+          rows.appendChild(dlgRow('清理失败', String(err)));
+          btnClean.disabled = false;
+          btnClean.textContent = '清理';
+        }
+      });
+      card.appendChild(actions);
+    });
+  }
+
   // 「检查更新」弹窗：展示当前/最新版本信息 + 确定 + 立即更新。
   // 无已知版本时先触发 /check-update 并轮询 /update-status（上限 15s）。
   function openCheckUpdateDialog() {
@@ -1130,6 +1193,9 @@
     } else if (id === 'legacy-cleanup') {
       // 旧版清理：壳内模态弹窗（检测 + 备份说明 + 清理按钮）。壳内就地动作。
       openLegacyDialog();
+    } else if (id === 'cache-cleanup') {
+      // 缓存清理：壳内模态弹窗（列出将删除/将保留 + 二次确认）。动作走 ACTIONS。
+      openCacheCleanupDialog();
     } else if (id === 'dev-mode') {
       call('dev-mode').then((r) => {
         if (r && typeof r.devMode === 'boolean') setDevMode(r.devMode);

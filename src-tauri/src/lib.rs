@@ -1008,6 +1008,79 @@ fn cleanup_legacy_install(app: AppHandle) -> serde_json::Value {
     legacy_cleanup_json(&app)
 }
 
+/// 缓存清理（A-3 L1）的**白名单**：只清可重建的缓存，绝不碰会话/证据。
+///
+/// 实测（2026-09-17，正式版真实数据）：`node_modules` 257MB、`.pnpm-store` 620MB、
+/// `reports` 1381MB（其中 1381MB 是**最新**的 hang dump）、`dsh-home` 75MB。
+/// 因此：
+///   - `.pnpm-store` **保留**——暖 store 重建约 6s，删了要冷装（需联网、数分钟）；
+///   - `reports` **保留**——它是崩溃/挂起取证目录，可能正是排障要的证据；
+///     仅清理其中**超过保留份数**的历史 dump（复用 web_dump::prune_dumps）；
+///   - `dsh-home` **保留**——会话、设置、凭据；
+///   - 只删 `node_modules`（可重建；删除后首次启动需联网重装，UI 必须事先告知）。
+///
+/// 返回结构含逐项结果与失败项，UI 据此如实展示（不假成功）。
+///
+/// **前置：先停服务**（方案 A-3 L1 要求）。dsh 进程持有 node_modules 里的文件
+/// （原生模块尤其），运行中删除会失败或留下半删的依赖树；这里先 stop_child 并等
+/// 进程退出，再做删除。清理与 `restart_server` 的竞争由调用方的 UI 顺序保证
+/// （弹窗内同步等待结果），删除失败会如实进入 blocked 列表而非假成功。
+fn cache_cleanup_json(app: &AppHandle) -> serde_json::Value {
+    let data = app.path().app_data_dir().unwrap_or_default();
+    let log = |m: &str| {
+        eprintln!("[dsh-desktop] cache-cleanup: {m}");
+        log_line(&data, &format!("cache-cleanup: {m}"));
+    };
+    // 1) 先停服务：node_modules 里的原生模块被运行中的 dsh 持有，运行中删除会
+    //    失败或留下半删状态。stop_child 内部会 try_wait + taskkill 整棵树。
+    log("stopping dsh service before cache cleanup");
+    stop_child(&app.state::<ServerState>());
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    let runtime = data.join("runtime");
+    let node_modules = runtime.join("node_modules");
+    let reports = runtime.join("reports");
+
+    // 2) 历史 dump：只保留最新 HANG_DUMP_KEEP 份（prune_dumps 已按名字排序保留尾部）。
+    let pruned = web_dump::prune_dumps(&reports, "dshweb-hang-", HANG_DUMP_KEEP);
+    log(&format!("pruned {pruned} old hang dump(s)"));
+
+    // 3) node_modules：可重建。删除失败（被占用）如实上报，不假装成功。
+    let mut removed_node_modules = false;
+    let mut blocked: Vec<String> = Vec::new();
+    if node_modules.is_dir() {
+        match std::fs::remove_dir_all(&node_modules) {
+            Ok(()) => {
+                removed_node_modules = true;
+                log("removed runtime/node_modules (will be reinstalled on next start)");
+            }
+            Err(e) => {
+                log(&format!("could not remove runtime/node_modules: {e}"));
+                blocked.push("runtime/node_modules".to_string());
+            }
+        }
+    }
+
+    serde_json::json!({
+        "ok": blocked.is_empty(),
+        "prunedDumps": pruned,
+        "removedNodeModules": removed_node_modules,
+        "blocked": blocked,
+        // 明确告知调用方：清理后首次启动需要联网重装依赖。
+        "needsNetworkOnNextStart": removed_node_modules,
+        // 保留项（供 UI 如实展示"什么没被删"）
+        "kept": ["runtime/dsh-home (sessions, settings, credentials)",
+                 "runtime/.pnpm-store (warm rebuild)",
+                 "runtime/reports (latest evidence)",
+                 "runtime/proxy.json", "dsh.json"],
+    })
+}
+
+#[tauri::command]
+fn cleanup_caches(app: AppHandle) -> serde_json::Value {
+    cache_cleanup_json(&app)
+}
+
 #[cfg(test)]
 mod migration_tests {
     use super::*;
@@ -1815,6 +1888,9 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
         }
         ("POST", "/shell/legacy-cleanup") => {
             ("200 OK", legacy_cleanup_json(app).to_string())
+        }
+        ("POST", "/shell/cleanup-caches") => {
+            ("200 OK", cache_cleanup_json(app).to_string())
         }
         _ => ("404 Not Found", "not found".into()),
     };
@@ -3646,7 +3722,8 @@ pub fn run() {
             open_plugins,
             get_shell_status,
             check_legacy_install,
-            cleanup_legacy_install
+            cleanup_legacy_install,
+            cleanup_caches
         ])
         .run(tauri::generate_context!())
         .expect("error while running DSH Smoothly Desktop");

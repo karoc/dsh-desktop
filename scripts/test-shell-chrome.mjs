@@ -38,7 +38,7 @@ assert.ok(Array.isArray(SHELL_MENUS[0].items), 'app menu has dropdown items')
 const brand = SHELL_MENUS[0].items[0]
 assert.ok(brand && brand.id === 'brand' && brand.type === 'brand', 'dropdown first row shows the app name (brand)')
 const ids = SHELL_MENUS[0].items.map((i) => i.id).filter(Boolean)
-for (const id of ['proxy-settings', 'plugins', 'check-update', 'dev-mode', 'refresh', 'restart', 'open-data', 'legacy-cleanup', 'about', 'quit']) {
+for (const id of ['proxy-settings', 'plugins', 'check-update', 'dev-mode', 'refresh', 'restart', 'open-data', 'legacy-cleanup', 'cache-cleanup', 'about', 'quit']) {
   assert.ok(ids.includes(id), `app menu contains ${id}`)
 }
 
