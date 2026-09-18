@@ -8,6 +8,7 @@ const stateEl = document.getElementById('state');
 const creditsEl = document.getElementById('credits');
 const retryBtn = document.getElementById('retry');
 const openDataBtn = document.getElementById('opendata');
+const openPluginsBtn = document.getElementById('openplugins');
 const spinner = document.getElementById('spinner');
 const installProgress = document.getElementById('installProgress');
 
@@ -17,6 +18,7 @@ function setState(text, failed = false) {
   spinner.hidden = failed;
   retryBtn.hidden = !failed;
   openDataBtn.hidden = !failed;
+  openPluginsBtn.hidden = !failed;
 }
 
 // ── 9 行替换 + 光辉扫过（demo-K 效果）────────────────────
@@ -279,6 +281,16 @@ openDataBtn.addEventListener('click', async () => {
     await tauri.core.invoke('open_data_dir');
   } catch (err) {
     appendLog('打开数据目录失败：' + String(err));
+  }
+});
+
+// 插件管理窗口独立于 dsh 运行（走环回桥 /plugins/*），因此 dsh 起不来时也能用：
+// 引导用户在那里禁用出问题的插件后重试。这是引导而非自动修复——不禁用任何东西。
+openPluginsBtn.addEventListener('click', async () => {
+  try {
+    await tauri.core.invoke('open_plugins');
+  } catch (err) {
+    appendLog('打开插件管理失败：' + String(err));
   }
 });
 

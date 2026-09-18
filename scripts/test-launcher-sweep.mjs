@@ -28,7 +28,7 @@ function makeEl(tag = 'div') {
   }
   return el
 }
-const ids = ['state', 'credits', 'retry', 'opendata', 'spinner', 'installProgress', 'legacyBanner', 'legacyBannerText', 'legacyCleanBtn', 'legacyLaterBtn']
+const ids = ['state', 'credits', 'retry', 'opendata', 'openplugins', 'spinner', 'installProgress', 'legacyBanner', 'legacyBannerText', 'legacyCleanBtn', 'legacyLaterBtn']
 const elements = Object.fromEntries(ids.map((id) => [id, makeEl()]))
 const creditsViewport = makeEl()
 creditsViewport.clientHeight = 26 * 9
