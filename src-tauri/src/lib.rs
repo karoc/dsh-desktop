@@ -1294,6 +1294,12 @@ mod migration_tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    // Windows 路径语义测试：断言盘符、反斜杠分隔、大小写不敏感。
+    // **必须 cfg(windows)**：在 Linux 上 `Path::components()` 把 `C:\Users\u\...`
+    // 当作**单个组件**（反斜杠不是分隔符），这些断言会失败——2026-09-19 CI 实测
+    // （ubuntu 的 check job 跑 cargo test --lib 时红）。Windows 侧由 windows job
+    // 的 cargo test 覆盖（G-2 加的步骤）。
+    #[cfg(windows)]
     #[test]
     fn path_under_uses_component_boundaries_not_string_prefix() {
         let base = std::path::Path::new(r"C:\Users\u\AppData\Local\dsh Desktop");
@@ -1344,6 +1350,8 @@ mod migration_tests {
         );
     }
 
+    // 同样依赖 Windows 路径语义（`\\?\` + 盘符）：见上面 path_under 测试的说明。
+    #[cfg(windows)]
     #[test]
     fn verbatim_prefixed_target_still_matches_after_stripping() {
         // 端到端语义：带 \\?\ 的进程路径经 strip 后仍能被 path_under 判中
