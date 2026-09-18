@@ -85,6 +85,53 @@ Invoke-Scenario -Name 'legacy-app-running' -WithUninstaller $true -WithMainApp $
 Write-Output "--- scenario 4: no legacy leftovers -> expect GONE (no-op)"
 Invoke-Scenario -Name 'no-legacy' -WithUninstaller $false -WithMainApp $false
 
+# ── L0 uninstall notice: must never block silent or /UPDATE runs ────────────
+# The hook is inserted at the top of Section Uninstall, BEFORE CheckIfAppIsRunning,
+# and auto-update calls `uninstall.exe /UPDATE`. A MessageBox there would hang an
+# unattended update, so silent and UPDATE modes must both fall straight through.
+function Invoke-UninstallNoticeProbe {
+  param([string]$Name, [bool]$UpdateMode)
+  $probeDir = Join-Path $env:TEMP 'nsi-l0-probe'
+  Remove-Item $probeDir -Recurse -Force -ErrorAction SilentlyContinue
+  New-Item -ItemType Directory -Force -Path $probeDir | Out-Null
+  Copy-Item $Nsh (Join-Path $probeDir 'legacy-takeover.nsh') -Force
+  $um = if ($UpdateMode) { 1 } else { 0 }
+  $nsi = @"
+!addplugindir "C:\Users\qqwto\AppData\Local\tauri\NSIS\Plugins\x86-unicode\additional"
+!define MAINBINARYNAME "dsh-desktop"
+OutFile "probe-l0.exe"
+RequestExecutionLevel user
+SilentInstall silent
+Var UpdateMode
+!include "legacy-takeover.nsh"
+Section
+  StrCpy `$UpdateMode $um
+  !insertmacro NSIS_HOOK_PREUNINSTALL
+  FileOpen `$9 "`$EXEDIR\l0.txt" w
+  FileWrite `$9 "PASSED"
+  FileClose `$9
+SectionEnd
+"@
+  Set-Content -Path (Join-Path $probeDir 'probe.nsi') -Value $nsi -Encoding UTF8
+  Push-Location $probeDir
+  & $makensis -INPUTCHARSET UTF8 'probe.nsi' | Out-Null
+  $mk = $LASTEXITCODE
+  Pop-Location
+  if ($mk -ne 0) { Write-Output ("[" + $Name + "] COMPILE-FAILED"); return }
+  $sw = [Diagnostics.Stopwatch]::StartNew()
+  Start-Process -FilePath (Join-Path $probeDir 'probe-l0.exe') -Wait
+  $sw.Stop()
+  $ok = Test-Path (Join-Path $probeDir 'l0.txt')
+  $verdict = if ($ok -and $sw.ElapsedMilliseconds -lt 5000) { 'NO-BLOCK' } else { 'BLOCKED-OR-FAILED' }
+  Write-Output ("[" + $Name + "] " + $verdict + " elapsed-ms=" + $sw.ElapsedMilliseconds)
+}
+
+Write-Output "--- scenario 5: uninstall notice, silent mode -> expect NO-BLOCK"
+Invoke-UninstallNoticeProbe -Name 'notice-silent' -UpdateMode $false
+
+Write-Output "--- scenario 6: uninstall notice, /UPDATE mode -> expect NO-BLOCK (auto-update must not hang)"
+Invoke-UninstallNoticeProbe -Name 'notice-update' -UpdateMode $true
+
 Remove-Item $sim -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item (Join-Path $env:TEMP 'legacy-sim-desktop') -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item (Join-Path $env:TEMP 'legacy-sim-running') -Recurse -Force -ErrorAction SilentlyContinue

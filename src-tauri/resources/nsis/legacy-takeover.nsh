@@ -80,14 +80,19 @@
 ; ── 卸载时告知「数据被保留」（A-3 L0）────────────────────────────────────────
 ; 卸载器只删程序目录与快捷方式，**不删** %APPDATA%\<identifier>（会话/设置/凭据）
 ; 与 %LOCALAPPDATA%\<identifier>（WebView2 缓存、备份）。用户不知道这点时会以为
-; "卸载=清干净"，或反过来担心数据丢失。这里在卸载流程里把保留路径与手动清理方式
-; 说清楚（DetailPrint 进日志；MessageBox 在非静默卸载时可见）。
-; 静默卸载（/S）不弹窗——避免无人值守场景被阻塞，只写日志。
+; "卸载=清干净"，或反过来担心数据丢失。
 ;
-; 目录名不依赖模板 define：identifier 由 tauri.conf.json 决定（本版为
+; 两个必须避开的场景（实测模板 installer.nsi:3196 确认插入点在 Section Uninstall
+; 开头、CheckIfAppIsRunning 之前）：
+;   1) 自动更新走 `uninstall.exe /UPDATE`（模板 3188 解析该参数）→ 绝不能弹窗，
+;      否则无人值守的更新会被阻塞；
+;   2) 静默卸载 `/S` → 同样不弹窗；且因为本宏在 CheckIfAppIsRunning 之前，用户
+;      可能在"应用正在运行"提示处取消卸载，那时弹过说明框就是误报。
+; 因此仅在「非静默且非 UPDATE」时弹说明框；其余情况只写 DetailPrint 日志。
+;
+; 目录名不依赖模板 define：identifier 由 tauri.conf.json 决定（正式版
 ; dsh.smoothly.desktop / dev 版 dsh.smoothly.desktop.dev），而模板是否提供
-; ${IDENTIFIER} 未经验证 → 用 MAINBINARYNAME 反推（dev 版 exe 名为
-; dsh-desktop-dev，两版数据目录不同名），避免引用不存在的 define 导致构建失败。
+; ${IDENTIFIER} 未经验证 → 用 MAINBINARYNAME 反推，避免引用不存在的 define。
 !macro NSIS_HOOK_PREUNINSTALL
   !if "${MAINBINARYNAME}" == "dsh-desktop-dev"
     !define /redef APP_DATA_DIR "dsh.smoothly.desktop.dev"
@@ -98,6 +103,10 @@
   DetailPrint "  Data:    $APPDATA\${APP_DATA_DIR}"
   DetailPrint "  Cache:   $LOCALAPPDATA\${APP_DATA_DIR}"
   DetailPrint "  To remove them, delete those folders manually after uninstalling."
+  ; 自动更新：静默处理，绝不弹窗（$UpdateMode 由模板在 Section Uninstall 里解析）。
+  ; 不用 ${If}：LogicLib 在模板里是隐式可用，本文件被独立 harness 编译时未必有
+  ; （实测 probe 编译失败）→ 用原生 StrCmp 保持自足。
+  StrCmp $UpdateMode 1 legacy_uninst_quiet
   IfSilent legacy_uninst_quiet
   MessageBox MB_OK|MB_ICONINFORMATION \
     "会话、设置与凭据不会被删除。$\r$\n$\r$\n数据目录：$APPDATA\${APP_DATA_DIR}$\r$\n缓存目录：$LOCALAPPDATA\${APP_DATA_DIR}$\r$\n$\r$\n如需彻底清理，请在卸载后手动删除上述目录。"
