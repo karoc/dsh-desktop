@@ -21,6 +21,14 @@
 >
 > 详情见 `.agents/notes/implemented/bug-fix/2026-09-08-legacy-uninstaller-name-kill.md`。
 
+## [0.9.1](https://github.com/karoc/dsh-desktop/compare/v0.9.0...v0.9.1) (2026-09-19)
+
+
+### Bug Fixes
+
+* **guard:** 恢复 -WaitForAppSec（登录时 guard 不再自尽）+ 取证 Note 与转录解码器 ([#34](https://github.com/karoc/dsh-desktop/issues/34)) ([e1f6172](https://github.com/karoc/dsh-desktop/commit/e1f6172c18176d94e2f72f5f727be9c26dbf3616))
+* **release:** 清扫 draft 步骤改用 REST 列表（修 v0.9.0 的 release job 红灯） ([#31](https://github.com/karoc/dsh-desktop/issues/31)) ([c49c910](https://github.com/karoc/dsh-desktop/commit/c49c9103eb8edddfd94356533b21b5ecad0a3ed1))
+
 ## [0.9.0](https://github.com/karoc/dsh-desktop/compare/v0.8.0...v0.9.0) (2026-09-18)
 
 
