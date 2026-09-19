@@ -1039,7 +1039,7 @@
     {
       "id": "card-c12f05be-bd8f-4835-baca-156a9b5995a9",
       "title": "跟进：恢复宿主服务 + 第 5 次事故取证判定（manager-exception 标记 / guard VANISHED）",
-      "description": "恢复：宿主机壳（dsh-desktop.exe pid 30596）还活着但服务处于 down（manager gen2 于 02:11:09 死后按 D1 不自动重启），需要用户在壳里点「重启服务」/托盘入口恢复——本轮不动用户服务。重启后即加载带取证的新 manager（已热部署）。下一次同类事故要拿到的新证据：① reports/manager-exception-*.txt 有无（有＝manager 自身崩溃，看栈；无＝被外部 TerminateProcess）；② guard 日志 %LOCALAPPDATA%\\dsh-hang-guard-prod.log 的 VANISHED/suspect 行（凶手是否 taskkill/新进程）；③ guard evidence 目录 dsh-hang-<app>-<ts>\\processes.txt 的死亡瞬间全表。共同触发器已收敛为「pwsh 跑 npm 测试套件（D:\\Dev\\c-video-download 的 test:fast/test:engine，lint 阶段会连开 39 个 node --check）」×4 次，若证据指向 dsh 侧进程树管理（dsh-subprocess-local 的 Windows Job/taskkill 路径），再往上游或改壳层兜底；若指向外部工具，则按工具处理。",
+      "description": "恢复：宿主机壳（dsh-desktop.exe pid 30596）还活着但服务处于 down（manager gen2 于 02:11:09 死后按 D1 不自动重启），需要用户在壳里点「重启服务」/托盘入口恢复——本轮不动用户服务。重启后即加载带取证的新 manager（已热部署）。\n\n【2026-09-19 追加】宿主机 guard 仍是 09-15 的热替换版本，**需用 `scripts/install-hang-guard.ps1` 重装一次**才能拿到带 `-WaitForAppSec` 的版本——否则\"登录后 guard 两周期即自尽\"的老问题会让第 5 次事故同样零证据。该修复已随 0.9.1 入库分发（PR #34，此前只存在于宿主机、仓库侧从未提交）。重装后应看到 guard 日志出现 `waiting for shell (...) to start` 与随后的 `shell (...) detected -- sampler + hang watcher armed` 两类行。\n\n下一次同类事故要拿到的新证据：① reports/manager-exception-*.txt 有无（有＝manager 自身崩溃，看栈；无＝被外部 TerminateProcess）；② guard 日志 %LOCALAPPDATA%\\dsh-hang-guard-prod.log 的 VANISHED/suspect 行（凶手是否 taskkill/新进程）；③ guard evidence 目录 dsh-hang-<app>-<ts>\\processes.txt 的死亡瞬间全表。共同触发器已收敛为「pwsh 跑 npm 测试套件（D:\\Dev\\c-video-download 的 test:fast/test:engine，lint 阶段会连开 39 个 node --check）」×4 次，若证据指向 dsh 侧进程树管理（dsh-subprocess-local 的 Windows Job/taskkill 路径），再往上游或改壳层兜底；若指向外部工具，则按工具处理。",
       "rationale": "根因未定，本轮只补齐了\"下一次可诊断\"。四次事故（09-01 07:21 挂起、09-01 21:02 整树消失、09-04 00:04 整树消失、09-15 02:11 exit code 1）全部发生在同一 workspace + 同一动作场景，必须在第 5 次抓住凶手才能收敛；同时服务当前是下线状态，需要用户动作才能恢复，不能让它悄悄停在半死状态。",
       "sourceSessionId": "session-87446335-155f-4883-9837-55ea38439301",
       "status": "todo",
@@ -1051,7 +1051,7 @@
         "waiting-user"
       ],
       "createdAt": 1789410458361,
-      "updatedAt": 1789410458361
+      "updatedAt": 1789793674199
     },
     {
       "id": "card-abc3590d-f280-44be-ae5b-3ca4f4caa851",
