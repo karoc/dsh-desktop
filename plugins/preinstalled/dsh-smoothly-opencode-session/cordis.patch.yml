@@ -1,0 +1,36 @@
+# Bundle layer applied when a profile lists this package. The row names the
+# package by name so Node resolution finds the installed code; this is a
+# host-only plugin (no exports["./client"], no dsh.client manifest). The
+# row's host apply listens on the llm/stream waterfall and injects the
+# OpenCode-required x-opencode-session header onto provider requests.
+#
+# Configuration (row config, all optional — the code fills defaults for
+# missing keys, so a profile override only needs the keys it changes):
+#   providers: [string]  provider route keys whose requests receive the
+#                        header. Defaults to the pi-ai catalog ids
+#                        ['opencode', 'opencode-go']. Add your own route key
+#                        when OpenCode is served under a custom provider name
+#                        (e.g. opencode-go-self).
+#   mode: 'session-id' | 'uuid'
+#                        'session-id' (default): header value = the DSH
+#                        session id that already travels with each model call
+#                        — stable across turns, compaction, retries and
+#                        restarts, unique per conversation.
+#                        'uuid': a process-stable random uuid derived per DSH
+#                        session id (opaque; resets when the process
+#                        restarts).
+#   debug: true|false    log every streamed call that receives the header
+#                        via ctx.logger (the dsh process console).
+#   debugFile: path      optional absolute path; when set, every streamed
+#                        call that receives the header appends one JSON line
+#                        ({"ts","provider","model","session","header","value"})
+#                        to that file — handy when the dsh console is hidden.
+- insert:
+    - id: dsh-smoothly-opencode-session
+      name: '@karoc/dsh-smoothly-opencode-session'
+      config:
+        providers:
+          - opencode
+          - opencode-go
+        mode: session-id
+        debug: false

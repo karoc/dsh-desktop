@@ -1220,6 +1220,37 @@
       "updatedAt": 1789773349359,
       "summary": "按 v2 顺序完成全部 7 项（10 个提交，全部已推送 origin/feat/launcher-log-9-lines-final-delay，HEAD=5673311）：① G-1 manager 真源/副本逐字节相等断言 + 负向验证；② A-4 分期1 启动页「打开插件管理」按钮（复用 open_plugins，零新 Rust 代码）+ 实机构造失败态验证；③ 附带修复 plugin-console 桥端口惰性读取（实机发现窗口空白，根因=顶层常量缓存 vs 注入时序）+ 回归断言；④ A-2a NSIS 旧版在跑时不删其快捷方式（共享尾标签缺陷）+ 六场景 harness 实测（含修复前对照：shortcut=GONE → PRESENT）；⑤ A-3 L0 卸载数据保留文案（避开 /UPDATE 与静默模式，六场景实测不阻塞）；⑥ A-3 L1「清理缓存…」菜单项（实测收益核算后只删 node_modules + 历史 dump；自愈端到端实测：删 241MB node_modules → 重启 → 自动重装 824 包 → 正常起服务）；⑦ A-2b 三处路径判定改组件级比较 + 去 \\\\?\\ 前缀 + reparse 判定（Rust 17/17 单测）；⑧ A-1 一期壳自更新检查（GitHub /releases/latest 直用、独立端点、缓存 6h、防降级、dev 跳过；实机验证 dev=true + 版本比较 5/5 + GitHub API 形状）；⑨ A-1 UI 收尾（busy/opErr 路径也渲染壳分区）；⑩ G-2 Windows 专属 Rust 单测进 CI（置于 bundle 前快速失败）。\n收尾验证：npm test 9 套全绿；cargo test --lib 17/17；chrome 契约测试 PASS；工作区无临时残留。\n已知验证缺口（如实记录）：A-1 弹窗新增分区的像素级渲染未验证（菜单下拉在注入 shadow DOM 中，UIA 不暴露未展开项，本会话合成点击未能稳定展开）——已由语法/契约/数据链路/版本逻辑/Rust 单测间接覆盖，建议下次实机手动确认。",
       "rejected": "放弃「一次性全做完再统一验证」——改为每项独立实测后再进下一项（实际因此抓到 3 个实现期缺陷：plugin-console 桥端口顶层常量导致窗口空白、L1 初版漏 stop_child、A-1 弹窗 busy/opErr 早退不渲染壳分区）；放弃「A-1 产出 latest.json / 新增 open_url / 复用 update-status」「A-3 L1 连 .pnpm-store 与 reports 一起清」「A-2 新建 guard_removal」「A-4 新增 Rust 命令改 bundles」等原方案路径（理由见 Agent Note 的 Alternatives）；也放弃把 verify-*.ps1 全量纳入 CI（需真实旧版残留/交互环境，不适合 CI，只纳入 Windows 专属 Rust 单测）。"
+    },
+    {
+      "id": "card-44210777-e765-4181-8df1-eaaef2f0a3df",
+      "title": "预装 @karoc/dsh-smoothly-opencode-session 0.1.0（第 4 个预装包，首个 scoped 包名）",
+      "description": "涉及：plugins/preinstalled/dsh-smoothly-opencode-session/（新增 5 文件）、scripts/sync-resources.mjs ship list、src/plugin-console.js + plugins/dsh-plugin-console/client.js 双语简介、README、预装插件同步 Skill、scripts/test-control-plane.mjs 新增 scoped 路径断言。",
+      "rationale": "用户要求「在壳内预装该插件的最新版本 0.1.0」。该 host-only 插件给 OpenCode / OpenCode Go 路由的模型请求补 x-opencode-session 头（缺它自 2026-09-05 起被网关拒为 400 MissingSessionID），预装后用户不必自己 npm 安装即可在插件管理窗口一键启用（默认关，随壳版本锁定）。",
+      "rejected": "① 按插件仓库 HEAD 同步——拒绝：沿用 2026-08-25 定的「npm 已发布 latest tarball 为权威基准」，0.1.0 已发布且 tarball 与仓库 HEAD(018e123) 逐字节一致。② 默认启用——拒绝：预装插件一律默认关（D3 约定），启用/禁用走 dsh.profile.bundles 开关。③ 把 README.zh.md / CHANGELOG.md / CONTRIBUTING.md 一起随包——拒绝：保持壳内精简约定（README.zh.md 不随壳发，留链接是坏链）。④ 改 ensurePreinstalled 支持 scoped——不需要：运行时路径由 bundle package.json 的 name 决定，`join(node_modules, name)` 天然支持 scope。",
+      "sourceSessionId": "session-67d49873-a409-4621-a37d-e1d206530643",
+      "status": "in_progress",
+      "tags": [
+        "preinstalled",
+        "plugins",
+        "opencode"
+      ],
+      "createdAt": 1789823947634,
+      "updatedAt": 1789823947634
+    },
+    {
+      "id": "card-94d7001c-a0eb-4a16-a8c9-ae86d45b713e",
+      "title": "壳发新版本：预装 OCS 0.1.0 随包 → release-please 出 PR → tag → CI 出安装包",
+      "rationale": "预装插件只在「发布新的桌面版本」后才随安装包生效（源树改动不影响已装应用的 runtime 拷贝）。用户明确要求「然后壳发新版本」，所以本轮必须走完 feat → PR → release-please bump → 合并 release PR → tag → CI 三平台安装包 + Release 核对。",
+      "rejected": "① 手动改版本号/手动打 tag——拒绝：CONTRIBUTING 明确版本 bump 与 tag 由 release-please 接管。② main 直推——拒绝：约定走 PR（直推会静默跳过必需检查）。③ 只在本地构建安装包——拒绝：正式版必须由 GitHub Release 分发。",
+      "sourceSessionId": "session-67d49873-a409-4621-a37d-e1d206530643",
+      "status": "todo",
+      "tags": [
+        "release",
+        "preinstalled",
+        "plugins"
+      ],
+      "createdAt": 1789823947647,
+      "updatedAt": 1789823947647
     }
   ]
 }

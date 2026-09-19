@@ -13,8 +13,9 @@ description: Use when checking, auditing, or updating the shell-bundled "preinst
 - **打包链**：`scripts/sync-resources.mjs` 把 `plugins/preinstalled/<pkg>` 原样拷到 `src-tauri/resources/preinstalled/<pkg>`，随 tauri `bundle.resources` 进安装包。
 - **运行时**：`scripts/server-manager.mjs` 的 `ensurePreinstalled()` 把 `resources/preinstalled/*` 拷到 `<runtime>/node_modules/<pkg>`，记入 `<runtime>/dsh.json` 的 `preinstalled` 列表；预装包**不是** profile dependency，`dsh plugin` reconcile 永不触碰它们。
 - **三层身份**：内置核心（通知插件，常开）＞ 预装可选（三个插件，**默认关**，控制台启用）＞ 用户自装（npm，profile dependency）。
-- **三个预装插件**：`dsh-model-reasoning`、`dsh-kanban`、`dsh-turn-navigator`。
+- **四个预装插件**：`dsh-model-reasoning`、`dsh-kanban`、`dsh-turn-navigator`、`@karoc/dsh-smoothly-opencode-session`（host-only，OpenCode `x-opencode-session` 会话头；2026-09-19 随壳加入）。
   - ⚠️ **包名/目录名陷阱**：仓库目录 `plugins/preinstalled/dsh-turn-navigator/` 对应 npm 包名 `dsh-turn-navigator`（本地 dev 仓库目录叫 `dsh-turn-nav`，但发布/插件 id 是 `dsh-turn-navigator`）。核对以 bundle 自身 `package.json` 的 `name` 为准，不要用目录名猜。
+  - ⚠️ **scoped 包名**：`@karoc/dsh-smoothly-opencode-session` 的 npm 名带 scope，仓库目录却是不带 scope 的 `plugins/preinstalled/dsh-smoothly-opencode-session/`。运行时拷贝路径由 bundle 的 `package.json` 决定（`<runtime>/node_modules/@karoc/…`），`sync-resources.mjs` 的 ship list 写的是**目录名**；`scripts/test-control-plane.mjs` 覆盖了这条路径。
 
 ## 2. 核查（audit）
 
@@ -42,7 +43,7 @@ curl -s https://registry.npmjs.org/<pkg> | node -e "let d='';process.stdin.on('d
 
    ```sh
    mkdir -p .tmp-preinstalled && cd .tmp-preinstalled
-   npm pack --cache ./.npm-cache dsh-model-reasoning@<latest> dsh-kanban@<latest> dsh-turn-navigator@<latest>
+   npm pack --cache ./.npm-cache dsh-model-reasoning@<latest> dsh-kanban@<latest> dsh-turn-navigator@<latest> @karoc/dsh-smoothly-opencode-session@<latest>
    tar -xzf <pkg>-<ver>.tgz -C <dir>
    ```
 
@@ -66,8 +67,8 @@ curl -s https://registry.npmjs.org/<pkg> | node -e "let d='';process.stdin.on('d
 ## 4. 验证（缺一不可）
 
 ```sh
-# 1) 所有随包 lib 语法合法
-for f in dsh-model-reasoning dsh-kanban dsh-turn-navigator; do node --check plugins/preinstalled/$f/lib/index.js; node --check plugins/preinstalled/$f/lib/client.js; done
+# 1) 所有随包 lib 语法合法（host-only 插件只有 lib/index.js）
+for f in dsh-model-reasoning dsh-kanban dsh-turn-navigator dsh-smoothly-opencode-session; do node --check plugins/preinstalled/$f/lib/index.js; [ -f plugins/preinstalled/$f/lib/client.js ] && node --check plugins/preinstalled/$f/lib/client.js; done
 
 # 2) dsh-kanban bundle 含 skill-sync 字符串（防 rolldown 摇树）
 grep -c "kanban-use" plugins/preinstalled/dsh-kanban/lib/index.js      # ≥1
