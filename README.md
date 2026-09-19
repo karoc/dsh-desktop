@@ -54,7 +54,7 @@ src-tauri/                Tauri 2 壳：
   resources/manager/       同步后的 server-manager.mjs + proxy.mjs
   resources/node/          fetch-node.mjs 下载的 Node 24（不入库）
   resources/plugin/        @dsh-desktop 客户端插件（bundle 用）
-  resources/preinstalled/  预装插件 bundle（dsh-kanban / model-reasoning / turn-navigator）
+  resources/preinstalled/  预装插件 bundle（dsh-kanban / model-reasoning / turn-navigator / smoothly-opencode-session）
   icons/                   应用图标全套（含 NSIS 安装器图标/向导横幅）
 scripts/
   server-manager.mjs       更新 dsh（pnpm）+ 内置代理 + 拉起服务 + URL/日志上报（核心）
@@ -205,7 +205,7 @@ node scripts/server-manager.mjs \
 顶栏菜单「插件管理…」打开**壳内独立管理窗口**（复用原插件控制台 UI：主题/语言/卡片/
 开关，数据走环回桥——**dsh 崩溃/未启动时依然可管理**，插件出问题时能卸载/禁用）：
 
-- **预装插件（默认关闭，随壳自带）**：`dsh-kanban`（看板）、`dsh-model-reasoning`（按模型推理档位）、`dsh-turn-navigator`（会话轮次导航）。在管理窗口打开开关后**重启服务生效**；窗口里可一键检查/升级预装插件、恢复默认版本。
+- **预装插件（默认关闭，随壳自带）**：`dsh-kanban`（看板）、`dsh-model-reasoning`（按模型推理档位）、`dsh-turn-navigator`（会话轮次导航）、`@karoc/dsh-smoothly-opencode-session`（OpenCode 会话头，无它会 `400 MissingSessionID`）。在管理窗口打开开关后**重启服务生效**；窗口里可一键检查/升级预装插件、恢复默认版本。
 - **用户自装插件**：管理窗口输入 GitHub 地址或包名安装、卸载、更新（经内置 pnpm + `dsh plugin` CLI）。
 - **dsh 更新**：管理窗口「dsh 更新」区显示当前/可升版本。稳定版（`latest` tag）随时可一键升；若 npm 有更新的**预发布**（`next` tag，如 0.1.0-rc.8）也会提示「（预发布）」可升，想升才升，不点就保持稳定版。
 - 代理设置入口不在管理窗口里，在**顶栏菜单「代理设置…」**（独立设置窗口，托盘菜单同样可达）。

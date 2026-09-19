@@ -205,6 +205,18 @@ const tn = join(runtime, 'node_modules', 'dsh-turn-navigator', 'package.json')
 assert.ok(existsSync(tn), 'dsh-turn-navigator preinstalled bundle copied into runtime node_modules')
 const tnPkg = JSON.parse(readFileSync(tn, 'utf8'))
 assert.equal(tnPkg.name, 'dsh-turn-navigator', 'copied dsh-turn-navigator package keeps its real name')
+// @karoc/dsh-smoothly-opencode-session ships as a fourth preinstalled bundle
+// and is the first SCOPED one: the source dir stays unscoped while the runtime
+// copy must land under the scope dir (node_modules/@karoc/…) — i.e. the dir
+// name must never be used as the install path.
+const ocsName = '@karoc/dsh-smoothly-opencode-session'
+assert.ok(
+  Array.isArray(dshJson.preinstalled) && dshJson.preinstalled.includes(ocsName),
+  'dsh.json records the scoped preinstalled bundle by its real (scoped) package name',
+)
+const ocs = join(runtime, 'node_modules', '@karoc', 'dsh-smoothly-opencode-session', 'package.json')
+assert.ok(existsSync(ocs), 'scoped preinstalled bundle copied into runtime node_modules/@karoc')
+assert.equal(JSON.parse(readFileSync(ocs, 'utf8')).name, ocsName, 'copied scoped package keeps its real name')
 
 // ── scenario 5 (P5): plugins-install routes through the dsh plugin CLI ───────
 send({ cmd: 'plugins-install', spec: 'some-plugin@1.2.3' })
@@ -242,6 +254,11 @@ assert.ok(tnEntry, 'preinstalled-updates also covers dsh-turn-navigator')
 assert.equal(tnEntry.installed, bundledVersion('dsh-turn-navigator'), 'dsh-turn-navigator installed version read from the copied package')
 assert.equal(tnEntry.userUpdated, false, 'dsh-turn-navigator not user-updated on a fresh runtime')
 assert.equal(tnEntry.updateAvailable, false, 'dsh-turn-navigator not claimable as update without a registry')
+const ocsEntry = pu.updates?.[ocsName]
+assert.ok(ocsEntry, 'preinstalled-updates also covers the scoped bundle')
+assert.equal(ocsEntry.installed, bundledVersion('dsh-smoothly-opencode-session'), 'scoped bundle installed version read from the copied package')
+assert.equal(ocsEntry.userUpdated, false, 'scoped bundle not user-updated on a fresh runtime')
+assert.equal(ocsEntry.updateAvailable, false, 'scoped bundle not claimable as update without a registry')
 
 send({ cmd: 'preinstalled-update', name: 'dsh-model-reasoning' })
 const updStart = await waitFor((e) => e.t === 'op-status' && e.op === 'update-preinstalled' && e.done === false, 'update-preinstalled start')

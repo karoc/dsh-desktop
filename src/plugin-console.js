@@ -138,6 +138,10 @@
       zh: '为第三方（pi-ai）模型提供按模型配置思考等级（reasoning effort）的设置页',
       en: 'Settings page to configure per-model reasoning efforts (thinking levels) for third-party (pi-ai) providers',
     },
+    '@karoc/dsh-smoothly-opencode-session': {
+      zh: '为 OpenCode / OpenCode Go 路由的模型请求补上 x-opencode-session 会话头（缺它会被网关拒为 400 MissingSessionID）',
+      en: 'Attaches the OpenCode-required x-opencode-session header to OpenCode / OpenCode Go model calls (without it they are rejected as 400 MissingSessionID)',
+    },
   }
   function descFor(name, fallback) {
     return DESC[name]?.[lang] || fallback || ''

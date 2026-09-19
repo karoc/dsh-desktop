@@ -36,9 +36,12 @@ for (const dir of readdirSync(join(root, 'plugins'))) {
 // Preinstalled plugins: each directory under plugins/preinstalled is a
 // self-contained dsh bundle copied into <runtime>/node_modules at launch.
 // Version-locked with the shell release (see PLUGIN-CONSOLE-PLAN.md D3).
+// The list below is the ship list — dir names, not package names (the bundle's
+// own package.json decides where it lands in node_modules, so a scoped package
+// like @karoc/dsh-smoothly-opencode-session keeps its unscoped dir here).
 const preinstalledDest = join(res, 'preinstalled')
 mkdirSync(preinstalledDest, { recursive: true })
-for (const name of ['dsh-model-reasoning', 'dsh-kanban', 'dsh-turn-navigator']) {
+for (const name of ['dsh-model-reasoning', 'dsh-kanban', 'dsh-turn-navigator', 'dsh-smoothly-opencode-session']) {
   cpSync(join(root, 'plugins', 'preinstalled', name), join(preinstalledDest, name), { recursive: true, force: true })
 }
 

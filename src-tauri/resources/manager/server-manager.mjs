@@ -625,7 +625,13 @@ async function installDshUpdate({ force = false, version } = {}) {
   const backupDir = join(args.runtimeDir, '.plugin-backup')
   rmSync(backupDir, { recursive: true, force: true })
   mkdirSync(backupDir, { recursive: true })
-  const PROTECTED = ['@dsh-desktop', 'dsh-model-reasoning', 'dsh-kanban', 'dsh-turn-navigator']
+  // Top-level node_modules entries preserved across the install: the
+  // copied-only @dsh-desktop/* client plugins, plus one entry per preinstalled
+  // bundle — DERIVED from the bundles, never a second hardcoded list. Deriving
+  // matters for scoped packages: a bundle installs under its own package name
+  // (@karoc/dsh-smoothly-opencode-session), so the entry to back up is the
+  // scope dir `@karoc`, not anything spelled in a list here.
+  const PROTECTED = ['@dsh-desktop', ...preinstalledTopLevelEntries(args.resourceDir)]
   // node_modules may not exist yet on a first install (fresh runtime) — treat
   // as empty instead of crashing on readdirSync(ENOENT).
   const protectedEntries = existsSync(nodeModules)
@@ -946,6 +952,30 @@ function installedVersionOf(pkgDir) {
   } catch {
     return null
   }
+}
+
+/**
+ * Top-level node_modules entries under which the preinstalled bundles install.
+ * A bundle lands at `<runtime>/node_modules/<package.json name>`, so a scoped
+ * package contributes its scope dir (`@karoc`) and an unscoped one its own
+ * name. Used to build the install-survival PROTECTED list — deriving it keeps
+ * that list from drifting when a bundle is added or renamed.
+ */
+function preinstalledTopLevelEntries(resourceDir) {
+  const srcRoot = resolve(resourceDir, 'preinstalled')
+  if (!existsSync(srcRoot)) return []
+  const entries = []
+  for (const dir of readdirSync(srcRoot)) {
+    const pkgJson = join(srcRoot, dir, 'package.json')
+    if (!existsSync(pkgJson)) continue
+    try {
+      const name = JSON.parse(readFileSync(pkgJson, 'utf8')).name
+      if (typeof name === 'string' && name) entries.push(name.startsWith('@') ? name.split('/')[0] : name)
+    } catch {
+      // Malformed bundle manifest: ensurePreinstalled skips it too.
+    }
+  }
+  return entries
 }
 
 function ensurePreinstalled(runtimeDir, resourceDir) {

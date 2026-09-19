@@ -38,6 +38,7 @@
 | D8 | **首个预装插件**：`dsh-model-reasoning` | 纯 client bundle、自包含无依赖、作者自持，适合预装；默认关闭 |
 | D9 | **第二预装插件**：`dsh-kanban` | host + client 双半 bundle（board_* 工具 + 看板页），依赖 dsh 自带的 `@deepseek-ai/dsh-tools` 与 client 包，随壳锁定版本；默认关闭 |
 | D10 | **第三预装插件**：`dsh-turn-navigator` | 纯 client bundle（会话轮次导航胶囊条），注入 `@deepseek-ai/dsh-client-*` 与 `@deepseek-ai/dsh-api-remotes`，随壳锁定版本；默认关闭 |
+| D11 | **第四预装插件**：`@karoc/dsh-smoothly-opencode-session`（0.1.0，2026-09-19） | **host-only** bundle（无 client 半区）：在 `llm/stream` 上给 OpenCode / OpenCode Go 路由补 `x-opencode-session` 头，缺它被网关拒为 `400 MissingSessionID`。首个 **scoped** 包名：源目录 `plugins/preinstalled/dsh-smoothly-opencode-session/`（不带 scope），运行时落点由包自身 `name` 决定（`<runtime>/node_modules/@karoc/…`）；默认关闭 |
 
 **层级模型（三层身份）：**
 
