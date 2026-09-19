@@ -312,6 +312,33 @@ npm test                                     # 全量（可选，慢）
 git status --short                           # 确认无意外文件
 ```
 
+### 7.1 工作区纪律（提交与清理；违反会造成不可逆损失）
+
+本仓库的工作区经常**同时存在多个会话/多轮的未提交改动**。清理前必须分类，破坏性操作
+只作用于自己那部分：
+
+1. **先看清再动手**：`git status --short` 逐项定性 —— ① 本会话产出 ② 更早会话遗留
+   （典型形态：只热部署到宿主机、仓库侧从未提交）③ 派生物（dump/会话转录/临时目录）。
+   **②一律不动**：有价值就提交，拿不准就问用户。
+2. **禁止把破坏性命令放进 `||` 兜底链**。真实事故（2026-09-19）：
+   `git checkout -b main origin/main 2>/dev/null || { git checkout main && git reset --hard origin/main; }`
+   —— 因本地分支已存在而走了兜底，**静默**丢弃 4 个文件的未提交改动（含
+   `scripts/dsh-hang-guard.ps1` 的 `-WaitForAppSec`，当时宿主机热部署版是唯一残留）。
+   同步远端只用 `git merge --ff-only origin/main`（拒绝快进即报错，不做任何破坏）；
+   诊断与清理分步执行，命令里别吞 stderr。
+3. **热部署必须与提交配对**：把 manager/guard 改完拷到宿主机后立刻提交 —— 否则仓库成了
+   落后的一侧，下次重装/升级就把它回退掉（`server-manager.mjs` 有真源/副本契约，见 §4.2）。
+4. **git 救不了未提交内容**：`reflog` 只记 HEAD 移动，不含文件内容；`fsck --lost-found`
+   的悬空 blob 只在内容曾被 `git add` 过时才存在（两条路都实测验证过，均无）。
+   恢复顺序：**带外副本**（宿主机部署目录 `%LOCALAPPDATA%\<dir>\`、安装目录、已发布产物）
+   → git 层 → 按 Note 重实现；恢复后**逐行 diff 验证方向**（只能"副本 ⊇ 仓库版"，
+   绝不能把旧逻辑倒灌回仓库）。
+5. 提交一律走 PR（`gh` 在本仓库走项目级 token，见仓库根 `.envrc`；非交互 shell 需
+   `direnv exec . gh …`）。**`main` 的必需检查对 admin 直推无效**——直推会静默跳过门禁
+   （GitHub 只回一行 `Bypassed rule violations`）。
+
+完整记录与决策依据：`.agents/notes/implemented/process/2026-09-19-workspace-cleanup-discipline.md`。
+
 真源：本文件（仓库 `.dsh/skills/`，dsh-skill-filesystem 自动发现 project-dsh 层）。相关技能：
 - 安装/启动排障 → `windows-desktop-shell-debugging`
 - 预装插件版本同步 → `dsh-preinstalled-plugin-sync`
