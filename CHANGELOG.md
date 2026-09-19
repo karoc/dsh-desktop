@@ -21,6 +21,31 @@
 >
 > 详情见 `.agents/notes/implemented/bug-fix/2026-09-08-legacy-uninstaller-name-kill.md`。
 
+## [0.9.0](https://github.com/karoc/dsh-desktop/compare/v0.8.0...v0.9.0) (2026-09-18)
+
+
+### Features
+
+* **launcher:** 启动页日志 5→9 行 + 最终亮灯前停顿 1.7s ([4fcb2b1](https://github.com/karoc/dsh-desktop/commit/4fcb2b130442daea2f8baf59d4490705d26e7248))
+* **launcher:** 失败态新增「打开插件管理」按钮（A-4 分期1） ([1148f9b](https://github.com/karoc/dsh-desktop/commit/1148f9b1c22c181698a18a104c2e66d0ad4c48e6))
+* **nsis:** 卸载时告知数据被保留（A-3 L0） ([3232efd](https://github.com/karoc/dsh-desktop/commit/3232efd6a98dbbaef59d5798e0d0aa7e54a366a5))
+* **shell:** 壳自更新检查一期（A-1）——只报告，不下载不安装 ([811e98d](https://github.com/karoc/dsh-desktop/commit/811e98d75c0b7a104b1bbcf7a0ab154e8454b887))
+* **shell:** 清理缓存菜单项（A-3 L1）——只清可重建缓存，保留会话与证据 ([89893f9](https://github.com/karoc/dsh-desktop/commit/89893f919d3065c58ac9cb4205d6aa6fcd1df855))
+
+
+### Bug Fixes
+
+* **chrome:** 检查更新弹窗在 dsh 检查中/失败态也展示壳分区（A-1 收尾） ([4c66cf7](https://github.com/karoc/dsh-desktop/commit/4c66cf74049783c84c1d52c18d7ae0434a9cbea7))
+* **ci:** Windows 单测步骤前先物化 resources（修我引入的 job 失败） ([76d157b](https://github.com/karoc/dsh-desktop/commit/76d157b27d412e9c9061d50f94083fdf7cf4c8ea))
+* **launcher:** 顶点后新日志不得重启扫动，保持最终亮灯停顿精确 1.7s ([386b877](https://github.com/karoc/dsh-desktop/commit/386b877a96ced21c83e379a622d2ccba0bb5df19))
+* **nsis:** 卸载提示避开自动更新与静默模式（A-3 L0 收尾）+ harness 补两场景 ([bea8b9b](https://github.com/karoc/dsh-desktop/commit/bea8b9bef55ab00dd4c83a9b85dd046ae8b62083))
+* **nsis:** 旧版正在运行时不再删除其快捷方式（A-2a）+ 分支实测 harness ([ca45ab6](https://github.com/karoc/dsh-desktop/commit/ca45ab6901a5030e40912a18c98d19dc5cc89b8b))
+* **path:** 三处路径判定改为组件级比较 + 去 \\?\\ 前缀（A-2b） ([d5b1f0b](https://github.com/karoc/dsh-desktop/commit/d5b1f0bacebbbfad2ee378131f584557c4277b4b))
+* **plugin-console:** 桥端口改为惰性读取（原顶层常量导致窗口空白） ([6e73150](https://github.com/karoc/dsh-desktop/commit/6e731503e166fd7a99bc70910fd1454bf7c29d30))
+* **shell-chrome:** 页面模态不让位菜单栏（按 role=dialog+aria-modal 语义判别） ([445c82b](https://github.com/karoc/dsh-desktop/commit/445c82b41b7e2bc0ea21c2f676a2f74a78507b12))
+* **shell-chrome:** 页面级模态遮罩不再收起菜单栏（只有真正压住菜单栏区域的浮层才让位） ([f6d8043](https://github.com/karoc/dsh-desktop/commit/f6d804327587afb3f143888afcd5c6f5f5975535))
+* **test:** Windows 路径语义测试加 cfg(windows)——修 main 上 check job 红灯 ([b797926](https://github.com/karoc/dsh-desktop/commit/b797926fb2af9dfc88c5946fc78ad5f7d5ca8eb0))
+
 ## [0.8.0](https://github.com/karoc/dsh-desktop/compare/v0.7.0...v0.8.0) (2026-09-12)
 
 
