@@ -12,10 +12,11 @@ description: Use when checking, auditing, or updating the shell-bundled "preinst
 - **源**：`plugins/preinstalled/<pkg>/`（手工维护的精简拷贝，本仓库唯一真源）。
 - **打包链**：`scripts/sync-resources.mjs` 把 `plugins/preinstalled/<pkg>` 原样拷到 `src-tauri/resources/preinstalled/<pkg>`，随 tauri `bundle.resources` 进安装包。
 - **运行时**：`scripts/server-manager.mjs` 的 `ensurePreinstalled()` 把 `resources/preinstalled/*` 拷到 `<runtime>/node_modules/<pkg>`，记入 `<runtime>/dsh.json` 的 `preinstalled` 列表；预装包**不是** profile dependency，`dsh plugin` reconcile 永不触碰它们。
-- **三层身份**：内置核心（通知插件，常开）＞ 预装可选（三个插件，**默认关**，控制台启用）＞ 用户自装（npm，profile dependency）。
+- **三层身份**：内置核心（通知插件，常开）＞ 预装可选（四个插件，**默认关**，控制台启用）＞ 用户自装（npm，profile dependency）。
 - **四个预装插件**：`dsh-model-reasoning`、`dsh-kanban`、`dsh-turn-navigator`、`@karoc/dsh-smoothly-opencode-session`（host-only，OpenCode `x-opencode-session` 会话头；2026-09-19 随壳加入）。
   - ⚠️ **包名/目录名陷阱**：仓库目录 `plugins/preinstalled/dsh-turn-navigator/` 对应 npm 包名 `dsh-turn-navigator`（本地 dev 仓库目录叫 `dsh-turn-nav`，但发布/插件 id 是 `dsh-turn-navigator`）。核对以 bundle 自身 `package.json` 的 `name` 为准，不要用目录名猜。
   - ⚠️ **scoped 包名**：`@karoc/dsh-smoothly-opencode-session` 的 npm 名带 scope，仓库目录却是不带 scope 的 `plugins/preinstalled/dsh-smoothly-opencode-session/`。运行时拷贝路径由 bundle 的 `package.json` 决定（`<runtime>/node_modules/@karoc/…`），`sync-resources.mjs` 的 ship list 写的是**目录名**；`scripts/test-control-plane.mjs` 覆盖了这条路径。
+  - ⚠️ **dsh 升级保护名单是派生的**：`installDshUpdate` 的 `PROTECTED` 由 `preinstalledTopLevelEntries(resourceDir)` 从各 bundle 的 `package.json` 现算（scoped 包贡献其 scope 目录 `@karoc`，非 scoped 贡献包名），**不要**再手写插件名单——手写一定会漏掉 scope 目录那一层，dsh 升级时会把用户的预装包 prune 掉。
 
 ## 2. 核查（audit）
 
