@@ -1270,6 +1270,23 @@
       ],
       "createdAt": 1789825989014,
       "updatedAt": 1789825989014
+    },
+    {
+      "id": "card-af50eb36-6167-4815-82e2-1041c93317eb",
+      "title": "决策：chore(board) 提交会触发 release-please 版本 PR（#40 = 0.10.1 仅含看板收口）",
+      "description": "发现：release-please-config.json 把 chore 放在可见段（Chores），因此本轮「只改看板」的 chore(board) 提交直接生成了 PR #40 = release 0.10.1（diff 只有版本号三处 + 一条 Chores 条目）。三条路：① 合并它（多一次 ~25min 三平台 CI + 一个只含看板收口的版本）② 关掉它（release-please 下次 main push 会重建，等于没关）③ 把 config 的 chore 段设为 hidden:true（看板/杂务不再触发 release PR，代价是 release notes 里不再出现 chore 条目，含依赖升级类 chore）。倾向 ③，但要先确认用户是否想看 chore 条目。",
+      "rationale": "本轮收尾时发现 release-please 会为纯看板提交开 patch 版本 PR——这会影响后续所有 session 的收尾动作（每次都多一个 release PR），需要一个明确约定，否则每个会话都要重新判断。",
+      "rejected": "未擅自合并 #40（会烧一次 25min 的三平台 CI 出一个只含看板收口的版本）；也未擅自改 release-please 配置（改发布语义超出本轮「预装 + 发版」范围，且会影响用户对发布说明的预期）。",
+      "sourceSessionId": "session-67d49873-a409-4621-a37d-e1d206530643",
+      "status": "todo",
+      "tags": [
+        "process",
+        "release",
+        "decision",
+        "waiting-user"
+      ],
+      "createdAt": 1789826580613,
+      "updatedAt": 1789826580613
     }
   ]
 }
