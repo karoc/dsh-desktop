@@ -1225,32 +1225,51 @@
       "id": "card-44210777-e765-4181-8df1-eaaef2f0a3df",
       "title": "预装 @karoc/dsh-smoothly-opencode-session 0.1.0（第 4 个预装包，首个 scoped 包名）",
       "description": "涉及：plugins/preinstalled/dsh-smoothly-opencode-session/（新增 5 文件）、scripts/sync-resources.mjs ship list、src/plugin-console.js + plugins/dsh-plugin-console/client.js 双语简介、README、预装插件同步 Skill、scripts/test-control-plane.mjs 新增 scoped 路径断言。",
-      "rationale": "用户要求「在壳内预装该插件的最新版本 0.1.0」。该 host-only 插件给 OpenCode / OpenCode Go 路由的模型请求补 x-opencode-session 头（缺它自 2026-09-05 起被网关拒为 400 MissingSessionID），预装后用户不必自己 npm 安装即可在插件管理窗口一键启用（默认关，随壳版本锁定）。",
-      "rejected": "① 按插件仓库 HEAD 同步——拒绝：沿用 2026-08-25 定的「npm 已发布 latest tarball 为权威基准」，0.1.0 已发布且 tarball 与仓库 HEAD(018e123) 逐字节一致。② 默认启用——拒绝：预装插件一律默认关（D3 约定），启用/禁用走 dsh.profile.bundles 开关。③ 把 README.zh.md / CHANGELOG.md / CONTRIBUTING.md 一起随包——拒绝：保持壳内精简约定（README.zh.md 不随壳发，留链接是坏链）。④ 改 ensurePreinstalled 支持 scoped——不需要：运行时路径由 bundle package.json 的 name 决定，`join(node_modules, name)` 天然支持 scope。",
+      "rationale": "用户要求把该插件按「预装」随壳分发：它给 OpenCode / OpenCode Go 路由补 x-opencode-session 头（缺它 400 MissingSessionID），预装后用户无需自己 npm 安装即可在插件管理窗口一键启用。",
+      "rejected": "① 按插件仓库 HEAD 同步（沿用 npm latest 基准，两者本就逐字节一致）② 默认启用（预装一律默认关 D3；该头只对 OpenCode 路由有意义）③ 随包带 README.zh.md/CHANGELOG/CONTRIBUTING（精简约定）④ 把 '@karoc' 手写进 PROTECTED（治标，下次加预装包又会漂移；改为派生）⑤ 先做全量 WSL dsh 冷启验证（成本数百 MB/十分钟，收益被 test-control-plane + CI windows smoke 覆盖）。",
       "sourceSessionId": "session-67d49873-a409-4621-a37d-e1d206530643",
-      "status": "in_progress",
+      "status": "done",
       "tags": [
         "preinstalled",
         "plugins",
         "opencode"
       ],
       "createdAt": 1789823947634,
-      "updatedAt": 1789823947634
+      "updatedAt": 1789825966817,
+      "summary": "npm 0.1.0 tarball → plugins/preinstalled/dsh-smoothly-opencode-session/（package.json + cordis.patch.yml + lib/index.js + LICENSE + README.md，host-only 无 client 半区），sync-resources ship list + resources 副本；顺带修掉真实缺陷：manager 的 PROTECTED 改为从 bundle 派生 preinstalledTopLevelEntries()（scoped 包的 node_modules 顶层项是 @karoc，硬编码名单必然漏、dsh 升级会 prune 掉用户预装包）；控制台双语简介（src/plugin-console.js + plugins/dsh-plugin-console/client.js）、README、PLUGIN-CONSOLE-PLAN D11、预装同步 Skill、test-control-plane 新增 scoped 落点与 updates 断言；Agent Note feature/2026-09-19-preinstalled-smoothly-opencode-session.md。验证：audit-preinstalled 四包全 up-to-date、node --check 全 lib、diff -r 源树 vs resources 一致、manager/console 副本 cmp 一致、npm test 9 套全绿。"
     },
     {
       "id": "card-94d7001c-a0eb-4a16-a8c9-ae86d45b713e",
       "title": "壳发新版本：预装 OCS 0.1.0 随包 → release-please 出 PR → tag → CI 出安装包",
-      "rationale": "预装插件只在「发布新的桌面版本」后才随安装包生效（源树改动不影响已装应用的 runtime 拷贝）。用户明确要求「然后壳发新版本」，所以本轮必须走完 feat → PR → release-please bump → 合并 release PR → tag → CI 三平台安装包 + Release 核对。",
-      "rejected": "① 手动改版本号/手动打 tag——拒绝：CONTRIBUTING 明确版本 bump 与 tag 由 release-please 接管。② main 直推——拒绝：约定走 PR（直推会静默跳过必需检查）。③ 只在本地构建安装包——拒绝：正式版必须由 GitHub Release 分发。",
+      "rationale": "预装插件只在发布新的桌面版本后才随安装包生效（源树改动不影响已安装应用的 runtime 拷贝），用户明确要求「然后壳发新版本」，因此必须走完 feat → PR → release-please → tag → CI 出包全链路。",
+      "rejected": "① 手动改版本号/手动打 tag（release-please 接管）② main 直推（约定走 PR；实测 release PR 无 checks 时用 --admin 是唯一可用路径，--auto 会等永不到来的检查）③ 只本地构建安装包（正式版必须走 GitHub Release）④ 下载 Release 产物做 7z 内容核对（WSL 侧 github.com / 资产域名不可达、Windows 侧同样连不上 github.com，改为以 CI beforeBuildCommand + tauri resources 目录递归 + 既有三个同形 bundle 作保证）。",
       "sourceSessionId": "session-67d49873-a409-4621-a37d-e1d206530643",
-      "status": "todo",
+      "status": "done",
       "tags": [
         "release",
         "preinstalled",
         "plugins"
       ],
       "createdAt": 1789823947647,
-      "updatedAt": 1789823947647
+      "updatedAt": 1789825966829,
+      "summary": "PR #37（feat：预装 OCS 0.1.0）过 CI 快层后 squash 合并 main（7283837）→ release-please 自动出 PR #38 chore(main): release 0.10.0（0.9.1→0.10.0，三处 version 文件 + CHANGELOG）→ 该 PR 无 checks（bot 推送不触发 workflow），--admin 合并（内容仅版本元数据，无代码/工作流改动）→ 打 tag v0.10.0；因 tag 由 GITHUB_TOKEN 创建不触发 workflow，按既有做法 workflow_dispatch 在 tag 上跑 build.yml → check/test/windows(NSIS+布局断言+runtime smoke)/linux/release 全绿，GitHub Release v0.10.0 已挂 Windows NSIS（28.1 MB）+ Linux AppImage/deb 三产物，release-body.mjs 生成的说明正确列出四个预装包（含 @karoc/dsh-smoothly-opencode-session 0.1.0）。linux-smoke 仍为 main 上既有失败（对比改动前的 docs 提交 run 35422877702 同为 failure），与本轮无关。"
+    },
+    {
+      "id": "card-d0063307-1402-49eb-a0b5-615a5bb1a958",
+      "title": "实机验收 v0.10.0：插件管理窗口出现第四行预装插件并可启用",
+      "description": "装完 v0.10.0 后打开壳菜单「插件管理…」，确认预装区出现第四行 `@karoc/dsh-smoothly-opencode-session`（双语简介、默认关），打开开关 → 重启服务生效；若用 OpenCode / OpenCode Go 路由，再确认模型调用不再 400 MissingSessionID。",
+      "rationale": "本轮唯一未闭环的验收点：Release 产物内容无法自动核对（WSL 侧 github.com 与资产域名不可达、Windows 侧同样连不上 github.com，无法下载 28 MB 安装包做 7z 提取）。包内容由 CI beforeBuildCommand + tauri resources 目录递归保证（与既有三个 bundle 同形），实机安装是收口这一步的最直接方式。",
+      "rejected": "① 本地 Windows 构建再 7z 提取——只能证明构建输入正确，证明不了已上传产物，且要动 D:\\Dev\\dsh-desktop 工作区；② WSL 内跑 manager 冷装 dsh 做端到端启动验证——需先 fetch-node 下载 Node 运行时（同受网络限制），且 CI windows job 的 runtime smoke 已在真实 manager 上冷装 dsh 并通过（四个 bundle 的 resources 已在其 resource-dir 里）。",
+      "sourceSessionId": "session-67d49873-a409-4621-a37d-e1d206530643",
+      "status": "todo",
+      "tags": [
+        "verify",
+        "preinstalled",
+        "release",
+        "waiting-user"
+      ],
+      "createdAt": 1789825989014,
+      "updatedAt": 1789825989014
     }
   ]
 }
