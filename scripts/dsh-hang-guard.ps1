@@ -35,6 +35,13 @@
 .PARAMETER GraceSec
   startup grace after a (new) URL appears; slow boot is not a hang (default 30).
 
+.PARAMETER WaitForAppSec
+  How long to wait for the FIRST sighting of the shell when the guard starts
+  before the app does (default 0 = wait indefinitely). The login Startup entry
+  fires long before the user launches the app, so bailing out on "shell absent"
+  turned every launch into a no-op -- 2026-09-10 .. 2026-09-15 the guard was
+  never alive, and the 09-15 manager kill left no killer evidence.
+
 .PARAMETER AutoRestart
   Also POST the bridge /restart on a hang, and relaunch the shell exe if the
   shell process disappeared. OFF by default (D1).
@@ -47,6 +54,7 @@ param(
   [int]$IntervalSec = 3,
   [int]$MissLimit = 3,
   [int]$GraceSec = 30,
+  [int]$WaitForAppSec = 0,
   [switch]$AutoRestart
 )
 $ErrorActionPreference = "Continue"
@@ -179,10 +187,35 @@ $armed = $false
 $armedAt = $null
 $misses = 0
 $appGoneCycles = 0
+$sawApp = $false
+$startedAt = [DateTime]::UtcNow
+$lastWaitLog = 0
 $prev = @{}
 $nextProbe = [DateTime]::UtcNow
 
 while ($true) {
+  # Never seen the shell yet: idle-wait on a slow cadence (no 500 ms sampler --
+  # there is no service tree to sample). Evidence only makes sense after the
+  # app exists, and exiting here is what killed the guard on every login.
+  if (-not $sawApp) {
+    $running = @(Get-Process -Name $ExeName -ErrorAction SilentlyContinue).Count -gt 0
+    if (-not $running) {
+      $waitedSec = ([DateTime]::UtcNow - $startedAt).TotalSeconds
+      if ($WaitForAppSec -gt 0 -and $waitedSec -ge $WaitForAppSec) {
+        Write-Guard ("shell not started within " + $WaitForAppSec + "s -- exiting (no app to watch)")
+        exit 0
+      }
+      if (($waitedSec - $lastWaitLog) -ge 300) {
+        $lastWaitLog = $waitedSec
+        Write-Guard ("waiting for shell (" + $ExeName + ") to start -- " + [int]$waitedSec + "s")
+      }
+      Start-Sleep -Seconds $IntervalSec
+      continue
+    }
+    $sawApp = $true
+    Write-Guard ("shell (" + $ExeName + ") detected -- sampler + hang watcher armed")
+  }
+
   $snap = Get-Snapshot
   $now = [DateTime]::UtcNow
 
@@ -210,6 +243,8 @@ while ($true) {
   $prev = $cur
 
   # -- app liveness ------------------------------------------------------------
+  # Reaching here means the shell was seen at least once, so "gone" is a real
+  # event worth an evidence snapshot (and means stop watching: nothing to watch).
   $appRunning = @(Get-Process -Name $ExeName -ErrorAction SilentlyContinue).Count -gt 0
   if (-not $appRunning) {
     $appGoneCycles++
