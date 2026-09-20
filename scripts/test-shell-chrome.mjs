@@ -244,5 +244,42 @@ assert.ok(jobRs.includes('JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE'), 'job kills the t
 assert.ok(jobRs.includes('JOB_OBJECT_LIMIT_BREAKAWAY_OK'), 'job allows breakaway/nested jobs (dsh sandbox compatibility)')
 assert.ok(libRs.includes('job_object::assign'), 'manager is assigned to the job right after spawn')
 
+// ── cookie-431 修复（P0）契约 ───────────────────────────────────────────────
+// dsh web 的鉴权 cookie 名绑定端口 → 壳每轮新端口 → Cookie 头单调增长 → 越过
+// Node 默认 16KB 头上限后，页面上唯一 >1KB 的 URL（插件批 bundle ≈2.85KB）
+// 第一个被 431 打掉 → 全部客户端插件 import failed。修复 = 导航前清理陈旧
+// `dsh-auth-*`。三条硬约束由本契约锁死：
+//   1) 清理只能在**后台 janitor 线程**里调用（Windows 上 cookies() 在同步
+//      command / 事件处理器里会死锁，Tauri 官方 wry#583）；
+//   2) server-url 分支必须"先清理、后交付 URL"（launcher 页自己也监听该事件
+//      并 location.href，晚清理会让它用脏 jar 加载）；
+//   3) 复核读（remaining）必须存在——delete_cookie 是入队即返回，只数"删了几次"
+//      证明不了清理生效。
+assert.ok(libRs.includes('fn is_stale_auth_cookie'), 'lib.rs has the pure cookie predicate (unit-tested)')
+const pruneCallSites = (libRs.match(/prune_stale_auth_cookies\(/g) || []).length
+assert.equal(pruneCallSites, 2, 'prune_stale_auth_cookies is defined once and called from exactly one place')
+const janitorStart = libRs.indexOf('fn spawn_auth_cookie_janitor')
+const janitorEnd = libRs.indexOf('\nfn ', janitorStart + 10)
+const janitorBody = libRs.slice(janitorStart, janitorEnd > 0 ? janitorEnd : undefined)
+assert.ok(janitorStart > 0, 'lib.rs has the cookie janitor')
+assert.ok(janitorBody.includes('std::thread::spawn'), 'the janitor owns a background thread')
+assert.ok(janitorBody.includes('prune_stale_auth_cookies('), 'the janitor body is the only prune call site')
+assert.ok(janitorBody.includes('catch_unwind'), 'the janitor wraps the prune in catch_unwind (wry builds a Cookie per profile entry)')
+assert.ok(libRs.includes('fn count_stale_auth_cookies'), 'the prune re-reads the jar to verify the deletion')
+const urlBranchStart = libRs.indexOf('Some("url") =>')
+const urlBranchEnd = libRs.indexOf('Some("dump-web") =>')
+assert.ok(urlBranchStart > 0 && urlBranchEnd > urlBranchStart, 'locate the server-url branch in lib.rs')
+const urlBranch = libRs.slice(urlBranchStart, urlBranchEnd)
+assert.ok(urlBranch.includes('wait_for_startup_auth_prune()'), 'server-url waits for the startup prune')
+assert.ok(
+  urlBranch.indexOf('wait_for_startup_auth_prune()') < urlBranch.indexOf('handle.emit("server-url"'),
+  'the startup cookie prune completes BEFORE the URL is handed to any page (launcher self-navigates)',
+)
+assert.ok(urlBranch.includes('LAST_ANNOUNCED_ORIGIN'), 'only an authority change triggers another prune (never the live cookie)')
+assert.ok(
+  /spawn_auth_cookie_janitor\(/.test(libRs) && libRs.includes('request_auth_cookie_prune();'),
+  'setup spawns the janitor and asks for the startup prune',
+)
+
 console.log('PASS — shell chrome contract (menus, actions, bridge, IPC)')
 process.exit(0)

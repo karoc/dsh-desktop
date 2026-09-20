@@ -1335,7 +1335,7 @@
       "rationale": "这是唯一能同时修好\"已损坏存量装机\"和阻止复发的正确性修复：启动时把 57–68 条陈旧 cookie 清掉，首次导航（带 ?token=）重新签发 1 条，批 URL 请求头降到 ≈3.7KB。审计确认方向正确且 API 可用（Tauri 2.11.5 cookies()/delete_cookie，含 HttpOnly）。",
       "rejected": "① setup 兜底清理——Tauri 官方记载 Windows 死锁（主线程 + 无超时嵌套泵），删除；② on_page_load / 同步 command 内清理——同为死锁场景，禁止；③ 每次 server-url 事件都清理——会删掉正在用的 cookie 造成周期性 401，改为仅启动 + authority 变化；④ 把 prune 插在 navigate 之前而非 emit 之前——launcher 页自己监听 server-url 并 location.href，会先于 prune 加载；⑤ 只数\"删了几次\"当验收——DeleteCookie 未匹配也返回成功，必须复核 remaining；⑥ 每事件 thread::spawn——乱序 prune 会删掉新 authority 刚签发的 cookie 且兜底不自愈。",
       "sourceSessionId": "session-67d49873-a409-4621-a37d-e1d206530643",
-      "status": "todo",
+      "status": "in_progress",
       "tags": [
         "bug-fix",
         "webview2",
@@ -1344,7 +1344,7 @@
         "windows"
       ],
       "createdAt": 1789872910306,
-      "updatedAt": 1789872910306
+      "updatedAt": 1789876310062
     },
     {
       "id": "card-d011c102-a58a-4ca1-99a6-bb4ebb0ed306",
