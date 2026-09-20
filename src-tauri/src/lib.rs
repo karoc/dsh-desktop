@@ -268,6 +268,20 @@ static CLIENT_READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBo
 /// 执行，否则阻塞 WebView2 首帧 → 启动页前黑屏。boot 线程与 restart_server
 /// 拉起新服务前都等待此标志，防止清理把刚拉起的 manager/web 树误杀。
 static STARTUP_CLEANUP_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// 陈旧 dsh 鉴权 cookie 的"启动清理已完成"标志。server-url 分支在 `emit`
+/// 之前有界等待它（launcher 页自己也监听 server-url 并 location.href，必须
+/// 保证"清理先于任何加载"，否则它会用脏 jar 加载 → 431）。
+static AUTH_COOKIE_PRUNE_DONE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+/// janitor 线程的任务通道（单一后台线程串行处理；禁止每事件 spawn——乱序的
+/// prune 会删掉新 authority 刚签发的 cookie，而那次导航成功后导航兜底会
+/// `continue`、不自愈）。
+static AUTH_COOKIE_JANITOR: std::sync::OnceLock<std::sync::mpsc::Sender<()>> =
+    std::sync::OnceLock::new();
+/// 最近一次上报的 dsh web origin（`host:port`）。authority 变化 = 新的 cookie
+/// 命名空间，需要再清一次（同一 authority 的重复事件**不**清，否则会删掉页面
+/// 正在使用的 cookie）。
+static LAST_ANNOUNCED_ORIGIN: Mutex<Option<String>> = Mutex::new(None);
 
 /// Deterministic 64-bit FNV-1a — used to derive a per-build-identity toast
 /// activator CLSID without pulling in a hash/uuid crate.
@@ -1168,6 +1182,37 @@ fn cache_cleanup_json(app: &AppHandle) -> serde_json::Value {
 #[tauri::command]
 fn cleanup_caches(app: AppHandle) -> serde_json::Value {
     cache_cleanup_json(&app)
+}
+
+#[cfg(test)]
+mod cookie_tests {
+    use super::is_stale_auth_cookie;
+
+    #[test]
+    fn matches_only_dsh_auth_cookies_on_loopback_hosts() {
+        // 命中：dsh 自己签发 + 回环 host（容忍前导点、大小写、空白、::1）
+        for (name, domain) in [
+            ("dsh-auth-abc", "127.0.0.1"),
+            ("dsh-auth-abc", ".127.0.0.1"),
+            ("dsh-auth-abc", "LOCALHOST"),
+            ("dsh-auth-abc", " ::1 "),
+            ("dsh-auth-kWr-QG6iCVLDYcRuGSs54jAs500", "127.0.0.1"),
+        ] {
+            assert!(is_stale_auth_cookie(name, domain), "{name} / {domain} 应命中");
+        }
+        // 不命中：别的 cookie、别的 host、空 domain、前缀不完整
+        for (name, domain) in [
+            ("session", "127.0.0.1"),
+            ("dsh-authx", "127.0.0.1"),
+            ("x-dsh-auth-abc", "127.0.0.1"),
+            ("dsh-auth-abc", "evil.com"),
+            ("dsh-auth-abc", "127.0.0.1.evil.com"),
+            ("dsh-auth-abc", ""),
+            ("", "127.0.0.1"),
+        ] {
+            assert!(!is_stale_auth_cookie(name, domain), "{name} / {domain} 不应命中");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2269,6 +2314,30 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
                 match t {
                     Some("url") => {
                         if let Some(url) = ev.get("url").and_then(|v| v.as_str()) {
+                            // ── 陈旧鉴权 cookie 清理必须早于"交付 URL" ────────
+                            // launcher 页自己也会监听 server-url 并 location.href，
+                            // 另有 1s 轮询 get_shell_state.liveUrl；所以"清理先于
+                            // 任何加载"要求先清理、后 emit（见 cookie-431 方案）。
+                            wait_for_startup_auth_prune();
+                            let origin = tauri::Url::parse(url)
+                                .ok()
+                                .map(|u| u.origin().ascii_serialization());
+                            if let Some(origin) = origin {
+                                let changed = {
+                                    let mut last = LAST_ANNOUNCED_ORIGIN.lock().unwrap();
+                                    let changed = last.as_deref() != Some(origin.as_str());
+                                    if changed {
+                                        *last = Some(origin);
+                                    }
+                                    changed
+                                };
+                                if changed {
+                                    // authority 变化 = 新 cookie 命名空间：清掉旧
+                                    // authority 的 cookie（同一 authority 的重复事件
+                                    // 不清，避免删掉页面正在用的那条）。
+                                    request_auth_cookie_prune();
+                                }
+                            }
                             // 服务起来了：清空历史故障提示，条幅不再显示。
                             *handle.state::<ServerState>().last_error.lock().unwrap() = None;
                             {
@@ -2512,6 +2581,172 @@ fn is_shell_local_url(u: &tauri::Url) -> bool {
         && u.host_str()
             .map(|h| h == "tauri.localhost" || h.ends_with(".localhost"))
             .unwrap_or(false)
+}
+
+// ── dsh web 鉴权 cookie 清理（2026-09-20「cookie-431」修复）──────────────────
+// 背景：dsh web 的鉴权 cookie 名绑定 authority（`dsh-auth-<base64url(sha256(
+// host:port))>`），而壳用 `dsh web --port 0`（每轮随机端口）→ 每一轮"完成的
+// token 导航"都会新增一条 226B、Max-Age 30 天的 cookie；HTTP cookie 不按端口
+// 隔离，于是 Cookie 请求头单调增长，越过 Node 默认 16KB 头上限（**请求行也计入
+// 该预算**）后，页面上唯一 >1KB 的 URL——客户端插件批 bundle（≈2.85KB）——第一个
+// 被 `431 Request Header Fields Too Large` 打掉：批 bundle 未注册任何模块 →
+// 61 个客户端插件全部 `import failed` → 页面停在「Failed to load plugins」，
+// 且导航兜底因永远等不到 `/alive` 而每 3s 重载。
+// 详见 docs/2026-09-20-webview2-cookie-431-fix-plan.md（含阈值实测与审计）。
+
+/// 是否属于 dsh 自己签发、且落在本机回环 host 上的鉴权 cookie。
+/// 只认 `dsh-auth-` 前缀 + 回环 host：绝不触碰任何其它 cookie。
+fn is_stale_auth_cookie(name: &str, domain: &str) -> bool {
+    name.starts_with("dsh-auth-")
+        && matches!(
+            domain
+                .trim()
+                .trim_start_matches('.')
+                .to_ascii_lowercase()
+                .as_str(),
+            "127.0.0.1" | "localhost" | "::1"
+        )
+}
+
+/// 清理陈旧 dsh 鉴权 cookie，返回 `(清理前条数, 尝试删除条数, 清理后剩余条数)`。
+///
+/// ⚠️ **只能在后台线程调用**：Windows 上 `Webview::cookies()` 是同步阻塞 +
+/// 嵌套消息泵，Tauri 官方明确"在同步 command / 事件处理器里调用会死锁"
+/// （wry#583）。因此本函数不在 setup / on_page_load / 任何同步 command 里调用。
+///
+/// `delete_cookie` 是"入队即返回"（失败被框架的 log 吞掉，而本 crate 没有
+/// logger），所以**必须回读复核**：第二次 `cookies()` 会阻塞到主线程处理完
+/// 之前排队的删除，读到的就是删除后的真实状态。
+fn prune_stale_auth_cookies(app: &AppHandle) -> (usize, usize, usize) {
+    let data = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let Some(w) = app.get_webview_window("main") else {
+        log_line(&data, "dsh-auth cookies: main webview not ready");
+        return (0, 0, 0);
+    };
+    let Ok(all) = w.cookies() else {
+        log_line(&data, "dsh-auth cookies: cookies() failed");
+        return (0, 0, 0);
+    };
+    let jar = all.len();
+    let stale: Vec<_> = all
+        .into_iter()
+        .filter(|c| is_stale_auth_cookie(c.name(), c.domain().unwrap_or_default()))
+        .collect();
+    let before = stale.len();
+    if before == 0 {
+        log_line(&data, &format!("dsh-auth cookies: jar={jar} stale_before=0 deleted=0 remaining=0"));
+        return (0, 0, 0);
+    }
+    let mut deleted = 0;
+    for c in stale {
+        if w.delete_cookie(c).is_ok() {
+            deleted += 1;
+        }
+    }
+    // 复核（并给一次有界重试机会）。
+    let mut remaining = count_stale_auth_cookies(&w);
+    if remaining > 0 {
+        if let Ok(all) = w.cookies() {
+            for c in all
+                .into_iter()
+                .filter(|c| is_stale_auth_cookie(c.name(), c.domain().unwrap_or_default()))
+            {
+                let _ = w.delete_cookie(c);
+            }
+        }
+        remaining = count_stale_auth_cookies(&w);
+    }
+    log_line(
+        &data,
+        &format!(
+            "dsh-auth cookies: jar={jar} stale_before={before} deleted={deleted} remaining={remaining}"
+        ),
+    );
+    (before, deleted, remaining)
+}
+
+/// 复核用：当前 jar 里仍存在的陈旧 cookie 条数（读取失败按 0 处理并留痕）。
+fn count_stale_auth_cookies<R: tauri::Runtime>(w: &tauri::WebviewWindow<R>) -> usize {
+    w.cookies()
+        .map(|all| {
+            all.iter()
+                .filter(|c| is_stale_auth_cookie(c.name(), c.domain().unwrap_or_default()))
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+/// 启动 cookie janitor：单一后台线程串行处理清理请求。
+/// - 启动时先清一次（此时 dsh 还没起来，清理必然早于首次导航）；
+///   首轮可能撞上 WebView2 尚未就绪，因此带**有界重试**（最多 6 次 × 500ms），
+///   只有 `cookies()` 读成功才算"启动清理完成"。
+/// - 之后每次 authority 变化再清一次（长时间运行 + 多次重启服务的卫生措施）。
+/// - 整段用 `catch_unwind` 包住：wry 会对 profile 里每条 cookie 调
+///   `CookieBuilder::build()`，panic 会打死所在线程（比 431 更糟）。
+fn spawn_auth_cookie_janitor(app: &AppHandle) {
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    if AUTH_COOKIE_JANITOR.set(tx).is_err() {
+        return; // 已经启动过
+    }
+    let janitor_app = app.clone();
+    std::thread::spawn(move || {
+        let mut first = true;
+        while rx.recv().is_ok() {
+            let attempts = if first { 6 } else { 1 };
+            for attempt in 0..attempts {
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    prune_stale_auth_cookies(&janitor_app)
+                }));
+                match result {
+                    Ok((before, deleted, remaining)) => {
+                        if first && before == 0 && deleted == 0 && remaining == 0 {
+                            // 可能是 WebView2 未就绪（cookies() 失败）——再试；
+                            // 真正"干净"的情况也在最后一次尝试后放行。
+                            if attempt + 1 < attempts {
+                                std::thread::sleep(std::time::Duration::from_millis(500));
+                                continue;
+                            }
+                        }
+                        break;
+                    }
+                    Err(_) => {
+                        let data = janitor_app
+                            .path()
+                            .app_data_dir()
+                            .unwrap_or_else(|_| std::path::PathBuf::from("."));
+                        log_line(&data, "dsh-auth cookies: prune panicked (caught)");
+                        break;
+                    }
+                }
+            }
+            if first {
+                first = false;
+                AUTH_COOKIE_PRUNE_DONE.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+    });
+}
+
+/// 请求一次清理（非阻塞）。janitor 未启动时静默返回（不应发生）。
+fn request_auth_cookie_prune() {
+    if let Some(tx) = AUTH_COOKIE_JANITOR.get() {
+        let _ = tx.send(());
+    }
+}
+
+/// server-url 分支用：等到"启动清理已完成"（有界，最多 3s）。
+/// 正常路径下 janitor 早就完成（dsh 启动需 ≥2s，清理是 ms 级），等待几乎零成本。
+fn wait_for_startup_auth_prune() {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while !AUTH_COOKIE_PRUNE_DONE.load(std::sync::atomic::Ordering::SeqCst) {
+        if std::time::Instant::now() >= deadline {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
 }
 
 /// 主窗口若停在 dsh 页则退回启动页（故障披露 + 重试入口）。
@@ -3892,6 +4127,11 @@ pub fn run() {
             STARTUP_CLEANUP_DONE.store(true, std::sync::atomic::Ordering::SeqCst);
             // loopback notification bridge (see start_bridge)
             start_bridge(app.handle().clone());
+            // 陈旧 dsh 鉴权 cookie 清理（cookie-431 修复）：单一后台 janitor 线程，
+            // 启动即清一次。必须在后台线程执行——Windows 上 cookies() 会死锁在
+            // 同步 command / 事件处理器里（见 prune_stale_auth_cookies 的注释）。
+            spawn_auth_cookie_janitor(app.handle());
+            request_auth_cookie_prune();
             // dsh web 挂起看护（只 dump 不重启，见 start_hang_watchdog）
             start_hang_watchdog(app.handle());
 

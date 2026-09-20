@@ -61,11 +61,14 @@ if (argv.includes('plugin')) {
 }
 const m = process.env.DSH_TEST_MARKER
 if (m) appendFileSync(m, 'boot ' + process.pid + '\\n')
-// Probe the env the shell injected (forward-proxy choke point).
+// Probe the env the shell injected (forward-proxy choke point) plus the Node
+// header budget the manager must hand to dsh web (cookie-431 fix, P1).
 const ep = process.env.DSH_TEST_ENV_PROBE
 if (ep) writeFileSync(ep, JSON.stringify({
   http: process.env.HTTP_PROXY, https: process.env.HTTPS_PROXY,
   nodeEnvProxy: process.env.NODE_USE_ENV_PROXY, noProxy: process.env.NO_PROXY,
+  nodeOptions: process.env.NODE_OPTIONS,
+  maxHeaderSize: process.getBuiltinModule('node:http').maxHeaderSize,
 }))
 const port = 18000 + (process.pid % 1000)
 process.stdout.write(JSON.stringify({ t: 'url', url: 'http://127.0.0.1:' + port }) + '\\n')
@@ -150,6 +153,17 @@ assert.equal(probed.nodeEnvProxy, '1', 'NODE_USE_ENV_PROXY=1 injected (undici ho
 assert.equal(probed.http, `http://127.0.0.1:${ps.port}`, 'HTTP_PROXY points at the built-in proxy')
 assert.equal(probed.https, `http://127.0.0.1:${ps.port}`, 'HTTPS_PROXY points at the built-in proxy')
 assert.ok(/127\.0\.0\.1/.test(probed.noProxy) && /localhost/.test(probed.noProxy), 'NO_PROXY keeps loopback direct')
+// cookie-431 fix (P1): the dsh web child must run with a raised header budget —
+// Node's default 16384 B is what made the 2.85 KB plugin batch URL answer 431.
+assert.ok(
+  typeof probed.nodeOptions === 'string' && probed.nodeOptions.includes('--max-http-header-size=65536'),
+  `dsh web child gets --max-http-header-size=65536 (got: ${probed.nodeOptions})`,
+)
+assert.ok(
+  probed.nodeOptions.includes('--report-on-fatalerror'),
+  'the pre-existing crash-report flags are still appended',
+)
+assert.equal(probed.maxHeaderSize, 65_536, 'the child process really runs with a 64 KiB header budget')
 
 const status1 = await waitFor((e) => e.t === 'update-status', 'initial update-status')
 assert.equal(status1.current, '9.9.9-test', 'update-status reports the installed fake version')

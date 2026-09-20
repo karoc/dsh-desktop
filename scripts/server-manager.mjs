@@ -1327,6 +1327,22 @@ async function launchDsh(runtimeDir, patchPath, cwd) {
   // everything after it to the booted app verbatim. `--no-open` is a web-app
   // flag, so it must trail `--patch` or the patch overlay would be handed to
   // the web app ("unknown option '--patch'").
+  // dsh web 子进程的 NODE_OPTIONS（唯一注入点；manager 自身保持干净）：
+  //  - --max-http-header-size=65536：Node 默认 16384B 且**请求行也计入**，
+  //    而 dsh 的鉴权 cookie 名绑定端口、壳每轮新端口 → Cookie 头单调增长；
+  //    页面上唯一 >1KB 的 URL（客户端插件批 bundle ≈2.85KB）会第一个被
+  //    `431 Request Header Fields Too Large` 打掉 → 全部客户端插件
+  //    import failed →「Failed to load plugins」。壳侧已在导航前清理陈旧
+  //    cookie（src-tauri/src/lib.rs prune_stale_auth_cookies），此处把硬悬崖
+  //    抬到 64KB 作纵深防御。顺序语义：追加在用户值之后（Node 取最后一个
+  //    同名 flag），最终值写入 manager.log 便于取证与回滚。
+  //  - --report-*：崩溃现场（OOM/fatal/uncaught）落到 <runtime>/reports。
+  const childNodeOptions = [
+    process.env.NODE_OPTIONS ?? '',
+    '--max-http-header-size=65536',
+    `--report-on-fatalerror --report-uncaught-exception --report-compact --report-dir=${join(runtimeDir, 'reports').replaceAll('\\', '/')}`,
+  ].filter(Boolean).join(' ')
+  log(`dsh web NODE_OPTIONS: ${childNodeOptions}`)
   const child = spawn(process.execPath, [entry, 'web', '--patch', patchArg, '--no-open', '--host', '127.0.0.1', '--port', '0'], {
     cwd,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -1337,10 +1353,7 @@ async function launchDsh(runtimeDir, patchPath, cwd) {
     env: {
       ...process.env,
       DSH_HOME: dshHome,
-      NODE_OPTIONS: [
-        process.env.NODE_OPTIONS ?? '',
-        `--report-on-fatalerror --report-uncaught-exception --report-compact --report-dir=${join(runtimeDir, 'reports').replaceAll('\\', '/')}`,
-      ].filter(Boolean).join(' '),
+      NODE_OPTIONS: childNodeOptions,
     },
     windowsHide: true,
   })
