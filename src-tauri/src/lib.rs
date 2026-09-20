@@ -1216,6 +1216,25 @@ mod cookie_tests {
 }
 
 #[cfg(test)]
+mod nav_fallback_tests {
+    use super::{nav_fallback_interval_secs, NAV_FALLBACK_MAX_ATTEMPTS};
+
+    #[test]
+    fn backoff_keeps_fast_retries_first_then_caps() {
+        // 前 3 次仍是 3s（黑屏修复依赖的快速回路）
+        assert_eq!(nav_fallback_interval_secs(0), 3);
+        assert_eq!(nav_fallback_interval_secs(2), 3);
+        // 之后指数退避并封顶 30s
+        assert_eq!(nav_fallback_interval_secs(3), 6);
+        assert_eq!(nav_fallback_interval_secs(4), 12);
+        assert_eq!(nav_fallback_interval_secs(5), 24);
+        assert_eq!(nav_fallback_interval_secs(6), 30);
+        assert_eq!(nav_fallback_interval_secs(NAV_FALLBACK_MAX_ATTEMPTS), 30);
+        assert_eq!(nav_fallback_interval_secs(u32::MAX), 30, "no overflow at the cap");
+    }
+}
+
+#[cfg(test)]
 mod migration_tests {
     use super::*;
 
@@ -2569,6 +2588,24 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// 导航兜底的节流曲线（秒）：前 3 次保持 3s（覆盖"冷启动 navigate 丢失"这一
+/// 主场景），之后 6/12/24s，封顶 30s。任何"页面起不来"的原因都不该变成 3s
+/// 无限重载——2026-09-20 cookie-431 事故实测 535 次 nav-fallback，页面永远停在
+/// 错误页并持续刷网络/CPU（详见 docs/2026-09-20-webview2-cookie-431-fix-plan.md）。
+fn nav_fallback_interval_secs(attempts: u32) -> u64 {
+    match attempts {
+        0..=2 => 3,
+        3 => 6,
+        4 => 12,
+        5 => 24,
+        _ => 30,
+    }
+}
+
+/// 超过该次数后只写一条"放弃快速重试"的日志（仍按封顶间隔继续重试，页面
+/// 一旦恢复可用仍能自愈）。
+const NAV_FALLBACK_MAX_ATTEMPTS: u32 = 8;
+
 /// 本地壳页面（启动页）URL 判定：macOS/Linux 是 `tauri://localhost`，Windows
 /// 是 `http://tauri.localhost`（WebView2 不支持自定义 scheme，Tauri 用
 /// `<scheme>.localhost` 代管）。故障回退导航只认这两种，否则会落到
@@ -3827,6 +3864,11 @@ pub fn run() {
                     let mut last_nav = std::time::Instant::now()
                         .checked_sub(std::time::Duration::from_secs(60))
                         .unwrap_or(std::time::Instant::now());
+                    // 有界退避：任何"页面起不来"的原因都不该变成 3s 无限重载
+                    // （2026-09-20 cookie-431 事故实测 535 次 nav-fallback，
+                    // 页面永远停在错误页且持续刷网络/CPU）。
+                    let mut attempts: u32 = 0;
+                    let mut gave_up_logged = false;
                     loop {
                         std::thread::sleep(std::time::Duration::from_millis(1500));
                         let live = LIVE_DSH_URL.lock().unwrap().clone();
@@ -3835,15 +3877,29 @@ pub fn run() {
                         // on_page_load/URL 层都可能"空转"（navigate 生效但 WebView 未
                         // 渲染），只有 client JS 回连才证明渲染完成。
                         if CLIENT_READY.load(std::sync::atomic::Ordering::SeqCst) {
+                            // 页面已就绪：重置退避，下次故障重新从 3s 起步。
+                            attempts = 0;
+                            gave_up_logged = false;
                             continue;
                         }
                         let Some(w) = nav_app.get_webview_window("main") else { continue };
-                        if last_nav.elapsed().as_secs() < 3 {
+                        let interval = nav_fallback_interval_secs(attempts);
+                        if last_nav.elapsed().as_secs() < interval {
                             continue;
+                        }
+                        if attempts >= NAV_FALLBACK_MAX_ATTEMPTS && !gave_up_logged {
+                            gave_up_logged = true;
+                            log_line(
+                                &nav_data_dir,
+                                &format!(
+                                    "nav-fallback: giving up fast retries after {attempts} attempts (still retrying every {interval}s)"
+                                ),
+                            );
                         }
                         if let Ok(u) = tauri::Url::parse(&live) {
                             let _ = w.navigate(u);
                             last_nav = std::time::Instant::now();
+                            attempts = attempts.saturating_add(1);
                             // 诊断：导航兜底每次实际 navigate 都留痕（session.log）
                             log_line(&nav_data_dir, &format!("nav-fallback: navigate -> {live}"));
                         }
