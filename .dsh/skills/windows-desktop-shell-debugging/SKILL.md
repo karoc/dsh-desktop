@@ -1,6 +1,6 @@
 ---
 name: windows-desktop-shell-debugging
-description: 排障 Windows 桌面壳（Tauri + 内置 Node 运行时 + 安装/升级/冷安装）的"装不上/启动失败/安装卡死"类问题。覆盖：如何通过 WSL 挂载直接读取 Windows 宿主机的应用运行时、manager.log、代理配置与 node_modules 现场；如何用受控实验隔离"包管理器挂起"的变量（代理/镜像/工具/Node 版本）；如何端到端验证修复。当用户报告 Windows 版安装卡住、`launch failed: not installed`、升级后白屏/服务退出、冷安装长时间无进展时使用。不要用于纯前端/非 Tauri 项目的调试。
+description: "排障 Windows 桌面壳（Tauri + 内置 Node 运行时 + 安装/升级/冷安装）的\"装不上/启动失败/安装卡死\"类问题。覆盖：如何通过 WSL 挂载直接读取 Windows 宿主机的应用运行时、manager.log、代理配置与 node_modules 现场；如何用受控实验隔离\"包管理器挂起\"的变量（代理/镜像/工具/Node 版本）；如何端到端验证修复。当用户报告 Windows 版安装卡住、`launch failed: not installed`、升级后白屏/服务退出、冷安装长时间无进展时使用。不要用于纯前端/非 Tauri 项目的调试。"
 ---
 
 # Windows 桌面壳安装/启动排障技能

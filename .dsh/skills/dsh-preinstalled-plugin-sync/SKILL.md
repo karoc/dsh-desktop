@@ -1,6 +1,6 @@
 ---
 name: dsh-preinstalled-plugin-sync
-description: Use when checking, auditing, or updating the shell-bundled "preinstalled" DeepSeek Harness plugins in the dsh-desktop repo (plugins/preinstalled/<pkg> → src-tauri/resources/preinstalled/<pkg>, version-locked with the shell release). Covers the version audit against npm latest, the npm-tarball sync with the shell's file conventions (README pruning, dsh-kanban skill assets), resource re-sync via scripts/sync-resources.mjs, verification, and the commit/push step. Triggers on: 检查/更新/同步预装插件版本、预装插件维护、preinstalled plugin sync.
+description: "Use when checking, auditing, or updating the shell-bundled \"preinstalled\" DeepSeek Harness plugins in the dsh-desktop repo (plugins/preinstalled/<pkg> → src-tauri/resources/preinstalled/<pkg>, version-locked with the shell release). Covers the version audit against npm latest, the npm-tarball sync with the shell's file conventions (README pruning, dsh-kanban skill assets), resource re-sync via scripts/sync-resources.mjs, verification, and the commit/push step. Triggers on: 检查/更新/同步预装插件版本、预装插件维护、preinstalled plugin sync."
 ---
 
 # dsh-desktop 预装插件版本核查与同步技能
