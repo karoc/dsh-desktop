@@ -1440,6 +1440,24 @@
       ],
       "createdAt": 1789878495146,
       "updatedAt": 1789878495146
+    },
+    {
+      "id": "card-eff66931-2b19-4f80-af0e-6bf728a351ba",
+      "title": "流程修复：release-please 会静默丢弃「解析失败」的提交（#43 从 0.10.1 变更记录里消失）",
+      "description": "2026-09-20 实测：P0+P1 修复提交（#43）正文含 `<base64url(sha256(host:port))>`，release-please 的 conventional-commit 解析器报 `unexpected token '(' at 4:28`，**整条提交被静默丢弃**（0.10.1 的 CHANGELOG 只剩 P2a 那条；版本号仍因其它 fix 正常 patch）。复现：`require('@conventional-commits/parser').parser(msg)`，把该行单独摘出即 FAIL，去掉即 OK。处置：① CHANGELOG.md 手动补录该条并注明原因；② CONTRIBUTING.md 写入两条纪律（正文避免尖括号+括号混用；合并后核对 release PR 是否列出该提交，日志搜 `commit could not be parsed`）；③ 发布后用 `gh release edit v0.10.1 --notes-file`（release-body.mjs 重新生成）刷新 Release notes。",
+      "summary": "已定位触发点（单个正文行）、复现方法与处置三步；CHANGELOG 手动补录 + CONTRIBUTING 纪律已入库，Release notes 刷新待发布完成后执行。",
+      "rationale": "这是流程性缺陷：解析失败不会报错、不会阻止发版，只会让\"最重要的修复\"从变更记录里消失——本轮差点就这样发出去。必须把触发条件、自查动作与补录手法固化，否则下次还会踩。",
+      "rejected": "① 改写历史提交（force-push main）——破坏主干历史且已发版，弃；② 忽略不补——发布说明缺少最关键修复，用户无法据此判断该不该升级；③ 把解析器加进仓库做提交门禁——成本高（新依赖）且 release-please 自身日志已足够自查，先用文档纪律。",
+      "sourceSessionId": "session-67d49873-a409-4621-a37d-e1d206530643",
+      "status": "done",
+      "tags": [
+        "process",
+        "release",
+        "release-please",
+        "documentation"
+      ],
+      "createdAt": 1789910831539,
+      "updatedAt": 1789910831539
     }
   ]
 }

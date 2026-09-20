@@ -23,6 +23,17 @@
 - 标题 ≤ 72 字符，正文列要点；squash 后一条提交对应一个功能
 - 规范直接驱动 release-please：`feat` → minor，`fix` → patch，自动 bump 版本 + CHANGELOG
 
+> ⚠️ **release-please 解析陷阱（2026-09-20 实测，丢过一条 fix）**：提交**正文**里写
+> `<base64url(sha256(host:port))>` 这类"尖括号 + 圆括号"的技术写法，会让
+> conventional-commit 解析器报 `unexpected token '('`；release-please 遇到解析失败的
+> 提交会**整条静默丢弃**——CHANGELOG / Release notes 少一条，版本号提升不受影响（其它
+> 提交仍会 bump），所以不看日志根本发现不了。两条纪律：
+> 1. 正文里避免尖括号与括号混用（写成 `sha256 of host:port` 之类）；
+> 2. 合并 fix/feat 后**核对 release PR 是否列出了你的提交**（工作流日志搜
+>    `commit could not be parsed`）。漏了就在 `CHANGELOG.md` 该版本段落手动补录
+>    （注明"手动补录 + 原因"），再用 `gh release edit <tag> --notes-file <(node scripts/release-body.mjs <ver>)`
+>    刷新 Release notes。
+
 ## 门禁（提交前本地跑）
 
 ```bash
