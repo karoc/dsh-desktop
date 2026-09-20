@@ -26,7 +26,11 @@ description: "Use when checking, auditing, or updating the shell-bundled \"prein
 node scripts/audit-preinstalled.mjs
 ```
 
-输出语义化：`UPDATE` = 需要同步，`up-to-date` = 已最新；永远 exit 0（报告工具，不当门禁）。脚本逻辑：读 `plugins/preinstalled/<pkg>/package.json` 的 version → `fetch` npm registry `dist-tags.latest` → 对比。无 bundle 时提示。
+输出语义化：`UPDATE` = 需要同步，`up-to-date` = 已最新；永远 exit 0（报告工具，不当门禁）。**两层比对**，因为只比版本号有盲区：
+
+- **版本级**：读 `plugins/preinstalled/<pkg>/package.json` 的 version → `fetch` npm registry `dist-tags.latest` → 对比。无 bundle 时提示。
+- **内容级**：对「随包逐字拷贝」的资产（`lib/*.js`、`cordis.patch.yml`、`skills/*/SKILL.md`）与**同版本的已发布 tarball** 做 sha256 比对（tarball 在内存里 gunzip + 极简 tar 解析，不落临时文件、不加依赖）。这一层专治版本级的盲区：手工同步拷错/拷漏时版本号照样相等，旧逻辑会判 `up-to-date`；现在报 `content: ⚠️ <file> DRIFT`。四个预装包当前实测 12/12 资产与已发布 tarball 逐字节一致。
+- **技能 frontmatter**：随包 `skills/*/SKILL.md` 若 frontmatter 无法解析（未加引号的 `description` 含 `": "`），单独报 `skill: ⚠️ …`。这属于**上游包缺陷，同步修不了**，只能发新版本 —— 正是 2026-09-20 那次技能被 DSH 静默丢弃的类别。
 
 不想用脚本时手工等价：
 
