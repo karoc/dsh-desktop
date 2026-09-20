@@ -182,6 +182,22 @@ Start-Process "C:\Users\<u>\AppData\Local\DSH Smoothly Desktop\dsh-desktop.exe"
 - 别改 `resources/manager/*` 后不修真源（§9.5）。
 - 别在 `curl` 时用无 token 的 URL 判断 web 存活（0.1.2-rc.1 起 401 是正常）；用 manager.log 的完整 URL。
 
+### 9.8b 431 类故障（"页面能加载但插件全挂"）速查（2026-09-20 实战）
+
+**症状**：壳窗口显示 `Failed to load plugins / web boot: N entries did not activate … import failed`，`session.log` 每 3s 一条 `nav-fallback: navigate`（实测最多 535 次），`client-ready` 永不出现；**或** WebView2 直接显示 `HTTP ERROR 431` 页面。
+
+**机制**：dsh web 是 Node HTTP 服务，头预算 = 默认 `maxHeaderSize` **16384B 且请求行计入**；越限回 `HTTP/1.1 431 Request Header Fields Too Large`（无 Date/Content-Type/Server）。dsh 的鉴权 cookie 名绑定 authority（`dsh-auth-<hash(host:port)>`）而壳每轮新端口 → Cookie 头单调增长；页面上唯一 >1KB 的 URL（客户端插件批 bundle，≈2.85KB）第一个被打掉，且 `prefetchImmediateTier().catch(()=>{})` 把加载错误吞掉，只报 `import failed`。
+
+**诊断三步**（都只读）：
+1. `python3 scripts/hdrprobe.py --port <dsh端口> --token <token>` → A/B/C 段给阈值与"长 URL 先死"的机读证据，D 段给 431 指纹。
+2. 数 cookie：`%LOCALAPPDATA%\<identifier>\EBWebView\Default\Network\Cookies` 是 SQLite，**只能在应用关闭后读**（运行期被 WebView2 独占，PowerShell 六种 FileShare 都 sharing violation）：
+   `SELECT count(*) FROM cookies WHERE name LIKE 'dsh-auth-%'`；单条 ≈226B，悬崖 ≈ (16384 − 请求行长度) / 226 条。
+3. 看 `session.log` 是否出现 `dsh-auth cookies: jar=… stale_before=… deleted=… remaining=…`（修复后的机读证据；`remaining` 必须为 0）。
+
+**修复（已随壳发布）**：壳在导航前用 Tauri cookie API 清掉 `dsh-auth-*`（只回环 host），见 `src-tauri/src/lib.rs` 的 `prune_stale_auth_cookies` / `spawn_auth_cookie_janitor`；manager 给 dsh 子进程注入 `--max-http-header-size=65536`。**改这块必须守三条硬约束**（契约测试 `scripts/test-shell-chrome.mjs` 会拦）：① `cookies()` 只能在后台线程调用（Windows 上 `setup`/`on_page_load`/同步 command 里会死锁，wry#583）；② 清理必须早于 `handle.emit("server-url")`（launcher 页自己也会导航）；③ 只在启动与 authority 变化时清（同一 authority 重复事件会删掉在用的 cookie）。
+
+**复现/验证手法**（dev 版，隔离 profile）：关掉 dev 壳 → 备份 `Cookies` → 用**壳自带 node.exe**（含 `node:sqlite`）纯 SQL 克隆现有 `dsh-auth-*` 行到 ≥90 条（**不要**用 JS 读整行再写回：`creation_utc` 超过 2^53，`node:sqlite` 会抛 `ERR_OUT_OF_RANGE`；克隆要复用 `encrypted_value`（DPAPI v10，用户级）只改 `name`）→ 起未修复构建应看到 431/错误页 → 起修复后构建应看到 `deleted=N remaining=0` + `client-ready`。
+
 ### 9.9 导航兜底终版机制（2026-09-07 定案，黑屏根治）
 
 **页面可用信号 = 桥收到 client 的 `/alive`（client-ready）**，不是 `window.url()`、也不是 `on_page_load`：
