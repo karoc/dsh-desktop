@@ -26,6 +26,8 @@
 
 ### Bug Fixes
 
+* **webview2:** 清理陈旧 dsh-auth cookie（P0）+ 抬高 dsh web 头上限（P1）——修复「启动不起来」（431） ([#43](https://github.com/karoc/dsh-desktop/issues/43)) ([cbd094d](https://github.com/karoc/dsh-desktop/commit/cbd094da99483f085a3a3c642ceb69eac71cf4d2))
+  * 手动补录：该提交正文含 `sha256(host:port)` 一类写法，release-please 的 conventional-commit 解析器报 `unexpected token '('` 并**静默丢弃**整条提交（版本号提升不受影响）。复盘与硬约束见 `.agents/notes/implemented/bug-fix/2026-09-20-webview2-cookie-431-prune.md`。
 * **shell:** 导航兜底改有界退避——任何启动失败不再变成 3s 无限重载（P2a） ([#44](https://github.com/karoc/dsh-desktop/issues/44)) ([9dc167d](https://github.com/karoc/dsh-desktop/commit/9dc167d498766e0c870e487e8aecdc0de03cd035))
 
 
