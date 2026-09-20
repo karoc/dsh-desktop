@@ -76,6 +76,9 @@ grep -c "kanban-use" plugins/preinstalled/dsh-kanban/lib/index.js      # ≥1
 grep -c "skill-version" plugins/preinstalled/dsh-kanban/lib/index.js   # ≥1
 
 # 3) 源树与 resources 完全一致（sync 幂等）
+#    该不变量现已并入 npm test 的「副本一致性」门禁（scripts/test-copy-consistency.mjs，
+#    CI 的 PR 层也跑）：它同时覆盖 manager 真源副本、桌面客户端插件副本、预装 ship list
+#    完整性，以及 .dsh/skills/*/SKILL.md 的 frontmatter 可解析性。这条 diff 作二次确认：
 diff -r plugins/preinstalled src-tauri/resources/preinstalled && echo IDENTICAL
 ```
 

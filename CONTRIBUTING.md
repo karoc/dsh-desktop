@@ -37,7 +37,8 @@
 ## 门禁（提交前本地跑）
 
 ```bash
-npm test                          # 全量 7 套（行为 + 契约）
+npm test                          # 全量 11 套（行为 + 契约 + 副本一致性）
+node scripts/test-copy-consistency.mjs  # 副本一致性（改了 scripts/ 或 plugins/ 后先 npm run sync:resources）
 node scripts/test-shell-chrome.mjs  # 壳契约（菜单 id ↔ ACTIONS ↔ lib.rs）
 # Rust：cargo fmt --check + cargo clippy -D warnings（CI 快层会跑，本地有工具链时先跑）
 ```

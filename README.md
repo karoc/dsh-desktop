@@ -129,13 +129,14 @@ node_modules 符号链接树、写迁移标记、绝不上移覆盖已有新数�
 ## 本地验证（Linux 可跑的部分）
 
 ```bash
-npm test                 # 全量：通知插件 / 控制面 / 插件控制台 / 代理 / 代理e2e / 启动页设置 / 壳顶栏契约
+npm test                 # 全量 11 套：通知插件 / 控制面 / 插件控制台 / 控制台窗口 / 代理 / 代理e2e / 启动页设置 / 壳顶栏契约 / 启动器扫动 / 请求头预算 / 副本一致性
 npm run test:plugin      # 通知插件行为测试（纯 Node，无浏览器）
 npm run test:control     # manager 控制面（10 场景）
 npm run test:console     # 插件控制台行为（17 场景）
 npm run test:proxy       # 内置正向代理（12 场景）
 npm run test:launcher-settings  # 代理设置窗口（6 场景）
 npm run test:shell-chrome       # 壳顶栏契约（菜单 id ↔ ACTIONS ↔ lib.rs 桥/命令）
+npm run test:copies      # 副本一致性（manager / 客户端插件 / 预装 ship list / SKILL.md frontmatter）
 npm run fetch:node       # 下载并校验内置 Node 24（win/linux/darwin）
 npm run sync:resources   # 同步 manager/plugin/patch 进 src-tauri/resources
 ```
