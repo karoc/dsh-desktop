@@ -1258,10 +1258,10 @@
       "id": "card-d0063307-1402-49eb-a0b5-615a5bb1a958",
       "title": "实机验收 v0.10.1：插件管理窗口第四行预装插件可启用 + 431 修复在正式版生效",
       "description": "装 v0.10.1（或已在本机的同内容构建）后：① 壳菜单「插件管理…」预装区出现第四行 `@karoc/dsh-smoothly-opencode-session`（双语简介、默认关），打开开关 → 重启服务生效；② 431 修复侧：`%APPDATA%\\dsh.smoothly.desktop\\dsh-desktop-session.log` 出现 `dsh-auth cookies: jar=… stale_before=… deleted=… remaining=0`，且页面正常启动（无 431 / 无 nav-fallback 循环）；③ 若用 OpenCode / OpenCode Go 路由，确认模型调用不再 400 MissingSessionID。",
-      "rationale": "本轮唯一未闭环的验收点：Release 产物内容无法自动核对（WSL 侧 github.com 与资产域名不可达、Windows 侧同样连不上 github.com，无法下载 28 MB 安装包做 7z 提取）。包内容由 CI beforeBuildCommand + tauri resources 目录递归保证（与既有三个 bundle 同形），实机安装是收口这一步的最直接方式。",
-      "rejected": "① 本地 Windows 构建再 7z 提取——只能证明构建输入正确，证明不了已上传产物，且要动 D:\\Dev\\dsh-desktop 工作区；② WSL 内跑 manager 冷装 dsh 做端到端启动验证——需先 fetch-node 下载 Node 运行时（同受网络限制），且 CI windows job 的 runtime smoke 已在真实 manager 上冷装 dsh 并通过（四个 bundle 的 resources 已在其 resource-dir 里）。",
+      "rationale": "用户指出\"测试不该甩给用户\"：本条卡四条判据全部可由 agent 用桥/窗口截图/启停往返/负向用例/脏 jar 种子闭环，且已把验收基准从\"从 main 构建\"提升到\"tag v0.10.1 构建\"，与发布产物同源。",
+      "rejected": "① 把验收留给用户（用户反问后改为自测）② 只验\"jar=0 也能启动\"（不算验证修复——已补种 65 条脏 cookie 走完整自愈路径）③ 通过 GitHub API 拉 Release 资产核对（出网被阻断，实测失败）④ 为对齐版本号而额外重启（改用 tag 本地构建安装，一次到位）。",
       "sourceSessionId": "session-67d49873-a409-4621-a37d-e1d206530643",
-      "status": "todo",
+      "status": "done",
       "tags": [
         "verify",
         "preinstalled",
@@ -1269,7 +1269,8 @@
         "waiting-user"
       ],
       "createdAt": 1789825989014,
-      "updatedAt": 1789911313748
+      "updatedAt": 1789916193785,
+      "summary": "agent 自测完成，并**升级为\"在已发布的 v0.10.1 上验收\"**：① 用 tag `v0.10.1` 本地重建安装包（28.16MB）→ 关闭壳 → 静默安装 → 安装目录 exe 版本显示 **0.10.1**、manager 含 `--max-http-header-size`、启动 20s 内 `client-ready`、`dsh-auth cookies: jar=0 …`；② 插件控制台（bridge 60026）：preinstalled 四项含 `@karoc/dsh-smoothly-opencode-session`、默认未启用（bundles 不含）；打开壳内「插件管理」窗口截图确认第四行渲染出来（显示我加的双语简介），`POST /plugins/enable` → `{ok:true,nextAction:restart}` 且 profile bundles 追加该 scoped 包名 → `POST /plugins/disable` → 已移除（恢复原状）；负向用例 `enable some-random-pkg` → `{ok:false,\"not a preinstalled plugin\"}`；③ **脏 jar 自愈（关键）**：把生产 profile 的 cookie 库克隆到 **65 条 ≈17.0KB**（已越过 2.85KB 批 URL 的 ≈13.4KB 悬崖）→ 启动 v0.10.1 → `dsh-auth cookies: jar=65 stale_before=65 deleted=65 remaining=0` + 第二次 authority 变更清理 → 7s 后 `client-ready`；验收后已删除种子备份、cookie 库回到正常（1 条）。④ 唯一无法在本环境验证：CI 产出的安装包本体（本机到 github.com 资产域名出网被阻断，WSL 与 Windows 侧都试过）；替代证据＝同 tag 源码本地构建 + tag 构建的 CI windows job（NSIS 布局断言 + runtime smoke）通过。"
     },
     {
       "id": "card-af50eb36-6167-4815-82e2-1041c93317eb",
