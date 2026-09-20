@@ -1,0 +1,18 @@
+# Agent Note: webview2-cookie-431-prune
+
+Status: implemented
+
+## Problem
+
+宿主正式版「启动不起来」：WebView2 里的 dsh 页面停在 `Failed to load plugins / web boot: 61 entries did not activate … import failed`，壳的导航兜底每 3s 重载（实测 535 次），窗口不可用。根因是跨层叠加：dsh web 的鉴权 cookie 名绑定 authority（`dsh-auth-<base64url(sha256(host:port))>`），而壳用 `dsh web --port 0` 每轮新端口 → 每一轮"完成的 token 导航"新增一条 226B、30 天不过期的 cookie；HTTP cookie 不按端口隔离，Cookie 请求头因此单调增长。dsh web 是 Node HTTP 服务，头预算 = 默认 `maxHeaderSize` 16384B 且**请求行也计入**，越限即回 `431 Request Header Fields Too Large`；页面上唯一 >1KB 的 URL（客户端插件批 bundle，68 插件 ≈2.85KB）第一个被打掉，于是"所有客户端插件 import failed"。实测阈值：单条 226B、16335B→404/16435B→431、真实批 URL 16205B→200/16605B→431。
+
+## Decision
+
+三层修复已合并（PR #43 / #44，main `cbd094d`、`9dc167d`）。**P0（src-tauri/src/lib.rs）**：`is_stale_auth_cookie(name, domain)` 只认 `dsh-auth-` 前缀 + 回环 host（`127.0.0.1`/`localhost`/`::1`，容忍前导点与大小写），**绝不触碰其它 cookie**；`prune_stale_auth_cookies` 读 jar → 过滤 → `delete_cookie` → **回读复核 `remaining`**（`delete_cookie` 是入队即返回、未匹配也返回成功，只数"删了几次"证明不了清理生效），剩余 >0 时有界重试一次，日志恒定输出 `dsh-auth cookies: jar=… stale_before=… deleted=… remaining=…`（0 与失败也写）。清理跑在**单一 janitor 后台线程**（mpsc 串行、`catch_unwind` 包住——wry 会对 profile 里每条 cookie 建 `Cookie`，panic 会打死线程）：启动清一次（WebView2 未就绪时 6×500ms 有界重试，只有 `cookies()` 读成功才算"启动清理完成"），之后**仅在 authority 变化**时再清（同一 authority 的重复事件不清，避免删掉页面正在用的 cookie）。`server-url` 分支在 `handle.emit("server-url")` **之前**做有界等待（≤3s）：launcher 页自己也监听该事件并 `location.href`，另有 1s 轮询 `get_shell_state.liveUrl`，先清理后交付 URL 才能让"清理先于任何加载"成为硬保证。**硬约束（注释 + `scripts/test-shell-chrome.mjs` 源级契约锁死）**：`cookies()` 绝不在 `setup`/`on_page_load`/任何同步 command 里调用（Windows 上 Tauri 官方明确会死锁，wry#583）；`prune_stale_auth_cookies(` 全文件只能有一个调用点（janitor 内）；等待必须早于 `emit`。**P1（scripts/server-manager.mjs + resources 副本）**：给 dsh 子进程的 `NODE_OPTIONS` 追加 `--max-http-header-size=65536`（沿用既有唯一注入点，manager 自身仍不注入），最终值写 manager.log。**P2a（同 PR #44）**：导航兜底改有界退避 `nav_fallback_interval_secs`（前 3 次 3s，之后 6/12/24s 封顶 30s），≥8 次只写一条 `giving up fast retries`，`/alive` 到达即重置。测试：`scripts/test-header-limit.mjs`（纯 Node，进 `npm test`：长 URL 先 431 + 64KB 后通过）、control-plane env 探针断言子进程 `maxHeaderSize==65536`、Rust 单测（cookie 谓词 + 退避曲线）。**未做**：P2b（`/alive` 绑定窗口 nonce）——`on_page_load` 注入晚于客户端插件首 ping，需要插件侧重试配合，先留卡；上游 issue 已起草未提交。
+## Alternatives considered
+
+**在 `setup` / `on_page_load` / 同步 command 里清理**——Tauri 官方记载 Windows 上 `cookies()` 会死锁（主线程 + 无超时嵌套消息泵），会挂死启动，弃。**每次 `server-url` 事件都清理**——同一 authority 的重复事件（report-url 重发）会删掉页面正在使用的 cookie，制造可避免的 401 窗口，改为仅启动 + authority 变化。**清空整个 WebView2 profile / cookie DB**——连 12MB 批 bundle 缓存一起丢，且文件被 WebView2 独占锁、必须在创建 webview 之前删，时序脆弱，弃。**固定 dsh 端口**（authority 固定 → cookie 名复用）——端口冲突会让启动直接失败，失败模式比现状更差，弃。**只抬高头上限**——只是延后（按实测速率 64KB 数月后仍会耗尽，且批 URL 随插件数 ≈22B/插件 增长），降级为 P1 纵深。**用 JS 删 cookie**——`dsh-auth-*` 是 HttpOnly，删不掉。**每个事件 `thread::spawn` 清理**——乱序的 prune 会删掉新 authority 刚签发的 cookie，而那次导航成功后兜底会 `continue`、不自愈，弃（改单一串行 janitor）。
+## Consequences
+
+代价：多一个常驻后台线程 + URL 事件路径上一次 ≤3s 的有界等待（正常路径 janitor 早已完成，实测零延迟）；janitor 在"主线程被 WebView2 卡住"时会阻塞，但不再阻塞 manager stdout 读线程（这正是把清理搬出读线程的原因）。收益：存量装机下次启动即自愈（dev 实测 92 条 → `deleted=92 remaining=0` → 9s 后 `client-ready` → 真实 UI；修复前同一 jar 显示 `HTTP ERROR 431` + 18 次 nav-fallback + 无 ready），且任何"页面起不来"不再变成 3s 无限重载。可观测性：`dsh-auth cookies:` 行是机读证据，`scripts/hdrprobe.py` 可复跑阈值/431 指纹。已知边界：只清 `dsh-auth-*`（live dsh 的受信 `/` 不设其它 cookie，故不会登出任何东西）；`localhost`/`::1` 分支对本壳是死代码（manager 固定 `--host 127.0.0.1`）但成本近零；prod 首次启动读到的 `jar=0`（强制结束进程丢了 WebView2 cookie 库）意味着"脏 jar 自愈"这条路径由 dev E2E 证明而非 prod。遗留：P2b（nonce 绑定就绪信号，防外部浏览器 ping 误关兜底）、上游 issue（cookie 名绑端口 / 批 URL 线性增长 / bundle 加载错误被 `prefetchImmediateTier().catch(()=>{})` 吞掉）、SKILL 的 431 条目。方案与四角度审计：`docs/2026-09-20-webview2-cookie-431-fix-plan.md`、`docs/2026-09-20-webview2-cookie-431-fix-audit.md`。
+
