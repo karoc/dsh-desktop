@@ -1241,8 +1241,8 @@
     {
       "id": "card-94d7001c-a0eb-4a16-a8c9-ae86d45b713e",
       "title": "壳发新版本：预装 OCS 0.1.0 随包 → release-please 出 PR → tag → CI 出安装包",
-      "rationale": "预装插件只在发布新的桌面版本后才随安装包生效（源树改动不影响已安装应用的 runtime 拷贝），用户明确要求「然后壳发新版本」，因此必须走完 feat → PR → release-please → tag → CI 出包全链路。",
-      "rejected": "① 手动改版本号/手动打 tag（release-please 接管）② main 直推（约定走 PR；实测 release PR 无 checks 时用 --admin 是唯一可用路径，--auto 会等永不到来的检查）③ 只本地构建安装包（正式版必须走 GitHub Release）④ 下载 Release 产物做 7z 内容核对（WSL 侧 github.com / 资产域名不可达、Windows 侧同样连不上 github.com，改为以 CI beforeBuildCommand + tauri resources 目录递归 + 既有三个同形 bundle 作保证）。",
+      "rationale": "该决策卡的本意是\"#40 怎么处理\"，本轮发版时已作出选择（合并凑版），记录结论避免留下悬空决策。",
+      "rejected": "① 关闭 #40 等下次 feature 折叠——本轮需要立刻发版把 431 修复推给其他机器，等待不现实；② 把 chore 段设为 hidden——会一并隐藏依赖升级类 chore，收益不明确，留作可选优化。",
       "sourceSessionId": "session-67d49873-a409-4621-a37d-e1d206530643",
       "status": "done",
       "tags": [
@@ -1251,13 +1251,13 @@
         "plugins"
       ],
       "createdAt": 1789823947647,
-      "updatedAt": 1789825966829,
-      "summary": "PR #37（feat：预装 OCS 0.1.0）过 CI 快层后 squash 合并 main（7283837）→ release-please 自动出 PR #38 chore(main): release 0.10.0（0.9.1→0.10.0，三处 version 文件 + CHANGELOG）→ 该 PR 无 checks（bot 推送不触发 workflow），--admin 合并（内容仅版本元数据，无代码/工作流改动）→ 打 tag v0.10.0；因 tag 由 GITHUB_TOKEN 创建不触发 workflow，按既有做法 workflow_dispatch 在 tag 上跑 build.yml → check/test/windows(NSIS+布局断言+runtime smoke)/linux/release 全绿，GitHub Release v0.10.0 已挂 Windows NSIS（28.1 MB）+ Linux AppImage/deb 三产物，release-body.mjs 生成的说明正确列出四个预装包（含 @karoc/dsh-smoothly-opencode-session 0.1.0）。linux-smoke 仍为 main 上既有失败（对比改动前的 docs 提交 run 35422877702 同为 failure），与本轮无关。"
+      "updatedAt": 1789911293824,
+      "summary": "实际走向是①「合并凑版」：#40 已随本轮修复一起合并并发布 v0.10.1（2026-09-20T13:19Z，三平台资产：Windows NSIS 28.1MB + Linux AppImage/deb）。chore 条目确实进了 0.10.1 的发布说明（Complimentary「Chores」段两条看板提交），可接受、不构成阻塞；「把 chore 设为 hidden」仍是可选优化，未实施。"
     },
     {
       "id": "card-d0063307-1402-49eb-a0b5-615a5bb1a958",
-      "title": "实机验收 v0.10.0：插件管理窗口出现第四行预装插件并可启用",
-      "description": "装完 v0.10.0 后打开壳菜单「插件管理…」，确认预装区出现第四行 `@karoc/dsh-smoothly-opencode-session`（双语简介、默认关），打开开关 → 重启服务生效；若用 OpenCode / OpenCode Go 路由，再确认模型调用不再 400 MissingSessionID。",
+      "title": "实机验收 v0.10.1：插件管理窗口第四行预装插件可启用 + 431 修复在正式版生效",
+      "description": "装 v0.10.1（或已在本机的同内容构建）后：① 壳菜单「插件管理…」预装区出现第四行 `@karoc/dsh-smoothly-opencode-session`（双语简介、默认关），打开开关 → 重启服务生效；② 431 修复侧：`%APPDATA%\\dsh.smoothly.desktop\\dsh-desktop-session.log` 出现 `dsh-auth cookies: jar=… stale_before=… deleted=… remaining=0`，且页面正常启动（无 431 / 无 nav-fallback 循环）；③ 若用 OpenCode / OpenCode Go 路由，确认模型调用不再 400 MissingSessionID。",
       "rationale": "本轮唯一未闭环的验收点：Release 产物内容无法自动核对（WSL 侧 github.com 与资产域名不可达、Windows 侧同样连不上 github.com，无法下载 28 MB 安装包做 7z 提取）。包内容由 CI beforeBuildCommand + tauri resources 目录递归保证（与既有三个 bundle 同形），实机安装是收口这一步的最直接方式。",
       "rejected": "① 本地 Windows 构建再 7z 提取——只能证明构建输入正确，证明不了已上传产物，且要动 D:\\Dev\\dsh-desktop 工作区；② WSL 内跑 manager 冷装 dsh 做端到端启动验证——需先 fetch-node 下载 Node 运行时（同受网络限制），且 CI windows job 的 runtime smoke 已在真实 manager 上冷装 dsh 并通过（四个 bundle 的 resources 已在其 resource-dir 里）。",
       "sourceSessionId": "session-67d49873-a409-4621-a37d-e1d206530643",
@@ -1269,16 +1269,16 @@
         "waiting-user"
       ],
       "createdAt": 1789825989014,
-      "updatedAt": 1789825989014
+      "updatedAt": 1789911313748
     },
     {
       "id": "card-af50eb36-6167-4815-82e2-1041c93317eb",
       "title": "决策：chore(board) 提交会触发 release-please 版本 PR（#40 = 0.10.1 仅含看板收口）",
       "description": "发现：release-please-config.json 把 chore 放在可见段（Chores），因此本轮「只改看板」的 chore(board) 提交直接生成了 PR #40 = release 0.10.1（diff 只有版本号三处 + 一条 Chores 条目）。三条路：① 合并它（多一次 ~25min 三平台 CI + 一个只含看板收口的版本）② 关掉它（release-please 下次 main push 会重建，等于没关）③ 把 config 的 chore 段设为 hidden:true（看板/杂务不再触发 release PR，代价是 release notes 里不再出现 chore 条目，含依赖升级类 chore）。倾向 ③，但要先确认用户是否想看 chore 条目。",
-      "rationale": "本轮收尾时发现 release-please 会为纯看板提交开 patch 版本 PR——这会影响后续所有 session 的收尾动作（每次都多一个 release PR），需要一个明确约定，否则每个会话都要重新判断。",
-      "rejected": "未擅自合并 #40（会烧一次 25min 的三平台 CI 出一个只含看板收口的版本）；也未擅自改 release-please 配置（改发布语义超出本轮「预装 + 发版」范围，且会影响用户对发布说明的预期）。",
+      "rationale": "本卡的本意是\"#40 怎么处理\"；本轮发版需要立刻把 431 修复推给其他机器，遂合并凑版，记录结论避免留下悬空决策。",
+      "rejected": "① 关闭 #40 等下次 feature 折叠——发版不能等；② 把 chore 段设为 hidden——会一并隐藏依赖升级类 chore，收益不明确，留作可选优化。",
       "sourceSessionId": "session-67d49873-a409-4621-a37d-e1d206530643",
-      "status": "todo",
+      "status": "done",
       "tags": [
         "process",
         "release",
@@ -1286,7 +1286,8 @@
         "waiting-user"
       ],
       "createdAt": 1789826580613,
-      "updatedAt": 1789826580613
+      "updatedAt": 1789911344411,
+      "summary": "实际走向是①「合并凑版」：#40 已随本轮修复一起合并并发布 v0.10.1（2026-09-20T13:19Z，三平台资产：Windows NSIS 28.1MB + Linux AppImage/deb）。chore 条目确实进了 0.10.1 发布说明的 Chores 段（两条看板提交），已接受、不构成阻塞；「把 chore 设为 hidden」仍是可选优化，未实施。"
     },
     {
       "id": "card-17cf6dd4-d39b-4428-bfb3-f0c7422e0c00",
