@@ -19,9 +19,10 @@ one upstream backend and keeps OpenCode's prompt cache warm across its turns
   retries and process restarts (by default the DSH session id itself — the
   same identity the official DeepSeek adapter already sends as
   `x-deepseek-harness-session-id`).
-- **Leaves everything else untouched**: other providers, requests that already
-  carry the header, and requests without a session id pass through exactly as
-  before.
+- **Leaves everything else untouched**: a request whose **initial URL** is not
+  an allowed host is never modified (host gate, default `https://opencode.ai`),
+  as are requests that already carry the header, other providers, and calls
+  without a session id. See [hosts](#hosts).
 
 ## How it works
 
@@ -70,6 +71,18 @@ Provider route keys whose requests receive the header. Defaults to the pi-ai
 catalog ids `opencode` and `opencode-go`. If you serve OpenCode under a custom
 provider route key (e.g. `opencode-go-self` in `llm-pi-ai`), add that key.
 
+### hosts
+
+The host gate: a request is only modified when its target host is allowed
+(default `['https://opencode.ai']`, subdomains included). Entries are `host`
+(implicitly `https`) or `scheme://host[:port]`; a leading `*.` is ignored; IDN
+entries normalize to punycode; unusable entries are reported in the startup log
+instead of being ignored silently. `['*']` disables the gate entirely — use it
+only for a mirror you fully trust. If you reach OpenCode through a reverse
+proxy or a mirror, list that host here (write the full scheme, and note that a
+bare `host` entry means `https`) or the header will silently not be attached;
+the plugin warns once per blocked provider/host pair.
+
 ### mode
 
 - `session-id` (default) — header value = the DSH session id of the model
@@ -80,11 +93,34 @@ provider route key (e.g. `opencode-go-self` in `llm-pi-ai`), add that key.
 
 ### debug / debugFile
 
-- `debug: true` — log every streamed call that receives the header via
-  `ctx.logger` (the dsh process console).
-- `debugFile: <absolute path>` — append one JSON line
-  (`{"ts","provider","model","session","header","value"}`) per streamed call
-  that receives the header. Handy when the dsh console is not visible.
+- `debug: true` — log every streamed call that **enters the injection flow**
+  via `ctx.logger` (the dsh process console), and reveal raw values in
+  request-level records.
+- `debugFile: <absolute path>` — append one JSON line per streamed call
+  (`kind: "stream"`, with `provider`/`model`/`session`/`value`) and, when
+  `debugRequests` is on, per injected or host-blocked request
+  (`kind: "inject" | "skip"`). The stream-level record only means the call
+  entered the injection flow; the request-level records are what prove what was
+  actually attached. The file is append-only (no rotation; roughly one record
+  per injected request) and written fire-and-forget, so a short-lived process
+  can lose its tail.
+
+### debugRequests
+
+`debugRequests: true` writes one request-level record **at the real fetch
+moment**: `{"ts","kind","reason","host","provider","valueHash","valueLen"}`
+with `reason` in `session` / `discovery` / `host-not-allowed` /
+`already-present`. By default the value is reduced to a 12-hex-character
+SHA-256 prefix; the raw value appears only when `debug: true` is set as well
+(the file then contains session identifiers).
+
+### discoveryFallback
+
+`discoveryFallback: true` (default off) attaches a **process-stable UUID** to
+bare discovery requests that carry no session id: only `GET` requests whose
+path ends in `/models` and whose host passes the gate. The Models page listing
+works without this today; enable it only if your OpenCode endpoint starts
+rejecting that listing.
 
 To override configuration in a profile without editing this package, add a
 patch entry with the **same id** to the profile's own `cordis.patch.yml` (it
@@ -138,17 +174,20 @@ restored on unload, so no other provider is affected.
 src/index.ts            host plugin: llm/stream listener + fetch shim
 cordis.patch.yml        bundle layer (inserts the plugin row with defaults)
 scripts/                release gate + post-publish verification
-tests/                  node --test unit tests for the pure helpers
+tests/                  node --test unit + fake-cordis integration tests
 lib/                    built output (npm package entry)
 ```
 
 ## Build & test
 
 ```sh
-pnpm install      # installs dev deps (tsdown, @deepseek-ai/cordis types, @types/node)
-pnpm bundle       # emits lib/index.js
+npm install       # installs dev deps (tsdown, @deepseek-ai/cordis types, @types/node)
+npm run bundle    # emits lib/index.js
 npm test          # node --test tests/*.test.ts (runs TypeScript directly)
 ```
+
+`pnpm` works too (`pnpm bundle`, `pnpm test`); this checkout documents the npm
+path because pnpm is not always on PATH.
 
 ## Notes / limitations
 
@@ -160,12 +199,38 @@ npm test          # node --test tests/*.test.ts (runs TypeScript directly)
   a future DSH version swaps its network stack, the header silently stops
   being sent (the 400 comes back) — uninstall then. This is an external-plugin
   stopgap until the provider adapter itself (pi-ai) sends the header.
+- **Redirects are not re-gated:** the gate applies to the initial request URL.
+  Node's fetch follows redirects and (measured on Node 24) keeps custom headers
+  across origins, so a request that starts on an allowed host and redirects
+  elsewhere carries the header to the redirect target.
 - **Not the official fix:** the DSH maintainers' position is that provider
   particularities belong in the pi-ai package (see discussion #5495 and
-  earendil-works/pi #9326). Once that ships and DSH upgrades to it, this
-  plugin can be removed.
-- **Discovery probes are untouched** (requests without a session id pass
-  through).
+  earendil-works/pi #9326). This plugin is the stopgap until that ships — see
+  the retirement procedure below before removing it.
+- **Discovery probes are untouched** unless `discoveryFallback` is enabled.
+
+### Retirement (verifiable procedure)
+
+Do not retire this plugin on faith; verify, in this order:
+
+1. Read the version DSH actually loads — under pnpm's strict layout the real
+   path is `<dsh-root>/packages/llm/llm-pi-ai/node_modules/@earendil-works/pi-ai/package.json`
+   (a flat `<dsh-root>/node_modules/@earendil-works/pi-ai/package.json` is the
+   fallback; the package does not export `package.json`, so `require.resolve`
+   will not find it). If the path cannot be located, keep the plugin and
+   re-check after the next DSH upgrade.
+2. If that version's `dist/` contains `x-opencode-session`
+   (`grep -rl x-opencode-session <that package>/dist`), determine what its
+   injection is keyed on: the provider id (`opencode` / `opencode-go`) or the
+   base URL (`opencode.ai`).
+3. Outcomes: keyed on the base URL → this plugin is redundant, uninstall it;
+   keyed on the provider id only → a custom route such as `opencode-go-self` is
+   still not covered, so either keep the plugin or migrate that route to the
+   built-in `opencode-go` provider first.
+4. No new version / not found yet → keep the plugin, and re-run this procedure
+   after DSH bumps its `@earendil-works/pi-ai` dependency
+   (`npm view "@earendil-works/pi-ai@<declared-range>" version` reports the
+   newest version that range allows).
 
 ## License
 
