@@ -492,7 +492,7 @@ Windows 桌面壳里系统通知 toast「每次都会弹两次」。三方独立
   解析，零依赖、不落临时文件）。内容级专治版本级盲区：手工同步拷错时版本号照样相等，旧逻辑会判 `up-to-date`，
   而技能 §3 又明令"已是最新的插件不要动"。它同时报出随包技能 frontmatter 不可解析，并标注为**上游包缺陷
   （同步修不了，只能发新版本）**。契约不变：只读、不写文件、永远 exit 0、不当门禁；代价是现在要下载四个 tarball，
-  跑完约 1–2 分钟。
+  耗时随网络波动（实测 3 秒 ~ 超过 60 秒），别把慢当成卡死。
 - 两个门禁都做过负向对照（否则是假门禁）：往 `resources/manager/proxy.mjs` 或
   `resources/preinstalled/dsh-kanban/lib/index.js` 追加一个字节 → 精确指向该文件地失败；frontmatter 规则对加引号
   的 description PASS、对未加引号的 FAIL。
