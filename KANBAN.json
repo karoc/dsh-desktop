@@ -1287,6 +1287,136 @@
       ],
       "createdAt": 1789826580613,
       "updatedAt": 1789826580613
+    },
+    {
+      "id": "card-17cf6dd4-d39b-4428-bfb3-f0c7422e0c00",
+      "title": "根因（待修）：WebView2 请求头超 16KB → dsh 对 2.8KB 的插件批 bundle 返回 431 → 页面停在「Failed to load plugins」+ 壳兜底 3s 重载死循环",
+      "description": "根因已由四角度对抗式审计独立复核并量化（证据链修正两处错配：DevTools 里 status/state 200 是壳环回桥请求、不能用；\"153 次启动=153 条 cookie\"高估，实际 prod 96 个 token 端口 / dev 41 条↔39 端口 39/39）。实测：单条 cookie 226B、请求行计入 16KB 预算、真实批 URL 2846B 时头块 16407B→200 / 16607B→431、现场 jar ∈57–68 条。修复方案与审计已存档：docs/2026-09-20-webview2-cookie-431-fix-plan.md（v2）+ docs/2026-09-20-webview2-cookie-431-fix-audit.md + 上游 issue 草稿。实施拆成 P0/P1/P2/验证四张卡。",
+      "rationale": "保留为本轮事故的根因记录与证据入口（含现场数值与复现方法），实施卡与验证卡从本卡派生。",
+      "rejected": "① 未把根因归到 v0.10.0 预装插件（时间线证明首次失败在旧壳上）② 未采用\"WebView2 引擎回归\"猜测（运行时 151.0.4129.107 自 8/25 未变）③ 未采用\"慢启动竞态\"猜测（阈值复现证明是头预算硬上限）。",
+      "sourceSessionId": "session-67d49873-a409-4621-a37d-e1d206530643",
+      "status": "done",
+      "tags": [
+        "bug-fix",
+        "windows",
+        "dsh-web",
+        "webview2",
+        "investigate",
+        "waiting-user"
+      ],
+      "createdAt": 1789869887115,
+      "updatedAt": 1789872910293,
+      "summary": "根因定性+定量完成：dsh 鉴权 cookie 名绑 authority（dsh-auth-<hash(host:port)>）+ 壳 --port 0 → 每轮新增 226B、30 天不过期 → Cookie 头越过 Node 默认 16384B 头预算（请求行计入）→ 页面上唯一 >1KB 的 URL（插件批 bundle，68 插件 ≈2.85KB）被 431 → 批 bundle 未注册模块 → 61 个客户端插件 import failed → 页面停在 Failed to load plugins；壳兜底只看 /alive → 3s 重载死循环（实测 535 次），外部浏览器 ping /alive 会把兜底关掉使页面永久冻结。四角度审计确认因果成立并指出 v1 方案 4 处实质缺陷，已全部修入方案 v2。"
+    },
+    {
+      "id": "card-4aed37d5-8cba-4d77-95f1-f8fb5fcfa7e6",
+      "title": "审计结论（副作用/回归/安全）：cookie-431 修复方案 P0/P1 需返工再实施",
+      "description": "审计指向的关键文件：src-tauri/src/lib.rs:2281-2295（server-url 调用点）、src/app.js:159-166/303-325（launcher 自导航）、lib.rs:3595-3615（nav-fallback 3s 重载）、scripts/server-manager.mjs:1337-1344（NODE_OPTIONS）。三项 P0 缺陷：① prune 只覆盖 Rust navigate，launcher JS + nav-fallback 两条导航路径漏网（431 现场正是 nav-fallback）；② w.cookies() 在 Windows 同步调用会死锁（tauri webview/mod.rs:2163-2166），plan 的 setup 兜底会卡死启动；③ prune 无条件执行且同一 authority 重复导航，会周期性删掉在用 cookie（plan §8 的\"瞬时 401\"会真实发生）。P1 与 docs/2026-09-09-pending-cards-solutions.md:252\"壳不注入 NODE_OPTIONS\"冲突，需写明例外理由。另有日志出口缺失（pruned==0/Err 无痕，V3 判据失效）等 8 项 P2。",
+      "summary": "完成三角度只读审计并回传父 agent。已核实：431 阈值实测（带有效 cookie 16KB→200、20KB→431）；dsh 仅在 ?token= 303 时签发 cookie（browser-auth.ts:256-263）且受信 / 不设任何其它 cookie；插件批 URL 2834 chars 为唯一超长项；--max-http-header-size 在 Node 24 合法且生效；nav-fallback 实机 535 次导航；正式/开发版 WebView2 profile 相互隔离。结论：方案方向正确但不能按现稿实施，P0 需补\"统一导航出口 + 只在 authority 变化时 prune + 禁止主线程调用 cookie API\"三条，P1 需补冲突记录与用户 NODE_OPTIONS 顺序语义。",
+      "rationale": "431 修复方案（docs/2026-09-20-webview2-cookie-431-fix-plan.md）已写好待实施，实施前必须做副作用/回归/安全审计——本卡记录审计结论，避免直接照方案落地后引入更难查的回归。审计为只读，未改任何文件。",
+      "rejected": "未按方案原样认可 P0 调用点（会漏掉 431 现场那条 nav-fallback 路径）；未接受 plan §4 的\"不存在持续 401 窗口\"论断（同一 authority 重复上报时会真实出现）；未采纳\"P1 只影响 dsh web 进程\"的说法（MCP/非 packaged PTC 子树会继承，但无害，已改为精确表述）；未把 ::1 当作现实风险（manager 硬编码 --host 127.0.0.1），仅列为低廉加固。",
+      "sourceSessionId": "3c790bc3-6ee0-4c94-aefb-71049fec05ee",
+      "status": "done",
+      "tags": [
+        "bug-fix",
+        "webview2",
+        "audit",
+        "security",
+        "windows",
+        "dsh-web"
+      ],
+      "createdAt": 1789872167594,
+      "updatedAt": 1789872167594
+    },
+    {
+      "id": "card-37c1eddb-e8e9-46e6-883b-e1a6736efe08",
+      "title": "P0 实施：janitor 线程清理陈旧 dsh-auth cookie（启动 + authority 变化，含复核与有界等待）",
+      "description": "按 docs/2026-09-20-webview2-cookie-431-fix-plan.md §4.1/§4.2/§5 实施：① 纯函数 is_stale_auth_cookie（前缀 dsh-auth- + host ∈ 127.0.0.1/localhost/::1，domain 大小写/前导点归一化）；② prune_stale_auth_cookies（cookies() → 过滤 → delete_cookie → **二次 cookies() 复核 remaining**，>0 有界重试一次，catch_unwind 包住）；③ 单一 janitor 线程（mpsc 串行；Job::Startup + Job::AuthorityChanged(origin)）；④ server-url 分支在 handle.emit(\"server-url\") 之前完成\"启动清理\"的有界等待（≤3s）；⑤ 日志恒定输出 `dsh-auth cookies: before=B pruned=P remaining=R`（0/失败也写）；⑥ Rust 单测真值表。硬约束（写注释+契约测试）：cookies() 禁止在 setup/on_page_load/同步 command 调用；prune 与 navigate 同线程紧邻；绝不在 w.reload()（无 token）前清理。",
+      "rationale": "这是唯一能同时修好\"已损坏存量装机\"和阻止复发的正确性修复：启动时把 57–68 条陈旧 cookie 清掉，首次导航（带 ?token=）重新签发 1 条，批 URL 请求头降到 ≈3.7KB。审计确认方向正确且 API 可用（Tauri 2.11.5 cookies()/delete_cookie，含 HttpOnly）。",
+      "rejected": "① setup 兜底清理——Tauri 官方记载 Windows 死锁（主线程 + 无超时嵌套泵），删除；② on_page_load / 同步 command 内清理——同为死锁场景，禁止；③ 每次 server-url 事件都清理——会删掉正在用的 cookie 造成周期性 401，改为仅启动 + authority 变化；④ 把 prune 插在 navigate 之前而非 emit 之前——launcher 页自己监听 server-url 并 location.href，会先于 prune 加载；⑤ 只数\"删了几次\"当验收——DeleteCookie 未匹配也返回成功，必须复核 remaining；⑥ 每事件 thread::spawn——乱序 prune 会删掉新 authority 刚签发的 cookie 且兜底不自愈。",
+      "sourceSessionId": "session-67d49873-a409-4621-a37d-e1d206530643",
+      "status": "todo",
+      "tags": [
+        "bug-fix",
+        "webview2",
+        "dsh-web",
+        "P0",
+        "windows"
+      ],
+      "createdAt": 1789872910306,
+      "updatedAt": 1789872910306
+    },
+    {
+      "id": "card-d011c102-a58a-4ca1-99a6-bb4ebb0ed306",
+      "title": "P1 实施：manager 给 dsh 子进程注入 --max-http-header-size=65536（含契约测试）",
+      "description": "scripts/server-manager.mjs（真源）给 dsh 子进程的 NODE_OPTIONS 追加 --max-http-header-size=65536（沿用既有注入点，位于 --report-* 之前/之后均可，Node 取最后一个同名 flag），并把最终 NODE_OPTIONS 落 manager.log；改完跑 node scripts/sync-resources.mjs 同步 src-tauri/resources/manager/；扩 scripts/test-control-plane.mjs 的 DSH_TEST_ENV_PROBE（现只写 4 个 proxy 变量）断言子进程含该 flag 且 manager 自身未变；新增 scripts/test-header-limit.mjs（纯 Node，进 npm test）：默认 16KB 下 2830B 请求行 + 13.6KB cookie → 431、子进程 --max-http-header-size=65536 下同例 → 200。",
+      "rationale": "纵深防御：把\"头预算硬悬崖\"变成软退化，覆盖 P0 之外的单会话内多次重启累积（每次重启 +226B）以及未来批 URL 继续变长（≈22B/插件）。实测 flag 合法且生效（http.maxHeaderSize 65536）。",
+      "rejected": "① 只做 P1 不做 P0——审计证明 P1 只是延后且会掩盖 P0（控制实验必须同时关 P1 才复现），且按实测速率 64KB 仍会耗尽；② 给壳自身注入 NODE_OPTIONS——违反 docs/2026-09-09-pending-cards-solutions.md 的既有约定（本方案只动 manager→dsh 子进程这一既有注入点）；③ 抬到更大值（如 1MB）——无必要，64KB 已远超实测需求（P0 后批请求头块 ≈3.7KB）。",
+      "sourceSessionId": "session-67d49873-a409-4621-a37d-e1d206530643",
+      "status": "todo",
+      "tags": [
+        "bug-fix",
+        "webview2",
+        "dsh-web",
+        "P1",
+        "manager"
+      ],
+      "createdAt": 1789872924346,
+      "updatedAt": 1789872924346
+    },
+    {
+      "id": "card-7605867e-5988-4bdf-aaf4-737d4b85e3e7",
+      "title": "P2 加固：导航兜底有界退避 + /alive 就绪信号绑定窗口 nonce",
+      "description": "① 导航兜底退避：lib.rs 兜底线程固定 3s → 前 3 次保持 3s，之后 6/12/24/30s 封顶，连续失败 ≥8 次写 nav-fallback: giving up after N attempts（不再无限刷）；② 就绪信号绑定窗口：壳在主窗口注入一次性 nonce（w.eval 设 window.__DSH_SHELL_NONCE__），plugins/dsh-client-notifications/client.js 在 POST /alive 回带 nonce，桥仅在 nonce 匹配时置 CLIENT_READY；nonce 缺失（旧 bundle）回退旧行为避免永不 ready。",
+      "rationale": "本轮事故的次生放大器已被现场证实：任何\"页面起不来\"的原因都会变成 3s 无限重载（实测 535 次），且外部浏览器 ping /alive 会把壳兜底关掉、页面永久冻结在错误页（01:29:50Z 最后 fallback → 01:29:53Z 外部 client-ready）。这两项让同类故障可诊断、可恢复，且不再互相干扰。",
+      "rejected": "① 只改退避不做 nonce——外部浏览器仍能误关兜底，页面会永久冻结；② 只做 nonce 不改退避——其它启动失败仍会无限重载；③ 本轮一并实施——用户当前要求是\"方案+审计\"，P2 独立提交便于回滚与单独验证（退避参数与 nonce 兼容路径都需要 dev 实机验证）。",
+      "sourceSessionId": "session-67d49873-a409-4621-a37d-e1d206530643",
+      "status": "todo",
+      "tags": [
+        "bug-fix",
+        "webview2",
+        "watchdog",
+        "P2",
+        "windows"
+      ],
+      "createdAt": 1789872924362,
+      "updatedAt": 1789872924362
+    },
+    {
+      "id": "card-f5a1f362-f026-4f2d-9318-e5b1de5c44b0",
+      "title": "验证 S0–S9：种 90 条 cookie 复现 → 修复验证 → 因果闭环 → 存量自愈",
+      "description": "按方案 §6 执行：S0 基线（应用关闭后读 dev/prod 的 EBWebView Cookies SQLite，记 total/dsh_auth/other_names）→ S1 阈值标定（scripts/hdrprobe.py）→ S2 DPAPI(v10) 直写 SQLite 种 90 条 cookie（dev，应用关闭）→ S3 复现（未修复壳：boot 错误页 + raw socket 431）→ S4 部署（构建 dev exe、taskkill /T /F、覆盖 exe、**同步安装目录 resources\\manager\\***、比 md5）→ S5 修复验证（日志 remaining=0、90s 内 client-ready、nav-fallback ≤2、verify-dev-ui.ps1 dump 无 boot 错误文本且有真实控件、关壳回读 dsh_auth ≤2 且其它 cookie 与基线逐项相同）→ S6 因果闭环（P0+P1 同时关才复现；同 jar 同 URL 431→200）→ S7 回归（npm test 含新增契约测试 + cargo test --lib + clippy -D warnings）→ S8 副作用（重启 dsh 服务再验一次；插件窗口/托盘/菜单无回归）→ S9 存量自愈（prod 覆盖安装后首启恢复）。",
+      "rationale": "审计（角度 D）证明 v1 的验证计划不足以证明\"真修好\"：60 次启停恰好压在阈值悬崖上、client-ready 不是可用性判据、P1 同版会掩盖 P0、安装目录 manager 资源副本已漂移。本卡是重写后的最小充分验证清单，判据全部可机读。",
+      "rejected": "① \"跑 60 次启停复现\"——余量 0–10% 且 dev jar 已有 41 条，改为 DPAPI 直种 90 条（20.3KB，≥30% 余量）；② 用 client-ready 当页面可用判据——外部浏览器可置位，改为 UIA dump 断言；③ 用 DevTools 截图当 431 证据——改为 raw socket 机读；④ 只覆盖 exe 不覆盖安装目录 resources——会拿旧 manager 假通过。",
+      "sourceSessionId": "session-67d49873-a409-4621-a37d-e1d206530643",
+      "status": "todo",
+      "tags": [
+        "verify",
+        "webview2",
+        "dsh-web",
+        "dev-verify",
+        "windows"
+      ],
+      "createdAt": 1789873012111,
+      "updatedAt": 1789873012111
+    },
+    {
+      "id": "card-54093650-ee90-4fa3-ad07-6a6a3e7f87a6",
+      "title": "沉淀：上游 issue 提交 + 排障技能补 431/cookie 条目 + 实施后 Agent Note",
+      "description": "① 上游 issue：草稿已就绪 docs/2026-09-20-dsh-upstream-issue-cookie-port-binding.md（cookie 名绑端口→无界累积 / 批 URL 随插件数线性增长 ≈22B/插件 / prefetchImmediateTier().catch(()=>{}) 吞掉 bundle 加载错误），等用户确认后提交（用哪个账号/仓库）；② 技能沉淀：.dsh/skills/windows-desktop-shell-debugging/SKILL.md §9 补 431 症状与指纹、cookie jar 只能在应用关闭后读、DPAPI v10 种子法、/alive 被外部浏览器误置的陷阱、安装目录 resources/manager 同步（交叉引用 §9.10.5）；③ 实施完成后写 Agent Note（class=bug-fix，topic=webview2-cookie-431-prune），写明两条硬约束：cookies() 禁止主线程、仅在启动/authority 变化时清理。",
+      "rationale": "本轮的价值一半在\"下次不用重新排查\"：431 这类\"长 URL 先死 + 错误被吞\"的故障排查成本极高（本次花了数小时、需要 DevTools+raw socket+DB 取证）。归档阈值知识、复现工具与技能条目，才能把成本降到分钟级。",
+      "rejected": "① 只写看板不写技能/文档——下次会话看不到；② 直接把 issue 发出去——需用户确认账号与措辞（且要先确认上游是否已知）；③ 把 Agent Note 提前到方案阶段写——Note 应记录\"已发布的事实\"，实施后再写。",
+      "sourceSessionId": "session-67d49873-a409-4621-a37d-e1d206530643",
+      "status": "todo",
+      "tags": [
+        "process",
+        "skill",
+        "upstream",
+        "waiting-user",
+        "documentation"
+      ],
+      "createdAt": 1789873012128,
+      "updatedAt": 1789873012128
     }
   ]
 }
