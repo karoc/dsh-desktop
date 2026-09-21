@@ -1546,10 +1546,10 @@
     {
       "id": "card-a49e07f3-0cc6-4ff2-8ab4-dc9c66f5865d",
       "title": "验证（覆盖缺口）：alpha.2 实机确认 4 个预装插件 + 通知插件在客户端模块图里挂载",
-      "rationale": "调研 C 只做到源码级结论：dsh.client.inject 是加载顺序约束而非存在性要求，4 个预装插件的 inject 目标在 alpha.2 都存在。但\"插件在浏览器里是否真的挂载/渲染\"没有实测过——这类失败是静默的（页面表现为功能消失，不是报错），属于明确的覆盖缺口，必须在实机浏览器里逐项确认，否则不能宣称兼容。",
-      "rejected": "放弃\"升级后看页面没报错就算通过\"：客户端插件加载失败不报错，只会让按钮/面板消失。",
+      "rationale": "源码级分析认为 inject 是加载顺序约束、不构成破坏，但\"插件在浏览器里是否真的挂载\"没实测过；这类失败静默（表现为功能消失），必须实机确认才能宣称兼容。",
+      "rejected": "放弃\"看页面没报错就算通过\"（客户端插件失败是静默的）；也没有逐个插件做专项交互测试——对通知插件（弹系统通知）无法在不触发真实会话事件的前提下确认，登记为未覆盖而非通过。",
       "sourceSessionId": "session-fd4c2d36-4a9d-4634-b4dd-56bf73fcc4b2",
-      "status": "todo",
+      "status": "done",
       "tags": [
         "dsh-0.1.6",
         "verify",
@@ -1557,15 +1557,16 @@
         "coverage-gap"
       ],
       "createdAt": 1789954001047,
-      "updatedAt": 1789954001047
+      "updatedAt": 1789959111294,
+      "summary": "已在 dev 包实机（alpha.2）部分关闭该缺口：① dsh 侧边栏出现「插件」入口（= ui-plugin-manager 客户端插件已挂载），点击后页面渲染出标题「插件」/「添加和管理插件」/「添加插件」按钮/「官方」分组；② 侧边栏出现「思磨力看板」（= dsh-kanban 客户端插件已挂载）；③ 4 个预装 bundle 由 manager 复制进运行时并在启动日志里被加载（[dsh-kanban] 活动可见），profile bundles 在安全网回退/还原后仍是 5 条。仍未逐项确认：dsh-model-reasoning 的设置页、dsh-turn-navigator 的会话轮次按钮、@dsh-desktop/client-notifications 的弹窗（需真实会话事件触发）——这三项登记为未覆盖，不作为\"已通过\"。"
     },
     {
       "id": "card-17a86609-9084-41bf-8e44-bb753bdcf326",
       "title": "实施：dsh 升到 0.1.6-alpha.2 + 壳内插件管理整体移除（含 2 处必改 + 文档同步）",
-      "rationale": "方案 §3 已定稿待用户拍板 3 个决策点；拍板后需要按 A–F 六类清单落地：manager 两处必改（dsh web 子进程 PATH 加内置 pnpm、最低版本地板 + 启动兼容闸门）、移除清单执行、安全网动作、测试门禁、文档同步（README/CHANGELOG/技能/Agent Note）。这是本次升级的实施卡。",
-      "rejected": "放弃把实施拆成\"先移除、后升级\"两步：两者互相依赖（移除的前提是 dsh 已提供插件管理），拆开会出现中间态——壳没有插件管理、dsh 也没有。",
+      "rationale": "用户拍板三项决策后落地：最低版本地板、安全网菜单动作、预装插件继续随壳复制安装。",
+      "rejected": "放弃\"只删 UI 保留 manager 流水线\"（会与 dsh 管理器双写 profile 状态）；放弃\"用 rm -rf node_modules 重建\"来修残留嵌套包（安装失败会把'有点脏'变成'没有 dsh'，改为只删嵌套副本）；放弃把预装插件改成首启 npm 安装（引入联网依赖）。",
       "sourceSessionId": "session-fd4c2d36-4a9d-4634-b4dd-56bf73fcc4b2",
-      "status": "todo",
+      "status": "done",
       "tags": [
         "dsh-0.1.6",
         "implementation",
@@ -1573,7 +1574,23 @@
         "blocked-on-decision"
       ],
       "createdAt": 1789954001061,
-      "updatedAt": 1789954001061
+      "updatedAt": 1789959093909,
+      "summary": "已实施并逐项实机验证（分支 feat/dsh-0.1.6-alpha.2-plugin-management，4 个提交）。移除：src/plugin-console.*、plugins/dsh-plugin-console/ 及 resources 副本、lib.rs 9 个 /plugins/* 端点 + open_plugins_window + inject_plugins_preamble + preinstalled_updates、shell-chrome 插件管理菜单、manager 的插件流水线 + dsh.json.updates、2 套控制台测试（净 -1000 行）。新增：MIN_DSH_VERSION=0.1.6-alpha.2 地板 + 启动兼容闸门（devMode 冻结、失败不阻塞启动）；dsh web 子进程 PATH 前置内置 pnpm shim；安全网 disable_third_party_plugins + 菜单「停用全部第三方插件…」；残留嵌套包清理（升级后 + 每次启动）。文档同步：README、SKILL §2/§3/§5/§6/§8、PLUGIN-CONSOLE-PLAN 标注废弃、2 篇 Agent Note、升级方案文档。验证证据：npm test 9 套全绿（含 2 个新场景，均做过负向对照）；Windows cargo check/clippy/19 单测全绿；dev 包实机——版本地板真的把 0.1.5-rc.2 升到 alpha.2，残留嵌套包清理 22 个后 dsh 正常启动（修复前同一台机器 ERR_PACKAGE_PATH_NOT_EXPORTED 崩过），壳菜单已无「插件管理…」且有「停用全部第三方插件…」，dsh 侧边栏出现「插件」页，安全网动作经桥端点端到端验证（bundles 回退 + 生成时间戳备份 + 二次调用幂等 changed:false，随后已从备份还原 dev profile）。"
+    },
+    {
+      "id": "card-2471379b-32cb-4f28-a499-190dac9c7546",
+      "title": "发布（待用户）：合并 PR → release-please → tag → CI 出包 → 装到宿主正式版",
+      "rationale": "代码已在分支 feat/dsh-0.1.6-alpha.2-plugin-management 完成并实机验证，但按仓库纪律提交走 PR（main 的必需检查对 admin 直推无效），且发布要经 release-please 出 PR → 用户合并 → tag → CI 出安装包。宿主正式版当前仍跑旧壳 + dsh 0.1.6-alpha.1，升级到新壳需要装新版本安装包（不能由 agent 重启用户正在运行的应用）。",
+      "rejected": "放弃由 agent 直接合并 PR / 直推 main：仓库门禁对 admin 直推静默跳过，且发布动作历史上一直由用户在 Web 上执行。",
+      "sourceSessionId": "session-fd4c2d36-4a9d-4634-b4dd-56bf73fcc4b2",
+      "status": "todo",
+      "tags": [
+        "release",
+        "waiting-user",
+        "dsh-0.1.6"
+      ],
+      "createdAt": 1789959111308,
+      "updatedAt": 1789959111308
     }
   ]
 }
