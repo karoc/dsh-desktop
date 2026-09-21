@@ -1460,6 +1460,120 @@
       ],
       "createdAt": 1789910831539,
       "updatedAt": 1789910831539
+    },
+    {
+      "id": "card-887f8bbe-e0d6-4cd5-ba68-f455fad75ae1",
+      "title": "调研 A：dsh 0.1.6-alpha.2 CLI/boot/profile/web 破坏性差异",
+      "rationale": "壳通过 spawn CLI + 解析 stdout URL 启动服务，CLI/profile 契约的任何变化都会直接导致黑屏或启动失败；先证明\"启动机制不用重写\"才能把升级范围收敛到插件管理移除上。",
+      "rejected": "放弃只读 npm README 与 diff 推断：alpha.2 无 CHANGELOG、无 `!:` 破坏性标记（grep 计数为 0），README 不覆盖内部契约；也放弃三个并行子代理（全部中途失败、零报告产出，按验证纪律记为覆盖缺口后由我本人重做）。",
+      "sourceSessionId": "session-fd4c2d36-4a9d-4634-b4dd-56bf73fcc4b2",
+      "status": "done",
+      "tags": [
+        "dsh-0.1.6",
+        "research",
+        "upgrade"
+      ],
+      "createdAt": 1789948745320,
+      "updatedAt": 1789953966009,
+      "summary": "结论：壳的启动契约在 alpha.2 上未破坏。① `dsh web` 子命令被 `dsh <name>` 缩写规则取代（apps/cli/src/bin.ts:119），行为等价；② `--patch/--no-open/--host/--port` 全部仍在，stdout 仍打印 `dsh web: http://127.0.0.1:<port>/?token=…`；③ 最危险的改动是 apps/cli/src/profile-boot.ts:263 默认 resolutionMode 由 link 改为 runtime（behavior: enforce），且 CLI 无 flag、无 DSH_* 环境变量可退回 link；④ 本机探针按壳的真实布局（hoisted 安装 + 按 package.json name 复制 4 个 bundle + --patch 叠加）实测 alpha.2 启动成功、bundle 全部加载、dump-config 里叠加行仍在。证据落盘：.tmp-investigate/probe-alpha2.sh、probe/probe.log、probe/dump.yml、probe/boot.out。"
+    },
+    {
+      "id": "card-9ebbc448-2bc1-4fc3-ae05-2462f0c8e308",
+      "title": "调研 B：dsh 0.1.6 内置插件管理 / launcher facts / optional bundles / desktop 参考实现",
+      "rationale": "用户明确要求用 dsh 内置插件管理替换壳内自建；必须确认它真实存在、在壳的启动方式下可用，以及哪些壳侧能力没有对应替代（否则会静默丢功能）。",
+      "rejected": "放弃\"壳可以通过 launcher facts 注入 OPTIONAL_BUNDLES/packageManager\"的假设：OPTIONAL_BUNDLES 是 app-boot 里编译期常量，packageManager 是进程内参数，第三方壳走 CLI 都拿不到；已改为\"壳侧把 pnpm 挂到 dsh web 的 PATH\"这一可验证方案。",
+      "sourceSessionId": "session-fd4c2d36-4a9d-4634-b4dd-56bf73fcc4b2",
+      "status": "done",
+      "tags": [
+        "dsh-0.1.6",
+        "plugin-manager",
+        "research"
+      ],
+      "createdAt": 1789948745333,
+      "updatedAt": 1789953966022,
+      "summary": "结论：dsh 0.1.6-alpha.2 自带完整插件管理，足以替换壳内自建。① @deepseek-ai/dsh-plugin-manager + @deepseek-ai/dsh-client-ui-plugin-manager 是 alpha.2 新增（提交 98b92b683c，仅 dsh-v0.1.6-alpha.2 含），ui-plugin-manager 已挂进 dsh-web-app bundle；② dsh web --dump-config 实测组合出 plugin-manager / tool-plugin-manager / hmr / ui-plugin-manager / ui-settings-plugin-inventory 五行，前两行与 hmr 的启用条件是 profileContext 存在（壳走 CLI 启动 → 成立）；③ launcher facts 的 packageManager 只能由进程内调用方注入（apps/desktop-host 走 argv），CLI 路径拿不到 → 管理器按 pnpmCommand='pnpm' 走 PATH；④ 新管理器没有\"更新\"操作（installBundle 对已装 spec 直接 refused('already-installed')）；⑤ 上游 Electron 桌面端已删掉原生插件管理 renderer/IPC/包操作，并把\"保留壳内独立管理页\"写成被否决备选（.agents/notes/implemented/architecture/2026-09-10-desktop-web-wrapper.md）。"
+    },
+    {
+      "id": "card-a03f9c71-d25b-4b3c-b4c9-56c1a49cd6d2",
+      "title": "调研 C：客户端插件 API / web UI 破坏性变更（影响预装插件 + 壳通知插件 + 注入 chrome）",
+      "rationale": "壳随包发布 4 个预装插件 + 1 个壳自有客户端插件（@dsh-desktop/client-notifications），全部挂在 dsh web 客户端插件 API 上；客户端 API 若有破坏性变更会直接变成用户可见的功能消失，必须在定方案前判断。",
+      "rejected": "放弃\"升级后跑一遍看插件是否还在\"的被动验证（插件的失败模式是静默不挂载，页面上表现为功能消失而非报错）；也放弃三个并行子代理（全部中途失败、零报告，按验证纪律记为覆盖缺口后由我本人重做源码级分析）。",
+      "sourceSessionId": "session-fd4c2d36-4a9d-4634-b4dd-56bf73fcc4b2",
+      "status": "done",
+      "tags": [
+        "dsh-0.1.6",
+        "client-plugin",
+        "research",
+        "preinstalled"
+      ],
+      "createdAt": 1789948757644,
+      "updatedAt": 1789953987072,
+      "summary": "源码级结论：结构性破坏未发现，但浏览器级验证仍是覆盖缺口（已另立卡跟进）。① dsh.client.inject 是\"加载顺序约束\"而非存在性要求（packages/client/modules/src/client/manifest.ts:47-50），所以缺失的 inject 目标不会让插件加载失败；② 4 个预装插件 inject 的 @deepseek-ai/dsh-client-* 在 alpha.2 客户端包里都存在（291 个包逐个核对）；③ @deepseek-ai/dsh-client-runtime 与 dsh-client-web-react 在 alpha.1 和 alpha.2 的安装闭包里都不存在（它们独立发版、主要作为类型包，如 ui-conversation 的 .d.ts 引用），宿主机 alpha.1 上 turn-navigator 本来就在这种状态下运行 → 不是 alpha.2 引入的破坏；④ 壳 chrome 注入依赖的 body/:root/elementFromPoint 未在本次改动中发现契约变化（未逐行核对，登记为待实机确认）。"
+    },
+    {
+      "id": "card-d2ddb416-87be-4062-9b7e-47b61a113502",
+      "title": "盘点 D：壳内插件管理移除面（Rust/前端/manager/测试/文档）逐项分类",
+      "rationale": "用户要求彻底移除壳内插件管理；移除面横跨 Rust 桥端点/窗口、前端 40KB 渲染核心、dsh 页内面板插件、manager 预装与安装流水线、5 套测试与 5 处文档。逐项分类可避免删掉仍有唯一职责的部分（尤其是 dsh 自更新入口与升级存活保护名单）。",
+      "rejected": "放弃\"只删 UI、保留 manager 侧流水线\"的最小改动假设：dsh 的插件模型是 profile package.json + cordis.patch.yml + pnpm，壳的 enable/disable 是直接改同一个文件（lib.rs write_web_profile_bundles），与新管理器（带文件锁 + HMR 重载 + 回滚）双写同一份状态会引入冲突，必须一起下线。",
+      "sourceSessionId": "session-fd4c2d36-4a9d-4634-b4dd-56bf73fcc4b2",
+      "status": "done",
+      "tags": [
+        "shell",
+        "plugin-console",
+        "removal",
+        "inventory"
+      ],
+      "createdAt": 1789948757661,
+      "updatedAt": 1789953987084,
+      "summary": "穷尽盘点已落进 docs/2026-09-21-dsh-0.1.6-alpha.2-upgrade-plan.md §3.3，分 A 整文件删除（5 个：src/plugin-console.{html,js}、plugins/dsh-plugin-console/、resources 副本、2 套测试）、B 定点删除（lib.rs 9 个 /plugins/* 端点 + open_plugins_window + inject_plugins_preamble + window-state denylist + on_page_load 分支 + invoke_handler；shell-chrome 菜单项/ACTIONS/分支；patch overlay 的 desktop-plugin-console 行；manager 的 preinstalled-update/reset + runPluginOp + runDshPlugin + handleCommand 分支；package.json 3 个脚本）、C 保留但语义变化（ensurePlugin 仍拷 client-notifications、ensurePreinstalled 仍拷 bundle 但删更新/重置、dsh.json 保留 preinstalled 删 updates、ensurePnpm/PROTECTED/托盘检查更新保留）、D 必须新增的安全网（停用全部第三方插件，上游同类能力）、E 测试门禁同步、F 文档同步。关键发现：dsh 自更新入口本来就有壳菜单+托盘两处，删控制台不会丢入口。"
+    },
+    {
+      "id": "card-e6802b8a-bb51-458a-bad2-1d001d2669c6",
+      "title": "决策 E：定稿升级方案（目标通道 / 迁移路径 / 壳侧增删 / 回滚）",
+      "rationale": "调研 A/B/C/D 的结论需要收敛成可执行方案并交用户拍板：目标通道（latest 仍是 0.1.5-rc.2，必须设地板）、壳侧两处必改（dsh web 子进程 PATH 加内置 pnpm、最低版本闸门）、移除清单、能力对账（3 项真实损失）、迁移与回滚。",
+      "rejected": "放弃钉死具体版本（丧失自动更新）、放弃\"全 tag 取最高\"默认通道（用户被动吃 alpha 质量）、放弃\"不设安全网\"（dsh 起不来时无自救入口）、放弃把预装插件改成首启 npm 安装（引入联网依赖，离线退化）。",
+      "sourceSessionId": "session-fd4c2d36-4a9d-4634-b4dd-56bf73fcc4b2",
+      "status": "done",
+      "tags": [
+        "dsh-0.1.6",
+        "plan",
+        "decision"
+      ],
+      "createdAt": 1789948757674,
+      "updatedAt": 1789954850858,
+      "summary": "方案成文 docs/2026-09-21-dsh-0.1.6-alpha.2-upgrade-plan.md，用户已就 3 个决策点全部采纳建议：① 最低版本地板 MIN_DSH_VERSION=0.1.6-alpha.2 + 保留自动更新（目标 = max(latest, 地板)）；② 新增壳菜单动作「停用全部第三方插件…」作为 dsh 不可用时的自救安全网；③ 4 个预装 bundle 继续随壳复制安装，删除壳侧的 npm 更新/恢复出厂。下一步进入实施卡。"
+    },
+    {
+      "id": "card-a49e07f3-0cc6-4ff2-8ab4-dc9c66f5865d",
+      "title": "验证（覆盖缺口）：alpha.2 实机确认 4 个预装插件 + 通知插件在客户端模块图里挂载",
+      "rationale": "调研 C 只做到源码级结论：dsh.client.inject 是加载顺序约束而非存在性要求，4 个预装插件的 inject 目标在 alpha.2 都存在。但\"插件在浏览器里是否真的挂载/渲染\"没有实测过——这类失败是静默的（页面表现为功能消失，不是报错），属于明确的覆盖缺口，必须在实机浏览器里逐项确认，否则不能宣称兼容。",
+      "rejected": "放弃\"升级后看页面没报错就算通过\"：客户端插件加载失败不报错，只会让按钮/面板消失。",
+      "sourceSessionId": "session-fd4c2d36-4a9d-4634-b4dd-56bf73fcc4b2",
+      "status": "todo",
+      "tags": [
+        "dsh-0.1.6",
+        "verify",
+        "client-plugin",
+        "coverage-gap"
+      ],
+      "createdAt": 1789954001047,
+      "updatedAt": 1789954001047
+    },
+    {
+      "id": "card-17a86609-9084-41bf-8e44-bb753bdcf326",
+      "title": "实施：dsh 升到 0.1.6-alpha.2 + 壳内插件管理整体移除（含 2 处必改 + 文档同步）",
+      "rationale": "方案 §3 已定稿待用户拍板 3 个决策点；拍板后需要按 A–F 六类清单落地：manager 两处必改（dsh web 子进程 PATH 加内置 pnpm、最低版本地板 + 启动兼容闸门）、移除清单执行、安全网动作、测试门禁、文档同步（README/CHANGELOG/技能/Agent Note）。这是本次升级的实施卡。",
+      "rejected": "放弃把实施拆成\"先移除、后升级\"两步：两者互相依赖（移除的前提是 dsh 已提供插件管理），拆开会出现中间态——壳没有插件管理、dsh 也没有。",
+      "sourceSessionId": "session-fd4c2d36-4a9d-4634-b4dd-56bf73fcc4b2",
+      "status": "todo",
+      "tags": [
+        "dsh-0.1.6",
+        "implementation",
+        "removal",
+        "blocked-on-decision"
+      ],
+      "createdAt": 1789954001061,
+      "updatedAt": 1789954001061
     }
   ]
 }
