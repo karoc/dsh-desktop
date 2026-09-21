@@ -26,7 +26,6 @@ const bundledVersion = (name) =>
 const work = mkdtempSync(join(tmpdir(), 'dsh-ctrl-'))
 const runtime = join(work, 'runtime')
 const marker = join(work, 'boots.log')
-const pluginMarker = join(work, 'plugin.log')
 const envProbe = join(work, 'env.probe')
 
 // ── fake dsh package ────────────────────────────────────────────────────────
@@ -34,31 +33,7 @@ const dshDir = join(runtime, 'node_modules', '@deepseek-ai', 'dsh')
 mkdirSync(join(dshDir, 'lib'), { recursive: true })
 writeFileSync(join(dshDir, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '9.9.9-test' }, null, 2))
 writeFileSync(join(dshDir, 'lib', 'bin.js'), `
-import { appendFileSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
-const argv = process.argv.slice(2)
-// dsh plugin --profile web <args> mode: record the call; on 'add', write the
-// web profile manifest with the package as a PLAIN dependency (no dsh.bundle),
-// so the manager's post-install bundle check has real data to read.
-if (argv.includes('plugin')) {
-  const pm = process.env.DSH_TEST_PLUGIN_MARKER
-  if (pm) appendFileSync(pm, argv.join(' ') + '\\n')
-  const addAt = argv.indexOf('add')
-  if (addAt >= 0 && argv[addAt + 1]) {
-    const spec = argv[addAt + 1]
-    const name = spec.split(':').pop().split('/').pop()
-    const home = process.env.DSH_HOME || '.'
-    const dir = join(home, 'profiles', 'web')
-    mkdirSync(dir, { recursive: true })
-    const p = join(dir, 'package.json')
-    let m = { dependencies: {}, dsh: { profile: { bundles: [] } } }
-    try { m = JSON.parse(readFileSync(p, 'utf8')) } catch {}
-    m.dependencies = { ...(m.dependencies || {}), [name]: '0.0.0-git' }
-    m.dsh = { profile: { bundles: m.dsh?.profile?.bundles || [] } }
-    writeFileSync(p, JSON.stringify(m))
-  }
-  process.exit(0)
-}
+import { appendFileSync, writeFileSync } from 'node:fs'
 const m = process.env.DSH_TEST_MARKER
 if (m) appendFileSync(m, 'boot ' + process.pid + '\\n')
 // Probe the env the shell injected (forward-proxy choke point) plus the Node
@@ -69,6 +44,7 @@ if (ep) writeFileSync(ep, JSON.stringify({
   nodeEnvProxy: process.env.NODE_USE_ENV_PROXY, noProxy: process.env.NO_PROXY,
   nodeOptions: process.env.NODE_OPTIONS,
   maxHeaderSize: process.getBuiltinModule('node:http').maxHeaderSize,
+  path: process.env.PATH,
 }))
 const port = 18000 + (process.pid % 1000)
 process.stdout.write(JSON.stringify({ t: 'url', url: 'http://127.0.0.1:' + port }) + '\\n')
@@ -98,7 +74,6 @@ const child = spawn(process.execPath, [
     ...process.env,
     DSH_DESKTOP_NO_UPDATE: '1',
     DSH_TEST_MARKER: marker,
-    DSH_TEST_PLUGIN_MARKER: pluginMarker,
     DSH_TEST_ENV_PROBE: envProbe,
   },
   windowsHide: true,
@@ -164,6 +139,14 @@ assert.ok(
   'the pre-existing crash-report flags are still appended',
 )
 assert.equal(probed.maxHeaderSize, 65_536, 'the child process really runs with a 64 KiB header budget')
+// dsh 0.1.6 起插件管理在 dsh 内部（Web 侧边栏 Plugins 页），它按 PATH 找 pnpm
+// （launcher facts 的 packageManager 只能由进程内调用方注入，CLI 路径拿不到）
+// → dsh web 子进程的 PATH 必须以壳内置 pnpm 的 shim 目录开头，否则插件页装不了插件。
+const shimDir = join(runtime, 'bin')
+assert.ok(
+  typeof probed.path === 'string' && probed.path.split(process.platform === 'win32' ? ';' : ':')[0] === shimDir,
+  `dsh web child PATH starts with the bundled pnpm shim dir (got: ${probed.path})`,
+)
 
 const status1 = await waitFor((e) => e.t === 'update-status', 'initial update-status')
 assert.equal(status1.current, '9.9.9-test', 'update-status reports the installed fake version')
@@ -232,54 +215,6 @@ const ocs = join(runtime, 'node_modules', '@karoc', 'dsh-smoothly-opencode-sessi
 assert.ok(existsSync(ocs), 'scoped preinstalled bundle copied into runtime node_modules/@karoc')
 assert.equal(JSON.parse(readFileSync(ocs, 'utf8')).name, ocsName, 'copied scoped package keeps its real name')
 
-// ── scenario 5 (P5): plugins-install routes through the dsh plugin CLI ───────
-send({ cmd: 'plugins-install', spec: 'some-plugin@1.2.3' })
-const opStart = await waitFor((e) => e.t === 'op-status' && e.op === 'install' && e.done === false, 'op-status start')
-assert.equal(opStart.spec, 'some-plugin@1.2.3', 'op-status start carries the spec')
-const opDone = await waitFor((e) => e.t === 'op-status' && e.op === 'install' && e.spec === 'some-plugin@1.2.3' && e.done === true, 'op-status done')
-assert.equal(opDone.ok, true, 'install op reports success')
-// The fake profile declares no dsh.bundle -> honest hint, no restart promised.
-assert.equal(opDone.nextAction, null, 'non-bundle install does not ask for a restart')
-assert.ok(opDone.hint && opDone.hint.includes('dsh.bundle'), 'non-bundle install emits a clear hint')
-await new Promise((r) => setTimeout(r, 300))
-const pluginCalls = existsSync(pluginMarker) ? readFileSync(pluginMarker, 'utf8').split('\n').filter(Boolean) : []
-assert.equal(pluginCalls.length, 1, 'dsh plugin CLI invoked exactly once')
-assert.ok(pluginCalls[0].includes('--profile web add some-plugin@1.2.3'), `CLI args routed correctly (got: ${pluginCalls[0]})`)
-// ensurePnpm accepted the pre-seeded pnpm and wrote the shim.
-const shim = join(runtime, 'bin', process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm')
-assert.ok(existsSync(shim), 'pnpm shim written for the bundled pnpm')
-
-// ── scenario 6 (P5): preinstalled update check event + command routing ───────
-// Parallel registry checks across N preinstalled bundles still take a few
-// seconds offline; give the wait a generous window.
-const pu = await waitFor((e) => e.t === 'preinstalled-updates', 'preinstalled-updates event', 45_000)
-const entry = pu.updates?.['dsh-model-reasoning']
-assert.ok(entry, 'preinstalled-updates covers the shipped bundle')
-assert.equal(entry.installed, bundledVersion('dsh-model-reasoning'), 'installed version read from the copied package')
-assert.equal(entry.userUpdated, false, 'not user-updated on a fresh runtime')
-assert.equal(entry.updateAvailable, false, 'no registry in the sandbox -> not claimable as update')
-const kbEntry = pu.updates?.['dsh-kanban']
-assert.ok(kbEntry, 'preinstalled-updates also covers dsh-kanban')
-assert.equal(kbEntry.installed, bundledVersion('dsh-kanban'), 'dsh-kanban installed version read from the copied package')
-assert.equal(kbEntry.userUpdated, false, 'dsh-kanban not user-updated on a fresh runtime')
-assert.equal(kbEntry.updateAvailable, false, 'dsh-kanban not claimable as update without a registry')
-const tnEntry = pu.updates?.['dsh-turn-navigator']
-assert.ok(tnEntry, 'preinstalled-updates also covers dsh-turn-navigator')
-assert.equal(tnEntry.installed, bundledVersion('dsh-turn-navigator'), 'dsh-turn-navigator installed version read from the copied package')
-assert.equal(tnEntry.userUpdated, false, 'dsh-turn-navigator not user-updated on a fresh runtime')
-assert.equal(tnEntry.updateAvailable, false, 'dsh-turn-navigator not claimable as update without a registry')
-const ocsEntry = pu.updates?.[ocsName]
-assert.ok(ocsEntry, 'preinstalled-updates also covers the scoped bundle')
-assert.equal(ocsEntry.installed, bundledVersion('dsh-smoothly-opencode-session'), 'scoped bundle installed version read from the copied package')
-assert.equal(ocsEntry.userUpdated, false, 'scoped bundle not user-updated on a fresh runtime')
-assert.equal(ocsEntry.updateAvailable, false, 'scoped bundle not claimable as update without a registry')
-
-send({ cmd: 'preinstalled-update', name: 'dsh-model-reasoning' })
-const updStart = await waitFor((e) => e.t === 'op-status' && e.op === 'update-preinstalled' && e.done === false, 'update-preinstalled start')
-assert.equal(updStart.spec, 'dsh-model-reasoning', 'op-status start carries the bundle name')
-const updDone = await waitFor((e) => e.t === 'op-status' && e.op === 'update-preinstalled' && e.done === true, 'update-preinstalled done', 75_000)
-assert.equal(typeof updDone.ok, 'boolean', 'op reports an outcome (sandbox npm fails -> ok false)')
-
 // ── scenario 6b: restart-dsh clears the op-status (no stale "restart to apply") ──
 send({ cmd: 'restart-dsh' })
 const opReset = await waitFor(
@@ -287,29 +222,72 @@ const opReset = await waitFor(
   'op-status cleared after restart',
 )
 assert.ok(opReset, 'restart-dsh clears the op-status so the hint does not persist')
-// And a subsequent op is NOT blocked by the cleared state (busy-guard).
-send({ cmd: 'plugins-install', spec: 'after-restart@1.0.0' })
-const afterStart = await waitFor((e) => e.t === 'op-status' && e.op === 'install' && e.spec === 'after-restart@1.0.0' && e.done === false, 'install op starts after the cleared restart')
-assert.equal(afterStart.spec, 'after-restart@1.0.0', 'cleared state does not block new ops')
-await waitFor((e) => e.t === 'op-status' && e.op === 'install' && e.spec === 'after-restart@1.0.0' && e.done === true, 'install op settles')
-
-// ── scenario 6c: a raw GitHub URL is normalized before reaching pnpm ─────────
-send({ cmd: 'plugins-install', spec: 'https://github.com/xiaobright/dsh-anchored-standard/' })
-const ghDone = await waitFor((e) => e.t === 'op-status' && e.op === 'install' && e.spec === 'github:xiaobright/dsh-anchored-standard' && e.done === true, 'github install settles')
-assert.equal(ghDone.ok, true, 'github install op reports success')
-assert.ok(ghDone.hint && ghDone.hint.includes('dsh.bundle'), 'non-bundle github repo still gets the honest hint')
-await new Promise((r) => setTimeout(r, 300))
-const ghCalls = existsSync(pluginMarker) ? readFileSync(pluginMarker, 'utf8').split('\n').filter(Boolean) : []
-assert.ok(
-  ghCalls.some((l) => l.includes('add github:xiaobright/dsh-anchored-standard')),
-  `raw github URL normalized to a pnpm spec (calls: ${JSON.stringify(ghCalls)})`,
-)
 
 // ── scenario 7: SIGTERM tears the whole tree down ───────────────────────────
 child.kill('SIGTERM')
 const code = await new Promise((resolvePromise) => child.on('exit', (c) => resolvePromise(c)))
 assert.equal(code, 0, 'manager exits 0 on SIGTERM')
 
-console.log('PASS — manager control plane (10 scenarios)')
+// ── scenario 8: 低于最低版本地板时走兼容闸门，且失败不阻塞启动 ─────────────
+// 壳依赖 dsh 0.1.6-alpha.2 起的自带插件管理（壳内自建管理已整体移除），而 npm
+// latest 仍是 0.1.5-rc.2（不含插件管理）→ 低于地板的运行时必须被升级到地板。
+// 沙箱里 registry 指向一个必然连不上的地址：升级会失败，但 dsh **必须照样被拉起**
+// （失败只降级为"没有插件管理"，绝不能变成"起不来"）。
+const oldRuntime = join(work, 'runtime-old')
+const oldDsh = join(oldRuntime, 'node_modules', '@deepseek-ai', 'dsh')
+mkdirSync(join(oldDsh, 'lib'), { recursive: true })
+writeFileSync(join(oldDsh, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.1.5-rc.2' }))
+writeFileSync(join(oldDsh, 'lib', 'bin.js'), `
+import { appendFileSync } from 'node:fs'
+const m = process.env.DSH_TEST_MARKER
+if (m) appendFileSync(m, 'boot-old ' + process.pid + '\\n')
+process.stdout.write(JSON.stringify({ t: 'url', url: 'http://127.0.0.1:19999' }) + '\\n')
+setInterval(() => {}, 1000)
+`)
+mkdirSync(join(oldRuntime, 'node_modules', 'pnpm', 'bin'), { recursive: true })
+writeFileSync(join(oldRuntime, 'node_modules', 'pnpm', 'bin', 'pnpm.cjs'), '// pnpm stub\n')
+const oldMarker = join(work, 'boots-old.log')
+const oldChild = spawn(process.execPath, [
+  manager,
+  '--runtime-dir', oldRuntime,
+  '--resource-dir', resources,
+  '--patch', join(work, 'patch.yml'),
+  '--cwd', work,
+], {
+  stdio: ['pipe', 'pipe', 'pipe'],
+  env: {
+    ...process.env,
+    DSH_DESKTOP_NO_UPDATE: '1',
+    DSH_TEST_MARKER: oldMarker,
+    // 连不上的 registry：闸门必须快速失败并继续启动，而不是挂在网络超时上。
+    DSH_DESKTOP_REGISTRY: 'http://127.0.0.1:9/',
+  },
+  windowsHide: true,
+})
+// manager 的 log() 走 stdout 事件 + <runtime>/manager.log 旁路；用旁路断言，
+// 因为它不受事件时序影响（壳崩了日志也还在）。
+const oldLog = join(oldRuntime, 'manager.log')
+const oldLogText = () => (existsSync(oldLog) ? readFileSync(oldLog, 'utf8') : '')
+const gateDeadline = Date.now() + 90_000
+const until = async (pred) => {
+  while (Date.now() < gateDeadline && !pred()) await new Promise((r) => setTimeout(r, 200))
+  return pred()
+}
+assert.ok(
+  await until(() => oldLogText().includes('低于最低要求')),
+  `the floor gate announces the upgrade (manager.log: ${oldLogText().slice(0, 400)})`,
+)
+assert.ok(
+  await until(() => oldLogText().includes('兼容闸门升级失败')),
+  `the gate reports the failure honestly instead of pretending success (manager.log: ${oldLogText().slice(0, 600)})`,
+)
+assert.ok(
+  await until(() => existsSync(oldMarker) && readFileSync(oldMarker, 'utf8').includes('boot-old')),
+  `dsh still starts after a failed gate upgrade (manager.log: ${oldLogText().slice(0, 600)})`,
+)
+oldChild.kill('SIGTERM')
+await new Promise((resolvePromise) => oldChild.on('exit', resolvePromise))
+
+console.log('PASS — manager control plane (11 scenarios)')
 rmSync(work, { recursive: true, force: true })
 process.exit(0)

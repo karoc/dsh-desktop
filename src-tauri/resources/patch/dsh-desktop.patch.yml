@@ -1,10 +1,10 @@
-# DSH Smoothly Desktop overlay: inject the desktop client plugins into the web
+# DSH Smoothly Desktop overlay: inject the desktop client plugin into the web
 # profile's loader roster. Applied at runtime with `dsh web --patch <this>`;
 # the official @deepseek-ai/dsh package is never modified, so updating dsh to
-# the latest npm release cannot wipe these plugins.
+# the latest npm release cannot wipe this plugin.
+#
+# 这里只剩通知插件：插件管理已交给 dsh 自带的 Web 侧边栏 Plugins 页
+# （0.1.6-alpha.2 起），壳内的 @dsh-desktop/plugin-console 面板已整体移除。
 - insert:
     - id: desktop-notifications
       name: '@dsh-desktop/client-notifications'
-- insert:
-    - id: desktop-plugin-console
-      name: '@dsh-desktop/plugin-console'

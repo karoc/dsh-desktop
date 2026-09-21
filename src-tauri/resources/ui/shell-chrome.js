@@ -46,7 +46,9 @@
         { id: 'brand', label: PRODUCT_NAME, type: 'brand' },
         { type: 'sep' },
         { id: 'proxy-settings', label: '代理设置…' },
-        { id: 'plugins', label: '插件管理…' }, // 打开壳内独立管理窗口（dsh 崩溃时也可用）
+        // 安全网：插件管理本身交给 dsh 的 Web 侧边栏 Plugins 页（0.1.6-alpha.2 起），
+        // 但那个页面要 dsh 能起来才能用 —— 这一项是不依赖 dsh 的逃生口。
+        { id: 'disable-plugins', label: '停用全部第三方插件…' },
         { id: 'check-update', label: '检查更新…' }, // 有更新时翻转为「有更新 vX」
         { id: 'dev-mode', label: '开发者模式', type: 'checkbox' },
         { id: 'gpu-accel', label: 'GPU 加速', type: 'checkbox' },
@@ -67,11 +69,12 @@
   // ── 动作表：每个 id → 本地 IPC 命令 + 环回桥路径（双通道）─────────
   // ipc 命令必须在 lib.rs 的 invoke_handler 注册；bridge 路径必须在
   // handle_bridge_conn 有 match 分支（契约测试校验，勿漂移）。
-  // 注：about / check-update 的交互改在壳内完成（壳内模态弹窗）；plugins 打开
-  // 壳内独立管理窗口（跨壳动作，走 ACTIONS 的 /shell/open-plugins）。
+  // 注：about / check-update / legacy-cleanup / cache-cleanup / disable-plugins 的
+  // 交互都在壳内模态弹窗里完成，ACTIONS 只提供它们最终要调用的那个动作。
   const ACTIONS = {
     'proxy-settings': { ipc: 'open_settings', bridge: '/shell/open-settings' },
-    plugins: { ipc: 'open_plugins', bridge: '/shell/open-plugins' },
+    // 安全网：把 profile bundles 回退到 dsh 自带两层（确认弹窗后调用）。
+    'disable-plugins': { ipc: 'disable_third_party_plugins', bridge: '/shell/disable-third-party-plugins' },
     'check-update': { ipc: 'check_update', bridge: '/check-update' },
     // 壳自更新（A-1）：状态查询 + 触发检查。与 dsh 更新严格分开——壳更新只做
     // 只读展示，绝不触发下载/安装（一期的负向保证）。
@@ -1026,6 +1029,64 @@
     });
   }
 
+  // 「停用全部第三方插件」弹窗（安全网）：壳内已无插件管理 UI（插件管理交给
+  // dsh 的 Web 侧边栏 Plugins 页），但 dsh 被某个插件搞到起不来时那个页面也打不开。
+  // 这一项不依赖 dsh：备份 profile manifest → 把 bundles 回退到 dsh 自带两层。
+  function openDisablePluginsDialog() {
+    openDialog((card, close) => {
+      card.appendChild(el('div', '停用全部第三方插件', 'dialog-title'));
+      const body = document.createElement('div');
+      body.className = 'dialog-body';
+      const rows = document.createElement('div');
+      rows.appendChild(el('div', '用途：dsh 因某个插件起不来（黑屏 / 一直转圈）时，把插件启用列表恢复成 dsh 自带的两层。', 'dlg-note'));
+      rows.appendChild(el('div', '会做什么：', 'dlg-note'));
+      rows.appendChild(dlgRow('保留', 'dsh 自带的 dsh-base / dsh-web-app'));
+      rows.appendChild(dlgRow('停用', '其余全部 bundle（含随壳自带的预装插件）'));
+      rows.appendChild(dlgRow('备份', '改动前先复制一份 profile package.json'));
+      rows.appendChild(el('div', '插件文件不会被删除：停用只改启用列表，之后可在 dsh 的「插件」页重新启用。', 'dlg-note'));
+      body.appendChild(rows);
+      card.appendChild(body);
+      const actions = document.createElement('div');
+      actions.className = 'dialog-actions';
+      const btnClose = mkDlgBtn('取消');
+      btnClose.addEventListener('click', close);
+      const btnGo = mkDlgBtn('停用', true);
+      actions.append(btnClose, btnGo);
+      btnGo.addEventListener('click', async () => {
+        btnGo.disabled = true;
+        btnGo.textContent = '处理中…';
+        try {
+          const res = await call('disable-plugins');
+          rows.replaceChildren();
+          if (!res || res.ok !== true) {
+            rows.appendChild(el('div', '失败：' + ((res && res.error) || '壳未响应'), 'dlg-note'));
+            btnGo.disabled = false;
+            btnGo.textContent = '重试';
+            return;
+          }
+          if (!res.changed) {
+            rows.appendChild(el('div', '当前只有 dsh 自带的插件，无需改动。', 'dlg-note'));
+          } else {
+            rows.appendChild(dlgRow('已停用', String((res.removed || []).length) + ' 个'));
+            const shipped = Array.isArray(res.shellShipped) ? res.shellShipped : [];
+            const user = Array.isArray(res.userInstalled) ? res.userInstalled : [];
+            if (shipped.length) rows.appendChild(dlgRow('随壳自带', shipped.join('、')));
+            if (user.length) rows.appendChild(dlgRow('用户安装', user.join('、')));
+            rows.appendChild(dlgRow('备份', String(res.backup || '')));
+            rows.appendChild(el('div', '请「重启服务」使其生效；重启后在 dsh 的「插件」页可以重新启用。', 'dlg-note'));
+          }
+          btnGo.hidden = true;
+          btnClose.textContent = '关闭';
+        } catch (err) {
+          rows.appendChild(el('div', '失败：' + String(err), 'dlg-note'));
+          btnGo.disabled = false;
+          btnGo.textContent = '重试';
+        }
+      });
+      card.appendChild(actions);
+    });
+  }
+
   // 「检查更新」弹窗：展示当前/最新版本信息 + 确定 + 立即更新。
   // 无已知版本时先触发 /check-update 并轮询 /update-status（上限 15s）。
   function openCheckUpdateDialog() {
@@ -1193,17 +1254,6 @@
     render();
   }
 
-  // ── 插件管理（入口在菜单栏，管理在壳内独立窗口）────────────────
-  // 菜单「插件管理」打开壳内独立管理窗口（src/plugin-console.html，与代理
-  // 设置同尺寸居中）——窗口数据走环回桥，**不依赖 dsh 页面**，dsh 崩溃/未
-  // 启动时照样能卸载/禁用出问题的插件。窗口 UI 复用原插件控制台视觉。
-  // 旧版本插件残留的右下角 .dshc-btn 防御性隐藏。
-  function hideFabIfPresent() {
-    const btn = document.querySelector('button.dshc-btn');
-    if (btn && btn.style.display !== 'none') btn.style.display = 'none';
-  }
-  hideFabIfPresent();
-
   // ── 事件 ────────────────────────────────────────────────────────
   // window 级 CAPTURE 统一分发：不依赖 shadow 内单个元素监听（实机曾出现
   // "全部点击无反应"——具体绑定可能因注入/遮蔽失效）。capture 阶段最早收包，
@@ -1235,9 +1285,9 @@
   );
 
   function runMenuAction(id) {
-    if (id === 'plugins') {
-      // 插件管理：打开壳内独立管理窗口（全局可用，dsh 崩溃时也能管理）。
-      call('plugins');
+    if (id === 'disable-plugins') {
+      // 安全网：dsh 起不来时的自救（确认弹窗 + 备份 + 回退 bundles）。壳内就地动作。
+      openDisablePluginsDialog();
       return;
     }
     if (id === 'check-update') {
@@ -1361,8 +1411,6 @@
       closeMenus();
       document.body.appendChild(host);
     }
-    // 旧版插件控制台浮动按钮可能晚于 chrome 注入挂载：出现即隐藏（入口在菜单栏）。
-    hideFabIfPresent();
   });
   observer.observe(document.body, { childList: true });
 

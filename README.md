@@ -6,7 +6,8 @@
 
 DSH Smoothly Desktop（**DSH SD**）把 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）打包成可独立运行的 Windows 桌面 App。
 
-- **dsh 更新由你决定**：启动时只检查 npm 上 `@deepseek-ai/dsh` 的稳定版（`latest` tag）与预发布（`next` tag，如 0.1.0-rc.8），**不自动安装**。有新版时托盘菜单高亮「有更新 vX → 点击更新」；插件控制台的「dsh 更新」区显示可升版本（含预发布，想升才升）；点一下即下载安装并自动重启。dsh 永远来自官方 npm 包（经内置 pnpm 安装），本地零改动。
+- **dsh 更新由你决定**：启动时只检查 npm 上 `@deepseek-ai/dsh` 的稳定版（`latest` tag）与预发布（`next`/`alpha` tag），**不自动安装**。有新版时托盘菜单高亮「有更新 vX → 点击更新」，壳菜单「检查更新…」弹窗也能一键更新（含预发布，想升才升）；点一下即下载安装并自动重启。dsh 永远来自官方 npm 包（经内置 pnpm 安装），本地零改动。**唯一例外是版本地板**：壳要求 dsh ≥ `0.1.6-alpha.2`（该版本起 dsh 自带插件管理，见下条），低于地板的运行时会先自动升到地板，失败则如实提示并继续启动。
+- **插件管理在 dsh 自己的页面里**：dsh 0.1.6-alpha.2 起自带插件管理（Web 侧边栏 **Plugins** 页：安装/卸载/启用/停用/行级开关/构建脚本审批/插件配置页）。壳内不再有自建的插件管理窗口——dsh 起不来时用壳菜单「停用全部第三方插件…」自救（会先备份 profile `package.json`）。
 - **内置 Node 24 运行时**：安装包自带 Node（满足 dsh 的运行要求），用户机器无需装 Node。
 - **原生通知**：dsh 需要你问答（`pendingInteraction`：问题 / 批准 / 计划审阅）时，或某个会话结束（`running` 由真变假）时，弹出系统通知；窗口在前台时不打扰。
 - **点击通知直达会话**：单击系统通知会把窗口带回前台并打开对应会话（单实例 + 本地桥实现）。
@@ -68,7 +69,6 @@ plugins/dsh-client-notifications/
   client.js                浏览器半边：监听 pendingInteraction / running 沿，
                            经桥发通知、消费 /pending-open 打开会话
   index.js                 Node 半边：空实现（占位）
-plugins/dsh-plugin-console/   插件控制台（预装/自装插件 + dsh 更新，含预发布）
 .dsh/skills/               排障技能（Windows 桌面壳安装/启动调试方法论）
 .github/workflows/build.yml  windows-latest 出 NSIS；门禁：7z 断言 + runtime smoke；v* tag 发 Release
 LICENSE                   MIT
@@ -129,10 +129,9 @@ node_modules 符号链接树、写迁移标记、绝不上移覆盖已有新数�
 ## 本地验证（Linux 可跑的部分）
 
 ```bash
-npm test                 # 全量 11 套：通知插件 / 控制面 / 插件控制台 / 控制台窗口 / 代理 / 代理e2e / 启动页设置 / 壳顶栏契约 / 启动器扫动 / 请求头预算 / 副本一致性
+npm test                 # 全量 9 套：通知插件 / 控制面 / 代理 / 代理e2e / 启动页设置 / 壳顶栏契约 / 启动器扫动 / 请求头预算 / 副本一致性
 npm run test:plugin      # 通知插件行为测试（纯 Node，无浏览器）
-npm run test:control     # manager 控制面（10 场景）
-npm run test:console     # 插件控制台行为（17 场景）
+npm run test:control     # manager 控制面（11 场景，含版本地板闸门）
 npm run test:proxy       # 内置正向代理（12 场景）
 npm run test:launcher-settings  # 代理设置窗口（6 场景）
 npm run test:shell-chrome       # 壳顶栏契约（菜单 id ↔ ACTIONS ↔ lib.rs 桥/命令）
@@ -179,10 +178,10 @@ node scripts/server-manager.mjs \
 （`src-tauri/resources/ui/shell-chrome.js`，编译期内嵌，启动页与 dsh 页面都生效）：
 
 - 左上角**应用 icon**（真实 logo）展开唯一下拉菜单：「品牌头（应用名 + 版本）｜代理设置…
-  （独立设置窗口）｜插件管理…（**壳内独立管理窗口**：复用原插件控制台 UI，数据走环回桥，
-  **dsh 崩溃/未启动时也能管理插件**）｜检查更新…（壳内弹窗：当前/最新版本 + 确定 +
-  立即更新）｜开发者模式（✓）｜刷新页面｜重启服务｜打开数据目录｜关于（壳内弹窗：
-  名称/版本/构建日期/dsh 版本 + 确定）｜退出」；
+  （独立设置窗口）｜停用全部第三方插件…（**安全网**：dsh 被某个插件搞到起不来时用，
+  会先备份 profile `package.json` 再把启用列表回退到 dsh 自带两层）｜检查更新…（壳内弹窗：
+  当前/最新版本 + 确定 + 立即更新）｜开发者模式（✓）｜刷新页面｜重启服务｜打开数据目录｜
+  关于（壳内弹窗：名称/版本/构建日期/dsh 版本 + 确定）｜退出」；
   有更新时菜单按钮出现橙色角标、条目翻转为「有更新 vX」；
 - 右上角窗口三键：最小化 / 最大化(还原) / 关闭（关闭=隐藏到托盘，语义不变）；
 - 空白区拖动窗口、双击切换最大化；dsh 页面内路由切换不丢失（MutationObserver 自愈）；
@@ -196,20 +195,23 @@ node scripts/server-manager.mjs \
 **后续壳独有的菜单就在 `SHELL_MENUS` 数组里定义**（该文件顶部）。动作分两类：
 跨壳动作（开窗/服务/设置…）映射到 `ACTIONS` 双通道——本地页走 IPC 命令，远程 dsh 页走
 环回桥（`/window/*`、`/shell/*`，远程页没有 `__TAURI__`，tauri#11934）；壳内就地动作
-（关于 / 检查更新）不占桥、不进 ACTIONS，直接在壳内完成。契约由
+（关于 / 检查更新 / 停用全部第三方插件）不占桥、不进 ACTIONS，直接在壳内完成。契约由
 `scripts/test-shell-chrome.mjs` 守护：菜单 id ↔ ACTIONS ↔ lib.rs 桥端点/命令注册三方不漂移。
 （Tauri 2 的 `Menu` 在 Windows 不渲染窗口菜单栏，故为自绘注入；托盘菜单保留为窗口
-隐藏时的持久入口。代理设置与插件管理窗口不参与窗口状态记忆——工具窗固定居中弹出。）
+隐藏时的持久入口。代理设置窗口不参与窗口状态记忆——工具窗固定居中弹出。）
 
-## 插件（预装 + 用户自装）
+## 插件
 
-顶栏菜单「插件管理…」打开**壳内独立管理窗口**（复用原插件控制台 UI：主题/语言/卡片/
-开关，数据走环回桥——**dsh 崩溃/未启动时依然可管理**，插件出问题时能卸载/禁用）：
+**插件管理由 dsh 自己提供**：dsh 0.1.6-alpha.2 起自带 `@deepseek-ai/dsh-plugin-manager`，
+Web 侧边栏有 **Plugins** 页（安装 / 卸载 / 启用 / 停用 / bundle 内行级开关 / pnpm 构建
+脚本审批 / 插件自带配置页），有 HMR 时开关**免重启**生效。壳内**不再有**自建的插件管理
+窗口、桥端点或页内面板——避免与 dsh 的插件管理器双写同一份 profile 状态。
 
-- **预装插件（默认关闭，随壳自带）**：`dsh-kanban`（看板）、`dsh-model-reasoning`（按模型推理档位）、`dsh-turn-navigator`（会话轮次导航）、`@karoc/dsh-smoothly-opencode-session`（OpenCode 会话头，无它会 `400 MissingSessionID`）。在管理窗口打开开关后**重启服务生效**；窗口里可一键检查/升级预装插件、恢复默认版本。
-- **用户自装插件**：管理窗口输入 GitHub 地址或包名安装、卸载、更新（经内置 pnpm + `dsh plugin` CLI）。
-- **dsh 更新**：管理窗口「dsh 更新」区显示当前/可升版本。稳定版（`latest` tag）随时可一键升；若 npm 有更新的**预发布**（`next` tag，如 0.1.0-rc.8）也会提示「（预发布）」可升，想升才升，不点就保持稳定版。
-- 代理设置入口不在管理窗口里，在**顶栏菜单「代理设置…」**（独立设置窗口，托盘菜单同样可达）。
+- **预装插件（随壳自带，默认关闭）**：`dsh-kanban`（看板）、`dsh-model-reasoning`（按模型推理档位）、`dsh-turn-navigator`（会话轮次导航）、`@karoc/dsh-smoothly-opencode-session`（OpenCode 会话头，无它会 `400 MissingSessionID`）。它们随安装包发布、被复制进运行时并**版本锁定**（离线可用）；在 dsh 的 **Plugins** 页打开开关即可启用。
+- **用户自装插件**：在 dsh 的 **Plugins** 页按包名 / Git 地址 / tarball / 本地路径安装与卸载（走壳内置 pnpm，壳已把 pnpm shim 挂到 `dsh web` 子进程的 PATH）。
+- **能力边界（相对已移除的壳内控制台）**：① dsh 起不来时无法在图形界面里管理插件（改用壳菜单「停用全部第三方插件…」，它不依赖 dsh）；② 新管理器没有"更新到新版本"操作——需要时用 `dsh plugin --profile web update <包名>`，或卸载后重装；③ 预装插件不再支持"从 npm 升级 / 恢复出厂"，版本随壳发布走。
+- **dsh 更新**：壳菜单「检查更新…」弹窗显示当前/可升版本。稳定版（`latest` tag）随时可一键升；若 npm 有更新的**预发布**（`next`/`alpha` tag）也会提示「（预发布）」可升，想升才升，不点就保持原版本。**版本地板**：dsh < `0.1.6-alpha.2` 时启动会自动升到地板（该版本才有插件管理），失败会如实提示并继续启动；`dsh.json` 的 `devMode` 会冻结这一自动升级。
+- 代理设置入口在**顶栏菜单「代理设置…」**（独立设置窗口，托盘菜单同样可达）。
 
 ## 环境变量（可选）
 

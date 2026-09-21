@@ -52,8 +52,7 @@ struct ServerState {
     /// Latest plugin operation status reported by the manager.
     op: Mutex<OpStatus>,
     /// Cached per-preinstalled update state, mirrored from the manager's
-    /// `preinstalled-updates` protocol line ({name: {installed, latest, …}}).
-    preinstalled_updates: Mutex<serde_json::Value>,
+    /// (removed) preinstalled-updates state — the shell no longer manages plugin versions.
     /// Proxy UI data mirrored from the manager's `proxy-hosts` /
     /// `proxy-providers` protocol lines (observed hosts + settings.yaml
     /// provider hosts, for the settings panel's checkbox list).
@@ -1549,34 +1548,6 @@ fn preinstalled_names(runtime: &std::path::Path) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Preinstalled plugins with their package description, for the console UI.
-fn preinstalled_details(runtime: &std::path::Path) -> Vec<serde_json::Value> {
-    preinstalled_names(runtime)
-        .into_iter()
-        .map(|name| {
-            let description = std::fs::read_to_string(
-                runtime.join("node_modules").join(&name).join("package.json"),
-            )
-            .ok()
-            .and_then(|raw| {
-                serde_json::from_str::<serde_json::Value>(&raw)
-                    .ok()
-                    .and_then(|v| v.get("description").and_then(|d| d.as_str()).map(String::from))
-            })
-            .unwrap_or_default();
-            serde_json::json!({ "name": name, "description": description })
-        })
-        .collect()
-}
-
-/// Parse {"name": "..."} from a bridge POST body.
-fn body_name(body: &str) -> String {
-    serde_json::from_str::<serde_json::Value>(body)
-        .ok()
-        .and_then(|v| v.get("name").and_then(|n| n.as_str()).map(String::from))
-        .unwrap_or_default()
-}
-
 // ── dev mode (P3) ───────────────────────────────────────────────────────────
 // dsh.json `devMode`: freezes dsh updates in the manager and unlocks the
 // WebView2 devtools. Module-level HMR roots are NOT available in production
@@ -1882,128 +1853,6 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
                 ("403 Forbidden", "devtools requires dev mode (tray: 开发者模式)".into())
             }
         }
-        ("GET", "/plugins/list") => {
-            let body = plugins_panel_state(app).to_string();
-            ("200 OK", body)
-        }
-        ("POST", "/plugins/enable") => {
-            let name = body_name(&body);
-            let runtime = runtime_dir(app);
-            if !preinstalled_names(&runtime).contains(&name) {
-                let err = serde_json::json!({ "ok": false, "error": "not a preinstalled plugin" }).to_string();
-                ("400 Bad Request", err)
-            } else {
-                let mut bundles = web_profile_bundles(&runtime);
-                if !bundles.contains(&name) {
-                    bundles.push(name.clone());
-                }
-                match write_web_profile_bundles(&runtime, &bundles) {
-                    Ok(()) => {
-                        let ok = serde_json::json!({ "ok": true, "name": name, "nextAction": "restart" }).to_string();
-                        ("200 OK", ok)
-                    }
-                    Err(e) => {
-                        let err = serde_json::json!({ "ok": false, "error": e }).to_string();
-                        ("500 Internal Server Error", err)
-                    }
-                }
-            }
-        }
-        ("POST", "/plugins/disable") => {
-            let name = body_name(&body);
-            let runtime = runtime_dir(app);
-            if !preinstalled_names(&runtime).contains(&name) {
-                let err = serde_json::json!({ "ok": false, "error": "not a preinstalled plugin" }).to_string();
-                ("400 Bad Request", err)
-            } else {
-                let mut bundles = web_profile_bundles(&runtime);
-                bundles.retain(|b| b != &name);
-                match write_web_profile_bundles(&runtime, &bundles) {
-                    Ok(()) => {
-                        let ok = serde_json::json!({ "ok": true, "name": name, "nextAction": "restart" }).to_string();
-                        ("200 OK", ok)
-                    }
-                    Err(e) => {
-                        let err = serde_json::json!({ "ok": false, "error": e }).to_string();
-                        ("500 Internal Server Error", err)
-                    }
-                }
-            }
-        }
-        ("POST", "/plugins/install") => {
-            let spec = serde_json::from_str::<serde_json::Value>(&body)
-                .ok()
-                .and_then(|v| v.get("spec").and_then(|n| n.as_str()).map(String::from))
-                .unwrap_or_default();
-            let valid = !spec.is_empty() && spec.len() <= 512 && !spec.contains(char::is_whitespace);
-            if !valid {
-                let err = serde_json::json!({ "ok": false, "error": "invalid plugin spec" }).to_string();
-                ("400 Bad Request", err)
-            } else {
-                let line = serde_json::json!({ "cmd": "plugins-install", "spec": spec }).to_string();
-                send_line(&mut app.state::<ServerState>().stdin.lock().unwrap(), &line);
-                ("202 Accepted", serde_json::json!({ "ok": true }).to_string())
-            }
-        }
-        ("POST", "/plugins/remove") => {
-            let name = body_name(&body);
-            let runtime = runtime_dir(app);
-            let is_user = web_profile_bundles(&runtime).iter().any(|b| b == &name)
-                && !preinstalled_names(&runtime).contains(&name)
-                && !WEB_PROFILE_TEMPLATE.iter().any(|t| *t == name);
-            if !is_user {
-                let err = serde_json::json!({ "ok": false, "error": "not a user-installed plugin" }).to_string();
-                ("400 Bad Request", err)
-            } else {
-                let line = serde_json::json!({ "cmd": "plugins-remove", "name": name }).to_string();
-                send_line(&mut app.state::<ServerState>().stdin.lock().unwrap(), &line);
-                ("202 Accepted", serde_json::json!({ "ok": true }).to_string())
-            }
-        }
-        ("POST", "/plugins/update") => {
-            let name = serde_json::from_str::<serde_json::Value>(&body)
-                .ok()
-                .and_then(|v| v.get("name").and_then(|n| n.as_str()).map(String::from))
-                .unwrap_or_default();
-            let line = if name.is_empty() {
-                serde_json::json!({ "cmd": "plugins-update" }).to_string()
-            } else {
-                serde_json::json!({ "cmd": "plugins-update", "name": name }).to_string()
-            };
-            send_line(&mut app.state::<ServerState>().stdin.lock().unwrap(), &line);
-            ("202 Accepted", serde_json::json!({ "ok": true }).to_string())
-        }
-        ("POST", "/plugins/check-preinstalled-updates") => {
-            send_manager(
-                &mut app.state::<ServerState>().stdin.lock().unwrap(),
-                "preinstalled-check",
-            );
-            ("202 Accepted", serde_json::json!({ "ok": true }).to_string())
-        }
-        ("POST", "/plugins/update-preinstalled") => {
-            let name = body_name(&body);
-            let runtime = runtime_dir(app);
-            if !preinstalled_names(&runtime).contains(&name) {
-                let err = serde_json::json!({ "ok": false, "error": "not a preinstalled plugin" }).to_string();
-                ("400 Bad Request", err)
-            } else {
-                let line = serde_json::json!({ "cmd": "preinstalled-update", "name": name }).to_string();
-                send_line(&mut app.state::<ServerState>().stdin.lock().unwrap(), &line);
-                ("202 Accepted", serde_json::json!({ "ok": true }).to_string())
-            }
-        }
-        ("POST", "/plugins/reset-preinstalled") => {
-            let name = body_name(&body);
-            let runtime = runtime_dir(app);
-            if !preinstalled_names(&runtime).contains(&name) {
-                let err = serde_json::json!({ "ok": false, "error": "not a preinstalled plugin" }).to_string();
-                ("400 Bad Request", err)
-            } else {
-                let line = serde_json::json!({ "cmd": "preinstalled-reset", "name": name }).to_string();
-                send_line(&mut app.state::<ServerState>().stdin.lock().unwrap(), &line);
-                ("202 Accepted", serde_json::json!({ "ok": true }).to_string())
-            }
-        }
         // ── shell chrome (custom title bar + menu bar; remote dsh page has
         // no __TAURI__, so window/menu actions ride the bridge) ────────────
         // 诊断（临时）：记录窗口动作到达桥的时间，配合 chrome 闪框区分
@@ -2057,9 +1906,15 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
             open_settings_window(app);
             ("200 OK", serde_json::json!({ "ok": true }).to_string())
         }
-        ("POST", "/shell/open-plugins") => {
-            open_plugins_window(app);
-            ("200 OK", serde_json::json!({ "ok": true }).to_string())
+        // 安全网（dsh 起不来时的自救）：回退到 dsh 自带的两层 bundle。
+        ("POST", "/shell/disable-third-party-plugins") => {
+            match disable_third_party_plugins(app.clone()) {
+                Ok(v) => ("200 OK", v.to_string()),
+                Err(e) => (
+                    "500 Internal Server Error",
+                    serde_json::json!({ "ok": false, "error": e }).to_string(),
+                ),
+            }
         }
         ("POST", "/shell/dev-mode-toggle") => match toggle_dev_mode_impl(app) {
             Ok(v) => ("200 OK", v.to_string()),
@@ -2302,7 +2157,6 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
         };
         *state.update.lock().unwrap() = UpdateStatus::default();
         *state.op.lock().unwrap() = OpStatus::default();
-        *state.preinstalled_updates.lock().unwrap() = serde_json::json!({});
         let guard = state.update_item.lock().unwrap();
         if let Some(item) = guard.as_ref() {
             let _ = item.set_text("检查更新…");
@@ -2501,11 +2355,6 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
                             .get("hintPlugins")
                             .and_then(|v| v.as_array())
                             .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect());
-                    }
-                    Some("preinstalled-updates") => {
-                        let state = handle.state::<ServerState>();
-                        let updates = ev.get("updates").cloned().unwrap_or(serde_json::json!({}));
-                        *state.preinstalled_updates.lock().unwrap() = updates;
                     }
                     Some("proxy-hosts") => {
                         let hosts = ev
@@ -3303,29 +3152,6 @@ fn inject_shell_chrome(app: &AppHandle) {
     let _ = w.eval(format!("(()=>{{{prefix};{SHELL_CHROME}}})()"));
 }
 
-/// 给插件管理窗口（独立 webview，label "plugins"）注入应用名与环回桥端口。
-/// 该窗口页面（src/plugin-console.js）数据走环回桥（/plugins/*），与 dsh 页
-/// 同机制——桥由壳拉起，dsh 崩溃/未启动时窗口依然可管理插件。注入时机在
-/// on_page_load；页面脚本在桥端口注入前只显示"加载中"，就绪后初始化。
-fn inject_plugins_preamble(app: &AppHandle) {
-    let Some(w) = app.get_webview_window("plugins") else {
-        return;
-    };
-    let mut prefix = format!(
-        "window.__DSH_PRODUCT_NAME__={}",
-        serde_json::to_string(app.package_info().name.as_str())
-            .unwrap_or_else(|_| "\"DSH Smoothly Desktop\"".into())
-    );
-    let port = BRIDGE_PORT.load(std::sync::atomic::Ordering::SeqCst);
-    if port > 0 {
-        prefix.push_str(&format!(
-            ";window.__DSH_BRIDGE_PORT__={}",
-            serde_json::to_string(&port.to_string()).unwrap_or_else(|_| "\"0\"".into())
-        ));
-    }
-    let _ = w.eval(format!("(()=>{{{prefix};}})()"));
-}
-
 // ── proxy connection test (settings window "测试连接") ────────────────────────
 /// Basic base64 (RFC 4648, no padding variants) — avoids a crate for one use.
 fn b64(input: &[u8]) -> String {
@@ -3650,77 +3476,53 @@ fn open_settings(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Open (or focus) the standalone plugins manager window (menu bar entry).
-/// 独立于 dsh 页面运行：dsh 崩溃/未启动时同样可管理插件（数据走环回桥，
-/// 桥由壳拉起、不依赖 dsh 进程）。窗口 UI 复用原插件控制台（主题/语言/
-/// 卡片/开关，src/plugin-console.js 与 dsh 页内面板同一渲染核心）。
-fn open_plugins_window(app: &AppHandle) {
-    if let Some(w) = app.get_webview_window("plugins") {
-        let _ = w.show();
-        let _ = w.set_focus();
-        return;
-    }
-    let _ = tauri::WebviewWindowBuilder::new(app, "plugins", tauri::WebviewUrl::App("plugin-console.html".into()))
-        .title(format!("{} — 插件管理", app.package_info().name))
-        .inner_size(680.0, 720.0)
-        .min_inner_size(520.0, 560.0)
-        .resizable(true)
-        .center()
-        .build();
-}
-
-/// Chrome menu bar entry: open (or focus) the plugins manager window.
-#[tauri::command]
-fn open_plugins(app: AppHandle) -> Result<(), String> {
-    open_plugins_window(&app);
-    Ok(())
-}
-
-// ── 插件管理（入口在壳菜单栏，界面保留 dsh-plugin-console 原面板）────────
-// 菜单「插件管理」在 dsh 页内就地触发原插件控制台面板（globalThis
-// __DSH_PLUGIN_CONSOLE__.toggle()），壳不建自研窗口、不改插件 UI/UX。
-// 桥端点 /plugins/*（list/enable/disable/install/remove/update/…）仍由
-// 面板直接调用，以下 shared 状态逻辑保留：
-/// 插件面板完整状态：bundles / preinstalled / preinstalledUpdates / devMode /
-/// update / op。桥端点 /plugins/list 使用（插件控制台面板的唯一数据源）。
-fn plugins_panel_state(app: &AppHandle) -> serde_json::Value {
-    let runtime = runtime_dir(app);
-    let bundles = web_profile_bundles(&runtime);
-    let preinstalled = preinstalled_details(&runtime);
-    let upd = app.state::<ServerState>().update.lock().unwrap().clone();
-    let op = app.state::<ServerState>().op.lock().unwrap().clone();
-    let pre_updates = app.state::<ServerState>().preinstalled_updates.lock().unwrap().clone();
-    serde_json::json!({
-        "bundles": bundles,
-        "preinstalled": preinstalled,
-        "preinstalledUpdates": pre_updates,
-        "devMode": dev_mode(&runtime),
-        "update": {
-            "current": upd.current,
-            "latest": upd.latest,
-            "updateAvailable": upd.update_available,
-            "next": upd.next,
-            "nextAvailable": upd.next_available,
-        },
-        "op": {
-            "op": op.op,
-            "spec": op.spec,
-            "done": op.done,
-            "ok": op.ok,
-            "nextAction": op.next_action,
-            "error": op.error,
-            "hint": op.hint,
-            "hintKey": op.hint_key,
-            "hintPlugins": op.hint_plugins,
-        },
-    })
-}
-
 /// 壳健康状态（chrome 故障条幅轮询用）：最近故障摘要 + manager 真实存活 +
 /// 最近一次退出的退出码/证据目录。见 shell_status_json。
 #[tauri::command]
 fn get_shell_status(state: State<'_, ServerState>) -> serde_json::Value {
     shell_status_json(&state)
+}
+
+/// 安全网：把 web profile 的 bundle 列表回退到 dsh 自带的模板两层，并备份原 manifest。
+///
+/// 0.1.6-alpha.2 起插件管理交给 dsh 的 Web 侧边栏 Plugins 页，壳内不再有插件管理
+/// UI；但那个页面本身要 dsh 能起来才能用。第三方插件把 dsh 启动搞崩时，用户需要
+/// 一个不依赖 dsh 的逃生口（上游 Electron 桌面端同样保留"Host 起不来也能停用
+/// 第三方 bundle"的能力）。备份失败即中止，绝不在没有备份的情况下改动用户文件。
+#[tauri::command]
+fn disable_third_party_plugins(app: AppHandle) -> Result<serde_json::Value, String> {
+    let runtime = runtime_dir(&app);
+    let path = profile_manifest_path(&runtime);
+    let current = web_profile_bundles(&runtime);
+    let removed: Vec<String> = current
+        .iter()
+        .filter(|b| !WEB_PROFILE_TEMPLATE.contains(&b.as_str()))
+        .cloned()
+        .collect();
+    if removed.is_empty() {
+        return Ok(serde_json::json!({ "ok": true, "changed": false, "removed": [] }));
+    }
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let backup = path.with_file_name(format!("package.json.bak-disable-plugins-{stamp}"));
+    std::fs::copy(&path, &backup).map_err(|e| format!("备份 profile manifest 失败：{e}"))?;
+    let template: Vec<String> = WEB_PROFILE_TEMPLATE.iter().map(|s| s.to_string()).collect();
+    write_web_profile_bundles(&runtime, &template)?;
+    // 区分"随壳自带的预装插件"与"用户自己装的"：前者停用后仍留在 runtime 里，
+    // 后者是用户资产，界面据此给出不同的提示措辞。
+    let shipped = preinstalled_names(&runtime);
+    let shell_shipped: Vec<&String> = removed.iter().filter(|n| shipped.contains(n)).collect();
+    let user_installed: Vec<&String> = removed.iter().filter(|n| !shipped.contains(n)).collect();
+    Ok(serde_json::json!({
+        "ok": true,
+        "changed": true,
+        "removed": removed,
+        "shellShipped": shell_shipped,
+        "userInstalled": user_installed,
+        "backup": backup.to_string_lossy(),
+    }))
 }
 
 pub fn run() {
@@ -3753,7 +3555,7 @@ pub fn run() {
             // settings / plugins 是工具窗：不参与窗口状态记忆（记忆恢复会在
             // 创建时覆盖 builder 的 .center()，表现为"弹窗先闪一下居中、又跳回
             // 上次的左边位置"）。主窗口仍保留位置/大小/最大化记忆。
-            .with_denylist(&["settings", "plugins"])
+            .with_denylist(&["settings"])
             .build())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // Toast click / external activation: remember the session to
@@ -3778,7 +3580,6 @@ pub fn run() {
             dev_item: Mutex::new(None),
             gpu_item: Mutex::new(None),
             op: Mutex::new(OpStatus::default()),
-            preinstalled_updates: Mutex::new(serde_json::json!({})),
             proxy: Mutex::new(ProxyState::default()),
             last_error: Mutex::new(None),
             guard: Mutex::new(ManagerGuard::default()),
@@ -3804,9 +3605,6 @@ pub fn run() {
                     .unwrap_or_else(|_| std::path::PathBuf::from("."));
                 log_line(&data, &format!("main page load: {loaded}"));
                 inject_shell_chrome(webview.app_handle());
-            } else if webview.label() == "plugins" {
-                // 插件管理窗口：注入环回桥端口（窗口页数据走桥，不依赖 dsh）。
-                inject_plugins_preamble(webview.app_handle());
             }
             if let Some(w) = webview.app_handle().get_webview_window("main") {
                 if let Some(icon) = w.app_handle().default_window_icon() {
@@ -4226,8 +4024,8 @@ pub fn run() {
             toggle_dev_mode,
             toggle_gpu_accel,
             open_settings,
-            open_plugins,
             get_shell_status,
+            disable_third_party_plugins,
             check_legacy_install,
             cleanup_legacy_install,
             cleanup_caches
