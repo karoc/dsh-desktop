@@ -50,6 +50,7 @@ $labels["later"]   = [regex]::Unescape("\u7A0D\u540E\u914D\u7F6E")           # s
 $labels["kanban"]  = [regex]::Unescape("\u601D\u78E8\u529B\u770B\u677F")     # kanban
 $labels["plugins"] = [regex]::Unescape("\u63D2\u4EF6\u7BA1\u7406")           # shell plugin manager (removed 2026-09-21)
 $labels["dshplugins"] = [regex]::Unescape("\u63D2\u4EF6")                    # dsh's own sidebar Plugins entry
+$labels["disableplugins"] = [regex]::Unescape("\u505C\u7528\u5168\u90E8\u7B2C\u4E09\u65B9\u63D2\u4EF6\u2026") # safety-net menu item
 $labels["strip"]   = [regex]::Unescape("\u663E\u793A\u83DC\u5355\u680F")     # hover strip
 $labels["restart"] = [regex]::Unescape("\u91CD\u542F\u670D\u52A1")           # errbanner: restart service
 $labels["evidence"] = [regex]::Unescape("\u6253\u5F00\u8BC1\u636E\u76EE\u5F55") # errbanner: open evidence dir
