@@ -1583,14 +1583,15 @@
       "rationale": "代码已在分支 feat/dsh-0.1.6-alpha.2-plugin-management 完成并实机验证，但按仓库纪律提交走 PR（main 的必需检查对 admin 直推无效），且发布要经 release-please 出 PR → 用户合并 → tag → CI 出安装包。宿主正式版当前仍跑旧壳 + dsh 0.1.6-alpha.1，升级到新壳需要装新版本安装包（不能由 agent 重启用户正在运行的应用）。",
       "rejected": "放弃由 agent 直接合并 PR / 直推 main：仓库门禁对 admin 直推静默跳过，且发布动作历史上一直由用户在 Web 上执行。",
       "sourceSessionId": "session-fd4c2d36-4a9d-4634-b4dd-56bf73fcc4b2",
-      "status": "todo",
+      "status": "in_progress",
       "tags": [
         "release",
         "waiting-user",
         "dsh-0.1.6"
       ],
       "createdAt": 1789959111308,
-      "updatedAt": 1789959111308
+      "updatedAt": 1789960896774,
+      "summary": "PR #50 已 squash 合并（check/test 两个必需检查均绿后合并，未用 admin 绕过）；本地 main 已对齐 origin/main。宿主机正式版安装包已在 D:\\Dev\\dsh-desktop 本地编译完成：src-tauri\\target\\release\\bundle\\nsis\\DSH Smoothly Desktop_0.10.1_x64-setup.exe（28,121,392 字节；exe 内容已核对含新端点 /shell/disable-third-party-plugins 且不含旧的 /shell/open-plugins）。合并时发现 PR 基线是 origin/main，而分支基于本地 main，squash 顺带发布了 6 个更早已提交但从未推送的 main 提交（技能 frontmatter 修复 / 预装 OCS 0.1.1 同步 / 副本一致性门禁 / audit 内容级比对 / 2 篇 Note），已在 PR #50 上留言记录。待用户执行：关闭正在运行的正式版（会断开本会话）→ 运行安装包 → 首启自动把 dsh 从 0.1.6-alpha.1 升到 0.1.6-alpha.2 并清理残留嵌套包。注意产物版本号仍是 0.10.1（release-please 的 0.11.0 PR #48 尚开着），与当前已装版本同号。"
     }
   ]
 }
