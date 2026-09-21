@@ -8,6 +8,7 @@ DSH Smoothly Desktop（**DSH SD**）把 [DeepSeek Harness](https://github.com/de
 
 - **dsh 更新由你决定**：启动时只检查 npm 上 `@deepseek-ai/dsh` 的稳定版（`latest` tag）与预发布（`next`/`alpha` tag），**不自动安装**。有新版时托盘菜单高亮「有更新 vX → 点击更新」，壳菜单「检查更新…」弹窗也能一键更新（含预发布，想升才升）；点一下即下载安装并自动重启。dsh 永远来自官方 npm 包（经内置 pnpm 安装），本地零改动。**唯一例外是版本地板**：壳要求 dsh ≥ `0.1.6-alpha.2`（该版本起 dsh 自带插件管理，见下条），低于地板的运行时会先自动升到地板，失败则如实提示并继续启动。
 - **插件管理在 dsh 自己的页面里**：dsh 0.1.6-alpha.2 起自带插件管理（Web 侧边栏 **Plugins** 页：安装/卸载/启用/停用/行级开关/构建脚本审批/插件配置页）。壳内不再有自建的插件管理窗口——dsh 起不来时用壳菜单「停用全部第三方插件…」自救（会先备份 profile `package.json`）。
+- **升级后自动清理残留嵌套包**：pnpm 的 hoisted 安装不清理上一版留下的嵌套目录，而 Node 解析嵌套副本优先于提升到根的新版 —— 实测 0.1.5-rc.2 → 0.1.6-alpha.2 后 `dsh-session-persistence-jsonl/node_modules/@deepseek-ai/*` 仍是旧版（不导出新版需要的 `./message-projections`）→ dsh 启动即崩。壳在**升级后与每次启动**都检查一次，只删版本与父包不一致的嵌套副本（不重建整棵树、不需要联网）。
 - **内置 Node 24 运行时**：安装包自带 Node（满足 dsh 的运行要求），用户机器无需装 Node。
 - **原生通知**：dsh 需要你问答（`pendingInteraction`：问题 / 批准 / 计划审阅）时，或某个会话结束（`running` 由真变假）时，弹出系统通知；窗口在前台时不打扰。
 - **点击通知直达会话**：单击系统通知会把窗口带回前台并打开对应会话（单实例 + 本地桥实现）。

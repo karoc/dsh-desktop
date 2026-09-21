@@ -254,6 +254,7 @@ dev 数据目录 = `%APPDATA%\dsh.smoothly.desktop.dev`，证据 = `<runtime>\re
 | E0716 | `app.state()` 临时值先 `let` 绑定再锁 |
 | drag region | `data-tauri-drag-region` 是 JS API（本地页才有）；远程页用桥 `/window/drag`→`start_dragging` |
 | 工具窗居中闪跳 | window-state 插件在窗口创建时 `restore_state` 会**覆盖 builder 的 `.center()`**（弹窗先闪一下居中、又跳回上次的旧位置）→ 工具窗（settings / plugins）用 `Builder::with_denylist(&["settings", "plugins"])` 排除跟踪；主窗口保留记忆 |
+| 升级 dsh 后启动即崩（ERR_PACKAGE_PATH_NOT_EXPORTED） | pnpm 的 hoisted 安装**不清理嵌套目录**：`<pkg>/node_modules/@deepseek-ai/` 下留着上一版的内部包，Node 解析嵌套副本优先 → 子路径导出缺失。实测 0.1.5-rc.2 → 0.1.6-alpha.2 后 `dsh-session-persistence-jsonl` 下留了 3 个旧包。壳在升级后 + 每次启动调 `removeStaleNestedDshPackages()` 只删这些副本（判据：嵌套版本 ≠ 父包版本；`@deepseek-ai/*` 同版本发布）。**别改成 `rm -rf node_modules` 重建** —— 安装失败会把「有点脏」变成「没有 dsh」 |
 | 插件管理放哪 | **不放壳里**（2026-09-21 起）：dsh 0.1.6-alpha.2 自带插件管理（Web 侧边栏 Plugins 页），壳内自建管理会与它双写同一份 profile 状态。壳只保留不依赖 dsh 的安全网「停用全部第三方插件…」（`disable_third_party_plugins`，备份后回退 bundles） |
 | 构建日期/版本信息 | `build.rs` 用 civil_from_days 算法（无 chrono）输出 `cargo:rustc-env=DSH_BUILD_DATE`，注入前缀带 `__DSH_BUILD_DATE__`，壳内「关于」弹窗展示 |
 | dev 配置合并 | `--config` 深合并数组整体替换；version 不许覆盖（与 Cargo.toml 强制一致） |
