@@ -395,6 +395,61 @@ function dshInstalled(runtimeDir) {
 }
 
 /**
+ * 残留嵌套包检测：列出版本与其父包不一致的 `@deepseek-ai/*` 嵌套副本。
+ *
+ * 所有 `@deepseek-ai/dsh-*` 包同版本发布，因此嵌套副本只要与父包版本不同就是上一版
+ * 的残留（pnpm 的 hoisted 安装不会清理嵌套目录）。而 Node 解析时**嵌套副本优先于**
+ * 提升到根的新版 —— 2026-09-21 实测：0.1.5-rc.2 → 0.1.6-alpha.2 升级后
+ * `dsh-session-persistence-jsonl/node_modules/@deepseek-ai/` 下留着 3 个 0.1.5-rc.2
+ * 的包（不导出 alpha.2 需要的 `./message-projections`）→ dsh web 启动即
+ * ERR_PACKAGE_PATH_NOT_EXPORTED（黑屏）。
+ * @param runtimeDir - the runtime whose node_modules to scan.
+ * @returns every stale copy as `{ dir, label }` (label is for logging).
+ */
+function findStaleNestedDshPackages(runtimeDir) {
+  const scopeRoot = join(runtimeDir, 'node_modules', '@deepseek-ai')
+  if (!existsSync(scopeRoot)) return []
+  const stale = []
+  for (const parent of readdirSync(scopeRoot)) {
+    const parentPkg = join(scopeRoot, parent, 'package.json')
+    if (!existsSync(parentPkg)) continue
+    let parentVersion = null
+    try { parentVersion = JSON.parse(readFileSync(parentPkg, 'utf8')).version ?? null } catch { continue }
+    if (!parentVersion) continue
+    const nestedRoot = join(scopeRoot, parent, 'node_modules', '@deepseek-ai')
+    if (!existsSync(nestedRoot)) continue
+    for (const nested of readdirSync(nestedRoot)) {
+      const dir = join(nestedRoot, nested)
+      const nestedPkg = join(dir, 'package.json')
+      if (!existsSync(nestedPkg)) continue
+      try {
+        const nestedVersion = JSON.parse(readFileSync(nestedPkg, 'utf8')).version ?? null
+        if (nestedVersion && nestedVersion !== parentVersion) {
+          stale.push({ dir, label: `${parent} -> ${nested}@${nestedVersion} (parent ${parentVersion})` })
+        }
+      } catch { /* unreadable manifest: not ours to judge */ }
+    }
+  }
+  return stale
+}
+
+/**
+ * 清理残留嵌套包：**只删**那些版本不一致的嵌套副本目录，不重建整棵树。
+ *
+ * 这是修复"升级后 dsh 起不来"的最小动作：嵌套副本本来就违反了它声明的依赖范围
+ * （父包要求 `^0.1.6-alpha.2`，嵌套的却是 0.1.5-rc.2），删掉后 Node 会解析提升到根
+ * 的正确版本。相比删掉整个 node_modules 重装：不需要联网、不需要 pnpm、也不会在
+ * 安装失败时把一棵"只是有点脏"的树变成"没有 dsh"。
+ * @param runtimeDir - the runtime to repair.
+ * @returns the removed entries' labels.
+ */
+function removeStaleNestedDshPackages(runtimeDir) {
+  const stale = findStaleNestedDshPackages(runtimeDir)
+  for (const entry of stale) rmSync(entry.dir, { recursive: true, force: true })
+  return stale.map((entry) => entry.label)
+}
+
+/**
  * 0.3.3 的 pnpm isolated 布局特征：node_modules 下有 .pnpm 虚拟仓库，且 dsh 的
  * 内部包（dsh-base 等）没有提升到 node_modules 根。这种布局下复制到根目录的
  * 预装插件（dsh-kanban 等）和 host bundle（dsh-base/dsh-web-app）import dsh
@@ -595,7 +650,10 @@ async function installDshUpdate({ force = false, version } = {}) {
   try {
     await resolveRemoteVersions()
   } catch (err) {
-    throw new Error(`无法查询最新版本：${err.message}`)
+    // 显式指定版本时不需要 registry 元数据：pnpm 可以直接从本地 store 重装同一版本。
+    // 这条路径用于"残留嵌套包修复"——离线也要能修好已经装在机器上的损坏树。
+    if (version === undefined) throw new Error(`无法查询最新版本：${err.message}`)
+    log(`版本查询失败（${err.message}）— 用显式版本 ${version} 继续（本地 store）`)
   }
   // 目标版本：显式指定（壳菜单/托盘的「立即更新」可传具体版本）> max(npm latest, 地板)。
   // 地板保证装完一定有 dsh 自带插件管理（npm latest 目前仍是 0.1.5-rc.2）。
@@ -680,6 +738,13 @@ async function installDshUpdate({ force = false, version } = {}) {
         await pnpm(['install', `${PACKAGE}@${target}`, '--registry', reg, '--store-dir', pnpmStore, '--node-linker=hoisted'],
           { cwd: args.runtimeDir, stream: true, timeoutMs: 600_000 })
         log(`updated to ${target}`)
+        // 升级后一致性闸门：pnpm 的 hoisted 安装不会清理上一版留下的嵌套目录，而
+        // Node 解析时嵌套副本优先 → 残留的旧版内部包会让 dsh 启动即崩（见
+        // findStaleNestedDshPackages 的实测记录）。只删那些副本目录本身，不重建整棵树。
+        const removedStale = removeStaleNestedDshPackages(args.runtimeDir)
+        if (removedStale.length > 0) {
+          log(`清理了 ${removedStale.length} 个残留嵌套包（如 ${removedStale[0]}）`)
+        }
         lastErr = null
         break
       } catch (err) {
@@ -1505,6 +1570,17 @@ async function main() {
           log(`兼容闸门升级失败（继续启动，插件管理不可用）: ${err.message}`)
         }
       }
+    }
+  }
+
+  // 残留嵌套包修复：上一版升级可能留下旧版内部包（pnpm hoisted 不清理嵌套目录），
+  // 而 Node 解析时嵌套副本优先 → dsh 启动即 ERR_PACKAGE_PATH_NOT_EXPORTED（黑屏）。
+  // 已经在装上的用户不该等到下次升级才被修好，所以启动时也检查一次；修复只是删掉
+  // 那些副本目录（不重建树、不需要联网），devMode 冻结时同样不动。
+  if (dshInstalled(args.runtimeDir) && shellManifest.devMode !== true) {
+    const removedStale = removeStaleNestedDshPackages(args.runtimeDir)
+    if (removedStale.length > 0) {
+      log(`清理了 ${removedStale.length} 个残留嵌套包（如 ${removedStale[0]}）— 避免 dsh 解析到旧版内部包`)
     }
   }
 

@@ -245,7 +245,11 @@ process.stdout.write(JSON.stringify({ t: 'url', url: 'http://127.0.0.1:19999' })
 setInterval(() => {}, 1000)
 `)
 mkdirSync(join(oldRuntime, 'node_modules', 'pnpm', 'bin'), { recursive: true })
-writeFileSync(join(oldRuntime, 'node_modules', 'pnpm', 'bin', 'pnpm.cjs'), '// pnpm stub\n')
+// 这个桩**故意失败**：断言"升级失败时如实上报、且不阻塞启动"这条负向保证。
+writeFileSync(
+  join(oldRuntime, 'node_modules', 'pnpm', 'bin', 'pnpm.cjs'),
+  "process.stderr.write('ERR_PNPM sandbox offline\\n'); process.exit(1)\n",
+)
 const oldMarker = join(work, 'boots-old.log')
 const oldChild = spawn(process.execPath, [
   manager,
@@ -268,7 +272,7 @@ const oldChild = spawn(process.execPath, [
 // 因为它不受事件时序影响（壳崩了日志也还在）。
 const oldLog = join(oldRuntime, 'manager.log')
 const oldLogText = () => (existsSync(oldLog) ? readFileSync(oldLog, 'utf8') : '')
-const gateDeadline = Date.now() + 90_000
+let gateDeadline = Date.now() + 90_000
 const until = async (pred) => {
   while (Date.now() < gateDeadline && !pred()) await new Promise((r) => setTimeout(r, 200))
   return pred()
@@ -288,6 +292,75 @@ assert.ok(
 oldChild.kill('SIGTERM')
 await new Promise((resolvePromise) => oldChild.on('exit', resolvePromise))
 
-console.log('PASS — manager control plane (11 scenarios)')
+// ── scenario 9: 残留嵌套包被检测并**就地清理**，dsh 照常启动 ─────────────────
+// 2026-09-21 实测：0.1.5-rc.2 → 0.1.6-alpha.2 升级后
+// <runtime>/node_modules/@deepseek-ai/dsh-session-persistence-jsonl/node_modules/
+// @deepseek-ai/ 下留着 3 个 0.1.5-rc.2 的包（pnpm hoisted 不清理嵌套目录），而 Node
+// 优先解析嵌套副本 → 子路径导出缺失 → dsh web 启动即 ERR_PACKAGE_PATH_NOT_EXPORTED。
+// 断言：检测到 → 删掉那棵嵌套树 → dsh 仍然启动（修复不需要联网/pnpm，也不动主树）。
+const staleRuntime = join(work, 'runtime-stale')
+const staleDsh = join(staleRuntime, 'node_modules', '@deepseek-ai', 'dsh')
+mkdirSync(join(staleDsh, 'lib'), { recursive: true })
+writeFileSync(join(staleDsh, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.1.6-alpha.2' }))
+writeFileSync(join(staleDsh, 'lib', 'bin.js'), `
+import { appendFileSync } from 'node:fs'
+const m = process.env.DSH_TEST_MARKER
+if (m) appendFileSync(m, 'boot-stale ' + process.pid + '\\n')
+process.stdout.write(JSON.stringify({ t: 'url', url: 'http://127.0.0.1:19998' }) + '\\n')
+setInterval(() => {}, 1000)
+`)
+const staleParent = join(staleRuntime, 'node_modules', '@deepseek-ai', 'dsh-session-persistence-jsonl')
+const staleNestedDir = join(staleParent, 'node_modules', '@deepseek-ai', 'dsh-session-format-catalog')
+mkdirSync(staleNestedDir, { recursive: true })
+writeFileSync(join(staleParent, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-session-persistence-jsonl', version: '0.1.6-alpha.2' }))
+writeFileSync(join(staleNestedDir, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-session-format-catalog', version: '0.1.5-rc.2' }))
+// 一个"本该被解析到"的提升副本，证明清理后解析会落到它上面。
+const hoistedDir = join(staleRuntime, 'node_modules', '@deepseek-ai', 'dsh-session-format-catalog')
+mkdirSync(hoistedDir, { recursive: true })
+writeFileSync(join(hoistedDir, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-session-format-catalog', version: '0.1.6-alpha.2' }))
+mkdirSync(join(staleRuntime, 'node_modules', 'pnpm', 'bin'), { recursive: true })
+writeFileSync(join(staleRuntime, 'node_modules', 'pnpm', 'bin', 'pnpm.cjs'), '// pnpm stub\n')
+const staleMarker = join(work, 'boots-stale.log')
+const staleChild = spawn(process.execPath, [
+  manager,
+  '--runtime-dir', staleRuntime,
+  '--resource-dir', resources,
+  '--patch', join(work, 'patch.yml'),
+  '--cwd', work,
+], {
+  stdio: ['pipe', 'pipe', 'pipe'],
+  env: {
+    ...process.env,
+    DSH_DESKTOP_NO_UPDATE: '1',
+    DSH_TEST_MARKER: staleMarker,
+    // 连不上的 registry：清理型修复**不需要**联网，这条断言正是要证明这一点。
+    DSH_DESKTOP_REGISTRY: 'http://127.0.0.1:9/',
+  },
+  windowsHide: true,
+})
+const staleLog = join(staleRuntime, 'manager.log')
+const staleLogText = () => (existsSync(staleLog) ? readFileSync(staleLog, 'utf8') : '')
+// 每个场景各自计时：共享一个 deadline 会让后面的场景被前面耗掉的时间挤成"立即超时"。
+gateDeadline = Date.now() + 60_000
+assert.ok(
+  await until(() => staleLogText().includes('清理了 1 个残留嵌套包')),
+  `the stale-nested repair fires and reports what it removed (manager.log: ${staleLogText().slice(0, 600)})`,
+)
+assert.ok(
+  !existsSync(staleNestedDir),
+  'the stale nested copy is gone (the parent still resolves the hoisted alpha.2 package)',
+)
+assert.ok(
+  existsSync(join(hoistedDir, 'package.json')) && existsSync(join(staleDsh, 'package.json')),
+  'the repair removes only the stale copies — the hoisted package and dsh itself stay',
+)
+assert.ok(
+  await until(() => existsSync(staleMarker) && readFileSync(staleMarker, 'utf8').includes('boot-stale')),
+  `dsh starts after the repair (manager.log: ${staleLogText().slice(0, 600)})`,
+)
+staleChild.kill('SIGTERM')
+await new Promise((resolvePromise) => staleChild.on('exit', resolvePromise))
+
+console.log('PASS — manager control plane (12 scenarios)')
 rmSync(work, { recursive: true, force: true })
 process.exit(0)
