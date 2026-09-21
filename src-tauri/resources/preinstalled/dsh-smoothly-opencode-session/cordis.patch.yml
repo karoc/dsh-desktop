@@ -11,6 +11,13 @@
 #                        ['opencode', 'opencode-go']. Add your own route key
 #                        when OpenCode is served under a custom provider name
 #                        (e.g. opencode-go-self).
+#   hosts: [string]      host gate. Entries are `host` (implicitly https) or
+#                        `scheme://host[:port]`; a leading `*.` is ignored.
+#                        Defaults to ['https://opencode.ai'] (subdomains
+#                        included). `['*']` DISABLES the gate (any host gets
+#                        the header while a session stream is active) — use
+#                        only for a mirror you fully trust. Unusable entries
+#                        are reported in the startup log.
 #   mode: 'session-id' | 'uuid'
 #                        'session-id' (default): header value = the DSH
 #                        session id that already travels with each model call
@@ -19,12 +26,24 @@
 #                        'uuid': a process-stable random uuid derived per DSH
 #                        session id (opaque; resets when the process
 #                        restarts).
-#   debug: true|false    log every streamed call that receives the header
-#                        via ctx.logger (the dsh process console).
-#   debugFile: path      optional absolute path; when set, every streamed
-#                        call that receives the header appends one JSON line
-#                        ({"ts","provider","model","session","header","value"})
-#                        to that file — handy when the dsh console is hidden.
+#   debug: true|false    log every streamed call that ENTERS the injection
+#                        flow via ctx.logger, and reveal raw values in
+#                        request-level records.
+#   debugFile: path      optional absolute path; each streamed call appends
+#                        one JSON line (kind:"stream"), and when
+#                        debugRequests is on, each injected or host-blocked
+#                        request appends one too (kind:"inject"|"skip").
+#                        Append-only, no rotation. Values are hashed unless
+#                        debug is also true.
+#   debugRequests: true|false
+#                        write one request-level record at the real fetch
+#                        moment ({"ts","kind","reason","host","provider",
+#                        "valueHash","valueLen"}). This is what proves whether
+#                        the header was actually attached.
+#   discoveryFallback: true|false
+#                        (default false) inject a process-stable UUID into bare
+#                        discovery requests: only GET whose path ends in
+#                        /models and whose host passes the gate.
 - insert:
     - id: dsh-smoothly-opencode-session
       name: '@karoc/dsh-smoothly-opencode-session'

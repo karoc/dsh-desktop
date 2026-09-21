@@ -64,7 +64,8 @@
 - 机制：**回环 HTTP 桥**——Rust 起 127.0.0.1 随机端口小服务；manager 把端口烧进
   client.js（占位符替换）；客户端 `fetch` POST `/notify`（toast）与 `/alive`（加载探针）。
   纯标准 Web 技术，零 Tauri 依赖。
-- 教训：改 client.js 后必须 `sync-resources` 再本地验证（资源副本与源码同步是构建的前置步骤）。
+- 教训：改 client.js 后必须 `sync-resources` 再本地验证（资源副本与源码同步是构建的前置步骤）。这条纪律现已由
+  `npm run test:copies` 门禁兜住（见 §34）——漏跑不再是"下次注意"，而是测试红。
 
 ## 11. 通知点击 → 聚焦 + 定位会话
 
@@ -463,3 +464,35 @@ Windows 桌面壳里系统通知 toast「每次都会弹两次」。三方独立
 各一行 → 机制 1（本修复已堵）；若 `notification:` 行成对且 `notify-complete` 一行而 `notification:` 两行 →
 壳层重复；若 `notify-*` 决策行成对 → 双页面实例（webview 之外还有浏览器 tab 开着同一 dsh URL，各自一个插件
 实例各自 POST /notify），需关掉多余 tab/实例。
+
+## 34. 副本一致性：把"记得同步"变成门禁（含技能被静默丢弃）
+
+- 坑：tauri 只打包 `src-tauri/resources/`，而源在 `scripts/`、`plugins/`。这组"源 → 随包副本"此前只靠"改完
+  记得跑 `npm run sync:resources`"维持；漏跑时**所有源侧检查仍然全绿**，只有安装包里的资源是旧的——0.5.0/0.6.0
+  的 plugin-console 副本滞后即此类（见 §10）。
+- 机制：`scripts/test-copy-consistency.mjs`，接入 `npm test`（CI 的 PR 快层本就跑 `npm test`），单跑
+  `npm run test:copies`。检查四组：manager 两个真源文件逐字节；每个 `plugins/<dir>` 与
+  `resources/plugin/@dsh-desktop/<rel>` 目录镜像（`<rel>` 取自 bundle 自身 `package.json` 的 `name`，**不是**
+  目录名）；`plugins/preinstalled/<pkg>` 镜像 **+ 两个目录集合双向相等**（新插件漏进 `sync-resources.mjs` 的
+  ship list 会以专门消息失败，而不是悄悄不随包）；`.dsh/skills/*/SKILL.md` 的 frontmatter 规则。
+- 同类静默失败（必须一起防）：`.dsh/skills/*/SKILL.md` 的 `description` 若**未加引号**且含 ASCII `": "`，YAML
+  会读成 compact mapping 里的嵌套 mapping，DSH 的 skill provider 只写一条服务端 warn 就丢弃整个文件——技能从
+  模型目录与用户界面同时消失，**没有任何可见报错**（2026-09-20 三个技能中招，其中一个还是 harness 系统提示
+  要求加载的看板技能）。规则：description 含 `": "` 必须加引号（内部双引号转义为 `\"`），或改用全角「：」。
+- 排查纪律：判断技能是否真的可用，**不能看系统提示里注入的技能目录**——那是快照、会过期（实测它曾声称一个已被
+  回退的文件"可用"，而 `skill` 工具正确地报 unknown）。权威做法是直接跑 provider
+  （`/srv/deepseek-harness/packages/skill/skill-filesystem/lib/index.js` 的 `FileSystemSkillProvider`），以目标
+  cwd 调 `list()`，看 `logger.warn` 里有没有 `skill file ... ignored: invalid YAML frontmatter`，再确认目标技能
+  在候选里且 `invocation` 策略符合预期。**零告警 + 在候选里 + 策略正确**，三者齐备才算通过。
+- 实测教训：**共享 checkout 里未提交的修复等于不存在**。同一仓库上并发会话的分支切换 / 快进拉取 / PR 合入会抹掉
+  工作区改动（本次两处修复就这样丢过一次：无 stash、无分支、无提交，`git log --all -S` 无命中，不可恢复）。
+  跨仓库或共享 checkout 的修复必须当次提交。
+- 配套：`scripts/audit-preinstalled.mjs` 现有两层比对——版本级（npm `dist-tags.latest`）+ **内容级**（`lib/*.js`、
+  `cordis.patch.yml`、`skills/*/SKILL.md` 与**同版本**已发布 tarball 做 sha256；tarball 在内存 gunzip + 极简 tar
+  解析，零依赖、不落临时文件）。内容级专治版本级盲区：手工同步拷错时版本号照样相等，旧逻辑会判 `up-to-date`，
+  而技能 §3 又明令"已是最新的插件不要动"。它同时报出随包技能 frontmatter 不可解析，并标注为**上游包缺陷
+  （同步修不了，只能发新版本）**。契约不变：只读、不写文件、永远 exit 0、不当门禁；代价是现在要下载四个 tarball，
+  耗时随网络波动（实测 3 秒 ~ 超过 60 秒），别把慢当成卡死。
+- 两个门禁都做过负向对照（否则是假门禁）：往 `resources/manager/proxy.mjs` 或
+  `resources/preinstalled/dsh-kanban/lib/index.js` 追加一个字节 → 精确指向该文件地失败；frontmatter 规则对加引号
+  的 description PASS、对未加引号的 FAIL。

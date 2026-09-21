@@ -48,6 +48,14 @@ const NATIVE_BUILD_PKGS = [
   'protobufjs',
 ]
 
+/**
+ * 壳要求的最低 dsh 版本。0.1.6-alpha.2 起 dsh 自带插件管理（Web 侧边栏
+ * Plugins 页 + @deepseek-ai/dsh-plugin-manager），壳内自建插件管理已整体移除，
+ * 因此低于该版本的 dsh 会让用户彻底失去插件管理入口。npm 的 latest tag 目前仍是
+ * 0.1.5-rc.2（不含插件管理），所以安装/升级目标取 max(latest, 地板)。
+ */
+const MIN_DSH_VERSION = '0.1.6-alpha.2'
+
 // ── args ───────────────────────────────────────────────────────────────────
 function parseArgs(argv) {
   const out = { runtimeDir: null, resourceDir: null, patch: null, cwd: null, home: null, registry: undefined, bridgePort: null, shellVersion: null, shellIdentifier: null }
@@ -387,6 +395,61 @@ function dshInstalled(runtimeDir) {
 }
 
 /**
+ * 残留嵌套包检测：列出版本与其父包不一致的 `@deepseek-ai/*` 嵌套副本。
+ *
+ * 所有 `@deepseek-ai/dsh-*` 包同版本发布，因此嵌套副本只要与父包版本不同就是上一版
+ * 的残留（pnpm 的 hoisted 安装不会清理嵌套目录）。而 Node 解析时**嵌套副本优先于**
+ * 提升到根的新版 —— 2026-09-21 实测：0.1.5-rc.2 → 0.1.6-alpha.2 升级后
+ * `dsh-session-persistence-jsonl/node_modules/@deepseek-ai/` 下留着 3 个 0.1.5-rc.2
+ * 的包（不导出 alpha.2 需要的 `./message-projections`）→ dsh web 启动即
+ * ERR_PACKAGE_PATH_NOT_EXPORTED（黑屏）。
+ * @param runtimeDir - the runtime whose node_modules to scan.
+ * @returns every stale copy as `{ dir, label }` (label is for logging).
+ */
+function findStaleNestedDshPackages(runtimeDir) {
+  const scopeRoot = join(runtimeDir, 'node_modules', '@deepseek-ai')
+  if (!existsSync(scopeRoot)) return []
+  const stale = []
+  for (const parent of readdirSync(scopeRoot)) {
+    const parentPkg = join(scopeRoot, parent, 'package.json')
+    if (!existsSync(parentPkg)) continue
+    let parentVersion = null
+    try { parentVersion = JSON.parse(readFileSync(parentPkg, 'utf8')).version ?? null } catch { continue }
+    if (!parentVersion) continue
+    const nestedRoot = join(scopeRoot, parent, 'node_modules', '@deepseek-ai')
+    if (!existsSync(nestedRoot)) continue
+    for (const nested of readdirSync(nestedRoot)) {
+      const dir = join(nestedRoot, nested)
+      const nestedPkg = join(dir, 'package.json')
+      if (!existsSync(nestedPkg)) continue
+      try {
+        const nestedVersion = JSON.parse(readFileSync(nestedPkg, 'utf8')).version ?? null
+        if (nestedVersion && nestedVersion !== parentVersion) {
+          stale.push({ dir, label: `${parent} -> ${nested}@${nestedVersion} (parent ${parentVersion})` })
+        }
+      } catch { /* unreadable manifest: not ours to judge */ }
+    }
+  }
+  return stale
+}
+
+/**
+ * 清理残留嵌套包：**只删**那些版本不一致的嵌套副本目录，不重建整棵树。
+ *
+ * 这是修复"升级后 dsh 起不来"的最小动作：嵌套副本本来就违反了它声明的依赖范围
+ * （父包要求 `^0.1.6-alpha.2`，嵌套的却是 0.1.5-rc.2），删掉后 Node 会解析提升到根
+ * 的正确版本。相比删掉整个 node_modules 重装：不需要联网、不需要 pnpm、也不会在
+ * 安装失败时把一棵"只是有点脏"的树变成"没有 dsh"。
+ * @param runtimeDir - the runtime to repair.
+ * @returns the removed entries' labels.
+ */
+function removeStaleNestedDshPackages(runtimeDir) {
+  const stale = findStaleNestedDshPackages(runtimeDir)
+  for (const entry of stale) rmSync(entry.dir, { recursive: true, force: true })
+  return stale.map((entry) => entry.label)
+}
+
+/**
  * 0.3.3 的 pnpm isolated 布局特征：node_modules 下有 .pnpm 虚拟仓库，且 dsh 的
  * 内部包（dsh-base 等）没有提升到 node_modules 根。这种布局下复制到根目录的
  * 预装插件（dsh-kanban 等）和 host bundle（dsh-base/dsh-web-app）import dsh
@@ -587,11 +650,15 @@ async function installDshUpdate({ force = false, version } = {}) {
   try {
     await resolveRemoteVersions()
   } catch (err) {
-    throw new Error(`无法查询最新版本：${err.message}`)
+    // 显式指定版本时不需要 registry 元数据：pnpm 可以直接从本地 store 重装同一版本。
+    // 这条路径用于"残留嵌套包修复"——离线也要能修好已经装在机器上的损坏树。
+    if (version === undefined) throw new Error(`无法查询最新版本：${err.message}`)
+    log(`版本查询失败（${err.message}）— 用显式版本 ${version} 继续（本地 store）`)
   }
-  // 目标版本：显式指定（用户从控制台点"预发布更新"传 rc8 等）> latest tag。
-  const target = version ?? latestVersion
-  if (!target) throw new Error('无法获取最新版本')
+  // 目标版本：显式指定（壳菜单/托盘的「立即更新」可传具体版本）> max(npm latest, 地板)。
+  // 地板保证装完一定有 dsh 自带插件管理（npm latest 目前仍是 0.1.5-rc.2）。
+  const target = version ?? (latestVersion === null ? MIN_DSH_VERSION
+    : (versionGt(MIN_DSH_VERSION, latestVersion) ? MIN_DSH_VERSION : latestVersion))
   // A half-extracted install (package.json written, lib/bin.js missing) must
   // be REPAIRED even when the recorded version already matches latest — npm
   // may consider the package current and skip re-extraction, leaving the
@@ -671,6 +738,13 @@ async function installDshUpdate({ force = false, version } = {}) {
         await pnpm(['install', `${PACKAGE}@${target}`, '--registry', reg, '--store-dir', pnpmStore, '--node-linker=hoisted'],
           { cwd: args.runtimeDir, stream: true, timeoutMs: 600_000 })
         log(`updated to ${target}`)
+        // 升级后一致性闸门：pnpm 的 hoisted 安装不会清理上一版留下的嵌套目录，而
+        // Node 解析时嵌套副本优先 → 残留的旧版内部包会让 dsh 启动即崩（见
+        // findStaleNestedDshPackages 的实测记录）。只删那些副本目录本身，不重建整棵树。
+        const removedStale = removeStaleNestedDshPackages(args.runtimeDir)
+        if (removedStale.length > 0) {
+          log(`清理了 ${removedStale.length} 个残留嵌套包（如 ${removedStale[0]}）`)
+        }
         lastErr = null
         break
       } catch (err) {
@@ -943,17 +1017,6 @@ function restoreProfileBundlesAfterUpdate(runtimeDir, before) {
   }
 }
 
-/** Installed version of a package dir, or null. */
-function installedVersionOf(pkgDir) {
-  const p = join(pkgDir, 'package.json')
-  if (!existsSync(p)) return null
-  try {
-    return JSON.parse(readFileSync(p, 'utf8')).version ?? null
-  } catch {
-    return null
-  }
-}
-
 /**
  * Top-level node_modules entries under which the preinstalled bundles install.
  * A bundle lands at `<runtime>/node_modules/<package.json name>`, so a scoped
@@ -985,9 +1048,6 @@ function ensurePreinstalled(runtimeDir, resourceDir) {
     return
   }
   const manifest = readShellManifest(runtimeDir)
-  // User-chosen updates (dsh.json `updates`): keep the runtime copy at the
-  // user's version instead of overwriting it with the shell's bundled copy.
-  const userUpdated = manifest.updates ?? {}
   const names = []
   for (const name of readdirSync(srcRoot)) {
     const src = join(srcRoot, name)
@@ -998,15 +1058,6 @@ function ensurePreinstalled(runtimeDir, resourceDir) {
     const pkgName = JSON.parse(readFileSync(pkgJson, 'utf8')).name ?? name
     names.push(pkgName)
     const dest = join(runtimeDir, 'node_modules', pkgName)
-    if (userUpdated[pkgName] !== undefined) {
-      const installed = installedVersionOf(dest)
-      if (installed === userUpdated[pkgName]) {
-        log(`keeping user-updated ${pkgName}@${installed}`)
-        continue
-      }
-      // Stale record (runtime missing or version mismatch): fall through and
-      // restore the bundled copy below.
-    }
     const updating = existsSync(dest) && !sameTree(src, dest)
     if (!existsSync(dest) || updating) {
       mkdirSync(dirname(dest), { recursive: true })
@@ -1015,129 +1066,10 @@ function ensurePreinstalled(runtimeDir, resourceDir) {
     }
   }
   if (names.length === 0) return
-  // Preserve other shell fields (devMode, updates) while recording the list.
+  // Preserve other shell fields (devMode) while recording the list.
   manifest.preinstalled = names
   writeShellManifest(runtimeDir, manifest)
   log(`preinstalled bundles: ${names.join(', ')}`)
-}
-
-// ── preinstalled plugin updates (user-gated, npm source, reset available) ──
-// Preinstalled bundles are NOT profile dependencies, so `dsh plugin` cannot
-// manage them. Updates fetch the package from npm into a TEMP prefix and copy
-// the extracted package over the runtime copy — never `npm install --prefix
-// <runtime>`, which would prune the copied-only plugin packages (notifications
-// / console / other preinstalled) not listed in runtime/package.json.
-let preinstalledUpdates = {}
-
-function emitPreinstalledUpdates() {
-  emit({ t: 'preinstalled-updates', updates: preinstalledUpdates })
-}
-
-/** Latest version of a package on the registry (npm view), or null. */
-async function npmViewVersion(name) {
-  const out = await npm(['view', name, 'version', '--json', '--registry', REGISTRY], { timeoutMs: 60_000 })
-  const parsed = JSON.parse(out)
-  return typeof parsed === 'string' ? parsed : parsed?.version ?? null
-}
-
-/** Refresh the cached update state for every preinstalled bundle. */
-async function checkPreinstalledUpdates() {
-  const names = shellManifest.preinstalled ?? []
-  // Query the registry in PARALLEL: N bundles must not serialize N registry
-  // round-trips (offline each npm view can take seconds — serialized this
-  // delayed the preinstalled-updates event past the shell's patience).
-  const entries = await Promise.all(
-    names.map(async (name) => {
-      const installed = installedVersionOf(join(args.runtimeDir, 'node_modules', name))
-      let latest = null
-      try {
-        latest = await npmViewVersion(name)
-      } catch {
-        latest = null
-      }
-      return [name, {
-        installed,
-        latest,
-        updateAvailable: Boolean(latest && installed && latest !== installed),
-        userUpdated: (shellManifest.updates ?? {})[name] !== undefined,
-      }]
-    }),
-  )
-  const next = Object.fromEntries(entries)
-  preinstalledUpdates = next
-  emitPreinstalledUpdates()
-}
-
-/** Update one preinstalled bundle from npm (user-gated). */
-async function updatePreinstalled(name) {
-  if (!(shellManifest.preinstalled ?? []).includes(name)) {
-    log(`update-preinstalled: ${name} is not a preinstalled bundle`)
-    return
-  }
-  if (activeOp && activeOp.op && !activeOp.done) {
-    log(`update-preinstalled ignored: another op is running`)
-    return
-  }
-  emitOpStatus({ op: 'update-preinstalled', spec: name, done: false })
-  log(`updating preinstalled ${name}`)
-  const tmp = mkdtempSync(join(tmpdir(), 'dsh-pre-'))
-  try {
-    const latest = await npmViewVersion(name)
-    if (!latest) throw new Error('无法获取最新版本')
-    const dest = join(args.runtimeDir, 'node_modules', name)
-    const installed = installedVersionOf(dest)
-    if (installed !== latest) {
-      await npm(['install', `${name}@${latest}`, '--prefix', tmp, '--no-audit', '--no-fund', '--no-progress', '--loglevel=http', '--registry', REGISTRY], { stream: true, timeoutMs: 600_000 })
-      const src = join(tmp, 'node_modules', name)
-      if (!existsSync(src)) throw new Error(`npm 未产出 ${name}@${latest}`)
-      rmSync(dest, { recursive: true, force: true })
-      mkdirSync(dirname(dest), { recursive: true })
-      cpSync(src, dest, { recursive: true })
-      log(`preinstalled ${name} updated to ${latest}`)
-    } else {
-      log(`preinstalled ${name} already at ${latest}`)
-    }
-    const manifest = readShellManifest(args.runtimeDir)
-    manifest.updates = { ...(manifest.updates ?? {}), [name]: latest }
-    writeShellManifest(args.runtimeDir, manifest)
-    shellManifest = manifest
-    await checkPreinstalledUpdates()
-    emitOpStatus({ op: 'update-preinstalled', spec: name, done: true, ok: true, nextAction: 'restart' })
-  } catch (err) {
-    log(`update-preinstalled ${name} failed: ${err.message}`)
-    emitOpStatus({ op: 'update-preinstalled', spec: name, done: true, ok: false, error: err.message })
-  } finally {
-    rmSync(tmp, { recursive: true, force: true })
-  }
-}
-
-/** Reset one preinstalled bundle back to the shell-shipped (bundled) version. */
-async function resetPreinstalled(name) {
-  if (!(shellManifest.preinstalled ?? []).includes(name)) {
-    log(`reset-preinstalled: ${name} is not a preinstalled bundle`)
-    return
-  }
-  if (activeOp && activeOp.op && !activeOp.done) {
-    log(`reset-preinstalled ignored: another op is running`)
-    return
-  }
-  emitOpStatus({ op: 'reset-preinstalled', spec: name, done: false })
-  log(`resetting preinstalled ${name}`)
-  try {
-    const manifest = readShellManifest(args.runtimeDir)
-    if (manifest.updates) delete manifest.updates[name]
-    writeShellManifest(args.runtimeDir, manifest)
-    shellManifest = manifest
-    // Re-copy the bundled copy over the user's version (byte-compare detects
-    // the difference and replaces it).
-    ensurePreinstalled(args.runtimeDir, args.resourceDir)
-    shellManifest = readShellManifest(args.runtimeDir)
-    await checkPreinstalledUpdates()
-    emitOpStatus({ op: 'reset-preinstalled', spec: name, done: true, ok: true, nextAction: 'restart' })
-  } catch (err) {
-    log(`reset-preinstalled ${name} failed: ${err.message}`)
-    emitOpStatus({ op: 'reset-preinstalled', spec: name, done: true, ok: false, error: err.message })
-  }
 }
 
 function bakeBridgePort(dest) {
@@ -1354,6 +1286,10 @@ async function launchDsh(runtimeDir, patchPath, cwd) {
       ...process.env,
       DSH_HOME: dshHome,
       NODE_OPTIONS: childNodeOptions,
+      // dsh 0.1.6 起插件管理在 dsh 内部（Web 侧边栏 Plugins 页），它按 PATH 找
+      // pnpm（launcher facts 的 packageManager 只能由进程内调用方注入，CLI 路径
+      // 拿不到）→ 必须挂上壳内置的 pnpm shim，否则插件页装不了插件。
+      PATH: `${pnpmShimDir(runtimeDir)}${delimiter()}${process.env.PATH ?? ''}`,
     },
     windowsHide: true,
   })
@@ -1466,34 +1402,6 @@ function handleCommand(cmd) {
       dumpDoneAt = Date.now()
       if (dumpDoneResolve) { const resolve = dumpDoneResolve; dumpDoneResolve = null; resolve(true) }
       break
-    case 'plugins-install':
-      if (cmd.spec) {
-        const spec = normalizeGitHubSpec(cmd.spec)
-        if (spec !== cmd.spec) log(`plugins-install: ${cmd.spec} -> ${spec}`)
-        void runPluginOp(['add', spec], { op: 'install', spec })
-      } else {
-        log('plugins-install: missing spec')
-      }
-      break
-    case 'plugins-remove':
-      if (cmd.name) void runPluginOp(['remove', String(cmd.name)], { op: 'remove', spec: String(cmd.name) })
-      else log('plugins-remove: missing name')
-      break
-    case 'plugins-update':
-      void runPluginOp(
-        cmd.name ? ['update', String(cmd.name)] : ['update'],
-        { op: 'update', spec: cmd.name ? String(cmd.name) : '(all)' },
-      )
-      break
-    case 'preinstalled-check': void checkPreinstalledUpdates(); break
-    case 'preinstalled-update':
-      if (cmd.name) void updatePreinstalled(String(cmd.name))
-      else log('preinstalled-update: missing name')
-      break
-    case 'preinstalled-reset':
-      if (cmd.name) void resetPreinstalled(String(cmd.name))
-      else log('preinstalled-reset: missing name')
-      break
     default: log(`unknown manager command: ${cmd?.cmd}`)
   }
 }
@@ -1596,129 +1504,13 @@ function writePnpmShim(runtimeDir) {
   log(`pnpm shim ready at ${join(binDir, exe)}`)
 }
 
-/** Run `dsh plugin --profile web <args...>` under the web profile's DSH_HOME. */
-function runDshPlugin(runtimeDir, argsList, cwd) {
-  const dshBin = join(runtimeDir, 'node_modules', PACKAGE, 'lib', 'bin.js')
-  if (!existsSync(dshBin)) throw new Error(`dsh not installed at ${dshBin}`)
-  const dshHome = args.home ?? join(runtimeDir, 'dsh-home')
-  const env = {
-    ...process.env,
-    DSH_HOME: dshHome,
-    PATH: `${pnpmShimDir(runtimeDir)}${delimiter()}${process.env.PATH ?? ''}`,
-  }
-  return new Promise((resolvePromise, rejectPromise) => {
-    const child = spawn(process.execPath, [dshBin, 'plugin', '--profile', 'web', ...argsList], {
-      cwd,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env,
-      windowsHide: true,
-    })
-    const pump = (buf) => {
-      for (const line of String(buf).split(/\r?\n/)) {
-        const t = line.replace(/^\s+|\s+$/g, '')
-        if (t) log(t.slice(0, 500))
-      }
-    }
-    child.stdout.on('data', pump)
-    child.stderr.on('data', pump)
-    child.on('error', rejectPromise)
-    child.on('exit', (code) => resolvePromise(code ?? 1))
-  })
-}
-
-// Active plugin op, mirrored to the shell via {t:'op-status'} and included in
-// the bridge's /plugins/list so the console can show progress + nextAction.
+// Active manager op, mirrored to the shell via {t:'op-status'} (the shell's
+// check-update dialog renders progress and the failure reason).
 let activeOp = null
 
 function emitOpStatus(status) {
   activeOp = status
   emit({ t: 'op-status', ...status })
-}
-
-/**
- * Normalize common GitHub URL forms into a pnpm git spec. pnpm does NOT accept
- * a bare `https://github.com/...` as a dependency spec — it needs
- * `github:owner/repo` (or `git+https://...`). Users paste URLs, so we rewrite:
- *   https://github.com/owner/repo[/...][.git][#ref]  ->  github:owner/repo[#ref]
- * Other specs (npm names, github:, git+https://, paths) pass through untouched.
- */
-function normalizeGitHubSpec(spec) {
-  const s = String(spec).trim()
-  const m = s.match(/^https?:\/\/(?:www\.)?github\.com\/([^/\s?#]+)\/([^/\s?#]+?)(?:\.git)?(?:\/.*)?(?:#([\w.-]+))?$/)
-  if (m) {
-    const [, owner, repo, ref] = m
-    return `github:${owner}/${repo}${ref ? `#${ref}` : ''}`
-  }
-  return s
-}
-
-/** The web profile manifest path (same DSH_HOME the `dsh plugin` CLI uses). */
-function profileManifestPath() {
-  const home = args.home ?? join(args.runtimeDir, 'dsh-home')
-  return join(home, 'profiles', 'web', 'package.json')
-}
-
-function readProfileManifest() {
-  try {
-    return JSON.parse(readFileSync(profileManifestPath(), 'utf8'))
-  } catch {
-    return { dependencies: {}, dsh: { profile: { bundles: [] } } }
-  }
-}
-
-async function runPluginOp(argsList, opInfo) {
-  if (activeOp && activeOp.op && !activeOp.done) {
-    log(`plugin ${opInfo.op} ignored: another op is already running`)
-    return
-  }
-  // Capture the dependency set before, so an install can tell whether the
-  // added package actually became a plugin layer (dsh.profile.bundles) or was
-  // just a plain dependency (no dsh.bundle) — the honest "did it take effect".
-  const beforeDeps = new Set(Object.keys(readProfileManifest().dependencies ?? {}))
-  const cwd = args.cwd && existsSync(args.cwd) ? args.cwd : process.env.HOME ?? process.cwd()
-  emitOpStatus({ op: opInfo.op, spec: opInfo.spec, done: false })
-  log(`plugin ${opInfo.op}: ${opInfo.spec}`)
-  try {
-    // The `dsh plugin` CLI spawns `pnpm` — make sure the bundled one + shim
-    // are in place first (lazy install on the first plugin operation).
-    await ensurePnpm(args.runtimeDir)
-    const code = await runDshPlugin(args.runtimeDir, argsList, cwd)
-    const ok = code === 0
-    log(`plugin ${opInfo.op} ${opInfo.spec}: ${ok ? 'ok' : `failed (code ${code})`}`)
-    let hint
-    let hintKey
-    let hintPlugins
-    let nextAction = ok ? 'restart' : null
-    if (ok && opInfo.op === 'install') {
-      const after = readProfileManifest()
-      const afterDeps = Object.keys(after.dependencies ?? {})
-      const bundles = after.dsh?.profile?.bundles ?? []
-      const added = afterDeps.filter((n) => !beforeDeps.has(n))
-      const notLoaded = added.filter((n) => !bundles.includes(n))
-      if (notLoaded.length > 0) {
-        // Installed as a dependency but declares no dsh.bundle — it will never
-        // load as a plugin; no restart needed and the user deserves to know.
-        // hintKey + hintPlugins let the console render this in the UI language.
-        hint = `已安装：${notLoaded.join(', ')} 未声明 dsh.bundle，不会作为插件加载`
-        hintKey = 'not-a-bundle'
-        hintPlugins = notLoaded
-        nextAction = null
-      }
-    }
-    emitOpStatus({
-      op: opInfo.op,
-      spec: opInfo.spec,
-      done: true,
-      ok,
-      nextAction,
-      hint,
-      hintKey,
-      hintPlugins,
-    })
-  } catch (err) {
-    log(`plugin ${opInfo.op} failed: ${err.message}`)
-    emitOpStatus({ op: opInfo.op, spec: opInfo.spec, done: true, ok: false, error: err.message })
-  }
 }
 
 function delimiter() {
@@ -1760,6 +1552,38 @@ async function main() {
       log(`isolated→hoisted 布局迁移失败：${err.message}`)
     }
   }
+  // 兼容闸门：壳依赖 dsh 0.1.6-alpha.2 起的自带插件管理（壳内自建管理已移除）。
+  // 已装版本低于地板时先升到地板（npm latest 仍是 0.1.5-rc.2，全新安装/老用户
+  // 都可能落在没有插件管理的版本上）。失败不阻塞启动——用户仍可用壳菜单的
+  // 「停用全部第三方插件…」自救。devMode（dsh.json）是"别动我的 dsh"的显式
+  // 开关，与更新检查同语义：冻结时只告警，不擅自升级。
+  if (dshInstalled(args.runtimeDir)) {
+    const gateCurrent = installedVersion(args.runtimeDir)
+    if (gateCurrent !== null && versionGt(MIN_DSH_VERSION, gateCurrent)) {
+      if (shellManifest.devMode === true) {
+        log(`dsh ${gateCurrent} 低于最低要求 ${MIN_DSH_VERSION}，但 devMode 冻结了 dsh 升级 — 保持原样（插件管理不可用）`)
+      } else {
+        log(`dsh ${gateCurrent} 低于最低要求 ${MIN_DSH_VERSION}（该版本没有插件管理）— 升级到地板版本`)
+        try {
+          await installDshUpdate({ version: MIN_DSH_VERSION })
+        } catch (err) {
+          log(`兼容闸门升级失败（继续启动，插件管理不可用）: ${err.message}`)
+        }
+      }
+    }
+  }
+
+  // 残留嵌套包修复：上一版升级可能留下旧版内部包（pnpm hoisted 不清理嵌套目录），
+  // 而 Node 解析时嵌套副本优先 → dsh 启动即 ERR_PACKAGE_PATH_NOT_EXPORTED（黑屏）。
+  // 已经在装上的用户不该等到下次升级才被修好，所以启动时也检查一次；修复只是删掉
+  // 那些副本目录（不重建树、不需要联网），devMode 冻结时同样不动。
+  if (dshInstalled(args.runtimeDir) && shellManifest.devMode !== true) {
+    const removedStale = removeStaleNestedDshPackages(args.runtimeDir)
+    if (removedStale.length > 0) {
+      log(`清理了 ${removedStale.length} 个残留嵌套包（如 ${removedStale[0]}）— 避免 dsh 解析到旧版内部包`)
+    }
+  }
+
   // Launch dsh FIRST; the update check runs in the background (it must never
   // delay the UI — a slow registry lookup used to block dsh startup for
   // seconds behind a dark/white launcher). It reports via update-status events.
@@ -1785,8 +1609,6 @@ async function main() {
   }
   ensurePreinstalled(args.runtimeDir, args.resourceDir)
   shellManifest = readShellManifest(args.runtimeDir)
-  // Preinstalled update badges (npm view per bundle) — background, never blocks.
-  void checkPreinstalledUpdates().catch(() => {})
 
   const cwd = args.cwd && existsSync(args.cwd) ? args.cwd : process.env.HOME ?? process.cwd()
   log(`launching dsh web (runtime=${args.runtimeDir})`)

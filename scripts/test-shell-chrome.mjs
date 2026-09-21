@@ -38,7 +38,7 @@ assert.ok(Array.isArray(SHELL_MENUS[0].items), 'app menu has dropdown items')
 const brand = SHELL_MENUS[0].items[0]
 assert.ok(brand && brand.id === 'brand' && brand.type === 'brand', 'dropdown first row shows the app name (brand)')
 const ids = SHELL_MENUS[0].items.map((i) => i.id).filter(Boolean)
-for (const id of ['proxy-settings', 'plugins', 'check-update', 'dev-mode', 'refresh', 'restart', 'open-data', 'legacy-cleanup', 'cache-cleanup', 'about', 'quit']) {
+for (const id of ['proxy-settings', 'disable-plugins', 'check-update', 'dev-mode', 'refresh', 'restart', 'open-data', 'legacy-cleanup', 'cache-cleanup', 'about', 'quit']) {
   assert.ok(ids.includes(id), `app menu contains ${id}`)
 }
 
@@ -124,19 +124,30 @@ assert.ok(chromeSrc.includes('dialog-backdrop'), 'chrome has a modal dialog laye
 assert.ok(chromeSrc.includes('openCheckUpdateDialog'), 'check-update opens an in-shell modal (info + 确定 + 立即更新)')
 assert.ok(chromeSrc.includes('openAboutDialog'), 'about opens an in-shell modal (name/version/build date/dsh version + 确定)')
 assert.ok(chromeSrc.includes('__DSH_BUILD_DATE__'), 'about dialog shows the injected build date')
-// ── 插件管理 = 壳内独立管理窗口（全局可用，dsh 崩溃时也可管理）─────
-// 窗口页复用原插件控制台渲染核心（src/plugin-console.js），数据走环回桥
-// （桥由壳拉起、不依赖 dsh）；桥端口由 lib.rs 对 plugins 窗口注入。
-assert.ok(chromeSrc.includes('/shell/open-plugins'), 'chrome opens the plugins window via /shell/open-plugins')
-assert.ok(libRs.includes('"/shell/open-plugins"'), 'lib.rs has the /shell/open-plugins bridge arm')
-assert.ok(libRs.includes('fn open_plugins_window'), 'lib.rs opens the plugins manager window')
-assert.ok(libRs.includes('inject_plugins_preamble'), 'lib.rs injects the bridge port into the plugins window (global availability)')
-assert.ok(existsSync(join(root, 'src', 'plugin-console.html')), 'plugins window page exists (src/plugin-console.html)')
-assert.ok(existsSync(join(root, 'src', 'plugin-console.js')), 'plugins window script exists (src/plugin-console.js)')
-assert.ok(chromeSrc.includes('dshc-btn'), 'chrome defensively hides a leftover legacy fab (.dshc-btn)')
+// ── 插件管理已整体移除（0.1.6-alpha.2 起交给 dsh 自带的 Web 侧边栏「插件」页）──
+// 负向断言：这些入口一旦回潮就是回归（会与 dsh 的插件管理器双写 profile 状态）。
+assert.ok(!chromeSrc.includes('/shell/open-plugins'), 'chrome no longer opens a shell-side plugins window')
+assert.ok(!libRs.includes('"/shell/open-plugins"'), 'lib.rs has no /shell/open-plugins bridge arm')
+assert.ok(!libRs.includes('"/plugins/'), 'lib.rs has no /plugins/* bridge arms')
+assert.ok(!libRs.includes('fn open_plugins_window'), 'lib.rs has no plugins manager window')
+assert.ok(!libRs.includes('inject_plugins_preamble'), 'lib.rs has no plugins-window preamble injection')
+assert.ok(!existsSync(join(root, 'src', 'plugin-console.html')), 'no shell-side plugin console page')
+assert.ok(!existsSync(join(root, 'src', 'plugin-console.js')), 'no shell-side plugin console script')
+assert.ok(!existsSync(join(root, 'plugins', 'dsh-plugin-console')), 'no in-page plugin console plugin')
+// 安全网（唯一保留的插件相关动作）：不依赖 dsh 的逃生口。
+assert.ok(chromeSrc.includes('/shell/disable-third-party-plugins'), 'chrome wires the disable-third-party-plugins safety net')
+assert.ok(libRs.includes('"/shell/disable-third-party-plugins"'), 'lib.rs has the /shell/disable-third-party-plugins bridge arm')
+assert.ok(libRs.includes('fn disable_third_party_plugins'), 'lib.rs implements the safety net command')
+assert.ok(libRs.includes('fn disable_third_party_plugins(app: AppHandle) -> Result<serde_json::Value, String>'), 'the safety net is a registered tauri command')
+assert.ok(libRs.includes('disable_third_party_plugins,'), 'the safety net is in the invoke_handler list')
+// 备份先于改动：没有备份就绝不改用户文件（负向保证）。
+const safetyNet = libRs.slice(libRs.indexOf('fn disable_third_party_plugins'))
+const copyAt = safetyNet.indexOf('std::fs::copy(&path, &backup)')
+const writeAt = safetyNet.indexOf('write_web_profile_bundles(&runtime, &template)')
+assert.ok(copyAt > 0 && writeAt > copyAt, 'the safety net backs up the manifest BEFORE rewriting the bundles')
 // ── 工具窗不被窗口状态记忆覆盖居中（修复"闪一下居中又跳回左边"）───
 assert.ok(libRs.includes('with_denylist'), 'window-state plugin excludes utility windows via denylist')
-assert.ok(libRs.includes('"settings"') && libRs.includes('"plugins"'), 'settings & plugins windows are denylisted from window-state restore')
+assert.ok(libRs.includes('with_denylist(&["settings"])'), 'the settings window is denylisted from window-state restore')
 assert.ok(libRs.includes('__DSH_BUILD_DATE__'), 'lib.rs injects the build date into the chrome preamble')
 assert.ok(readFileSync(join(root, 'src-tauri', 'build.rs'), 'utf8').includes('DSH_BUILD_DATE'), 'build.rs emits the DSH_BUILD_DATE env (About build date)')
 

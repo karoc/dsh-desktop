@@ -33,12 +33,12 @@ feat/shell-menu-bar 分支）。本技能是"改壳自身功能"的操作手册�
 - `ACTIONS`：每个 id → `{ipc:'<命令>', bridge:'/路径'}` 双通道映射；只读状态查询加 `method:'GET'`。
 - **壳内就地动作不进 ACTIONS、不占桥**：纯壳内完成的菜单项（关于/检查更新=壳内模态弹窗）——
   契约测试对它们豁免，避免为 UI 造无意义的 IPC/桥端点。
-- **插件管理 = 壳内独立窗口**（label `plugins`，`src/plugin-console.html/js`）：复用原插件
-  控制台渲染核心（主题/语言/卡片/开关），数据走**环回桥 /plugins/***（桥由壳拉起、不依赖
-  dsh）——dsh 崩溃/未启动时照样能卸载/禁用出问题的插件。窗口页不用 IPC，capability
-  无需加；`on_page_load` 对 `plugins` 窗口注入 `__DSH_BRIDGE_PORT__`（`inject_plugins_preamble`，
-  页面脚本轮询等待桥端口就绪）。工具窗（settings/plugins）在 window-state `with_denylist`
-  排除，固定居中。
+- **插件管理不在壳里**（2026-09-21 起）：dsh 0.1.6-alpha.2 自带 `@deepseek-ai/dsh-plugin-manager`
+  + Web 侧边栏 Plugins 页，壳内的插件管理窗口/页内面板/`/plugins/*` 桥端点已**整体移除**。
+  壳只保留一个**不依赖 dsh** 的安全网菜单项「停用全部第三方插件…」（把 profile
+  `dsh.profile.bundles` 回退到 dsh 自带两层，改动前备份 `package.json`）。**不要再把插件
+  管理加回壳里**——那会与 dsh 的插件管理器双写同一份 profile 状态。工具窗（settings）在
+  window-state `with_denylist` 排除，固定居中。
 
 **加一个壳菜单 = SHELL_MENUS 加条目 + ACTIONS 加一行 + lib.rs 加对应命令/桥端点**
 （或明确归入"壳内就地动作"豁免并同步契约测试）。
@@ -97,11 +97,9 @@ feat/shell-menu-bar 分支）。本技能是"改壳自身功能"的操作手册�
 ### 2.4 UI 设计 token（样式统一）
 
 样式规范唯一真源：`docs/2026-09-02-ui-design-tokens.md`（圆角 8/12/14、按钮规格、
-主按钮纯色 accent、backdrop、字号、动效、键盘/焦点、无原生 confirm）。三处独立打包无法
-共享 CSS，按规范分别实现：壳 `shell-chrome.js` STYLE、设置窗/启动页 `styles.css`、
-插件管理窗口 `plugin-console.js`（`.dshc-*`，主题仅配色）。**插件管理窗口布局是硬约束**
-（head→安装→预装→用户→dsh 更新→操作→footer），改样式后跑
-`node scripts/test-plugin-console-window.mjs` 守护；不许引入新的圆角/字号/按钮规格。
+主按钮纯色 accent、backdrop、字号、动效、键盘/焦点、无原生 confirm）。两处独立打包无法
+共享 CSS，按规范分别实现：壳 `shell-chrome.js` STYLE、设置窗/启动页 `styles.css`。
+不许引入新的圆角/字号/按钮规格。
 
 ## 3. 开发版身份隔离（与正式版同机并存）
 
@@ -131,7 +129,7 @@ npm run bundle:dev   # = tauri build --config src-tauri/tauri.dev.conf.json --bu
   `__DSH_SHELL_VERSION__`/`__DSH_BUILD_DATE__`/`__DSH_PRODUCT_NAME__` + `/update-status`
   的 dsh 当前版本）——开发版标识随 productName 自带「Dev」，无需 Rust 侧 is_dev_build。
 - chrome 应用菜单标签用注入的 `__DSH_PRODUCT_NAME__`；下拉/弹窗有明显的 `SHELL_MENUS`、
-  `dialog-backdrop`、`__DSH_PLUGIN_CONSOLE__`（插件管理=就地触发原控制台）等标记。
+  `dialog-backdrop` 等标记。
 
 ## 4. 开发版本地构建工作流（流程约定，用户指定）
 
@@ -256,7 +254,8 @@ dev 数据目录 = `%APPDATA%\dsh.smoothly.desktop.dev`，证据 = `<runtime>\re
 | E0716 | `app.state()` 临时值先 `let` 绑定再锁 |
 | drag region | `data-tauri-drag-region` 是 JS API（本地页才有）；远程页用桥 `/window/drag`→`start_dragging` |
 | 工具窗居中闪跳 | window-state 插件在窗口创建时 `restore_state` 会**覆盖 builder 的 `.center()`**（弹窗先闪一下居中、又跳回上次的旧位置）→ 工具窗（settings / plugins）用 `Builder::with_denylist(&["settings", "plugins"])` 排除跟踪；主窗口保留记忆 |
-| 插件管理全局可用 | dsh 页内插件面板依赖 dsh 运行；插件出问题时（dsh 崩溃）恰恰需要管理入口 → 插件管理用壳内独立窗口（`src/plugin-console.*`，复用原控制台渲染核心走环回桥 `/plugins/*`，桥由壳拉起不依赖 dsh；窗口 label `plugins` 在 `on_page_load` 注入 `__DSH_BRIDGE_PORT__`，页面脚本轮询等待桥端口就绪） |
+| 升级 dsh 后启动即崩（ERR_PACKAGE_PATH_NOT_EXPORTED） | pnpm 的 hoisted 安装**不清理嵌套目录**：`<pkg>/node_modules/@deepseek-ai/` 下留着上一版的内部包，Node 解析嵌套副本优先 → 子路径导出缺失。实测 0.1.5-rc.2 → 0.1.6-alpha.2 后 `dsh-session-persistence-jsonl` 下留了 3 个旧包。壳在升级后 + 每次启动调 `removeStaleNestedDshPackages()` 只删这些副本（判据：嵌套版本 ≠ 父包版本；`@deepseek-ai/*` 同版本发布）。**别改成 `rm -rf node_modules` 重建** —— 安装失败会把「有点脏」变成「没有 dsh」 |
+| 插件管理放哪 | **不放壳里**（2026-09-21 起）：dsh 0.1.6-alpha.2 自带插件管理（Web 侧边栏 Plugins 页），壳内自建管理会与它双写同一份 profile 状态。壳只保留不依赖 dsh 的安全网「停用全部第三方插件…」（`disable_third_party_plugins`，备份后回退 bundles） |
 | 构建日期/版本信息 | `build.rs` 用 civil_from_days 算法（无 chrono）输出 `cargo:rustc-env=DSH_BUILD_DATE`，注入前缀带 `__DSH_BUILD_DATE__`，壳内「关于」弹窗展示 |
 | dev 配置合并 | `--config` 深合并数组整体替换；version 不许覆盖（与 Cargo.toml 强制一致） |
 | 单实例互斥名 | `{identifier}-sim`（Windows），改 identifier 即隔离 |
@@ -282,7 +281,7 @@ dev 数据目录 = `%APPDATA%\dsh.smoothly.desktop.dev`，证据 = `<runtime>\re
   桥端点/命令注册三方不漂移 + dev identity 配置 + **manager 看护契约**：退出处理区域不得出现
   `start_server`/`restart_server`/`Command::new`（D1 不自动重启）、`stop_child` 必须先 `try_wait`、
   `/shell/status` 字段名、`is_shell_local_url`）。
-- 全量：`npm test`（7 套，含 manager/代理/通知插件/契约）。
+- 全量：`npm test`（9 套，含 manager/代理/通知插件/壳契约/副本一致性）。
 - 改 chrome 渲染逻辑后：用最小 DOM 桩跑渲染路径（createElement/attachShadow/querySelector 等
   手写桩，注意 createTextNode 也要桩；断言宿主/下拉数/按钮数）。
 - Rust 单测：`cargo test --manifest-path src-tauri/Cargo.toml --lib`（纯逻辑：证据目录写入/保留、
@@ -350,5 +349,7 @@ git status --short                           # 确认无意外文件
 - `src-tauri/tauri.dev.conf.json` + `package.json` 的 `bundle:dev` —— 开发版打包
 - `scripts/test-shell-chrome.mjs` —— 壳↔壳契约测试
 - `src-tauri/src/lib.rs` —— `inject_shell_chrome` / `window_control` / `get_shell_state` /
-  `toggle_dev_mode_impl` / `toast_clsid` / 桥端点
+  `toggle_dev_mode_impl` / `disable_third_party_plugins`（插件安全网）/ `toast_clsid` / 桥端点
+- `docs/2026-09-21-dsh-0.1.6-alpha.2-upgrade-plan.md` —— 0.1.6-alpha.2 升级方案（含壳内
+  插件管理整体移除的决策、移除清单、能力对账与验证计划）
 - 验收清单：README「壳菜单栏」「开发版」小节（Windows 实机：拖动/三键/Aero 最大化图标/SPA 自愈）

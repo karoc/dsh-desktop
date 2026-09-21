@@ -284,13 +284,25 @@ openDataBtn.addEventListener('click', async () => {
   }
 });
 
-// 插件管理窗口独立于 dsh 运行（走环回桥 /plugins/*），因此 dsh 起不来时也能用：
-// 引导用户在那里禁用出问题的插件后重试。这是引导而非自动修复——不禁用任何东西。
+// 壳内已无插件管理 UI（0.1.6-alpha.2 起交给 dsh 的 Web 侧边栏「插件」页，那个页面
+// 要 dsh 能起来才打得开）。所以启动失败时这里提供不依赖 dsh 的自救：把插件启用列表
+// 回退到 dsh 自带的两层。改动前会先备份 profile manifest，插件文件不会被删除。
 openPluginsBtn.addEventListener('click', async () => {
   try {
-    await tauri.core.invoke('open_plugins');
+    const res = await tauri.core.invoke('disable_third_party_plugins');
+    if (!res || res.ok !== true) {
+      appendLog('停用第三方插件失败：' + String((res && res.error) || '壳未响应'));
+      return;
+    }
+    if (!res.changed) {
+      appendLog('当前只有 dsh 自带的插件，无需改动。');
+      return;
+    }
+    const removed = Array.isArray(res.removed) ? res.removed : [];
+    appendLog('已停用 ' + removed.length + ' 个第三方插件，备份：' + String(res.backup || ''));
+    appendLog('请点「重试」重启服务；之后可在 dsh 的「插件」页重新启用。');
   } catch (err) {
-    appendLog('打开插件管理失败：' + String(err));
+    appendLog('停用第三方插件失败：' + String(err));
   }
 });
 
