@@ -290,7 +290,7 @@ dsh 页面以纯远程页面加载，只授予 loopback 权限
 - **分支/合并**：功能走短分支 + PR，**squash merge** 进 main（一提交一功能）；main 有分支保护（需 PR + CI 快层通过）。
 - **提交规范**：Conventional Commits（`feat/fix/docs/ci/refactor/test/chore` + 中文描述），规范直接驱动版本发布。详见 `CONTRIBUTING.md`。
 - **CI 分层**：PR 只跑快层（check：`cargo check` + `fmt --check` + `clippy -D warnings`；test：`npm test` 全量，~5min）；main push / `v*` tag 跑全量（windows NSIS 打包 + 布局断言 + runtime smoke、linux 打包、linux-smoke canary）。
-- **发布**：release-please 自动 bump 三处版本（Cargo.toml / tauri.conf.json / package.json）→ CHANGELOG.md → release PR → 合并即打 tag → CI 自动出包发 Release。
+- **发布**：release-please 自动 bump 三处版本（Cargo.toml / tauri.conf.json / package.json）→ CHANGELOG.md → release PR → admin 合并 → 打 tag + 建 Release → **在 tag 上派发一次 `build.yml` 才有安装包**（见下）。
 
 ## 发布（release-please 自动出包 + GitHub Release）
 
@@ -304,8 +304,14 @@ Windows 安装包由 GitHub Actions（`.github/workflows/build.yml`）在 `windo
 ```text
 1) 功能合并进 main 后，release-please 依据 Conventional Commits 自动开 release PR
    （版本 bump 三处：Cargo.toml / tauri.conf.json / package.json + CHANGELOG.md）
-2) 审阅并合并该 release PR → 自动打 vX.Y.Z tag
-3) tag 触发 CI 全量构建 → 自动发 GitHub Release（附 Windows + Linux 安装包）
+2) 在发布分支上跑一遍本地门禁（四处版本一致 / CHANGELOG 有该版本段 / npm test / 预装审计），
+   再用 `gh pr merge --squash --admin` 合并 —— 该 PR 由 bot 创建，它的 CI run 恒为
+   `action_required`（GitHub 不自动跑 bot PR 的 workflow），所以 check/test 永不上报、
+   分支保护恒为 BLOCKED，admin 合并是唯一路径（详见 CONTRIBUTING「发布」）。
+3) 合并后 release-please 打 vX.Y.Z tag 并创建 GitHub Release —— 但 tag 是用 API 创建的，
+   不触发 workflow，此时 Release 的 assets 是空的。补一步：
+   `gh workflow run build.yml --ref vX.Y.Z`
+   → 全量构建 windows/linux 产物、挂到 Release、并用 release-body.mjs 重写说明。
 ```
 
 **Release 说明（What's Changed）**：发布 job 用 `scripts/release-body.mjs <version>`

@@ -55,8 +55,38 @@ CI 分层：PR 只跑快层（check + test，~5min）；main/tag 跑全量（win
 
 1. 合并到 main 后，release-please 依据 Conventional Commits 自动：
    版本 bump（Cargo.toml / tauri.conf.json / package.json 三处同步）→ CHANGELOG.md → 提 release PR。
-2. 审阅合并 release PR → 自动打 `vX.Y.Z` tag → 现有 CI 全量构建 + 自动发 GitHub Release（带安装包）。
-3. 不再手动改版本号、不打手动 tag。
+2. **合并 release PR 前，先在发布分支上跑一遍本地门禁**（见下「release PR 的门禁」）。
+3. 合并 release PR（**只能 admin 合并**，原因见下）→ release-please 自动打 `vX.Y.Z` tag
+   **并创建一个不带安装包的 GitHub Release**。
+4. **在 tag 上派发一次构建**，否则 Release 永远没有安装包：
+   ```bash
+   gh workflow run build.yml --ref vX.Y.Z
+   ```
+   该 run 会编译 windows/linux 产物、把安装包挂到 Release、并用 `scripts/release-body.mjs`
+   重写说明（说明里的 dsh 版本行由它查询 npm 得出）。约 15-20 分钟。
+5. 不再手动改版本号、不打手动 tag（tag 归 release-please 所有）。
+
+### release PR 的门禁（为什么必须 admin 合并）
+
+release-please 是 bot 创建的 PR，它触发的 build run 状态是 **`action_required`**（GitHub 要求
+人工批准 bot PR 的 workflow 才启动），因此 `check`/`test` **永远不会上报**，分支保护恒为
+`BLOCKED`，`gh pr merge` 只会回 "base branch policy prohibits the merge"。人类 PR 的 build
+则正常 success。所以发布 PR 的唯一合并路径是 `gh pr merge <n> --squash --admin`。
+
+**替代验证（合并前必做）**：把发布分支取下来，跑
+
+```bash
+git fetch origin release-please--branches--main
+git checkout FETCH_HEAD
+node -e "…四处版本一致性…"        # package.json / .release-please-manifest.json / tauri.conf.json / Cargo.toml
+grep -n "^## \[<version>\]" CHANGELOG.md
+npm test                          # 9 套
+node scripts/audit-preinstalled.mjs
+```
+
+四处版本一致 + CHANGELOG 有该版本段 + 门禁全绿，才 admin 合并。2026-09-22（v0.11.0）是第一次
+按这个流程走：本地门禁全绿 → admin 合并 → tag/Release 生成 → `workflow_dispatch` 补上三个平台
+安装包。
 
 > 过渡期说明：release-please 接管前发布的 `v0.3.x` 是手动 tag 流程；接入后以 release PR 为准。
 
