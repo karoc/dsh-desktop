@@ -3,6 +3,14 @@
 // src-tauri/resources/node/<platform>/ so `tauri build` can bundle it.
 // Idempotent: skips when the binary already exists. Verifies SHA-256 against
 // the official SHASUMS256.txt.
+//
+// Transport: `curl` (with the proxy npm itself uses) when available, else
+// `fetch`. Node's fetch ignores npm's `.npmrc` proxy settings and the proxy
+// variables are sampled at process start, so a fetch-only downloader cannot
+// reach nodejs.org on a network where it is only reachable through the proxy —
+// on this machine nodejs.org answers 200 in ~4.6s through the proxy and times
+// out direct (2026-09-22). The failure was invisible until now because the
+// binary was already cached and the script exits early ("node already present").
 
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -18,6 +26,85 @@ const PINNED_VERSION = process.env.DSH_DESKTOP_NODE_VERSION || 'v24.18.0'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
+/**
+ * The proxy npm itself would use, as an environment overlay for curl.
+ *
+ * npm's configured proxy WINS over an inherited variable: an inherited one may
+ * point at a proxy that does not route nodejs.org (the desktop shell's own
+ * forward proxy does not). `NO_PROXY` keeps loopback direct.
+ * @returns an env overlay, empty when npm has no proxy configured.
+ */
+function npmProxyEnv() {
+  const overlay = {}
+  for (const [envKey, configKey] of [['HTTPS_PROXY', 'https-proxy'], ['HTTP_PROXY', 'proxy']]) {
+    let configured = ''
+    try {
+      const value = spawnSync('npm', ['config', 'get', configKey], { cwd: root, encoding: 'utf8', timeout: 10_000 }).stdout?.trim() ?? ''
+      if (value !== '' && value !== 'null' && value !== 'undefined') configured = value
+    } catch { /* npm unavailable: no overlay */ }
+    if (configured !== '') overlay[envKey] = configured
+  }
+  if (Object.keys(overlay).length === 0) return {}
+  const noProxy = (process.env.NO_PROXY ?? '').split(',').map((entry) => entry.trim()).filter((entry) => entry !== '')
+  for (const host of ['127.0.0.1', 'localhost', '::1']) if (!noProxy.includes(host)) noProxy.push(host)
+  overlay.NO_PROXY = noProxy.join(',')
+  return overlay
+}
+
+const proxyEnv = npmProxyEnv()
+if (Object.keys(proxyEnv).length > 0) {
+  console.log(`fetch-node: using npm's proxy ${proxyEnv.HTTPS_PROXY ?? proxyEnv.HTTP_PROXY} for downloads`)
+}
+
+/** curl exits 127 / ENOENT when it is not installed at all. */
+const curlMissing = (result) => result.error?.code === 'ENOENT' || result.status === 127
+
+/** Download a URL to a file with curl. Returns 'ok' | 'no-curl' | an error string. */
+function curlDownload(url, dest) {
+  const result = spawnSync(
+    'curl',
+    ['-fsSL', '--max-time', '900', '-o', dest, url],
+    { env: { ...process.env, ...proxyEnv }, encoding: 'utf8', maxBuffer: 1024 * 1024 },
+  )
+  if (curlMissing(result)) return 'no-curl'
+  if (result.status !== 0) {
+    const detail = String(result.stderr ?? '').trim().split('\n').pop() ?? ''
+    return `curl exit ${result.status}${detail === '' ? '' : `: ${detail}`}`
+  }
+  return 'ok'
+}
+
+/** Fetch a small text resource with curl, or null when curl is unavailable. */
+function curlText(url) {
+  const result = spawnSync(
+    'curl',
+    ['-fsSL', '--max-time', '120', url],
+    { env: { ...process.env, ...proxyEnv }, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 },
+  )
+  if (curlMissing(result)) return null
+  if (result.status !== 0) throw new Error(`curl exit ${result.status} for ${url}`)
+  return result.stdout
+}
+
+async function download(url, dest) {
+  const viaCurl = curlDownload(url, dest)
+  if (viaCurl === 'ok') return
+  if (viaCurl !== 'no-curl') throw new Error(`download failed (${viaCurl}) ${url}`)
+  // No curl on PATH: fetch works only when the network needs no proxy.
+  const res = await fetch(url, { redirect: 'follow' })
+  if (!res.ok) throw new Error(`download failed ${res.status} ${url}`)
+  await pipeline(Readable.fromWeb(res.body), createWriteStream(dest))
+}
+
+async function fetchText(url) {
+  const viaCurl = curlText(url)
+  if (viaCurl !== null) return viaCurl
+  const res = await fetch(url)
+  if (!res.ok) throw new Error(`fetch failed ${res.status} ${url}`)
+  return await res.text()
+}
+
+/** The pinned archive for the platform this process runs on. */
 function target() {
   const p = process.platform
   const a = process.arch
@@ -28,12 +115,6 @@ function target() {
   if (p === 'darwin' && a === 'arm64') return { dir: 'darwin-arm64', name: `node-${PINNED_VERSION}-darwin-arm64.tar.gz`, type: 'targz', bin: 'node' }
   if (p === 'darwin' && a === 'x64') return { dir: 'darwin-x64', name: `node-${PINNED_VERSION}-darwin-x64.tar.gz`, type: 'targz', bin: 'node' }
   throw new Error(`unsupported platform: ${p}-${a}`)
-}
-
-async function download(url, dest) {
-  const res = await fetch(url, { redirect: 'follow' })
-  if (!res.ok) throw new Error(`download failed ${res.status} ${url}`)
-  await pipeline(Readable.fromWeb(res.body), createWriteStream(dest))
 }
 
 async function sha256(file) {
@@ -59,7 +140,7 @@ async function main() {
 
   console.log(`downloading ${t.name} …`)
   await download(`${SERVER}/${PINNED_VERSION}/${t.name}`, archive)
-  const sums = await (await fetch(sumUrl)).text()
+  const sums = await fetchText(sumUrl)
   const expected = sums
     .split('\n')
     .map((l) => l.trim())
