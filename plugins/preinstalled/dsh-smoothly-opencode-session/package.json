@@ -1,6 +1,6 @@
 {
   "name": "@karoc/dsh-smoothly-opencode-session",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Smoothly OpenCode Session (Smoothly OCS) — 思磨力 OpenCode 会话头: external DeepSeek Harness host plugin that attaches the OpenCode-required x-opencode-session header to model calls routed to OpenCode / OpenCode Go provider routes (stable per-conversation id; fixes 400 MissingSessionID, in effect for OpenCode Go since 2026-09-05).",
   "type": "module",
   "main": "lib/index.js",
@@ -17,7 +17,8 @@
     "README.zh.md",
     "CHANGELOG.md",
     "CONTRIBUTING.md",
-    "LICENSE"
+    "LICENSE",
+    "docs/guarantees.md"
   ],
   "dsh": {
     "bundle": {
@@ -27,7 +28,10 @@
   "scripts": {
     "bundle": "tsdown --config ./tsdown.config.ts",
     "prepare": "tsdown --config ./tsdown.config.ts",
-    "test": "node --test tests/*.test.ts",
+    "test": "node --test tests/*.test.ts && node scripts/check-guarantees.mjs",
+    "test:controls": "node scripts/test-negative-controls.mjs",
+    "verify:all": "node scripts/verify-all.mjs",
+    "verify:fresh": "node scripts/verify-all.mjs --check-fresh",
     "release:check": "node scripts/release-check.mjs",
     "prepack": "node scripts/release-check.mjs",
     "prepublishOnly": "node scripts/release-check.mjs && tsdown --config ./tsdown.config.ts",

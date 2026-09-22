@@ -54,13 +54,6 @@ const name = "dsh-smoothly-opencode-session";
 */
 const inject = ["llm"];
 const SESSION_HEADER = "x-opencode-session";
-/**
-* Provider route keys whose requests receive the header. A pi-ai catalog
-* provider keeps its id as the route key, so both built-in OpenCode ids are
-* covered; deployments that serve OpenCode under a custom provider key (e.g.
-* `opencode-go-self`) add it through config.
-*/
-const DEFAULT_PROVIDERS = ["opencode", "opencode-go"];
 /** Default host gate: OpenCode's own endpoints (subdomains included). */
 const DEFAULT_HOSTS = ["https://opencode.ai"];
 /** Normalize one configured host entry; undefined when unusable. */
@@ -157,10 +150,10 @@ function hostAllowed(target, policy) {
 }
 /** Resolve row config against code defaults (missing keys are never required). */
 function resolveConfig(config = {}) {
-	const providers = Array.isArray(config.providers) && config.providers.length > 0 ? config.providers.map((value) => String(value)) : [...DEFAULT_PROVIDERS];
+	const narrowed = Array.isArray(config.providers) ? config.providers.map((value) => String(value)).filter((value) => value !== "") : [];
 	const { policy, dropped } = normalizeHosts(config.hosts);
 	return {
-		providers: new Set(providers),
+		...narrowed.length > 0 ? { providers: new Set(narrowed) } : {},
 		hosts: policy,
 		droppedHosts: dropped,
 		mode: config.mode === "uuid" ? "uuid" : "session-id",
@@ -169,6 +162,11 @@ function resolveConfig(config = {}) {
 		debugRequests: config.debugRequests === true,
 		discoveryFallback: config.discoveryFallback === true
 	};
+}
+/** Human-readable description of the optional provider narrowing. */
+function describeNarrowing(resolved) {
+	if (resolved.providers === void 0) return "(none — the host gate decides)";
+	return `[${[...resolved.providers].join(", ")}]`;
 }
 /** Human-readable description of the effective host gate (startup log). */
 function describeHosts(policy) {
@@ -393,7 +391,7 @@ function apply(ctx, config = {}) {
 	});
 	ctx.effect(() => {
 		globalThis.fetch = patched;
-		ctx.logger.info("[%s] active for providers [%s] with mode %s", name, [...resolved.providers].join(", "), resolved.mode);
+		ctx.logger.info("[%s] active with mode %s; provider narrowing: %s", name, resolved.mode, describeNarrowing(resolved));
 		ctx.logger.info("[%s] host gate: %s", name, describeHosts(resolved.hosts));
 		if (resolved.hosts.wildcard) ctx.logger.warn("[%s] host gate is DISABLED (hosts: [\"*\"]) — while a session stream is active, ANY host receives the header", name);
 		if (resolved.droppedHosts.length > 0) ctx.logger.warn("[%s] ignored unusable hosts entries: %s", name, resolved.droppedHosts.join(", "));
@@ -402,10 +400,72 @@ function apply(ctx, config = {}) {
 			if (globalThis.fetch === patched) globalThis.fetch = originalFetch;
 		};
 	}, `${name}.fetch-patch`);
+	/**
+	* A configured provider route key that no adapter registered means injection
+	* silently never happens for that route — usually a renamed or mistyped key
+	* in `settings.yaml` (the ROUTE KEY is what `llm/stream` reports; a provider's
+	* display name is never visible here). Adapters register asynchronously after
+	* boot, so this runs once at the first model call and only warns.
+	*/
+	const readRegisteredRoutes = () => {
+		try {
+			const registered = ctx.llm?.listProviders?.();
+			if (!Array.isArray(registered)) return void 0;
+			return registered.map((info) => String(info?.id ?? ""));
+		} catch {
+			return;
+		}
+	};
+	let providerRegistryChecked = false;
+	const checkProviderRegistry = () => {
+		if (providerRegistryChecked) return;
+		providerRegistryChecked = true;
+		try {
+			const routes = readRegisteredRoutes();
+			if (routes === void 0) return;
+			const ids = new Set(routes);
+			const missing = [...resolved.providers ?? []].filter((id) => !ids.has(id));
+			if (missing.length > 0) {
+				ctx.logger.warn("[%s] configured provider route(s) not registered: %s (registered: %s) — a renamed or mistyped route key silently disables injection; fix `providers` in the plugin config", name, missing.join(", "), [...ids].join(", ") || "(none)");
+				if (resolved.debugFile !== void 0) recordDebug(ctx, resolved.debugFile, {
+					ts: (/* @__PURE__ */ new Date()).toISOString(),
+					kind: "diagnostic",
+					reason: "provider-route-not-registered",
+					missing,
+					registered: [...ids]
+				});
+			}
+		} catch {}
+	};
+	ctx.inject(["commands"], (commandCtx) => {
+		const commands = commandCtx.commands;
+		if (commands === void 0) return;
+		commands.register({
+			name: "ocgo",
+			description: "OpenCode 会话头：显示生效策略（host 门控 / provider 收窄 / mode / 已注册路由）",
+			handler: () => {
+				const routes = readRegisteredRoutes();
+				return {
+					kind: "success",
+					text: [
+						"OpenCode session header — effective policy",
+						`  host gate:          ${describeHosts(resolved.hosts)}`,
+						`  provider narrowing: ${describeNarrowing(resolved)}`,
+						`  mode:               ${resolved.mode}`,
+						`  discoveryFallback:  ${resolved.discoveryFallback ? "on" : "off"}`,
+						`  debugRequests:      ${resolved.debugRequests ? "on" : "off"}`,
+						...routes === void 0 ? [] : [`  registered routes:  ${routes.join(", ") || "(none)"}`],
+						"  change:             profile cordis.patch.yml 的插件行 config，改后重启 dsh"
+					].join("\n")
+				};
+			}
+		});
+	});
 	ctx.on("llm/stream", (options, next) => {
 		if (options === void 0 || options === null || typeof options !== "object") return next();
+		checkProviderRegistry();
 		const provider = String(options.provider);
-		if (!resolved.providers.has(provider)) return next();
+		if (resolved.providers !== void 0 && !resolved.providers.has(provider)) return next();
 		const sessionId = options.sessionId;
 		if (sessionId === void 0 || sessionId === null) return next();
 		const value = headerValueFor(String(sessionId), resolved.mode, uuidBySession);
@@ -445,4 +505,4 @@ var src_default = {
 	apply
 };
 //#endregion
-export { apply, src_default as default, describeHosts, hasSessionHeader, headerValueFor, hostAllowed, inject, name, normalizeHosts, patchFetch, resolveConfig, withStore };
+export { apply, src_default as default, describeHosts, describeNarrowing, hasSessionHeader, headerValueFor, hostAllowed, inject, name, normalizeHosts, patchFetch, resolveConfig, withStore };

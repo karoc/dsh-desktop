@@ -9,7 +9,7 @@ When you chat with an agent (in dsh, Codex, Claude Code, …) you produce lots o
 `dsh-kanban` sinks plans and todos into a **`KANBAN.json` file at the workspace root** (git-trackable, human-editable, survives sessions) and gives you two ways to maintain it:
 
 - **Model entry**: 4 model-facing tools (`board_list` / `board_add` / `board_update` / `board_remove`) so the model records plan steps and todos while talking.
-- **Web entry**: a new 「思磨力看板」 button in the dsh Web GUI sidebar that opens a **full-screen three-column board page** (To do / In progress / Done) with view, status move (incl. mark done), add, and delete.
+- **Web entry**: a 「思磨力看板」 entry in the dsh Web GUI sidebar's **global panels** section that renders a **three-column board page** (To do / In progress / Done) in the centre column, with view, status move (incl. mark done), add, and delete.
 
 The same `KANBAN.json` is shared by the model tools and the Web page, so **what the model writes, the page shows; what you check off on the page, the model reads next time.**
 
@@ -70,11 +70,12 @@ dsh's **system prompt** and visible to the user:
    session the model moves completed cards to done, adds follow-ups as todos,
    updates summaries, and **never leaves stale `in_progress` cards** — the
    board stays an honest cross-session hand-off.
-4. **User-side visibility**: the sidebar 「思磨力看板」 entry shows an **open-item
-   count badge** (backed by the `/kanban/counts` route; workspace resolved from
-   the most-recent workspace, subscribes to workspace-list changes so it
-   appears as soon as data is ready); the board page **auto-refreshes every
-   15s** while open, so model/other-session writes appear without a manual
+4. **User-side visibility**: the sidebar's global-panels 「思磨力看板」 entry
+   carries an **open-item count badge** on its glyph (backed by the
+   `/kanban/counts` route; the workspace follows the current session, then the
+   most recent one, and the badge subscribes to workspace-list changes so it
+   appears as soon as data is ready); the board panel **auto-refreshes every
+   15s** while shown, so model/other-session writes appear without a manual
    refresh.
 
 **Data-safety commitment**: the plugin **only writes** board/note files; there
@@ -106,7 +107,7 @@ The board is scoped to the **current session's working directory (cwd)**: every 
 |---|---|
 | Note classes | `scripts/agent-note-tree.ts` → `AGENT_NOTE_CLASSES` |
 | Note format | `scripts/verify-agent-note-format.ts` |
-| Non-trivial definition | root `AGENTS.md` ("Non-trivial changes MUST include an Agent Note…") |
+| Non-trivial definition | `.agents/notes/README.md` → "When to write one" (root `AGENTS.md` only points at it) |
 
 - **Plugin ships defaults** (updated per release): `src/note-spec.ts` fixes the
   default classes, format template, and definition — works out of the box;
@@ -127,10 +128,11 @@ The board is scoped to the **current session's working directory (cwd)**: every 
 #### Sync mechanism (dev-time check + releases)
 
 - **Source anchor**: `src/note-spec.ts` states it is replicated from
-  deepseek-harness (upstream commit `47f943859bef60e4160492346772ded9b24f765a`);
+  deepseek-harness (upstream commit `ddefc45fbc7f8e46dd73185e68295696d1297887`);
 - **Dev-time check**: `pnpm check:spec` (`scripts/check-note-spec.mjs`) reads the
   local dsh checkout's spec constants (classes from `agent-note-tree.ts`, format
-  from `verify-agent-note-format.ts`, non-trivial rule from `AGENTS.md`) and
+  from `verify-agent-note-format.ts`, note-scope rule from
+  `.agents/notes/README.md` + the `AGENTS.md` pointer to it) and
   diffs them against the plugin defaults — when upstream changes, one run reports
   the difference and tells you to update `src/note-spec.ts` and bump
   `NOTE_SPEC_VERSION`;
@@ -147,12 +149,15 @@ shipped, not part of the user-facing `test` chain).
 
 ### Web board page (client half)
 
-![The full-screen three-column board page (To do / In progress / Done)](docs/screenshots/board-page.png)
+![The three-column board page (To do / In progress / Done)](https://raw.githubusercontent.com/karoc/dsh-kanban/main/docs/screenshots/board-page.png)
 
-- A 「思磨力看板」 entry in the sidebar footer (`sidebar.footer.action`), showing an
-  **open-item count badge** (number when there are todo/in_progress cards,
-  "99+" cap);
-- A full-screen three-column board: **To do / In progress / Done**, each
+- A 「思磨力看板」 entry in the sidebar's **global panels** section
+  (`sidebar.panellist`) with an **open-item count badge** on the glyph (number
+  when there are todo/in_progress cards, "99+" cap);
+- The board is the `main` slot's occupant for that panel id: selecting the entry
+  renders it in the centre column (the Conversation steps aside, exactly like
+  the built-in Plugins page), and 「返回会话」/“Back to conversation” returns;
+- A three-column board: **To do / In progress / Done**, each
   column with a card count;
 - **Workspace switcher**: switch between any registered workspace at the top
   (each workspace owns its KANBAN.json); defaults to the current session's
@@ -233,7 +238,7 @@ dsh plugin --profile web remove dsh-kanban   # removes dependency + bundle layer
 
 ## Usage
 
-1. Install, restart `dsh web`; the sidebar footer shows the 「思磨力看板」 button.
+1. Install, restart `dsh web`; the sidebar's global panels section shows the 「思磨力看板」 entry.
 2. Ask the model to record plan steps with `board_add` (e.g. "put xxx on the board"); it writes the current workspace's `KANBAN.json`.
 3. Open 「思磨力看板」 anytime for the three-column view; mark done / move / add / delete directly on the page.
 4. After switching branches or opening new sessions the board is still there — it's just a file in the workspace.
@@ -266,25 +271,29 @@ tsdown.config.ts        # self-contained build: node half + module-table client 
 src/board-core.ts       # KANBAN.json domain: read/write, validation, card CRUD,
                         #   missingCardFields completeness rule (shared)
 src/index.ts            # host half: 4 model tools + /kanban/api webServer route
-src/client/index.ts     # client apply: sidebar entry + full-screen board page
+src/client/index.ts     # client apply: global panel (sidebar glyph + 'main' occupant)
 src/client/BoardPage.tsx       # three-column board component (+ missing-field hints)
-src/client/KanbanSurface.tsx   # sidebar button + overlay wrapper
-src/client/workspace-pick.ts   # most-recently-active workspace derivation (pure, unit-tested)
-src/client/board-state.ts      # module-level page visibility observable
+src/client/KanbanSurface.tsx   # panel glyph + the 'main' panel wrapper
+src/client/workspace-pick.ts   # current-session + most-recently-active workspace derivations (pure, unit-tested)
+src/client/board-counts.ts     # /kanban/counts poll behind the glyph badge
 src/client/locales.ts          # zh/en copy
 src/client/styles.ts           # --dsw-alias-* design-token styles
-src/skill-sync.ts              # host half: kanban-use skill self-heal install (on dsh web start)
-skills/kanban-use/SKILL.md     # the kanban-use skill (ships in the npm tarball; auto-installed)
+src/skill-register.ts          # host half: kanban-use served through ctx.skills (DSH ≥ 0.1.6)
+src/skill-sync.ts              # host half: copy fallback for shells without the skill service
+skills/kanban-use/SKILL.md     # the kanban-use skill (ships in the npm tarball)
 scripts/check-card-discipline.mjs # dev gate: guidance/schema/skill agree on completeness
+scripts/check-tokens.mjs         # dev gate: every --dsw-alias-* token exists in the installed DSH theme
+scripts/check-client-wiring.mjs  # dev gate: panel id/key wiring survived the edit
 scripts/audit-cards.mjs          # KANBAN.json completeness audit ([workspace] [--fail])
 scripts/install-skill.mjs        # symlink/copy the skill into ~/.agents/skills (shipped too)
-scripts/verify-skill-sync.mjs    # skill self-heal three-state verification (part of pnpm test)
+scripts/verify-skill-sync.mjs    # copy-fallback three-state verification (part of pnpm test)
+scripts/verify-skill-runtime.mjs # runtime skill registration vs a real registry (part of pnpm test)
 docs/screenshots/board-page.png  # Web board page screenshot (README figure)
 ```
 
 ## Why an external plugin
 
-dsh's official updates only touch the bundled in-repo packages. An **external bundle** is installed into the user profile via `dsh plugin` and is never touched by official upgrades (same pattern as `dsh-model-reasoning`). The plugin only uses dsh's externally stable capability surface: tool registration (`ctx.tools`), webServer route registration, and the Web sidebar/overlay slots.
+dsh's official updates only touch the bundled in-repo packages. An **external bundle** is installed into the user profile via `dsh plugin` and is never touched by official upgrades (same pattern as `dsh-model-reasoning`). The plugin only uses dsh's externally stable capability surface: tool registration (`ctx.tools`), webServer route registration, the skill registry (`ctx.skills`), and the Web global-panel slots (`sidebar.panellist` + `main`).
 
 ## Known limitations (v1)
 
@@ -301,18 +310,23 @@ pnpm bundle    # emits lib/index.js + lib/client.js
 ```
 
 - `src/client/` is the browser plugin; the client bundle keeps `@deepseek-ai/*` + `react` external (resolved from the loader module table at runtime) and inlines everything else.
-- UI uses `--dsw-alias-*` design tokens, namespaced with the `kb-` prefix.
+- UI uses `--dsw-alias-*` design tokens, namespaced with the `kb-` prefix; `pnpm check:tokens` fails on any token the installed DSH theme does not define (an unknown custom property renders as *nothing*, silently).
+- The board is a DSH **global panel**: `sidebar.panellist` draws the sidebar row, the keyed `main` slot hosts the page. `pnpm check:wiring` pins that wiring; the live-GUI scripts verify it in a browser.
 
 ## Verification
 
 ```sh
 pnpm test       # tsc --noEmit typecheck + 14 KANBAN.json domain unit tests
-                #   + 8 workspace-pick derivation tests + host tool smoke
+                #   + 13 workspace-pick/current-session derivation tests
+                #   + token-drift gate (with negative control) + panel-wiring gate
+                #   + host tool smoke + skill runtime registration vs a real registry
 pnpm typecheck  # typecheck only (tsc --noEmit)
 pnpm verify     # 4 board tools registered + board_add persisted end-to-end
 pnpm accept     # GUI acceptance against a running dsh web (http://127.0.0.1:3080):
-                #   native-DSH sidebar entry → opaque full-screen three-column page
-                #   → add / move / delete
+                #   sidebar global-panel row → board rendered in the centre column
+                #   (opaque, row marked selected) → add / move / delete
+node scripts/capture-board-page.mjs  # refresh the README figure from the live GUI
+                #   (captures the board panel only — never the session sidebar)
 ```
 
 Since DSH 0.1.2-alpha.2 the Web GUI protects its index with a browser-session
@@ -330,6 +344,12 @@ External plugins get no compile-time typechecking by default (tsdown only
 transpiles); `tsc --noEmit` in `pnpm test` catches "used-but-not-imported"
 mistakes that would otherwise crash at runtime (a missing `IconCheckOutline16`
 import once took down the whole board page).
+
+Since DSH 0.1.6-alpha.2 the client `SessionListState` no longer carries
+`current`; the board derives the current session from main-view retention
+(`retainedBy.mainView`), the same predicate the shell's own sidebar, session
+binding, and Settings use — and still reads `current` when an older shell
+provides it.
 
 `scripts/verify-model-board.mjs` additionally verifies a **real model call**: it sends
 the GUI agent an instruction to use `board_add`/`board_list`, then confirms the card

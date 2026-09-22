@@ -1,7 +1,7 @@
 ---
 name: kanban-use
-skill-version: 1
-description: Use when creating, updating, or closing kanban board cards (board_list / board_add / board_update / board_remove), when the user states a multi-step plan or list of tasks that should outlive this turn, when resuming work in a workspace that has an open board, or when asked how the board should be used. Teaches the card-completeness discipline: every card carries why (rationale), rejected alternatives when a decision was made, and a done card is self-explanatory with all three what/why/rejected fields so the next session can pick the work up without asking.
+skill-version: 3
+description: "Use when creating, updating, or closing kanban board cards (board_list / board_add / board_update / board_remove), when the user states a multi-step plan or list of tasks that should outlive this turn, when resuming work in a workspace that has an open board, or when asked how the board should be used. Teaches the card-completeness discipline: every card carries why (rationale), rejected alternatives when a decision was made, and a done card is self-explanatory with all three what/why/rejected fields so the next session can pick the work up without asking."
 ---
 
 # kanban 使用纪律（dsh-kanban 插件配套技能）
@@ -22,6 +22,13 @@ description: Use when creating, updating, or closing kanban board cards (board_l
 界线：**计划与进度** → 看板；**完成后的决策档案** → Agent Note。一个
 非平凡变更通常两者都有：看板卡片记「做了什么、进行到哪」，Agent Note 记
 「为什么这样做、放弃了什么、代价是什么」。
+
+"非平凡"的判据（DSH `.agents/notes/README.md` → *When to write one*）：只有在
+**留下代码/测试/现有文档解释不了的持久决策理由**时才写（行为、架构、跨文件或
+跨包约定、流程与工具、测试策略、磁盘/线上/配置格式，或任何维护者日后可能重新
+审视的决定）。**机械或局部改动豁免**——重命名、格式化、局部 UI 表现与交互调整
+都不需要 note。已有 note 拥有这条决策时**更新它**，不要新建重复档案；也**不要
+把一篇 note 改成另一个决策**（另写一篇并互链）。
 
 ## 2. 卡片解剖：六个字段的语义
 

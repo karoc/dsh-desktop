@@ -318,13 +318,16 @@ async function removeCard(cwd, id) {
 //#endregion
 //#region src/skill-sync.ts
 /**
-* kanban-use skill self-heal installation (host half).
+* kanban-use skill copy installer (host half) — the FALLBACK delivery path.
 *
-* The skill ships inside the npm package (files: skills/kanban-use/SKILL.md),
-* so `dsh plugin add/update dsh-kanban` puts the file on disk automatically.
-* But the AGENT skills directory (~/.agents/skills) is a per-machine local
-* asset that npm does NOT touch — so every dsh web start, this module makes
-* sure the skill is present there, mirroring the plugin's copy.
+* Preferred path (DSH ≥ 0.1.6, i.e. when `ctx.skills` exists): src/skill-register.ts
+* serves the skill out of the installed package, so the skill version always
+* equals the plugin version and no per-machine copy is needed. This module is
+* used only when that service is absent (older shells, or a profile without the
+* skill packages): the skill ships inside the npm package (files:
+* skills/kanban-use/SKILL.md), so `dsh plugin add/update dsh-kanban` puts the
+* file on disk automatically — but ~/.agents/skills is a per-machine local asset
+* that npm does NOT touch, so the plugin makes sure it is present there too.
 *
 * Sync policy (four states, driven by the `skill-version` fingerprint in the
 * SKILL.md frontmatter — bump it whenever the skill CONTENT changes):
@@ -347,12 +350,6 @@ async function removeCard(cwd, id) {
 * The manual dev command remains `pnpm install:skill` (repo checkout) or
 * `node scripts/install-skill.mjs --copy` (anywhere, incl. inside the
 * installed package — the script is shipped too).
-*
-* ⚠️ Tree-shaking: this module is KEPT in the bundle because the self-heal
-* runs as a module top-level side effect below, and src/index.ts imports it
-* as a side-effect import ('./skill-sync.ts'). A plain "call inside apply()"
-* was rolled out entirely by rolldown (same trap as §5 styles); do not move
-* the self-heal call into a function that only apply() references.
 */
 /** Absolute path of the shipped skill file inside this package (lib/../skills). */
 function skillSourceFile() {
@@ -404,7 +401,128 @@ async function ensureSkillInstalled(home = homedir()) {
 		console.warn(`[dsh-kanban] could not auto-install the kanban-use skill (${error.message}) — run install-skill.mjs manually`);
 	}
 }
-ensureSkillInstalled();
+//#endregion
+//#region src/skill-register.ts
+/**
+* kanban-use skill delivery through the shell's own skill registry (host half).
+*
+* WHY this exists next to src/skill-sync.ts (which copies the skill into
+* ~/.agents/skills): the copy is a per-machine artifact that the package cannot
+* see. It goes stale, it can be edited into a shape DSH silently drops (0.2.7:
+* an unquoted `description` made the whole file invisible to the model), and it
+* needs a version fingerprint to tell "old package content" from "user edit".
+* DSH's `ctx.skills` registry removes all three problems: `ctx.skills.register()`
+* serves the skill straight out of the installed package, so the skill version
+* IS the plugin version.
+*
+* Precedence (packages/skill/skill: "project entries outrank runtime entries,
+* which outrank user entries"): a runtime registration beats anything in
+* ~/.agents/skills, so a stale copy left behind by an older plugin version
+* cannot shadow the shipped skill — while a project-level copy
+* (<workspace>/.agents/skills or <workspace>/.dsh/skills) still wins, which is
+* the documented way to customize it.
+*
+* Fallback: when the service is absent (an older shell, or a profile without
+* the skill packages) `registerSkillRuntime` returns false and the caller keeps
+* the copy-based self-heal. The service is reached through `ctx.get('skills')`
+* rather than `inject`, so a shell without it degrades to the fallback instead
+* of failing the plugin load.
+*
+* The frontmatter reader below is deliberately a MINIMAL parser for this file's
+* own shape (name / description / skill-version as single-line scalars), not a
+* YAML implementation: it refuses anything it does not understand, and the
+* refusal path is the copy fallback (which DSH's real YAML parser then handles).
+* scripts/verify-skill-runtime.mjs pins the shipped SKILL.md against this
+* parser, so a frontmatter edit that breaks it fails the suite instead of
+* silently degrading.
+*/
+/** Strip one layer of YAML quoting from a scalar and unescape `\"` / `\\`. */
+function scalarValue(raw) {
+	const value = raw.trim();
+	if (value === "") return void 0;
+	const quoted = /^"(.*)"$/s.exec(value);
+	if (quoted !== null) return quoted[1]?.replaceAll("\\\"", "\"").replaceAll("\\\\", "\\");
+	const single = /^'(.*)'$/s.exec(value);
+	if (single !== null) return single[1]?.replaceAll("''", "'");
+	if (/[#{}[\],&*?|>@`]/.test(value) || value.includes(": ")) return void 0;
+	return value;
+}
+/**
+* Parse the packaged SKILL.md into runtime-registration fields.
+* @param text - the raw SKILL.md contents.
+* @returns the parsed fields, or undefined when the file is not the flat
+*   frontmatter shape this parser accepts (caller falls back to the copy path).
+*/
+function parseSkillMarkdown(text) {
+	const opening = /^---\r?\n/.exec(text);
+	if (opening === null) return void 0;
+	const closing = /\r?\n---\r?\n/.exec(text.slice(opening[0].length));
+	if (closing === null) return void 0;
+	const headerEnd = opening[0].length + closing.index;
+	const header = text.slice(opening[0].length, headerEnd);
+	const content = text.slice(headerEnd + closing[0].length).trim();
+	let name;
+	let description;
+	for (const line of header.split(/\r?\n/)) {
+		if (line.trim() === "" || line.trimStart().startsWith("#")) continue;
+		const entry = /^([A-Za-z0-9_-]+):[ \t]*(.*)$/.exec(line);
+		if (entry === null) return void 0;
+		const key = entry[1];
+		const value = scalarValue(entry[2] ?? "");
+		if (value === void 0) return void 0;
+		if (key === "name") name = value;
+		else if (key === "description") description = value;
+	}
+	if (name === void 0 || description === void 0) return void 0;
+	if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)) return void 0;
+	if (content === "") return void 0;
+	return {
+		name,
+		description,
+		content
+	};
+}
+/**
+* Register the packaged kanban-use skill with the shell's skill registry.
+* Never throws and never blocks plugin load: a missing service, a missing file,
+* or an unparseable frontmatter all return false so the caller can fall back.
+* @param ctx - the host plugin context.
+* @param sourceFile - the packaged SKILL.md path (injectable for tests).
+* @returns true when the skill was registered at runtime.
+*/
+function registerSkillRuntime(ctx, sourceFile) {
+	const skills = ctx.get?.("skills");
+	if (skills === void 0 || typeof skills.register !== "function") return false;
+	let text;
+	try {
+		text = readFileSync(sourceFile ?? defaultSkillFile(), "utf8");
+	} catch (error) {
+		ctx.logger?.warn?.(`[dsh-kanban] packaged skill could not be read (${error.message}) — falling back to the copy installer`);
+		return false;
+	}
+	const parsed = parseSkillMarkdown(text);
+	if (parsed === void 0) {
+		ctx.logger?.warn?.("[dsh-kanban] skills/kanban-use/SKILL.md frontmatter is not the flat name/description shape — serving it through the filesystem fallback instead");
+		return false;
+	}
+	try {
+		const disposer = skills.register({
+			name: parsed.name,
+			description: parsed.description,
+			content: parsed.content,
+			source: "runtime"
+		});
+		ctx.effect?.(() => disposer, "dsh-kanban: kanban-use skill registration");
+		return true;
+	} catch (error) {
+		ctx.logger?.warn?.(`[dsh-kanban] runtime skill registration failed (${error.message}) — falling back to the copy installer`);
+		return false;
+	}
+}
+/** Absolute path of the packaged SKILL.md, resolved relative to the bundle. */
+function defaultSkillFile() {
+	return join(dirname(fileURLToPath(import.meta.url)), "..", "skills", "kanban-use", "SKILL.md");
+}
 /** The closed set of Agent Note classes (mirrors DSH's classification gate). */
 const DEFAULT_NOTE_CLASSES = [
 	"feature",
@@ -436,8 +554,13 @@ const DEFAULT_NOTE_FORMAT = [
 	"{{consequences_section}}",
 	""
 ].join("\n");
-/** Default "non-trivial change" definition (mirrors DSH's AGENTS.md rule). */
-const DEFAULT_NON_TRIVIAL_DEFINITION = "A change is NON-TRIVIAL (so it needs a note) when it changes behavior, architecture, cross-file or cross-package conventions, process or tooling, test strategy, on-disk storage format, wire/protocol format, or configuration format — or makes any decision a maintainer could reasonably revisit later. Mechanical or local-only edits (renames, formatting, pure comments, no behavior change) are exempt.";
+/**
+* Default "non-trivial change" definition (mirrors DSH's note-scope rule, which
+* moved from a root AGENTS.md sentence to `.agents/notes/README.md#when-to-write-one`
+* — "lasting decision rationale that code, tests, and existing documentation do
+* not explain"; the AGENTS.md line is now a pointer to it).
+*/
+const DEFAULT_NON_TRIVIAL_DEFINITION = "A change is NON-TRIVIAL (so it needs a note) only when it carries lasting decision rationale that code, tests, and existing documentation do not explain — behavior, architecture, cross-file or cross-package conventions, process or tooling, test strategy, on-disk storage format, wire/protocol format, or configuration format, or any decision a maintainer could reasonably revisit later. Mechanical or local edits are exempt, including local UI presentation and interaction changes. Updating the note that already owns the decision satisfies the rule — do not create a duplicate; and never edit an existing note into a DIFFERENT decision (supersede it with a new note and cross-link the two).";
 /** Resolve the overrides file path for one workspace. */
 function noteOverridesPath(cwd) {
 	if (!isAbsolute(cwd)) throw new TypeError(`kanban: workspace must be an absolute path, got ${JSON.stringify(cwd)}`);
@@ -476,10 +599,10 @@ async function effectiveNoteSpec(cwd) {
 	const overrides = await readNoteOverrides(cwd);
 	const noteClasses = overrides.noteClasses !== void 0 ? [...overrides.noteClasses] : [...DEFAULT_NOTE_CLASSES];
 	return {
-		specVersion: overrides.specVersion ?? 1,
+		specVersion: overrides.specVersion ?? 2,
 		noteClasses,
 		noteFormat: overrides.noteFormat ?? DEFAULT_NOTE_FORMAT,
-		nonTrivialDefinition: overrides.nonTrivialDefinition ?? "A change is NON-TRIVIAL (so it needs a note) when it changes behavior, architecture, cross-file or cross-package conventions, process or tooling, test strategy, on-disk storage format, wire/protocol format, or configuration format — or makes any decision a maintainer could reasonably revisit later. Mechanical or local-only edits (renames, formatting, pure comments, no behavior change) are exempt.",
+		nonTrivialDefinition: overrides.nonTrivialDefinition ?? "A change is NON-TRIVIAL (so it needs a note) only when it carries lasting decision rationale that code, tests, and existing documentation do not explain — behavior, architecture, cross-file or cross-package conventions, process or tooling, test strategy, on-disk storage format, wire/protocol format, or configuration format, or any decision a maintainer could reasonably revisit later. Mechanical or local edits are exempt, including local UI presentation and interaction changes. Updating the note that already owns the decision satisfies the rule — do not create a duplicate; and never edit an existing note into a DIFFERENT decision (supersede it with a new note and cross-link the two).",
 		hasOverrides: overrides.noteClasses !== void 0 || overrides.noteFormat !== void 0 || overrides.nonTrivialDefinition !== void 0
 	};
 }
@@ -695,7 +818,26 @@ function boardSnapshotText(context) {
 	});
 	const incomplete = open.filter((card) => missingCardFields(card).length > 0).length;
 	const tail = incomplete > 0 ? ["", `${incomplete} open card(s) are missing fields (缺) — fill the flagged 为什么 (and other fields) when you pick the work up.`] : [];
-	return "Current workspace board (KANBAN.json) — open items:\n" + [...lines, ...tail].join("\n");
+	return literalPromptText("Current workspace board (KANBAN.json) — open items:\n" + [...lines, ...tail].join("\n"));
+}
+/**
+* Neutralize `{{` in literal text contributed to a DYNAMIC prompt context.
+*
+* DSH interpolates every context contribution when it renders the runtime
+* snapshot (`renderContextSections`), and any `{{name}}` it cannot resolve —
+* an unknown variable, a lowercase-name violation, an unmatched pair — throws,
+* which fails the snapshot for EVERY request while such a card is open. Card
+* titles are model- and user-authored, so `修复 {{TOKEN}} 渲染` on the board
+* used to break assembly outright (reproduced against the built bundle before
+* this guard existed). Contexts have no `interpolate: false` opt-out (that
+* option exists on sections only), so the sequence itself has to go: a
+* zero-width space keeps the braces visually intact for the model while making
+* the text opaque to the interpolator.
+* @param text - literal prompt text that may contain user data.
+* @returns the same text with every `{{` broken apart.
+*/
+function literalPromptText(text) {
+	return text.replaceAll("{{", "{​{");
 }
 /** Execute the human `/kanban` command against the receiving agent's workspace. */
 async function executeBoardCommand(ctx, invocation) {
@@ -850,11 +992,12 @@ async function listAgentNotes(cwd) {
 }
 /** Register the four model-facing board tools. */
 function apply(ctx) {
-	ensureSkillInstalled();
+	if (!registerSkillRuntime(ctx)) ensureSkillInstalled();
 	ctx.systemPrompt.section({
 		name: "tool:board",
 		order: 113,
-		text: BOARD_GUIDANCE
+		text: BOARD_GUIDANCE,
+		interpolate: false
 	});
 	ctx.systemPrompt.context({
 		name: "board:open-items",
@@ -1015,7 +1158,7 @@ function apply(ctx) {
 	}));
 	ctx.tools.register(defineTool({
 		name: "note_add",
-		description: "Write an Agent Note documenting a NON-TRIVIAL change, at .agents/notes/implemented/<class>/<date>-<topic>.md (mirrors the DeepSeek Harness repository discipline). A change is non-trivial when it changes behavior, architecture, cross-file/cross-package conventions, process or tooling, test strategy, storage/wire/config format, or makes a decision a maintainer could reasonably revisit. Call this AFTER completing such a change, alongside any board cards — the note records the why and what was rejected that the code cannot. Write at DSH engineering depth: the Decision states shipped reality in the present tense (concrete names, contracts, boundaries — not a summary); include negative guarantees and edge cases (what is NOT done, permission/ownership boundaries, safety rules); Alternatives must be REAL options that lost, each with why (never invented); Consequences records what the trade-off COST and BOUGHT; cross-link related notes by relative path when they exist under .agents/notes.",
+		description: `Write an Agent Note documenting a NON-TRIVIAL change, at .agents/notes/implemented/<class>/<date>-<topic>.md (mirrors the DeepSeek Harness repository discipline). ${DEFAULT_NON_TRIVIAL_DEFINITION} Call this AFTER completing such a change, alongside any board cards — the note records the why and what was rejected that the code cannot. Write at DSH engineering depth: the Decision states shipped reality in the present tense (concrete names, contracts, boundaries — not a summary); include negative guarantees and edge cases (what is NOT done, permission/ownership boundaries, safety rules); Alternatives must be REAL options that lost, each with why (never invented); Consequences records what the trade-off COST and BOUGHT; cross-link related notes by relative path when they exist under .agents/notes.`,
 		parameters: {
 			class: {
 				type: "string",
@@ -1226,7 +1369,7 @@ function registerWebApi(ctx) {
 			sendJson(res, 200, {
 				ok: true,
 				specVersion: spec.specVersion,
-				pluginSpecVersion: 1,
+				pluginSpecVersion: 2,
 				noteClasses: spec.noteClasses,
 				noteFormat: spec.noteFormat,
 				nonTrivialDefinition: spec.nonTrivialDefinition,
@@ -1265,7 +1408,7 @@ function registerWebApi(ctx) {
 			sendJson(res, 200, {
 				ok: true,
 				specVersion: spec.specVersion,
-				pluginSpecVersion: 1,
+				pluginSpecVersion: 2,
 				noteClasses: spec.noteClasses,
 				noteFormat: spec.noteFormat,
 				nonTrivialDefinition: spec.nonTrivialDefinition,
@@ -1335,4 +1478,4 @@ function registerWebApi(ctx) {
 	}
 }
 //#endregion
-export { NOTE_CLASSES, apply, ensureSkillInstalled, inject, name, skillSourceFile, skillTargetFile };
+export { NOTE_CLASSES, apply, ensureSkillInstalled, inject, literalPromptText, name, parseSkillMarkdown, registerSkillRuntime, skillSourceFile, skillTargetFile };

@@ -6,11 +6,11 @@
 #
 # Configuration (row config, all optional — the code fills defaults for
 # missing keys, so a profile override only needs the keys it changes):
-#   providers: [string]  provider route keys whose requests receive the
-#                        header. Defaults to the pi-ai catalog ids
-#                        ['opencode', 'opencode-go']. Add your own route key
-#                        when OpenCode is served under a custom provider name
-#                        (e.g. opencode-go-self).
+#   providers: [string]  OPTIONAL narrowing. Unset (default) = every provider
+#                        whose request targets an allowed host is covered, so a
+#                        renamed or custom route key (e.g. opencode-go-self)
+#                        needs no configuration and cannot break silently.
+#                        Set it only to restrict injection to specific routes.
 #   hosts: [string]      host gate. Entries are `host` (implicitly https) or
 #                        `scheme://host[:port]`; a leading `*.` is ignored.
 #                        Defaults to ['https://opencode.ai'] (subdomains
@@ -48,8 +48,5 @@
     - id: dsh-smoothly-opencode-session
       name: '@karoc/dsh-smoothly-opencode-session'
       config:
-        providers:
-          - opencode
-          - opencode-go
         mode: session-id
         debug: false

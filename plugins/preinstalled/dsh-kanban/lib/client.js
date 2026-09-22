@@ -12,16 +12,17 @@ window.__ModuleLoader__.load({
 		* Module-level open-item count for the sidebar badge, shared by the sidebar
 		* entry button. Polls the host `/kanban/counts` endpoint for one workspace and
 		* exposes a bare observable pair (subscribe/getSnapshot) for
-		* useSyncExternalStore — same pattern as board-state.ts.
+		* useSyncExternalStore — the module-level observable pattern the plugin uses
+		* for cross-entry state (the sidebar glyph and any future consumer).
 		*/
-		const listeners$1 = /* @__PURE__ */ new Set();
+		const listeners = /* @__PURE__ */ new Set();
 		let counts = { open: 0 };
 		let pollTimer = null;
 		/** Subscribe to count changes; returns an unsubscribe. */
 		function subscribeCounts(fn) {
-			listeners$1.add(fn);
+			listeners.add(fn);
 			return () => {
-				listeners$1.delete(fn);
+				listeners.delete(fn);
 			};
 		}
 		/** Current open-item count snapshot. */
@@ -35,7 +36,7 @@ window.__ModuleLoader__.load({
 				const body = await response.json();
 				if (response.ok && body.ok === true && typeof body.open === "number") {
 					counts = { open: body.open };
-					for (const fn of listeners$1) fn();
+					for (const fn of listeners) fn();
 				}
 			} catch {}
 		}
@@ -74,39 +75,6 @@ window.__ModuleLoader__.load({
 				pollTimer = null;
 			}
 			latestResolveCwd = void 0;
-		}
-		//#endregion
-		//#region src/client/board-state.ts
-		/**
-		* Module-level board visibility state shared by the sidebar entry button and
-		* the full-screen overlay page. A bare observable pair (subscribe/getSnapshot)
-		* consumed through React's useSyncExternalStore — no store machinery needed for
-		* a single boolean that two sibling entries must agree on.
-		*/
-		const listeners = /* @__PURE__ */ new Set();
-		let open = false;
-		/** Subscribe to visibility changes; returns an unsubscribe. */
-		function subscribeBoard(fn) {
-			listeners.add(fn);
-			return () => {
-				listeners.delete(fn);
-			};
-		}
-		/** Current visibility snapshot. */
-		function getBoardOpen() {
-			return open;
-		}
-		/** Open the board page (called from the sidebar entry). */
-		function openBoard() {
-			if (open) return;
-			open = true;
-			for (const fn of listeners) fn();
-		}
-		/** Close the board page (called from the overlay's close control). */
-		function closeBoard() {
-			if (!open) return;
-			open = false;
-			for (const fn of listeners) fn();
 		}
 		//#endregion
 		//#region src/client/BoardPage.tsx
@@ -177,7 +145,7 @@ window.__ModuleLoader__.load({
 			const pad = (n) => String(n).padStart(2, "0");
 			return `${formatTime(epochMs)}:${pad(date.getSeconds())}`;
 		}
-		/** The board page component (rendered inside the shell.overlay seat). */
+		/** The board page component (the board global panel's `main`-slot occupant). */
 		function BoardPage({ api, workspace, workspaces, onClose, t, openSession }) {
 			const [cards, setCards] = (0, react.useState)([]);
 			const [path, setPath] = (0, react.useState)(void 0);
@@ -284,7 +252,7 @@ window.__ModuleLoader__.load({
 				return groups;
 			}, [cards]);
 			if (selectedWorkspace === void 0) return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-				className: "kb-overlay",
+				className: "kb-panel",
 				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(BoardHeader, {
 					onClose,
 					t
@@ -307,7 +275,7 @@ window.__ModuleLoader__.load({
 				})]
 			});
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-				className: "kb-overlay",
+				className: "kb-panel",
 				"data-testid": "kanban-page",
 				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(BoardHeader, {
 					onClose,
@@ -924,7 +892,7 @@ window.__ModuleLoader__.load({
 				})
 			});
 		}
-		/** Shared header strip of the overlay (native DSH ghost buttons). */
+		/** Shared header strip of the board panel (native DSH ghost buttons). */
 		function BoardHeader(props) {
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("header", {
 				className: "kb-header",
@@ -952,15 +920,29 @@ window.__ModuleLoader__.load({
 					/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
 						variant: "ghost",
 						size: "md",
-						icon: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCloseOutline16, {}),
+						icon: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronLeftOutline14, {}),
 						onClick: props.onClose,
-						children: props.t("close")
+						children: props.t("backToChat")
 					})
 				]
 			});
 		}
 		//#endregion
 		//#region src/client/workspace-pick.ts
+		/**
+		* Resolve the Session currently on stage (the main view's occupant), or
+		* undefined when none is — a global panel is open, or the list is still empty.
+		* @param sessions - the `useSessions`/`ctx.sessions.list` snapshot, or undefined when absent.
+		* @returns the current session id, or undefined.
+		*/
+		function currentSessionId(sessions) {
+			if (sessions === void 0) return void 0;
+			const legacy = sessions.current;
+			if (typeof legacy === "string" && legacy !== "") return legacy;
+			const byId = sessions.byId;
+			if (byId === void 0) return void 0;
+			for (const [sessionId, summary] of Object.entries(byId)) if ((summary.retainedBy?.mainView ?? 0) > 0) return sessionId;
+		}
 		/** Pick the most-recently-active workspace id, or undefined when empty. */
 		function recentWorkspaceId(items, byId) {
 			let selected;
@@ -985,47 +967,53 @@ window.__ModuleLoader__.load({
 		//#endregion
 		//#region src/client/KanbanSurface.tsx
 		/**
-		* Sidebar entry button and overlay wrapper for the kanban board page.
+		* Sidebar global-panel glyph and the panel wrapper for the board page.
 		*
 		* Kept in a `.tsx` file so the browser bundle can parse JSX; the plugin entry
-		* (src/client/index.ts) stays plain TypeScript and imports these. The sidebar
-		* entry mirrors the Settings footer trigger (icon + label, left-aligned,
-		* 34px compact row) so it lines up with the Settings entry below it.
+		* (src/client/index.ts) stays plain TypeScript and imports these. The board is
+		* a DSH "global panel" (DSH ≥ 0.1.6): the sidebar renders the panel row — icon,
+		* label, tooltip, selected tint — from the `sidebar.panellist` registration,
+		* and the frame renders this file's page component in the `main` column while
+		* that panel is selected. Nothing here draws its own button or overlay chrome.
 		*/
 		/**
-		* Sidebar footer entry button: icon + label, left-aligned, styled exactly
-		* like the Settings trigger (34px compact row, 12px radius, 10px left pad)
-		* so it sits flush with the Settings entry below it. The rail (collapsed)
-		* state shows only the icon, like the other rail controls. Shows an open-item
-		* count badge when the current workspace has todo/in_progress cards.
+		* Sidebar glyph for the board panel: the checklist icon at the size the
+		* sidebar asks for, plus the open-item count badge (same count the old footer
+		* entry showed, from the /kanban/counts poll).
 		*/
-		function SidebarKanbanButton(props) {
-			const wide = props.wide ?? true;
+		function KanbanPanelIcon(props) {
 			const { open } = (0, react.useSyncExternalStore)(subscribeCounts, getCountsSnapshot);
-			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
-				type: "button",
-				className: wide ? "kb-sidebar-trigger" : "kb-sidebar-trigger kb-sidebar-trigger-rail",
-				"aria-label": props.t(),
-				onClick: props.onClick,
-				children: [
-					/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChecklistOutline14, { size: wide ? 16 : 18 }),
-					wide && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-						className: "kb-sidebar-trigger-label",
-						children: props.t()
-					}),
-					open > 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-						className: wide ? "kb-badge" : "kb-badge kb-badge-rail",
-						title: `${open} open`,
-						children: open > 99 ? "99+" : String(open)
-					})
-				]
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+				className: "kb-panel-icon",
+				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChecklistOutline14, { size: props.size }), open > 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+					className: "kb-panel-badge",
+					title: `${open} open`,
+					children: open > 99 ? "99+" : String(open)
+				})]
+			});
+		}
+		/**
+		* The `main` panel occupant: the frame renders it only while the board panel is
+		* selected, so it needs no visibility gate of its own.
+		*/
+		function KanbanPanel(props) {
+			const { all, current } = resolveWorkspaces(props.useSessions?.((s) => s) ?? {}, props.useWorkspaces?.((s) => s) ?? {});
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(BoardPage, {
+				api: props.api,
+				workspace: current,
+				workspaces: all,
+				onClose: props.onClose,
+				t: props.t,
+				openSession: props.openSession
 			});
 		}
 		/**
 		* Build the full workspace list plus the default (current-session) workspace
 		* from the framework seats. Default: the current session's cwd, then the most
 		* recently active workspace, then the first workspace. The list drives the
-		* board page's workspace switcher.
+		* board page's workspace switcher. The current Session is resolved through
+		* {@link currentSessionId}, which covers both DSH selection eras (list-snapshot
+		* `current` up to 0.1.5, main-view retention from 0.1.6-alpha.2 on).
 		*/
 		function resolveWorkspaces(sessionList, workspaceList) {
 			const items = workspaceList.items ?? [];
@@ -1034,7 +1022,7 @@ window.__ModuleLoader__.load({
 				cwd: item.path,
 				title: item.title ?? item.path
 			}));
-			const current = sessionList.current;
+			const current = currentSessionId(sessionList);
 			if (current !== void 0) {
 				const cwd = sessionList.byId?.[current]?.cwd;
 				if (cwd !== void 0 && cwd !== "") {
@@ -1055,20 +1043,6 @@ window.__ModuleLoader__.load({
 				current: all.find((ws) => ws.workspaceId === recentId) ?? all[0]
 			};
 		}
-		/** Overlay wrapper: renders the board page only while open. */
-		function KanbanOverlay(props) {
-			const open = (0, react.useSyncExternalStore)(subscribeBoard, getBoardOpen);
-			const { all, current } = resolveWorkspaces(props.useSessions?.((s) => s) ?? {}, props.useWorkspaces?.((s) => s) ?? {});
-			if (!open) return null;
-			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(BoardPage, {
-				api: props.api,
-				workspace: current,
-				workspaces: all,
-				onClose: props.onClose,
-				t: props.t,
-				openSession: props.openSession
-			});
-		}
 		//#endregion
 		//#region src/client/locales.ts
 		/** Copy dictionaries for the dsh-kanban board page (Smoothly Kanban / 思磨力看板). */
@@ -1079,6 +1053,7 @@ window.__ModuleLoader__.load({
 			intro: "Cross-session plans and todos, persisted to KANBAN.json at the workspace root.",
 			pathLabel: "Board file",
 			close: "Close",
+			backToChat: "Back to conversation",
 			loading: "Loading…",
 			empty: "No cards yet. Ask the model to board_add a plan step, or add one below.",
 			addPlaceholder: "New card title…",
@@ -1105,7 +1080,7 @@ window.__ModuleLoader__.load({
 			specFormatLabel: "Note body template ({{title}} {{problem}} {{decision}} {{alternatives}} {{consequences}} {{alternatives_section}} {{consequences_section}})",
 			specFormatSource: "Source: deepseek-harness scripts/verify-agent-note-format.ts",
 			specDefinitionLabel: "Non-trivial change definition",
-			specDefinitionSource: "Source: deepseek-harness AGENTS.md (\"Non-trivial changes MUST include an Agent Note…\")",
+			specDefinitionSource: "Source: deepseek-harness .agents/notes/README.md → \"When to write one\" (root AGENTS.md points at it)",
 			specSave: "Save overrides",
 			specReset: "Reset to defaults",
 			specSaved: "Saved.",
@@ -1135,6 +1110,7 @@ window.__ModuleLoader__.load({
 			intro: "跨会话的计划与待办，持久化到工作区根目录的 KANBAN.json。",
 			pathLabel: "看板文件",
 			close: "关闭",
+			backToChat: "返回会话",
 			loading: "加载中…",
 			empty: "还没有卡片。可以让模型用 board_add 记录计划步骤，或在下方面板新增。",
 			addPlaceholder: "新卡片标题…",
@@ -1161,7 +1137,7 @@ window.__ModuleLoader__.load({
 			specFormatLabel: "笔记正文模板（{{title}} {{problem}} {{decision}} {{alternatives}} {{consequences}} {{alternatives_section}} {{consequences_section}}）",
 			specFormatSource: "来源：deepseek-harness scripts/verify-agent-note-format.ts",
 			specDefinitionLabel: "非平凡变更定义",
-			specDefinitionSource: "来源：deepseek-harness AGENTS.md（\"非平凡变更必须包含 Agent Note…\"）",
+			specDefinitionSource: "来源：deepseek-harness .agents/notes/README.md → \"When to write one\"（根 AGENTS.md 只留一行指针）",
 			specSave: "保存覆盖",
 			specReset: "恢复默认",
 			specSaved: "已保存。",
@@ -1197,67 +1173,32 @@ window.__ModuleLoader__.load({
 		* DSH look.
 		*/
 		const KANBAN_STYLES = `
-/* Sidebar footer trigger, mirroring the Settings trigger (34px compact row,
-   12px radius, 10px left pad, icon + left-aligned label). */
-.kb-sidebar-trigger {
-  flex: none;
-  display: flex;
+/* Global-panel glyph: the sidebar owns the panel row (button, label, tooltip,
+   selected tint); this only draws the icon plus the open-item badge. */
+.kb-panel-icon {
+  position: relative;
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  width: calc(100% + 8px);
-  height: 34px;
-  margin: 4px -4px 4px;
-  padding: 6px 2px 6px 10px;
-  box-sizing: border-box;
-  border: none;
-  border-radius: 12px;
-  background: transparent;
-  cursor: pointer;
-  overflow: hidden;
-  color: var(--dsw-alias-label-primary);
-  font-family: inherit;
-  font-size: 14px;
-  line-height: 22px;
-}
-.kb-sidebar-trigger:hover {
-  background: var(--dsw-alias-interactive-bg-hover);
-}
-/* Rail trigger: the same 36x36 circle box as the other rail controls. */
-.kb-sidebar-trigger-rail {
-  width: 36px;
-  height: 36px;
-  margin: 8px 0 10px;
   justify-content: center;
-  gap: 0;
-  padding: 0;
-  border-radius: 50%;
 }
-.kb-sidebar-trigger-label {
-  overflow: hidden;
-  white-space: nowrap;
-}
-/* Open-item count badge on the sidebar entry (wide + rail states). */
-.kb-badge {
-  margin-left: auto;
-  min-width: 16px; height: 16px;
-  padding: 0 4px;
-  display: inline-flex; align-items: center; justify-content: center;
-  border-radius: 8px;
-  background: var(--dsw-alias-button-primary-fill);
-  color: var(--dsw-alias-bg-base);
-  font-size: 10px; line-height: 16px; font-weight: 600;
-}
-.kb-badge-rail {
+.kb-panel-badge {
   position: absolute;
-  top: -2px; right: -2px;
+  top: -6px; right: -8px;
   min-width: 14px; height: 14px;
+  padding: 0 3px;
+  display: inline-flex; align-items: center; justify-content: center;
+  box-sizing: border-box;
   border-radius: 7px;
-  font-size: 9px; line-height: 14px;
+  background: var(--dsw-alias-button-primary-fill);
+  color: var(--dsw-alias-label-primary-foreground);
+  font-size: 9px; line-height: 14px; font-weight: 600;
+  pointer-events: none;
 }
-.kb-sidebar-trigger-rail { position: relative; }
-.kb-overlay {
-  position: fixed; inset: 0; z-index: 50;
+/* The board page is the 'main' global panel's occupant: it fills the centre
+   column (no overlay positioning, no z-index — the frame sizes it). */
+.kb-panel {
   display: flex; flex-direction: column;
+  height: 100%; min-height: 0;
   background: var(--dsw-alias-bg-base);
   color: var(--dsw-alias-label-primary);
   font: inherit;
@@ -1298,7 +1239,7 @@ window.__ModuleLoader__.load({
 .kb-board-path {
   margin: 0 0 16px; font-size: 12px; line-height: 18px;
   color: var(--dsw-alias-label-tertiary);
-  font-family: var(--dsw-font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-family: var(--dsw-font-markdown-code-font-family, var(--ds-font-family-code, ui-monospace, SFMono-Regular, monospace));
   word-break: break-all;
 }
 .kb-columns {
@@ -1432,7 +1373,7 @@ window.__ModuleLoader__.load({
   resize: vertical;
   border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px;
   padding: 8px 10px;
-  background: var(--dsw-alias-bg-input, transparent);
+  background: var(--dsw-alias-bg-layer-1);
   color: var(--dsw-alias-label-primary);
   font: inherit; font-size: 13px; line-height: 18px;
 }
@@ -1451,21 +1392,30 @@ window.__ModuleLoader__.load({
 .kb-spec-active { color: var(--dsw-alias-button-primary-fill); font-size: 12px; }
 .kb-spec-body { display: flex; flex-direction: column; gap: 12px; padding: 12px; border-top: 1px solid var(--dsw-alias-border-l2); }
 .kb-spec-intro { margin: 0; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-tertiary); }
+/* Spec-drift warning: the shell's warn panel vocabulary (state-warn-tertiary
+   fill, state-warn-label text, 20%-alpha state border) rather than a neutral
+   card — the previous interactive-bg-hover-danger TEXT color was a 5%-alpha
+   hover fill used as a foreground, i.e. unreadable in the light theme. */
 .kb-spec-warning {
   margin: 0; padding: 8px 10px; font-size: 12px; line-height: 18px;
-  color: var(--dsw-alias-interactive-bg-hover-danger);
-  border: 1px solid var(--dsw-alias-border-l3); border-radius: 8px;
-  background: var(--dsw-alias-bg-module);
+  color: var(--dsw-alias-state-warn-label);
+  border: 1px solid color-mix(in srgb, var(--dsw-alias-state-warn-label) 20%, transparent);
+  border-radius: 8px;
+  background: var(--dsw-alias-state-warn-tertiary);
 }
 .kb-spec-label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
 .kb-spec-input {
   width: 100%; box-sizing: border-box; resize: vertical;
   border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px;
-  padding: 8px 10px; background: var(--dsw-alias-bg-input, transparent);
+  padding: 8px 10px; background: var(--dsw-alias-bg-layer-1);
   color: var(--dsw-alias-label-primary); font: inherit; font-size: 13px; line-height: 18px;
 }
 .kb-spec-input:focus { outline: none; border-color: var(--dsw-alias-border-l3); }
-.kb-spec-monospace { font-family: var(--dsw-font-mono, ui-monospace, SFMono-Regular, monospace); font-size: 12px; }
+/* Official monospace stack: ui-theme's base.css defines --ds-font-family-code
+   and exposes it as --dsw-font-markdown-code-font-family; --dsw-font-mono
+   was never a DSH token, so the previous declaration silently fell through to
+   the generic fallback list. */
+.kb-spec-monospace { font-family: var(--dsw-font-markdown-code-font-family, var(--ds-font-family-code, ui-monospace, SFMono-Regular, monospace)); font-size: 12px; }
 .kb-spec-source { font-size: 11px; line-height: 16px; color: var(--dsw-alias-label-tertiary); word-break: break-word; }
 .kb-spec-saved { margin: 0; font-size: 12px; color: var(--dsw-alias-button-primary-fill); }
 .kb-spec-actions { display: flex; gap: 8px; }
@@ -1474,12 +1424,12 @@ window.__ModuleLoader__.load({
   color: var(--dsw-alias-label-tertiary);
 }
 .kb-empty { border: 1px dashed var(--dsw-alias-border-l3); border-radius: 12px; }
-.kb-error { color: var(--dsw-alias-interactive-bg-hover-danger); }
+.kb-error { color: var(--dsw-alias-state-error-primary); }
 .kb-archived {
   margin: 0 0 12px; padding: 8px 12px; font-size: 12px; line-height: 18px;
   color: var(--dsw-alias-label-secondary);
   border: 1px solid var(--dsw-alias-border-l3); border-radius: 8px;
-  background: var(--dsw-alias-bg-module);
+  background: var(--dsw-alias-bg-module-platform);
   word-break: break-all;
 }
 /* Card detail dialog (headless Modal): wider than the 380px default, with a
@@ -1543,7 +1493,7 @@ body .kb-detail-modal { width: min(560px, 100%); }
   margin: 0;
   padding: 10px 12px;
   border: 1px solid var(--dsw-alias-border-l2); border-radius: 10px;
-  background: var(--dsw-alias-bg-module);
+  background: var(--dsw-alias-bg-module-platform);
   font-size: 13px; line-height: 22px;
   color: var(--dsw-alias-label-primary);
   white-space: pre-wrap; word-break: break-word;
@@ -1584,6 +1534,12 @@ body .kb-detail-modal { width: min(560px, 100%); }
 		//#region src/client/index.ts
 		/** Dictionary namespace owned by this plugin. */
 		const NS = "dsh-kanban";
+		/**
+		* Global-panel id: the sidebar entry's list id and the `main` slot's key must
+		* be the same branded value (ui-sidebar resolves the row's label and the
+		* centre column's occupant from it).
+		*/
+		const PANEL_ID = "kanban";
 		/** Required services (cordis fiber inject). */
 		const inject = [
 			"slots",
@@ -1678,7 +1634,7 @@ body .kb-detail-modal { width: min(560px, 100%); }
 					let sessionBy;
 					try {
 						const sessionState = sessions?.list?.getSnapshot();
-						const currentId = sessionState?.current;
+						const currentId = currentSessionId(sessionState);
 						sessionBy = sessionState?.byId;
 						const currentCwd = currentId === void 0 ? void 0 : sessionState?.byId?.[currentId]?.cwd;
 						if (currentCwd !== void 0 && currentCwd !== "") return currentCwd;
@@ -1702,33 +1658,32 @@ body .kb-detail-modal { width: min(560px, 100%); }
 					unsubscribeWorkspaces?.();
 				};
 			}, "dsh-kanban: counts polling");
-			ctx.slots.inject("sidebar.footer.action", () => ctx.slots.register({
-				name: "sidebar.footer.action",
-				id: "kanban",
-				order: 10,
+			const panelInjected = () => ({
+				api,
+				onClose: () => {
+					ctx.get("layout")?.selectPanel?.(null);
+				},
+				t,
+				openSession: (sessionId) => {
+					const sessions = ctx.get("sessions");
+					if (sessions === void 0) return;
+					ctx.get("layout")?.selectPanel?.(null);
+					sessions.open(sessionId);
+				}
+			});
+			ctx.slots.inject("main", () => ctx.slots.register({
+				name: "main",
+				key: PANEL_ID,
 				locale: NS,
-				inject: () => ({
-					onClick: openBoard,
-					t: () => t("nav")
-				})
-			}, SidebarKanbanButton));
-			ctx.slots.inject("shell.overlay", () => ctx.slots.register({
-				name: "shell.overlay",
-				id: "kanban",
+				inject: panelInjected
+			}, KanbanPanel));
+			ctx.slots.inject("sidebar.panellist", () => ctx.slots.register({
+				name: "sidebar.panellist",
+				id: PANEL_ID,
 				order: 10,
-				locale: NS,
-				inject: () => ({
-					api,
-					onClose: closeBoard,
-					t,
-					openSession: (sessionId) => {
-						const sessions = ctx.get("sessions");
-						if (sessions === void 0) return;
-						closeBoard();
-						sessions.open(sessionId);
-					}
-				})
-			}, KanbanOverlay));
+				label: () => t("nav"),
+				locale: NS
+			}, KanbanPanelIcon));
 		}
 		//#endregion
 		exports.apply = apply;

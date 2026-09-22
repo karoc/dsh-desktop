@@ -67,9 +67,20 @@ profile) is entirely optional — the code fills defaults for missing keys.
 
 ### providers
 
-Provider route keys whose requests receive the header. Defaults to the pi-ai
-catalog ids `opencode` and `opencode-go`. If you serve OpenCode under a custom
-provider route key (e.g. `opencode-go-self` in `llm-pi-ai`), add that key.
+**Optional narrowing — you normally need no configuration here.** The
+authoritative discriminator is the request HOST (see [hosts](#hosts)): leave
+`providers` unset and every provider whose target host passes the gate is
+covered, so a custom route key (for example `opencode-go-self`) works without
+being listed and cannot break silently when it is renamed. Set it only to
+restrict injection to specific provider ROUTE KEYS (the pi-ai catalog ids
+`opencode` / `opencode-go` are then just two ordinary entries). Matching uses
+the route key — a provider's display name (for example a UI label such as
+"OC Go") is never visible here. When you do set a list, the plugin compares it
+against the registered routes at the first model call and warns once about any
+key no adapter registered (also written to `debugFile` when configured, since a
+service deployment may not capture the console). The ` /ocgo ` command prints
+the effective policy — gate, narrowing, mode, registered routes — with no client
+UI involved.
 
 ### hosts
 
@@ -101,18 +112,21 @@ the plugin warns once per blocked provider/host pair.
   `debugRequests` is on, per injected or host-blocked request
   (`kind: "inject" | "skip"`). The stream-level record only means the call
   entered the injection flow; the request-level records are what prove what was
-  actually attached. The file is append-only (no rotation; roughly one record
-  per injected request) and written fire-and-forget, so a short-lived process
-  can lose its tail.
+  actually attached. **The stream-level record carries the raw session id and
+  value (its 0.1.0 format, kept for compatibility); only the request-level
+  records are hashed by default.** The file is append-only (no rotation;
+  roughly one record per injected request) and written fire-and-forget, so a
+  short-lived process can lose its tail.
 
 ### debugRequests
 
 `debugRequests: true` writes one request-level record **at the real fetch
 moment**: `{"ts","kind","reason","host","provider","valueHash","valueLen"}`
 with `reason` in `session` / `discovery` / `host-not-allowed` /
-`already-present`. By default the value is reduced to a 12-hex-character
-SHA-256 prefix; the raw value appears only when `debug: true` is set as well
-(the file then contains session identifiers).
+`already-present`. These records are hashed by default: the value is reduced to
+a 12-hex-character SHA-256 prefix, and the raw value appears only when
+`debug: true` is set as well. (The separate stream-level record described above
+keeps the raw session id — see its note.)
 
 ### discoveryFallback
 
