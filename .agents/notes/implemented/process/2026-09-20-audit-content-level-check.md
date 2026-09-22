@@ -13,6 +13,10 @@ Status: implemented
 
 给 audit 增加两层报告，同时**严格保留它既有的契约**：只读、不写任何文件、永远 exit 0、绝不当门禁、不用 `npm view`。
 
+> **部分被取代（2026-09-22）**：本文选定的 tarball 获取方式（`dist.tarball` + `fetch`、不落临时文件）已改为 npm CLI
+> （`npm view` + `npm pack`），见 [audit-registry-transport-and-verdict](2026-09-22-audit-registry-transport-and-verdict.md)：`fetch` 不读 npm 的代理配置，
+> 在代理网络上会让整份报告建立在未知数据上。内容级比对**本身**（比什么、怎么比、为什么当报告而非门禁）仍按本文执行。
+
 - **内容级比对**：对随包逐字拷贝的资产（`lib/*.js`、`cordis.patch.yml`、`skills/*/SKILL.md`）与**同版本**的已发布 tarball 做 sha256 比对。tarball 由 `versions[latest].dist.tarball` 取得（权威 URL，天然处理 scoped 包名），在内存里 `gunzipSync` + 极简 tar 解析（512 字节头、`size` 八进制、typeflag、ustar prefix），不落临时文件、不加依赖。版本相同时**也**比对——那正是这个检查存在的理由。报告 `content: N/N verbatim assets match` 或 `content: ⚠️ <file> DRIFT`。
 - **技能 frontmatter 报告**：随包 `skills/*/SKILL.md` 若 frontmatter 不可解析，报 `skill: ⚠️ …`，并明确标注"上游包缺陷，需要新版本而非同步"。
 - **网络加固**：registry 探测包了 try/catch —— 瞬时超时降级为一条报告行（`⚠️ Connect Timeout`），不再让脚本崩溃。这是实测踩到的：加固前一次 connect timeout 直接把脚本打崩（report 工具崩溃比报告缺失更糟）。汇总行同时统计版本更新与内容漂移两类。

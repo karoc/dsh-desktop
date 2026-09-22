@@ -28,8 +28,9 @@ node scripts/audit-preinstalled.mjs
 
 输出语义化：`UPDATE` = 需要同步，`up-to-date` = 已最新；永远 exit 0（报告工具，不当门禁）。**两层比对**，因为只比版本号有盲区：
 
-- **版本级**：读 `plugins/preinstalled/<pkg>/package.json` 的 version → `fetch` npm registry `dist-tags.latest` → 对比。无 bundle 时提示。
-- **内容级**：对「随包逐字拷贝」的资产（`lib/*.js`、`cordis.patch.yml`、`skills/*/SKILL.md`）与**同版本的已发布 tarball** 做 sha256 比对（tarball 在内存里 gunzip + 极简 tar 解析，不落临时文件、不加依赖）。这一层专治版本级的盲区：手工同步拷错/拷漏时版本号照样相等，旧逻辑会判 `up-to-date`；现在报 `content: ⚠️ <file> DRIFT`。四个预装包当前实测 12/12 资产与已发布 tarball 逐字节一致。
+- **版本级**：读 `plugins/preinstalled/<pkg>/package.json` 的 version → **`npm view`**（走 `.npmrc` 的 registry / 代理 / 鉴权，与发布同一条路）取 `dist-tags.latest` → 对比。无 bundle 时提示。**不要改回 `fetch`**：它不读 npm 的代理配置，在「npmjs 只能经代理访问」的网络下会全部超时，见下方 NOT VERIFIED 条。
+- **内容级**：对「随包逐字拷贝」的资产（`lib/*.js`、`cordis.patch.yml`、`skills/*/SKILL.md`）与**同版本的已发布 tarball** 做 sha256 比对（tarball 由 `npm pack` 取到系统临时目录再读入内存 gunzip + 极简 tar 解析：临时目录必定删除，npm cache 固定在工作区 `.tmp-investigate/.npm-cache`）。这一层专治版本级的盲区：手工同步拷错/拷漏时版本号照样相等，旧逻辑会判 `up-to-date`；现在报 `content: ⚠️ <file> DRIFT`。四个预装包当前实测 12/12 资产与已发布 tarball 逐字节一致。
+- **未能验证 ≠ 通过**：registry 不可达（或 npm 查询失败）时每一行都取不到数据，此时打印 `⚠️ NOT VERIFIED — N of M bundle(s) could not be checked` 并逐行列出原因，**不再**打印「all preinstalled plugins are at the latest published version, with matching content」。旧逻辑只看 `versionUpdates`/`contentDrifts` 两个计数器，全部失败时它们都是 0 → 在**未知数据**上给出绿色结论（2026-09-22 实测并修）。退出码仍是 0（报告工具、不当门禁），但输出不再可能被误读为通过。`DSH_PREINSTALLED_REGISTRY` 可覆盖 registry，是负向对照用的缝。
 - **技能 frontmatter**：随包 `skills/*/SKILL.md` 若 frontmatter 无法解析（未加引号的 `description` 含 `": "`），单独报 `skill: ⚠️ …`。这属于**上游包缺陷，同步修不了**，只能发新版本 —— 正是 2026-09-20 那次技能被 DSH 静默丢弃的类别。
 
 不想用脚本时手工等价：
