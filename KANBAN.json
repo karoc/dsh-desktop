@@ -1592,6 +1592,91 @@
       "createdAt": 1789959111308,
       "updatedAt": 1789960896774,
       "summary": "PR #50 已 squash 合并（check/test 两个必需检查均绿后合并，未用 admin 绕过）；本地 main 已对齐 origin/main。宿主机正式版安装包已在 D:\\Dev\\dsh-desktop 本地编译完成：src-tauri\\target\\release\\bundle\\nsis\\DSH Smoothly Desktop_0.10.1_x64-setup.exe（28,121,392 字节；exe 内容已核对含新端点 /shell/disable-third-party-plugins 且不含旧的 /shell/open-plugins）。合并时发现 PR 基线是 origin/main，而分支基于本地 main，squash 顺带发布了 6 个更早已提交但从未推送的 main 提交（技能 frontmatter 修复 / 预装 OCS 0.1.1 同步 / 副本一致性门禁 / audit 内容级比对 / 2 篇 Note），已在 PR #50 上留言记录。待用户执行：关闭正在运行的正式版（会断开本会话）→ 运行安装包 → 首启自动把 dsh 从 0.1.6-alpha.1 升到 0.1.6-alpha.2 并清理残留嵌套包。注意产物版本号仍是 0.10.1（release-please 的 0.11.0 PR #48 尚开着），与当前已装版本同号。"
+    },
+    {
+      "id": "card-c01ae2ba-a88d-4f08-b1cb-c842581aeb37",
+      "title": "跟进（DSH 上游）：网关 403 server_error 被误判为 AUTH → GUI 报「API 密钥无效」且不自动重试",
+      "rationale": "2026-09-21 19:33 本会话（session-1ea02a4a）turn 1 step 26 收到上游 opencode-go-self 的 HTTP 403，body 是 {\"type\":\"server_error\",\"code\":\"server_error\",\"message\":\"Error from provider (Console Go): Upstream request failed: [server_error] Upstream response was not valid JSON\"}；llm-pi-ai/src/stream.ts:42-43 的文本正则 /\\b(?:401|403)\\b/ 先命中 → 归类 AUTH → 客户端 i18n（ui-chat/src/client/locale.ts:80-81）显示「本轮运行失败 / API 密钥无效」。AUTH 不在本会话生效的重试白名单（EMPTY_RESPONSE/RATE_LIMIT/SERVER/TIMEOUT/TRANSPORT，最多 5 次）里，所以整轮直接终止——而按 body 语义本该是 SERVER（可重试）。对用户的直接代价：一次瞬时网关抖动被误读成「密钥失效」，误导排查方向。",
+      "rejected": "不改本机 /srv/deepseek-harness（只读上游 checkout，宿主 dsh 用的是安装副本，改了不生效也不该在会话里擅动）。也不靠「把 AUTH 加进重试白名单」绕过：真密钥无效时会变成 5 次无意义重试 + 延迟报错，属于掩盖而非修复。正确的修法是分类时优先结构化字段（type/code=server_error）再看 HTTP 状态。",
+      "sourceSessionId": "session-1ea02a4a-ec10-413d-a83f-40a4acf99941",
+      "status": "todo",
+      "tags": [
+        "dsh-upstream",
+        "llm-error",
+        "misclassification",
+        "follow-up"
+      ],
+      "createdAt": 1789990599180,
+      "updatedAt": 1789990599180
+    },
+    {
+      "id": "card-2e1da17b-a9c1-47a4-847b-e1766a0f7ebe",
+      "title": "宿主正式版断流根因：本地 sub2api 上游通道的 60 秒规则（grok-4.6 RST / glm account9 504）——待切通道或换账号",
+      "rationale": "用户观察到「宿主机正式版最近几次断流，上游 >60 秒就断」。取证（2026-09-21）：宿主机 session-6b239498（D:\\Dev\\c-home）今天 4 次 turn 级失败，其中 turn6 step6 / turn7 step2 是「Upstream HTTP/2 stream failed」(PI_AI_ERROR，不可重试，直接断轮)；本地 sub2api（127.0.0.1:37780，WSL /opt/sub2api，systemd 服务）日志给出权威根因：`stream read error … received from peer`（stream ID 15/19 INTERNAL_ERROR）＋ `upstream stream truncated before terminal chunk`，upstream_model=grok-4.6、account_id=10；中继侧 latency_ms 分别为 99578 / 60541。DSH 侧时间线：末次数据 19:25:26→报错 19:26:26、19:27:19→19:28:19，即「uplink 静默正好 60.0 秒后被对端 RST_STREAM」。turn2/turn3 的 502/503 同源：glm-5.3-flash 的 account 9 在 ~59–60s 返回 504（`pool_mode_error_skipped status_code 504`）→ 中继标记 account_model 冷却（10s→45s）→ 故障转移无可用账号 → 对 DSH 返回 502/503。宿主机 agent-default-model 正是 local-sub2api-grok-chat/grok-4.6，即踩中的那条通道。",
+      "rejected": "不按「DSH 有 60 秒请求上限」处理：DSH 流空闲看门狗是 300s（defaults.ts:4），触发时报 TIMEOUT/`stream idle timeout after Nms`，与本次 PI_AI_ERROR 不同；且中继当日有一条 163996ms 的 glm-5.3-flash 请求返回 200，63–80s 的 grok 请求亦 200——证明「总时长 >60s」不必然断。也不打算调小 providers.streamIdleTimeoutMs：上游 60s 先断，调小只会在正常长思考时误杀。",
+      "sourceSessionId": "session-1ea02a4a-ec10-413d-a83f-40a4acf99941",
+      "status": "todo",
+      "tags": [
+        "windows",
+        "prod",
+        "sub2api",
+        "upstream",
+        "follow-up"
+      ],
+      "createdAt": 1789992165986,
+      "updatedAt": 1789992893629,
+      "description": "补充取证（2026-09-21 晚）：① sub2api 自身的流间隔超时已排除——二进制含配置键 gateway.stream_data_interval_timeout（校验「0 或 30–300 秒」）与错误串「openai chat completions stream: data interval timeout」，但今日 journal 中该错误 0 次；两次断流记的是「stream error … received from peer」，即对端 RST。② 通道性质线索：二进制含 xAI OAuth / accounts.x.ai / X-Grok-Client-Version|Surface / GROK_SSO_UNAUTHORIZED 等串 → platform「grok」的账号大概率是 xAI/Grok 账号池（SSO/订阅号）而非官方 API，所以「最上游」很可能不是模型厂商 API，而是账号池 + 其前面的自建网关/反代。③ 60 秒机制最可能是链路某层默认 60s 读超时（nginx proxy_read_timeout 默认 60s：HTTP/1.1 回 504、HTTP/2 发 RST_STREAM），与 glm 侧 504@59–60.6s、grok 侧静默 60.0s 后 RST 完全吻合（同类案例 NVIDIA/NemoClaw#3210、skyflo-ai/skyflo@9049f39）。④ 待确认（本机不可核验，账号目录 600 nobody 读不到）：sub2api 后台账号 9/10 的 base_url、系统设置里 gateway.stream_data_interval_timeout 现值；若上游是自建反代，把 proxy_read_timeout/send_timeout 提到 300s+ 并 proxy_buffering off。"
+    },
+    {
+      "id": "card-9f56e152-afa3-4a57-98cc-36abd906e1f6",
+      "title": "插件侧可选增强（非必须）：model-reasoning/turn-navigator 迁移到 plugins.* 槽位 + 清理陈旧 inject 条目",
+      "rationale": "0.1.6-alpha.2 把插件配置页从 Settings 挪到了 Plugins 页：新增 `plugins.item` / `plugins.bundle.config` / `plugins.row.config` 三个槽位，并**废弃 `settings.plugin.item`**。我们的 model-reasoning 与 turn-navigator 走的是 `settings.section` / `settings.general.item`（alpha.2 仍在、签名未变），所以**不迁移也不会坏**；但 dsh 现在期望插件配置出现在 Plugins 页，迁过去才能被用户在那个入口找到。另：turn-navigator 的 `dsh.client.inject` 里 `@deepseek-ai/dsh-client-runtime` 与 `@deepseek-ai/dsh-client-web-react` 在 alpha.2 客户端图里已不存在（属陈旧条目，因 inject 只是顺序提示且插件运行时只 require ui-primitives/react 而无害），可顺手清掉。两项都是**插件仓库侧**的改动，不是壳的改动。",
+      "rejected": "放弃把这两项当作\"必须随本次 dsh 升级一起做\"：它们不影响功能正确性（配置页仍渲染在 Settings、陈旧 inject 条目不解析），塞进本次发布只会扩大变更面。",
+      "sourceSessionId": "session-fd4c2d36-4a9d-4634-b4dd-56bf73fcc4b2",
+      "status": "todo",
+      "tags": [
+        "plugins",
+        "dsh-0.1.6",
+        "follow-up",
+        "plugin-repo-side"
+      ],
+      "createdAt": 1790046653940,
+      "updatedAt": 1790046653940
+    },
+    {
+      "id": "card-9d667df2-327a-42db-bdb9-beaf815716cc",
+      "title": "适配（插件侧）：turn-navigator 需补 dispose——残留 body.tn-hide-official 会隐藏官方轮次栏",
+      "rationale": "alpha.2 把 host HMR 从默认关（alpha.1 base bundle 里是 `disabled: true`）改成默认开（`disabled: !!js \"!ctx.get('profileContext')\"`），于是有 launcher 提供 profile 的壳（我们）默认获得配置热重载，插件开关/配置改动免重启生效 —— 插件因此必须在卸载时释放自己创建的资源。逐项核对后只有一处真缺陷：turn-navigator 的 `applyModeToBody()` 在 apply 时给 document.body 加 `tn-hide-official`（隐藏官方轮次栏），全文件没有对应移除（唯一的 classList.remove 是无关的高亮类，ctx.effect 只有 1 处且是语言字典）。在线停用/重载后官方轮次栏会继续被残留 class 隐藏，刷新才恢复。kanban 的模块级轮询已正确挂在 ctx.effect 上，model-reasoning 的监听都在 React useEffect 里，两者干净。",
+      "rejected": "放弃把这条并进\"可选增强\"卡：它不是增强而是新默认值下的真缺陷（用户会看到官方轮次栏消失且不自愈），按缺陷单独跟踪。也放弃凭代码推断就宣称\"全部干净\"：这条是读代码判定的，未做在线停用实测。",
+      "sourceSessionId": "session-fd4c2d36-4a9d-4634-b4dd-56bf73fcc4b2",
+      "status": "done",
+      "tags": [
+        "plugins",
+        "dsh-0.1.6",
+        "hmr",
+        "adaptation",
+        "plugin-repo-side"
+      ],
+      "createdAt": 1790048191698,
+      "updatedAt": 1790078493504,
+      "summary": "全部完成并落到两个仓库的 main。① 插件仓库 ~/dsh-turn-nav：修 tn-hide-official body class 的 dispose（ctx.effect + clearModeFromBody）、删两个陈旧 inject 条目、新增 scripts/test-client-dispose.mjs 并接入 pnpm test（含负向对照）、双语 README 与 CHANGELOG 同步、release-check 与 post-publish-check 改走 npm/curl 的传输（代理网络下不再误拦发布/静默不验证）、CONTRIBUTING 补传输纪律；0.4.4 已由用户 npm publish（registry latest = 0.4.4）。② 壳仓库 dsh-desktop：预装同步到 0.4.4（六件 + sync-resources，PR #51 合并 f1457b2），审计脚本改走 npm view/npm pack 且\"未能验证\"不再打印通过（含三条负向对照），技能与旧 Note 同步更新 + 新增 Agent Note 2026-09-22-audit-registry-transport-and-verdict。验证：audit 报四个包 latest 全部真实、内容 12/12 资产与已发布 tarball 逐字一致（turn-navigator 0.4.4 3/3）、副本一致性 PASS、npm test 9 套全绿。"
+    },
+    {
+      "id": "card-9d2c60d6-8d56-44e0-9720-f10f3c8926aa",
+      "title": "跟进（同类盲点）：release-body.mjs 也用裸 fetch 拉 npmjs（本地跑会把 dsh 版本写成 unknown）",
+      "rationale": "用户点名先修这处；它虽只在 CI 调用且失败时如实降级，但本地跑会把「内置 dsh 版本」写成裸 unknown 并进永久 Release 说明。",
+      "rejected": "放弃\"只修用户点名的 release-body 一处\"：按新纪律（发现即记录、记录即继续处理，直到能力范围内不再可见问题）做了同类全仓扫描，同一根因下又抓出 fetch-node（更严重：全新构建下不到 Node）与 audit 目录缺失裸栈，一并修掉并合并为 PR #52。",
+      "sourceSessionId": "session-fd4c2d36-4a9d-4634-b4dd-56bf73fcc4b2",
+      "status": "done",
+      "tags": [
+        "tooling",
+        "proxy",
+        "fetch-blind-spot",
+        "follow-up"
+      ],
+      "createdAt": 1790078237762,
+      "updatedAt": 1790083701216,
+      "summary": "已修并验证（PR #52 合并 37adb51）。release-body.mjs 的 dist-tags 查询改走 npm view（DSH_RELEASE_BODY_REGISTRY 可覆盖），降级时在正文里明说「⚠️ 发版时未能查询 npm registry」而非打印裸 unknown。同轮扫尾在同一根因下又修两处：fetch-node.mjs（内置 Node 下载改 curl + npm 配置的代理，curl 缺失回退 fetch；本机 nodejs.org 直连超时、经代理 200/4.6s，全新构建原本下不到 Node，只因二进制已缓存而未暴露）、audit-preinstalled.mjs（plugins/preinstalled 缺失时不再裸栈崩溃，改报 NOT VERIFIED）。顺带按文档走查清掉两处本次改动引入的过时描述（CONTRIBUTING 的「11 套」、UI 设计规范里已移除的插件管理窗口硬约束）。验证：真实下载 30MB + sha256 verified + 解包可执行且与旧二进制 cmp 一致；负向对照 v24.99.99 → 明确 404 失败 + exit 1；release-body 正向真实版本、负向显式说明；npm test 9 套全绿；全仓 fetch 扫描结论记入 Agent Note。"
     }
   ]
 }
