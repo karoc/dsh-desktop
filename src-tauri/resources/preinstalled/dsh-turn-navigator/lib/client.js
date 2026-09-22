@@ -371,6 +371,20 @@ window.__ModuleLoader__.load({
 			if (typeof document === "undefined") return;
 			document.body.classList.toggle("tn-hide-official", current !== "official");
 		}
+		/**
+		* Drop the `tn-hide-official` body class — the plugin's dispose hook.
+		*
+		* dsh 0.1.6+ enables the host `hmr` row by default for launcher-provided
+		* profiles, so this plugin can be disabled or reloaded LIVE (the dsh Plugins
+		* page toggles bundles without a restart). Without this teardown the class
+		* outlives the plugin and keeps hiding the OFFICIAL rail, and only a page
+		* reload brings it back. Removing the class is the correct "unloaded" state:
+		* the official rail is the built-in default whenever this plugin is not applied.
+		*/
+		function clearModeFromBody() {
+			if (typeof document === "undefined") return;
+			document.body.classList.remove("tn-hide-official");
+		}
 		//#endregion
 		//#region src/client/TurnNavRail.tsx
 		/**
@@ -1262,7 +1276,10 @@ body.tn-hide-official [data-conversation-scroll] nav {
 			}), "dsh-turn-navigator: copy dictionaries");
 			const t = ctx.locale.bind(NS);
 			const api = ctx.get("connection")?.api;
-			applyModeToBody();
+			ctx.effect(() => {
+				applyModeToBody();
+				return clearModeFromBody;
+			}, "dsh-turn-navigator: official-rail body class");
 			let journal;
 			let sessionAccess;
 			const resolveHandles = () => {
