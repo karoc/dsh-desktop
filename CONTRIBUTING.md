@@ -37,13 +37,19 @@
 ## 门禁（提交前本地跑）
 
 ```bash
-npm test                          # 全量 11 套（行为 + 契约 + 副本一致性）
+npm test                          # 全量 9 套（行为 + 契约 + 副本一致性）
 node scripts/test-copy-consistency.mjs  # 副本一致性（改了 scripts/ 或 plugins/ 后先 npm run sync:resources）
 node scripts/test-shell-chrome.mjs  # 壳契约（菜单 id ↔ ACTIONS ↔ lib.rs）
 # Rust：cargo fmt --check + cargo clippy -D warnings（CI 快层会跑，本地有工具链时先跑）
 ```
 
 CI 分层：PR 只跑快层（check + test，~5min）；main/tag 跑全量（windows 打包+冒烟、linux）。
+
+**外部网络访问必须走 npm / curl 的传输，不要用裸 `fetch`**：Node 的 `fetch` 不读 npm 的
+`.npmrc` 代理配置，且代理变量与 `NODE_USE_ENV_PROXY` 在进程启动时就被采样（脚本内再设无效），
+所以在「目标站点只能经代理访问」的网络下它一律超时。2026-09-22 一天内因此踩到三处：
+`release-check`（插件仓库）拦下发布、`audit-preinstalled` 在零数据上打印通过、
+`fetch-node` 全新构建下不到 Node。判据 grep：`grep -rn "fetch(" scripts/`。
 
 ## 发布（release-please 自动）
 

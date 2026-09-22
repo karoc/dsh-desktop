@@ -6,10 +6,11 @@ CSS**，统一 = 按本规范同一数值分别实现。改动任一 UI 面的�
 
 ## 设计原则
 
-1. **几何/层级/动效全局统一**；**颜色**：壳内 + 设置窗跟随系统深浅色（`prefers-color-scheme`），
-   插件管理窗口保留 4 套主题（深空/极光/月光/琥珀）**仅作配色**（几何不再随主题变化）。
-2. **布局不动**：尤其插件管理窗口——区块顺序（head → 安装 → 预装 → 用户 → dsh 更新 →
-   操作 → footer）与信息架构是硬约束，结构测试 `scripts/test-plugin-console-window.mjs` 守护。
+1. **几何/层级/动效全局统一**；**颜色**：壳内 + 设置窗跟随系统深浅色（`prefers-color-scheme`）。
+   （2026-09-22：插件管理窗口已随"插件管理交给 dsh 内置"整体移除，它那 4 套主题与布局硬约束
+   不再适用；本规范现只覆盖壳顶栏/弹窗与设置窗/启动页。）
+2. **布局不动**：壳顶栏与壳内弹窗的信息架构（`SHELL_MENUS` 顺序、弹窗 head → 内容 → 操作）
+   是硬约束，结构测试 `scripts/test-shell-chrome.mjs` 守护。
 3. **主按钮一律纯色 accent**（不用渐变）；渐变仅保留给「组件个性」：开关 on 态、
    升级箭头、安装进度条、主题点。
 
@@ -56,11 +57,8 @@ CSS**，统一 = 按本规范同一数值分别实现。改动任一 UI 面的�
 |---|---|---|
 | 顶栏/下拉/壳内弹窗/toast/确认 | `src-tauri/resources/ui/shell-chrome.js`（STYLE 常量，Rust include_str 内嵌） | 系统深浅色 `--dsh-*`；`.dd-*`/`.dialog-*`/`.dlg-*`/`.mini-toast` |
 | 设置窗/启动页 | `src/styles.css` | 系统深浅色 `--bg/--card/--border/--fg/--muted/--accent` |
-| 插件管理窗口 | `src/plugin-console.js`（`injectStyle` + `applyTheme`） | `.dshc-*`；主题只设配色变量，几何固定 |
 
 ## 维护约定
 
 - 新界面/组件按本表数值实现，不许引入新的圆角/字号/按钮规格。
-- 改插件管理窗口样式后，跑 `node scripts/test-plugin-console-window.mjs`（守护布局顺序 +
-  主按钮纯色 + 无原生 confirm + 主题纯配色）。
 - 契约测试 `scripts/test-shell-chrome.mjs` 守护壳菜单/弹窗相关标记。
