@@ -29,12 +29,25 @@
 //
 // Baseline convention: sync target = npm latest (published) tarball, per
 // .agents/notes/implemented/process/2026-08-25-preinstalled-plugin-sync-v038.md.
-// Registry probes use plain fetch (no `npm view` subprocess — it prints E404
-// blocks for unpublished versions and needs ~/.npm which the sandbox may deny).
-// Tarballs are read in memory (node:zlib + a minimal tar reader): no temp files,
-// no new dependencies, nothing written.
+//
+// Registry access goes through the **npm CLI** (`npm view` / `npm pack`), not
+// `fetch`. Node's fetch ignores npm's `.npmrc` proxy settings, and the proxy
+// variables plus `NODE_USE_ENV_PROXY` are sampled when the process starts, so a
+// fetch-based probe goes DIRECT: on a network where registry.npmjs.org is only
+// reachable through the configured proxy every probe failed, `latest` came back
+// `<unknown>` for all four bundles, and the script still printed "all
+// preinstalled plugins are at the latest published version, with matching
+// content" — a pass derived from NO data (2026-09-22). npm's own transport uses
+// the same registry, proxy and auth as the `npm publish` that produces the
+// baseline. The cache is pinned inside the workspace (`~/.npm` may be denied)
+// and the tarball is read through a temp dir that is always removed.
+// `DSH_PREINSTALLED_REGISTRY` overrides the registry (default npmjs) and is the
+// seam the negative-control test uses to prove an unreachable registry can no
+// longer produce a green verdict.
+import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { readdirSync, readFileSync, statSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { gunzipSync } from 'node:zlib'
@@ -56,19 +69,57 @@ for (const dir of readdirSync(preinstalledDir)) {
   }
 }
 
-const registryUrl = (name) => `https://registry.npmjs.org/${encodeURIComponent(name)}`
+/** The registry this audit checks against (npmjs unless overridden). */
+const REGISTRY = (process.env.DSH_PREINSTALLED_REGISTRY ?? 'https://registry.npmjs.org').replace(/\/+$/, '')
+/** npm needs a writable cache; keep it inside the workspace (`~/.npm` may be denied). */
+const NPM_CACHE = join(root, '.tmp-investigate', '.npm-cache')
+
+/** First non-empty line of an npm failure — the audit's one-line error surface. */
+function firstErrorLine(error) {
+  const text = [error?.stdout, error?.stderr, error?.message].filter(Boolean).join('\n')
+  return text.split('\n').map((line) => line.trim()).find((line) => line !== '') ?? String(error)
+}
 
 async function latestOf(name) {
   // A flaky registry must degrade to a report line, never crash the audit:
-  // this script is a report tool (always exit 0), not a gate.
+  // this script is a report tool (always exit 0), not a gate. It must however
+  // never *claim* verification it did not do — see the verdict at the bottom.
   try {
-    const res = await fetch(registryUrl(name), { headers: { accept: 'application/json' } })
-    if (!res.ok) return { latest: null, tarball: null, error: `HTTP ${res.status}` }
-    const doc = await res.json()
-    const latest = doc?.['dist-tags']?.latest ?? null
-    return { latest, tarball: latest === null ? null : doc?.versions?.[latest]?.dist?.tarball ?? null, error: null }
+    const doc = JSON.parse(execFileSync(
+      'npm',
+      ['view', name, 'dist-tags.latest', 'dist.tarball', '--json', '--registry', REGISTRY, '--cache', NPM_CACHE],
+      { cwd: root, encoding: 'utf8', timeout: 60_000, maxBuffer: 16 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] },
+    ))
+    const latest = typeof doc?.['dist-tags.latest'] === 'string' ? doc['dist-tags.latest'] : null
+    const tarball = typeof doc?.['dist.tarball'] === 'string' ? doc['dist.tarball'] : null
+    if (latest === null) return { latest: null, tarball: null, error: 'registry answered no dist-tags.latest' }
+    return { latest, tarball, error: null }
   } catch (error) {
-    return { latest: null, tarball: null, error: error.cause?.message ?? error.message }
+    return { latest: null, tarball: null, error: firstErrorLine(error) }
+  }
+}
+
+/**
+ * Download a published tarball through npm (which honors `.npmrc` proxy/auth).
+ * @param name - package name.
+ * @param version - the version to fetch.
+ * @returns the raw `.tgz` bytes; the temp dir is always removed.
+ */
+function packTarball(name, version) {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-preinstalled-audit-'))
+  try {
+    execFileSync(
+      'npm',
+      ['pack', `${name}@${version}`, '--pack-destination', dir, '--registry', REGISTRY, '--cache', NPM_CACHE],
+      { cwd: root, encoding: 'utf8', timeout: 180_000, maxBuffer: 16 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] },
+    )
+    const file = readdirSync(dir).find((entry) => entry.endsWith('.tgz'))
+    if (file === undefined) throw new Error('npm pack produced no tarball')
+    return readFileSync(join(dir, file))
+  } catch (error) {
+    throw new Error(firstErrorLine(error))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
   }
 }
 
@@ -144,9 +195,7 @@ const rows = await Promise.all(
     // the same-version case, which is the blind spot this check exists for.
     if (tarball !== null) {
       try {
-        const res = await fetch(tarball)
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const published = untar(Buffer.from(await res.arrayBuffer()))
+        const published = untar(packTarball(name, latest))
         row.content = localAssets(path).map((rel) => {
           const local = readFileSync(join(path, rel))
           const remote = published.get(rel)
@@ -204,13 +253,21 @@ if (rows.length === 0) {
   console.log('no preinstalled bundles found under plugins/preinstalled/')
 }
 
+const unverifiable = rows.filter((row) => row.error !== null || row.contentError !== null)
 const needsWork = versionUpdates > 0 || contentDrifts > 0
 if (needsWork) {
   const parts = []
   if (versionUpdates > 0) parts.push(`${versionUpdates} version update(s)`)
   if (contentDrifts > 0) parts.push(`${contentDrifts} content drift(s)`)
   console.log(`\n${parts.join(' + ')} — see skills/dsh-preinstalled-plugin-sync/SKILL.md for the update flow.`)
-} else if (rows.length > 0) {
+} else if (rows.length > 0 && unverifiable.length === 0) {
   console.log('\nall preinstalled plugins are at the latest published version, with matching content.')
+} else if (unverifiable.length > 0) {
+  // A probe that could not run is a COVERAGE GAP, never a pass: "no updates and
+  // no drifts found" is exactly what an unreachable registry produces too.
+  console.log(`\n⚠️  NOT VERIFIED — ${unverifiable.length} of ${rows.length} bundle(s) could not be checked against the registry:`)
+  for (const row of unverifiable) console.log(`   - ${row.name}: ${row.error ?? row.contentError}`)
+  console.log('   Nothing above was compared against a published tarball. Fix registry access and re-run;')
+  console.log('   do NOT read this run as "up to date".')
 }
 process.exit(0) // report-only; never a gate
