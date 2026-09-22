@@ -21,6 +21,32 @@
 >
 > 详情见 `.agents/notes/implemented/bug-fix/2026-09-08-legacy-uninstaller-name-kill.md`。
 
+## [0.11.0](https://github.com/karoc/dsh-desktop/compare/v0.10.1...v0.11.0) (2026-09-22)
+
+
+### ⚠ BREAKING CHANGES
+
+* **dsh:** 升级到 dsh 0.1.6-alpha.2，插件管理改由 dsh 内置（移除壳内自建管理） ([#50](https://github.com/karoc/dsh-desktop/issues/50))
+
+### Features
+
+* **dsh:** 升级到 dsh 0.1.6-alpha.2，插件管理改由 dsh 内置（移除壳内自建管理） ([#50](https://github.com/karoc/dsh-desktop/issues/50)) ([f360083](https://github.com/karoc/dsh-desktop/commit/f360083b78e45cb4d962182ec067236807626c37))
+
+
+### Bug Fixes
+
+* **scripts:** 修 fetch 代理盲点三处（release-body / fetch-node / audit 目录缺失）+ 清理过时文档 ([#52](https://github.com/karoc/dsh-desktop/issues/52)) ([37adb51](https://github.com/karoc/dsh-desktop/commit/37adb514be5c90ed7d53381523b41eaf56fc492b))
+
+
+### Chores
+
+* **board:** 0.10.1 发版收口（决策卡结案 + 验收卡改为 v0.10.1） ([#47](https://github.com/karoc/dsh-desktop/issues/47)) ([17a207e](https://github.com/karoc/dsh-desktop/commit/17a207eb3fe7b4111ca801f1132a44ab5bc265b6))
+* **board:** v0.10.1 实机验收自测完成 ([#49](https://github.com/karoc/dsh-desktop/issues/49)) ([d6fea67](https://github.com/karoc/dsh-desktop/commit/d6fea67faec47bce1ef63f581624babf98325df6))
+* **board:** 发布卡进行中（PR [#50](https://github.com/karoc/dsh-desktop/issues/50) 已合并 + 宿主本地出包） ([232e4b9](https://github.com/karoc/dsh-desktop/commit/232e4b96a03dff2833c04fded6af45c97a50a2ce))
+* **board:** 收口本次三处传输修复 + 适配卡结案（含另一条会话的两张跟进卡） ([4c48cce](https://github.com/karoc/dsh-desktop/commit/4c48ccea8f5313b7353273f4d59a774f9ab6c42a))
+* **plugins:** sync preinstalled bundles to latest — kanban 0.2.8, smoothly-opencode-session 0.2.0 ([a76d325](https://github.com/karoc/dsh-desktop/commit/a76d3250849b72f58af9332947ab8779674856a6))
+* **plugins:** 预装 dsh-turn-navigator 同步到 0.4.4 + 修审计脚本在代理网络上的假通过 ([#51](https://github.com/karoc/dsh-desktop/issues/51)) ([f1457b2](https://github.com/karoc/dsh-desktop/commit/f1457b2d3073ad5431adf21ca50ad09f54804a8d))
+
 ## [0.10.1](https://github.com/karoc/dsh-desktop/compare/v0.10.0...v0.10.1) (2026-09-20)
 
 
