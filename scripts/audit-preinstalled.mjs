@@ -46,7 +46,7 @@
 // longer produce a green verdict.
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -58,7 +58,15 @@ const preinstalledDir = join(root, 'plugins', 'preinstalled')
 // Plugin package names are discovered from each bundle's own package.json
 // (dir name may differ from the npm package name — e.g. dsh-turn-nav repo is
 // packaged as dsh-turn-navigator). Skip non-bundle dirs (no package.json).
+// A missing directory is REPORTED, not thrown: a raw `readdir` ENOENT stack
+// replaced the script's own diagnostic and read like a crash rather than
+// "nothing to check" (2026-09-22). The copy gate already fails loudly on it.
 const bundles = []
+if (!existsSync(preinstalledDir)) {
+  console.log(`⚠️  NOT VERIFIED — no preinstalled bundle directory at ${relative(root, preinstalledDir)}`)
+  console.log('   Nothing was checked. Restore it (or run `node scripts/test-copy-consistency.mjs`, which fails on this) and re-run.')
+  process.exit(0) // report-only; never a gate
+}
 for (const dir of readdirSync(preinstalledDir)) {
   const pkgJson = join(preinstalledDir, dir, 'package.json')
   try {
@@ -250,7 +258,7 @@ for (const { name, bundled, latest, error, content, contentError, skills } of ro
 }
 
 if (rows.length === 0) {
-  console.log('no preinstalled bundles found under plugins/preinstalled/')
+  console.log('no preinstalled bundles found under plugins/preinstalled/ — nothing to check')
 }
 
 const unverifiable = rows.filter((row) => row.error !== null || row.contentError !== null)

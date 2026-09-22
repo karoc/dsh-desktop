@@ -11,9 +11,16 @@
 //        node scripts/release-body.mjs <version> > body.md
 //
 // Deterministic parts come from the repo (CHANGELOG.md + plugins/preinstalled/*)
-// and from the npm registry (@deepseek-ai/dsh dist-tags). The registry fetch
-// degrades to "unknown" when offline; the script never fails on it.
+// and from the npm registry (@deepseek-ai/dsh dist-tags). Registry access goes
+// through the **npm CLI**, not `fetch`: Node's fetch ignores npm's `.npmrc`
+// proxy settings and the proxy variables are sampled at process start, so a
+// fetch-based lookup goes direct and returns "unknown" on any proxied network
+// (2026-09-22: the same blind spot blocked the turn-navigator publish and made
+// audit-preinstalled.mjs report a pass on zero data). A registry failure still
+// never fails the release, but the body then SAYS so instead of printing a bare
+// `unknown` that reads like a real version.
 
+import { execFileSync } from 'node:child_process'
 import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -55,27 +62,35 @@ const plugins = readdirSync(join(ROOT, 'plugins', 'preinstalled'), { withFileTyp
   .sort((a, b) => a[0].localeCompare(b[0]))
 
 // ── 3. dsh runtime version (npm latest / next at release time) ─────────────
-let dsh = { latest: 'unknown', next: 'unknown' }
+// `npm view` uses the same registry, proxy and auth as an install would.
+const REGISTRY = (process.env.DSH_RELEASE_BODY_REGISTRY ?? 'https://registry.npmjs.org').replace(/\/+$/, '')
+let dsh = { latest: 'unknown', next: 'unknown', error: null }
 try {
-  const res = await fetch('https://registry.npmjs.org/@deepseek-ai/dsh', {
-    signal: AbortSignal.timeout(10000),
-  })
-  if (res.ok) {
-    const tags = (await res.json())['dist-tags'] ?? {}
-    dsh.latest = tags.latest ?? 'unknown'
-    dsh.next = tags.next ?? null
-  }
-} catch {
-  console.error('[release-body] WARNING: registry unreachable — dsh version unknown')
+  const tags = JSON.parse(execFileSync(
+    'npm',
+    ['view', '@deepseek-ai/dsh', 'dist-tags', '--json', '--registry', REGISTRY],
+    { cwd: ROOT, encoding: 'utf8', timeout: 60_000, maxBuffer: 4 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] },
+  ))
+  dsh.latest = typeof tags?.latest === 'string' ? tags.latest : 'unknown'
+  dsh.next = typeof tags?.next === 'string' ? tags.next : null
+} catch (error) {
+  const text = [error?.stdout, error?.stderr, error?.message].filter(Boolean).join('\n')
+  dsh.error = text.split('\n').map((line) => line.trim()).find((line) => line !== '') ?? String(error)
+  console.error(`[release-body] WARNING: registry lookup failed — dsh version unknown (${dsh.error})`)
 }
 
 // ── compose ───────────────────────────────────────────────────────────────
 const pluginLine = plugins.map(([n, v]) => `\`${n}\` **${v}**`).join('、')
 const nextLine = dsh.next && dsh.next !== dsh.latest ? `（\`next\` 预发布 = ${dsh.next}）` : ''
+// A degraded lookup must be visible in the body: a bare "unknown" reads like a
+// version, and this text ends up in a permanent GitHub Release.
+const dshLine = dsh.latest === 'unknown'
+  ? '**内置 dsh**：不随包固定版本——运行时由 manager 从 npm 自动安装/更新（用户门控，见 README「dsh 更新由你决定」）。⚠️ **发版时未能查询 npm registry**，此处的版本号缺失（不影响安装包内容）。'
+  : `**内置 dsh**：不随包固定版本——运行时由 manager 从 npm 自动安装/更新（用户门控，见 README「dsh 更新由你决定」）。发版时 npm \`latest\` = **${dsh.latest}**${nextLine}。`
 
 const body = `## 版本概要
 
-**内置 dsh**：不随包固定版本——运行时由 manager 从 npm 自动安装/更新（用户门控，见 README「dsh 更新由你决定」）。发版时 npm \`latest\` = **${dsh.latest}**${nextLine}。
+${dshLine}
 
 **预装插件**（随包分发、与版本锁定，均为 npm 最新发布版）：${pluginLine}。安装本版本后即随包生效。
 

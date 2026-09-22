@@ -12,6 +12,14 @@ Status: implemented
 
 同时新增**"未能验证 ≠ 通过"**判定：统计 `error !== null || contentError !== null` 的行，只要存在这样的行，就打印 `⚠️ NOT VERIFIED — N of M bundle(s) could not be checked against the registry:` 并逐行列出原因，**绝不**打印 "all preinstalled plugins are at the latest published version, with matching content"。退出码保持 0（脚本头部明确写着 report-only; never a gate），但输出不再可能在未知数据上给出绿色结论。
 
+同一天、同一根因的另外两处也一并修掉，并把它升格为**仓库级纪律**（写进 `CONTRIBUTING.md` 的「门禁」一节）：
+
+- **`scripts/release-body.mjs`**：发布说明里的「内置 dsh 版本」原来也用裸 `fetch` 拉 `@deepseek-ai/dsh` 的 dist-tags。改走 `npm view`（`DSH_RELEASE_BODY_REGISTRY` 可覆盖）；降级时**在正文里明说「发版时未能查询 npm registry」**，不再打印裸 `unknown` —— 那段文字会进永久的 GitHub Release，一个像版本号的 `unknown` 会被当成事实读。
+- **`scripts/fetch-node.mjs`**：内置 Node 运行时的下载同样用裸 `fetch`。本机 `nodejs.org` 直连超时、经 npm 代理 200/4.6s，也就是说**全新构建根本下不到 Node**；它一直没暴露，是因为二进制已缓存、脚本早退打印 `node already present`。改为 curl（带 npm 配置的代理）优先、curl 缺失时回退 fetch。
+- **`scripts/audit-preinstalled.mjs` 的另一个崩溃路径**：`plugins/preinstalled` 缺失时，发现循环直接 `readdirSync` 抛 ENOENT，裸栈取代了脚本自己的诊断（"no preinstalled bundles found" 永远到不了）。改为先判存在、打印 `⚠️ NOT VERIFIED — no preinstalled bundle directory at …` 并 exit 0（报告工具契约不变；副本门禁 `test-copy-consistency.mjs` 已对同一情形 exit 1）。
+
+**扫描结论**（用同一句 grep 全仓复查 `grep -rn "fetch(" scripts/`）：壳仓库只剩 `server-manager.mjs` 的两处 GitHub API（Windows 侧直连 200；失败时载荷带 `error` 字段、`latest: null`，UI 先判 `s.error` 再判「已是最新」，无假绿）与一处回环 watchdog 探活；插件仓库只剩 `post-publish-check.mjs` 的 fetch 主路径，它带 curl 兜底且已在真实环境验证能读到 registry 数据。
+
 负向保证：不改变内容级比对的语义（比哪些资产、sha256 判等、`DRIFT` / `not-in-tarball` 的措辞）；不把 audit 变成门禁；不写工作区里的任何持久文件（临时目录在系统 tmp，cache 目录是既有的工作区缓存约定）。
 ## Alternatives considered
 
