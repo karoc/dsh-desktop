@@ -259,6 +259,20 @@ dev 数据目录 = `%APPDATA%\dsh.smoothly.desktop.dev`，证据 = `<runtime>\re
   `./scripts/gh api -i -X POST repos/karoc/dsh-desktop/pulls -f title=probe -f head=no-such-branch -f base=main`
 - `git push` 走 SSH key（`git@github.com:…`），与 token 无关；CI 用 `secrets.GITHUB_TOKEN`，也与个人 token 无关。
 
+### 4.6 Rust 改动的本地验证必须覆盖 **host 目标**（别只跑 Windows 目标）
+
+CI 的 `check` 作业跑的是 **host（ubuntu）** 的 `cargo clippy -- -D warnings`；而 WSL 本地为了绕过 `llvm-rc`
+通常只跑 `--target x86_64-pc-windows-msvc`。**两者不等价**：只被 `#[cfg(not(target_os = "linux"))]` 分支引用的
+函数/常量，在 Linux 的 lib 构建里就是 dead code → CI 红（2026-09-26 实录：`close_needs_confirmation` /
+`close_confirmed` / `CLOSE_HIDE_ACTION` 三项）。
+
+- 修法：`#[cfg_attr(target_os = "linux", allow(dead_code))]`（**不要**直接 `#[cfg(target_os = "linux")]` 掉——
+  ubuntu job 还要跑纯函数的单测）。
+- 机制自证（无需 GTK 依赖，`rustc` 即可）：`fn unused(){}` + `-D warnings` → 报 `never used`；加
+  `#[allow(dead_code)]` → 通过。
+- WSL 本地跑不了 host 目标（缺 GTK/WebKit 系统依赖，`cairo-sys-rs` 等直接失败）⇒ **Linux 侧只能靠 CI 判定**，
+  推完必须看 `./scripts/gh pr checks <n>` 的 `check` 作业。
+
 ## 5. Tauri 2 踩坑速查（本轮新踩，先查再写）
 | 坑 | 真相 |
 |---|---|
