@@ -9,6 +9,8 @@
 //   - 回退动作**不再写同种标记**（否则语义颠倒），而是把 attempts 累加并标记
 //     `kind: 'rollback'`；`attempts >= 2` 时只保留取证，不再提供版本切换
 //     （防两个版本之间来回 ping-pong）。
+//   - attempts 按**无序版本对**累计（{A,B} 与 {B,A} 是同一对）：一次升级 + 一次回退就把
+//     这对版本的切换额度用尽 —— 护栏必须在「回退也失败」时生效。
 import { join } from 'node:path'
 
 /** 标记文件路径（相对 runtime 目录）。 */
@@ -28,9 +30,14 @@ export function upgradeMarkerPath(runtimeDir) {
 export function nextUpgradeMarker(previous, from, to, kind = 'update', now = Date.now()) {
   // 冷安装（没有旧版本）不算升级：写标记只会把"首次安装失败"误报成"升级失败"。
   if (from === null || from === undefined || from === '' || from === to) return null
-  // 同一目标的重复失败（例如用户反复重试同一升级）累计 attempts。
-  const sameTarget = previous !== null && typeof previous === 'object' && previous.to === to && previous.from === from
-  const attempts = sameTarget ? (Number(previous.attempts) || 1) + 1 : 1
+  // 同一**版本对**的重复尝试累计 attempts —— 必须按**无序对**判：回退会把 from/to 交换，
+  // 若按「同向同对」判，回退这一步会把 attempts 重置为 1，护栏在它要防的场景（A→B 失败 →
+  // 回退 B→A 又失败 → 再给「回退到 B」）里永不触发，用户可被拖进 A↔B 无限来回
+  // （每次都是真实安装 + 重启）。2026-09-26 由独立评审发现，此前单测把缺陷当成了预期。
+  const prev = previous !== null && typeof previous === 'object' ? previous : null
+  const samePair = prev !== null
+    && ((prev.to === to && prev.from === from) || (prev.to === from && prev.from === to))
+  const attempts = samePair ? (Number(prev.attempts) || 1) + 1 : 1
   return { from: String(from), to: String(to), kind, attempts, at: now }
 }
 
