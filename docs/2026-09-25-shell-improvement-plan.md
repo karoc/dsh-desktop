@@ -622,3 +622,34 @@ node scripts/sync-preinstalled-plugin.mjs dsh-model-reasoning 0.2.6 --check   # 
 **登记为"未做"的两项（非本目标完成条件，留待需要时做）**：
 1. **不一致态的恢复路径 E2E 验证**：当 UI 真停在「Failed to load plugins」时，用壳菜单「停用全部第三方插件…」（确认窗 → 唯一执行点）或启动页安全网把界面救回来。能力都在（菜单在失败页仍渲染、确认窗/桥端点/执行分支均已验证），但**没有端到端实测过**；要实测需在 dev runtime 装回 dsh 0.1.6 并置 `devMode: true` 冻结地板升级（约 590 包安装 + 两次重启）。
 2. **manager 侧运行时守卫**：`ensurePreinstalled` 前校验"已装 dsh ≥ 插件声明的地板"，不满足则跳过启用并日志告警 —— 更自动，但会"悄悄禁用用户的插件"，需先设计恢复路径（故仅登记）。
+
+## §14 两项待办的处置（2026-09-26，用户指令）
+
+### 14.1 「不一致态的恢复路径 E2E 实测」→ 梳理后判为已解决
+
+用户指令：梳理清楚、确认没问题就标记解决（以后不生效再说）。**梳理结论：恢复路径成立，且第 14.2 项把它从"手动自救"升级为"自动自愈"。**
+
+已核实的证据链（每一环都在本会话实测过，不是推断）：
+1. **失败页上壳的 UI 仍可用**：页面停在「Failed to load plugins」时，注入的壳菜单栏照常渲染（`dump` 仍列出 `[Button] 菜单 @ 77,2 60x60`；截图 `s8-caption-on.png` 即该状态）。
+2. **菜单动作在远程页可用**：菜单可点开（Menu 项实测列出「停用全部第三方插件…」「重启服务」等），且这些动作走壳确认窗（S4-1，实测批准过 `titlebar-contract`）。
+3. **停用逻辑本身正确**：`disable_third_party_plugins`（Rust）**先备份** profile manifest（`package.json.bak-disable-plugins-<时间戳>`）再写回两层模板 bundles；`preinstalled` 与用户自装插件分别统计、提示措辞不同。
+4. **需要一次重启才生效**：该函数只改 manifest，不重启 dsh web（符合"改配置不隐式重启"的既有约定）；重启入口存在（菜单「重启服务」→ 确认窗；manager 死时启动页有「重试」）。
+5. **manager 死亡时另有启动页安全网**：失败态截图显示启动页有「停用第三方插件」（会先备份）。
+
+⇒ 手动恢复 = 菜单「停用全部第三方插件…」→ 确认 → 菜单「重启服务」→ 确认。**该路径标记为已解决**；若将来不生效，按用户约定回报即可。
+
+### 14.2 「manager 侧地板守卫」→ 方案 + 已实施（运行时自愈）
+
+**问题**：静态门禁只管"打包时的搭配"；运行时仍可能不一致（用户回退 dsh、离线导致地板升级失败、插件与 dsh 被单独升降级）→ 插件 fiber 永 pending → dsh web boot fail-closed → 界面打不开。
+
+**方案（已实现）**：
+- 纯逻辑模块 `scripts/plugin-floor.mjs`：`collectDshFloors`（只取 `@deepseek-ai/dsh*` 的 peer 声明）+ `planPluginGuard({installedDsh, bundled, enabled})` → `{skipInstall, quarantine, warnings}`；内置 9 条 semver 自检。
+- manager 在 `ensurePreinstalled` 开头调用 `applyPluginFloorGuard`：
+  - **skipInstall**：地板不被满足的预装插件**不装进 runtime**（装了也不激活）；
+  - **quarantine**：已启用且地板不被满足的插件**从 profile bundles 摘掉**（先 `package.json.bak-plugin-floor-<ts>` 备份，再原子写回；记录到 `dsh.json` 的 `quarantinedPlugins`），使 dsh web 能起来；
+  - 新增 `writeWebProfileBundles`（JS 侧等价写入器：保留其它字段 + tmp/rename 原子写，避免 2026-09-07 的"半截 manifest → 模板重建 → 插件全丢"）。
+- **负向保证**：不动 `@deepseek-ai/*`（dsh 自身）；不动**未声明地板**的插件（没有证据就绝不改用户状态，只告警）；不删除任何文件（隔离只改启用列表，dsh 升上去后自动不再隔离，用户可在插件页重新启用）；dsh 版本未知时不做任何判断。
+- **验证**：`scripts/test-plugin-floor.mjs`（8 组断言：semver 自检 / prerelease 排序 / 只取 dsh peer / 四态计划 / 不误伤）接入 `npm test`（现 **15 套**）；**4 个负向对照变红**（忽略 prerelease 排序 / 未声明地板也隔离 / 隔离 `@deepseek-ai/*` / caret 上界退化）。
+- **副产品验证**：manager 模块图同步**自动**带上了 `plugin-floor.mjs`（S0 的"按相对导入闭包拷贝"修复在真实新增模块上生效）。
+
+**仍未做（登记）**：把 `quarantinedPlugins` 呈现到界面（当前只在 `dsh.json` + manager 日志里）；不一致态下的守卫 E2E 实测（需在 dev runtime 装回 dsh 0.1.6 + `devMode: true` 冻结地板）。
