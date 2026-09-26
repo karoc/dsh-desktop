@@ -41,11 +41,11 @@ check('同一版本对（无序）的重复尝试累加 attempts；换对重置'
   const third = nextUpgradeMarker(second, 'b', 'a', 'rollback')
   assert.deepEqual(
     { from: third.from, to: third.to, kind: third.kind, attempts: third.attempts },
-    { from: 'b', to: 'a', kind: 'rollback', attempts: 2 },
-    '回退是同一无序对的第二次尝试 → 计数累加并记 kind',
+    { from: 'b', to: 'a', kind: 'rollback', attempts: 3 },
+    '回退是同一无序对上的又一次尝试（本用例此前已同向试过两次）→ 计数累加并记 kind',
   )
   assert.equal(allowsVersionSwitch(third), false, '升级失败 + 回退后必须停止版本切换')
-  assert.equal(nextUpgradeMarker(third, 'a', 'b', 'update').attempts, 3, '升回同一对继续累加')
+  assert.equal(nextUpgradeMarker(third, 'a', 'b', 'update').attempts, 4, '升回同一对继续累加')
   assert.equal(nextUpgradeMarker(second, 'c', 'd', 'update').attempts, 1, '换版本对重置')
   assert.equal(nextUpgradeMarker(second, 'd', 'c', 'update').attempts, 1, '换版本对（反向）也重置')
 })
