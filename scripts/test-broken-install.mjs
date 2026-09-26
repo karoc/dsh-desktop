@@ -97,7 +97,24 @@ const child = spawn(NODE, [
   '--home', fakeHome,
   '--registry', `http://127.0.0.1:${registry.address().port}`,
   '--bridge-port', '0',
-], { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, HOME: fakeHome, DSH_DESKTOP_NO_UPDATE: '1', DSH_TEST_FAKE_DSH_PKG: fakeDshDir } })
+], {
+  stdio: ['pipe', 'pipe', 'pipe'],
+  // POSIX：自成进程组，便于整树回收（manager 被 SIGKILL 时它的假 dsh 子进程
+  // 不会自己退出 —— 曾实测泄漏两个常驻 node 进程）。
+  detached: process.platform !== 'win32',
+  env: { ...process.env, HOME: fakeHome, DSH_DESKTOP_NO_UPDATE: '1', DSH_TEST_FAKE_DSH_PKG: fakeDshDir },
+})
+
+/** 杀掉 manager 及其全部子进程（POSIX 用进程组，Windows 用 taskkill /T）。 */
+function killTree(pid) {
+  if (!pid) return
+  try {
+    if (process.platform === 'win32') spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' })
+    else process.kill(-pid, 'SIGKILL')
+  } catch { /* already gone */ }
+}
+// 兜底：任何提前退出（异常/断言失败）都不留孤儿进程。
+process.on('exit', () => killTree(child.pid))
 
 let output = ''
 child.stdout.on('data', (b) => { output += String(b) })
@@ -105,7 +122,7 @@ child.stderr.on('data', (b) => { output += String(b) })
 
 // Wait long enough for: gate → remove → pnpm install → launch → dsh "running".
 await new Promise((r) => setTimeout(r, 30_000))
-try { child.kill('SIGKILL') } catch {}
+killTree(child.pid)
 registry.close()
 
 let pass = true

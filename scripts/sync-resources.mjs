@@ -12,8 +12,22 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const res = join(root, 'src-tauri', 'resources')
 
 mkdirSync(join(res, 'manager'), { recursive: true })
-cpSync(join(root, 'scripts', 'server-manager.mjs'), join(res, 'manager', 'server-manager.mjs'), { force: true })
-cpSync(join(root, 'scripts', 'proxy.mjs'), join(res, 'manager', 'proxy.mjs'), { force: true })
+// manager 的**相对导入闭包**整体拷贝：以前这里硬编码两个文件名，新增 helper 模块
+// 时源码侧全绿、打包版却在启动 1 秒内 ERR_MODULE_NOT_FOUND 退出（2026-09-25 dev
+// 实机事故：upgrade-marker.mjs 没被带上）。改为从入口文件出发递归解析
+// `from './x.mjs'`，这样任何新模块都自动随包。
+const managerModules = new Set()
+const collectManagerModules = (file) => {
+  if (managerModules.has(file)) return
+  managerModules.add(file)
+  const text = readFileSync(join(root, 'scripts', file), 'utf8')
+  for (const m of text.matchAll(/from\s+'\.\/([^']+\.mjs)'/g)) collectManagerModules(m[1])
+}
+collectManagerModules('server-manager.mjs')
+for (const name of managerModules) {
+  cpSync(join(root, 'scripts', name), join(res, 'manager', name), { force: true })
+}
+console.log(`manager modules synced: ${[...managerModules].sort().join(', ')}`)
 
 // Desktop client plugins: plugins/<dir> -> resources/plugin/@dsh-desktop/<rel>
 // where <rel> comes from the package's real name (source dirs are NOT the
