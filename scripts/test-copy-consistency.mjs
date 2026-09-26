@@ -74,6 +74,31 @@ function assertIdentical(src, dest, hint) {
 // ── 1. manager 真源 → resources/manager 副本 ────────────────────────────────
 // 只比这两个文件：sync-resources.mjs 只把 manager 真源拷进 resources/manager，
 // scripts/ 下的其它脚本（测试、诊断）本来就不随包。
+// 只按"文件清单"比是不够的：manager 的**模块图**里新增一个 helper（如
+// upgrade-marker.mjs）而 sync-resources 没带上，源码侧一切绿、打包出来的 manager
+// 却在启动 1 秒内 ERR_MODULE_NOT_FOUND 退出（2026-09-25 dev 实机：launcher 直接
+// 显示 code:'ERR_MODULE_NOT_FOUND'，shellVersion 0.11.0）。所以这里改成：
+//   ① 从 server-manager.mjs 出发做**相对导入闭包**，每个模块都必须在副本里且字节一致；
+//   ② 副本里不允许出现闭包之外的 .mjs（防止残留旧模块）。
+const managerSrcDir = join(root, 'scripts')
+const managerCopyDir = join(root, 'src-tauri', 'resources', 'manager')
+const managerModules = new Set()
+const collectModules = (file) => {
+  if (managerModules.has(file)) return
+  managerModules.add(file)
+  const text = readFileSync(join(managerSrcDir, file), 'utf8')
+  for (const m of text.matchAll(/from\s+'(\.\/[^']+\.mjs)'/g)) collectModules(m[1].slice(2))
+}
+collectModules('server-manager.mjs')
+for (const name of managerModules) {
+  assertSameFile(join(managerSrcDir, name), join(managerCopyDir, name),
+    `manager 模块图成员 ${name} 必须在 resources/manager 里且字节一致（跑 npm run sync:resources）`)
+}
+for (const name of readdirSync(managerCopyDir)) {
+  if (!name.endsWith('.mjs')) continue
+  if (!managerModules.has(name)) fail(`resources/manager/${name} 不在 manager 模块图里（残留副本，应删除）`)
+}
+// 兼容旧清单：这两个是本仓长期存在的 manager 文件（模块图已覆盖，保留断言语义）
 for (const name of ['server-manager.mjs', 'proxy.mjs']) {
   assertSameFile(join(root, 'scripts', name), join(root, 'src-tauri', 'resources', 'manager', name),
     `run: npm run sync:resources (scripts/${name} is the source)`)

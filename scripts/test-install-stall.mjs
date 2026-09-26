@@ -81,7 +81,22 @@ const child = spawn(NODE, [
   '--home', fakeHome,
   '--registry', `http://127.0.0.1:${registry.address().port}`,
   '--bridge-port', '0',
-], { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, HOME: fakeHome, DSH_DESKTOP_NO_UPDATE: '1' } })
+], {
+  stdio: ['pipe', 'pipe', 'pipe'],
+  // POSIX：自成进程组，便于整树回收（manager 被 SIGKILL 时子进程不会自己退出）。
+  detached: process.platform !== 'win32',
+  env: { ...process.env, HOME: fakeHome, DSH_DESKTOP_NO_UPDATE: '1' },
+})
+
+/** 杀掉 manager 及其全部子进程（POSIX 用进程组，Windows 用 taskkill /T）。 */
+function killTree(pid) {
+  if (!pid) return
+  try {
+    if (process.platform === 'win32') spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' })
+    else process.kill(-pid, 'SIGKILL')
+  } catch { /* already gone */ }
+}
+process.on('exit', () => killTree(child.pid))
 
 const events = []
 const logLines = []
@@ -136,7 +151,7 @@ console.log(`time to install-status error: ${((Date.now() - startMs) / 1000).toF
 console.log(pass ? 'PASS: stalled install fails fast with a clear error + failover'
                  : 'FAILED — see above')
 
-child.kill('SIGKILL')
+killTree(child.pid)
 registry.close()
 try { child.stdin.destroy() } catch {}
 if (!pass) console.log('tmp runtime dir for inspection: ' + runtime)

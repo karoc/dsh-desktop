@@ -9,6 +9,13 @@ const creditsEl = document.getElementById('credits');
 const retryBtn = document.getElementById('retry');
 const openDataBtn = document.getElementById('opendata');
 const openPluginsBtn = document.getElementById('openplugins');
+// 壳最近一次记录的崩溃证据目录（server-down / get_shell_status 带来）。
+// 失败态把「打开数据目录」按钮改指它，且不新增按钮（见按钮处理器注释）。
+let evidenceDir = null;
+// 最近一次升级标记（S9）：manager 成功装完新版本后写、启动成功即被壳删除。
+// 若这次启动失败且标记仍在，就说明"失败很可能来自刚发生的升级"。
+let upgradeMarker = null;
+const rollbackBtn = document.getElementById('rollback');
 const spinner = document.getElementById('spinner');
 const installProgress = document.getElementById('installProgress');
 
@@ -19,6 +26,12 @@ function setState(text, failed = false) {
   retryBtn.hidden = !failed;
   openDataBtn.hidden = !failed;
   openPluginsBtn.hidden = !failed;
+  // 回退按钮只在失败态有意义；具体显隐由 renderUpgradeAttribution() 决定
+  //（依赖升级标记与 attempts）。
+  if (!failed && rollbackBtn) {
+    rollbackBtn.hidden = true;
+    rollbackBtn.disabled = false;
+  }
 }
 
 // ── 9 行替换 + 光辉扫过（demo-K 效果）────────────────────
@@ -173,16 +186,44 @@ if (tauri && tauri.event) {
 
   // 壳状态 → 启动页文案（异常退出时显示退出码 + 证据目录；壳不自动重启，
   // 重启只能由用户点「重试」触发 —— 决定 D1）。
+  // 升级归因（S9）：只有"确有可回退的旧版本 + attempts < 2"时才给一键回退；
+  // attempts >= 2 说明两个版本之间已经来回跳过，再自动切只会把用户拖进
+  // ping-pong —— 此时只保留归因文案与证据目录。
+  function renderUpgradeAttribution() {
+    if (!rollbackBtn) return;
+    const m = upgradeMarker;
+    const attempts = m && Number(m.attempts) || 1;
+    const canSwitch = !!m && attempts < 2;
+    rollbackBtn.hidden = !canSwitch;
+    if (canSwitch) {
+      rollbackBtn.textContent = `回退到 v${m.from}`;
+      // 回退是**降级 dsh**：新版预装插件可能依赖旧版 dsh 没有的客户端服务（如 0.1.7 的
+      // configForms），此时 dsh 的 web boot 会 fail-closed → 界面打不开。这不是静态
+      // 门禁能拦住的组合（门禁只管"打包时"的搭配），所以必须在按钮上写明自救路径。
+      rollbackBtn.title =
+        '装回升级前的版本。注意：① 升级后写入的新数据旧版读不到；'
+        + '② 若旧版 dsh 缺少新版插件所需的服务，界面可能打不开 —— 可在启动页点「停用第三方插件」自救。'
+        + '详见 README「升级与数据安全」';
+    }
+  }
+
   function applyShellStatus(st) {
     const exit = (st && st.lastManagerExit) || null;
     if (!exit) return false;
-    const where = exit.evidenceDir
-      ? `证据已保存到 ${exit.evidenceDir}`
+    evidenceDir = exit.evidenceDir || null;
+    upgradeMarker = (exit.upgrade && typeof exit.upgrade === 'object' && exit.upgrade.to) ? exit.upgrade : null;
+    renderUpgradeAttribution();
+    if (evidenceDir) {
+      openDataBtn.textContent = '打开证据目录';
+      openDataBtn.title = evidenceDir;
+    }
+    const where = evidenceDir
+      ? `证据已保存到 ${evidenceDir}`
       : '证据目录写入失败，完整日志见数据目录';
-    showActionable(
-      `dsh 服务异常退出（退出码 ${exit.hex || '?'}）。`,
-      `${where}；点「重试」手动重启服务。`,
-    );
+    const headline = upgradeMarker
+      ? `上次升级 v${upgradeMarker.from} → v${upgradeMarker.to} 后启动失败（退出码 ${exit.hex || '?'}）`
+      : `dsh 服务异常退出（退出码 ${exit.hex || '?'}）。`;
+    showActionable(headline, `${where}；点「重试」手动重启服务。`);
     return true;
   }
 
@@ -277,12 +318,37 @@ retryBtn.addEventListener('click', async () => {
 });
 
 openDataBtn.addEventListener('click', async () => {
+  // 失败态且壳记录了证据目录时，这个按钮改指证据目录（崩溃现场：退出码、
+  // manager 日志尾、孤儿 dump）。不新增第四个按钮的原因：启动页 .shell 是
+  // height:100% + justify-content:center 且无滚动，多一项 + 长路径会不可达。
+  const target = evidenceDir ? 'open_evidence_dir' : 'open_data_dir';
   try {
-    await tauri.core.invoke('open_data_dir');
+    await tauri.core.invoke(target);
   } catch (err) {
-    appendLog('打开数据目录失败：' + String(err));
+    appendLog((evidenceDir ? '打开证据目录失败：' : '打开数据目录失败：') + String(err));
   }
 });
+
+if (rollbackBtn) {
+  rollbackBtn.addEventListener('click', async () => {
+    const m = upgradeMarker;
+    if (!m || !m.from) return;
+    rollbackBtn.disabled = true;
+    rollbackBtn.textContent = `正在回退到 v${m.from}…`;
+    try {
+      await tauri.core.invoke('update_now', { version: m.from });
+      appendLog(
+        `已请求回退到 v${m.from}：安装完成后壳会自动重启 dsh。`
+        + '升级后写入的新数据旧版读不到；若旧版 dsh 缺少新版插件所需的服务导致界面打不开，'
+        + '可点「停用第三方插件」自救（详见 README）。',
+      );
+    } catch (err) {
+      rollbackBtn.disabled = false;
+      renderUpgradeAttribution();
+      appendLog('回退失败：' + String(err));
+    }
+  });
+}
 
 // 壳内已无插件管理 UI（0.1.6-alpha.2 起交给 dsh 的 Web 侧边栏「插件」页，那个页面
 // 要 dsh 能起来才打得开）。所以启动失败时这里提供不依赖 dsh 的自救：把插件启用列表

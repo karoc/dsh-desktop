@@ -16,3 +16,13 @@ scripts/server-manager.mjs：dsh 的 pnpm 安装加 `--node-linker=hoisted`（CL
 
 购买：预装插件（dsh-kanban）与 host bundle（dsh-base/dsh-web-app）在 hoisted 布局下全部可解析，启用后重启不再黑屏；0.3.3 isolated 存量 runtime 在下次启动自动迁移（检测 .pnpm 存在且 dsh-base 不在根 → 删 node_modules → 全新 hoisted 安装，~6s）；新安装直接 hoisted。代价：node_modules 从 isolated 的精简符号链接变为全量铺开（体积增大、冷装略慢）；hoisted 仍保留 .pnpm 虚拟仓库（pnpm 11.22 行为，符号链接到它）；迁移触发点 isIsolatedPnpmLayout 以 dsh-base 在根为信号，若 pnpm 未来改变 dsh-base 的位置需复核。测试：repro3（新装 hoisted + 启用 dsh-kanban → URL 正常）、migrate（isolated→hoisted 迁移 → URL 正常）均 PASS；control-plane/proxy/broken-install 全绿。
 
+## 后续（2026-09-25，dsh 0.1.7-rc.2 实测）：hoisted 强制可能已可移除
+
+上游在 0.1.6-alpha.2 → 0.1.7-rc.2 之间**删除了 `$DSH_HOME/profiles/node_modules` 的 symlink/ESM-proxy fallback**，改为内存内 `createRuntimeResolution()`（明写 "without writing module-resolution files"，`packages/boot/app-boot/src/profile.ts:426-431`，`PluginPackages` 构造参数由 `{generation,behavior}` 变为 `{resolution}`）——本 note 当初的失败模式正是为那条旧解析路径修的。
+
+实测（Linux，真实 dsh 0.1.7-rc.2，绕过 manager 的 isolated→hoisted 自动迁移，`--node-linker=isolated` 全新安装）：
+- dsh web 正常启动并输出 URL（无 `ERR_MODULE_NOT_FOUND`）；
+- 首页客户端名册含我们注入的通知插件 `@dsh-desktop/client-notifications/client.js`（=1）与 overlay 覆盖后的 `@deepseek-ai/dsh-client-ui-sidebar-browser/client.js`（=1）。
+
+**结论与边界**：在 0.1.7-rc.2 上**没有再现**当初的解析失败，hoisted 强制看起来已非必需。但这**不构成移除依据**：① 历史症状发生在 Windows/WebView2 上，本机只验证到 Linux 的宿主侧解析（模块解析本身与平台无关，但客户端渲染路径未覆盖）；② 移除会改变全新安装的布局，需要重新验证预装插件启用、黑屏回归、冷装体积/耗时。因此**保持现状**（继续 hoisted），登记为跟进项：待 Windows 实机用 isolated 冷启一次（断言 `/alive` + 名册含预装插件）后再决定是否去掉。
+

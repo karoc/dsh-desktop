@@ -3,7 +3,7 @@
 # (exports["./client"] + dsh.client manifest) is discovered by dsh web's
 # client-modules service and served at /plugins/dsh-turn-navigator/client.js.
 # The host half is an empty apply (no tools/routes); the client half registers
-# the session-header trigger and the shell.overlay drawer.
+# the session-header turn rail and the Settings → General *Turn navigation* row.
 - insert:
     - id: dsh-turn-navigator
       name: dsh-turn-navigator

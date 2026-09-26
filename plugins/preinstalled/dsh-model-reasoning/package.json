@@ -1,6 +1,6 @@
 {
   "name": "dsh-model-reasoning",
-  "version": "0.2.4",
+  "version": "0.2.6",
   "description": "Smoothly Model Reasoning (Smoothly MR) — 思磨力提供方参数: external DeepSeek Harness web client plugin — a Settings page managing llm-pi-ai provider-route parameters (retry & backoff, timeouts, transport, caching, budgets, capacities) plus per-model reasoning efforts.",
   "type": "module",
   "main": "lib/index.js",
@@ -38,11 +38,16 @@
   "scripts": {
     "bundle": "tsdown --config ./tsdown.config.ts",
     "prepare": "tsdown --config ./tsdown.config.ts",
-    "test": "node --test tests/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "tsc --noEmit && node --test tests/*.test.ts && node scripts/check-guarantees.mjs && node scripts/test-negative-controls.mjs",
     "release:check": "node scripts/release-check.mjs",
     "prepack": "node scripts/release-check.mjs",
     "prepublishOnly": "node scripts/release-check.mjs && tsdown --config ./tsdown.config.ts",
-    "postpublish": "node scripts/post-publish-check.mjs"
+    "postpublish": "node scripts/post-publish-check.mjs",
+    "verify:guarantees": "node scripts/check-guarantees.mjs",
+    "test:controls": "node scripts/test-negative-controls.mjs",
+    "verify:all": "node scripts/verify-all.mjs",
+    "verify:fresh": "node scripts/verify-all.mjs --check-fresh"
   },
   "engines": {
     "node": ">=18"
@@ -78,9 +83,16 @@
   "devDependencies": {
     "@types/react": "~18.3.1",
     "react": "^18.2.0",
-    "tsdown": "^0.22.0"
+    "tsdown": "^0.22.0",
+    "typescript": "^6.0.3"
   },
   "peerDependencies": {
+    "@deepseek-ai/dsh-client-ui-settings": ">=0.1.7-rc.1",
     "react": "^18.2.0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-client-ui-settings": {
+      "optional": true
+    }
   }
 }

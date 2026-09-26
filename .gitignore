@@ -7,3 +7,6 @@ dist/
 .DS_Store
 .envrc
 .npm-home/
+# `scripts/audit-preinstalled.mjs` 的 npm cache 与调查临时产物（NPM_CACHE 就指向
+# 这里）；工作目录而非交付内容，别让它以 untracked 形态污染发布 PR。
+.tmp-investigate/

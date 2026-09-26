@@ -78,12 +78,14 @@ dsh's **system prompt** and visible to the user:
    15s** while shown, so model/other-session writes appear without a manual
    refresh.
 
-**Data-safety commitment**: the plugin **only writes** board/note files; there
-is no startup, scheduled, or install-time cleanup. Cards are removed only by an
-explicit `board_remove` / the Web delete button (which requires a confirmation
-Modal — no accidental one-click loss); excess done cards are **archived**
-(moved to `.agents/notes/archive.json`), never deleted. All data lives inside
-your **workspace directory** (git-trackable, hand-editable).
+**Data-safety commitment**: the plugin **only writes** board/note files (plus,
+on a shell with no skill registry, the `~/.agents/skills/kanban-use/SKILL.md`
+copy described below); there is no startup, scheduled, or install-time cleanup.
+Cards are removed only by an explicit `board_remove` / the Web delete button
+(which requires a confirmation Modal — no accidental one-click loss); excess
+done cards (**beyond 100, oldest first**) are **archived** (moved to
+`.agents/notes/archive.json`), never deleted. All board data lives inside your
+**workspace directory** (git-trackable, hand-editable).
 
 ### Model tools
 
@@ -250,10 +252,10 @@ Cards are the board's cross-session memory: the next session reads them **withou
 - **Every card needs `rationale` (为什么)** — why it exists and why now. A title-only card is incomplete and is flagged:
   - in **tool outputs** (`⚠️缺:…` after the card line, plus a summary line when any card is incomplete),
   - in the **session-start snapshot** (`(缺:…)` on open items, so a resuming session can fill them),
-  - on the **Web board page** (a warning line `缺字段：…` under the card fields — humans see it too).
+  - on the **Web board page** (a warning line under the card fields — `missing: …` in the English UI, `缺字段：…` in Chinese — humans see it too).
 - **A `done` card must be self-explanatory**: `summary` (做了什么) + `rationale` + `rejected` (放弃了什么) all present, so the completed work is an honest hand-off.
 
-**The kanban-use skill** (`skills/kanban-use/SKILL.md`) is the deep manual for this discipline — field semantics, good/bad card examples, the create → advance → close flow, a close checklist, and templates. The system-prompt guidance points the model at it. **Installation and upgrades are automatic**: the skill ships inside the npm package (the tarball includes `skills/kanban-use/SKILL.md` and `scripts/install-skill.mjs`), and the plugin's host half checks `~/.agents/skills/kanban-use/SKILL.md` on every `dsh web` start. A `skill-version` fingerprint in the skill's frontmatter (bumped on content changes) drives the sync policy: missing → copies the shipped file in; identical → no-op; **same version but different content → your local copy is kept** (that is your own edit of the current version) with a hint; **older/different version → synced over** (that is stale package content from a previous install — the upgrade path). So `dsh plugin add/update dsh-kanban` + the required restart is all it takes, on any machine. The manual commands still exist for repo checkouts and forced syncs:
+**The kanban-use skill** (`skills/kanban-use/SKILL.md`) is the deep manual for this discipline — field semantics, good/bad card examples, the create → advance → close flow, a close checklist, and templates. The system-prompt guidance points the model at it. **Delivery has two paths, and neither asks the user for an extra step.** **Preferred (DSH ≥ 0.1.6, i.e. `ctx.skills` exists)**: the host half registers the packaged `skills/kanban-use/SKILL.md` straight into the shell's skill registry (`ctx.skills.register`, `source: 'runtime'`), so the skill version IS the plugin version — there is no stale copy, and a frontmatter DSH cannot parse cannot silently hide it; by DSH's precedence (project > runtime > user) a copy in `~/.agents/skills` **cannot** shadow it, while a project-level `.agents/skills` (or `.dsh/skills`) copy still wins — the documented way to customize. **Fallback (an older shell, or a profile without the skill service)**: copy install — the skill ships inside the npm package (the tarball includes `skills/kanban-use/SKILL.md` and `scripts/install-skill.mjs`) and the host half checks `~/.agents/skills/kanban-use/SKILL.md` on every `dsh web` start. A `skill-version` fingerprint in the skill's frontmatter (bumped on content changes) drives that copy policy: missing → copies the shipped file in; identical → no-op; **same or newer version but different content → your local copy is kept** (that is your own edit of the current version) with a hint; **older version (or a copy with no fingerprint) → synced over** (that is stale package content from a previous install, the upgrade path). So `dsh plugin add/update dsh-kanban` + the required restart is all it takes, on any machine. The manual commands still exist for repo checkouts and forced syncs:
 
 ```sh
 pnpm install:skill            # symlinks skills/kanban-use → ~/.agents/skills/kanban-use
@@ -293,7 +295,7 @@ docs/screenshots/board-page.png  # Web board page screenshot (README figure)
 
 ## Why an external plugin
 
-dsh's official updates only touch the bundled in-repo packages. An **external bundle** is installed into the user profile via `dsh plugin` and is never touched by official upgrades (same pattern as `dsh-model-reasoning`). The plugin only uses dsh's externally stable capability surface: tool registration (`ctx.tools`), webServer route registration, the skill registry (`ctx.skills`), and the Web global-panel slots (`sidebar.panellist` + `main`).
+dsh's official updates only touch the bundled in-repo packages. An **external bundle** is installed into the user profile via `dsh plugin` and is never touched by official upgrades (same pattern as `dsh-model-reasoning`). The plugin only uses dsh's externally stable capability surface: tool registration (`ctx.tools`), webServer route registration, system-prompt guidance (`ctx.systemPrompt.section` / `.context`), the command registry (`ctx.commands`), the skill registry (`ctx.skills`), and the Web global-panel slots (`sidebar.panellist` + `main`).
 
 ## Known limitations (v1)
 
@@ -316,7 +318,7 @@ pnpm bundle    # emits lib/index.js + lib/client.js
 ## Verification
 
 ```sh
-pnpm test       # tsc --noEmit typecheck + 14 KANBAN.json domain unit tests
+pnpm test       # tsc --noEmit typecheck + 20 KANBAN.json domain unit tests
                 #   + 13 workspace-pick/current-session derivation tests
                 #   + token-drift gate (with negative control) + panel-wiring gate
                 #   + host tool smoke + skill runtime registration vs a real registry
@@ -350,6 +352,24 @@ Since DSH 0.1.6-alpha.2 the client `SessionListState` no longer carries
 (`retainedBy.mainView`), the same predicate the shell's own sidebar, session
 binding, and Settings use — and still reads `current` when an older shell
 provides it.
+
+Since DSH 0.1.7-alpha.1 icons carry their stroke weight in the name
+(`*Regular` = 1 px, `*Medium` = 1.3 px) and the size-suffixed names are gone;
+the board imports the `*Regular` variants, with every rendered size unchanged
+(the artwork defaults still carry the old sizes). **The client half therefore
+requires DSH ≥ 0.1.7 since 0.2.9** — 0.2.8 is the release for 0.1.2–0.1.6. That
+floor is also declared, since 0.2.10, as an optional
+`@deepseek-ai/dsh-client-ui-slots` peer dependency, range `>=0.1.7-rc.1` (the
+prerelease floor is load-bearing: a plain `>=0.1.7` does not match a
+`0.1.7-rc.N` runtime). The peer gate itself shipped with **DSH 0.1.7-rc.1**:
+from there on the loader evaluates every `@deepseek-ai/dsh*` peer against the
+running runtime and skips an incompatible bundle with the exact
+`dsh plugin allow-version` remedy (`dsh plugin add` refuses it outright) — so a
+future plugin floor is enforced up front instead of failing later at render
+time. Runtimes older than the gate — everything up to and including
+0.1.7-alpha.2, hence all of 0.1.2–0.1.6 — do not evaluate peers at all: there
+the plugin still loads and the client half is what breaks on render, which is
+why 0.2.8 remains the release for those.
 
 `scripts/verify-model-board.mjs` additionally verifies a **real model call**: it sends
 the GUI agent an instruction to use `board_add`/`board_list`, then confirms the card

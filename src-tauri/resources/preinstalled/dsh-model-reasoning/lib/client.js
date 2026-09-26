@@ -565,7 +565,7 @@ window.__ModuleLoader__.load({
 					children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 						className: matched === void 0 ? "mr-selector-label mr-selector-placeholder" : "mr-selector-label",
 						children: matched === void 0 ? props.placeholder : matched.label
-					}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronDownOutline14, { className: "mr-chevron" })]
+					}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronDownOutlineRegular, { className: "mr-chevron" })]
 				}), open && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 					className: "mr-sselect-panel",
 					role: "listbox",
@@ -629,7 +629,7 @@ window.__ModuleLoader__.load({
 					children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 						className: matched === void 0 ? "mr-selector-label mr-selector-placeholder" : "mr-selector-label",
 						children: matched === void 0 ? placeholder : matched.label
-					}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronDownOutline14, { className: "mr-chevron" })]
+					}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronDownOutlineRegular, { className: "mr-chevron" })]
 				})
 			});
 		}
@@ -1576,7 +1576,7 @@ window.__ModuleLoader__.load({
 						className: "mr-empty",
 						role: "status",
 						children: [
-							/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconThinkOutline16, {
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconThinkOutlineRegular, {
 								className: "mr-empty-icon",
 								size: 16
 							}),
@@ -2086,15 +2086,18 @@ window.__ModuleLoader__.load({
 		/** The pi-ai settings namespace whose provider profiles this page edits. */
 		const PI_AI_NS = "llm-pi-ai";
 		/** Required services (cordis fiber inject). The target slot is declared by
-		* ui-settings; registration depends on it through `slots.inject()`. The
-		* `remote.settings` namespace carries this page's writes (dsh 0.1.2+ replaced
-		* the `connection.api` RPC face with the generated Remote namespaces). */
+		* ui-settings; registration depends on it through `slots.inject()`. Reads ride
+		* the settings-forms service (`configForms`, the dsh 0.1.7 successor of the
+		* removed `settingsScope` seam); the `remote.settings` namespace carries this
+		* page's writes (dsh 0.1.2+ replaced the `connection.api` RPC face with the
+		* generated Remote namespaces — writes stay on the raw Remote call so
+		* conflict/refusal details survive; see the 2026-08-30 agent note). */
 		const inject = [
 			"slots",
 			"locale",
 			"remote",
 			"remote.settings",
-			"settingsScope"
+			"configForms"
 		];
 		/**
 		* Register the Provider parameters section once the `settings.section`
@@ -2107,12 +2110,12 @@ window.__ModuleLoader__.load({
 				zh,
 				en
 			}), "dsh-model-reasoning: copy dictionaries");
-			const scope = ctx.settingsScope.bind({ namespace: PI_AI_NS });
+			const form = ctx.configForms.get(PI_AI_NS);
 			const t = ctx.locale.bind(NS);
 			const injected = () => ({
 				api: ctx.remote.settings,
 				t,
-				hooks: { modelReasoning: scope }
+				hooks: { modelReasoning: form }
 			});
 			ctx.slots.inject("settings.section", () => ctx.slots.register({
 				name: "settings.section",

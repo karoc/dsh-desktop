@@ -19,11 +19,13 @@
 //   7. on signal, kill the whole dsh tree (taskkill /T /F on Windows).
 
 import { spawn } from 'node:child_process'
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, appendFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, delimiter as pathDelimiter, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createForwardProxy, providerHostsFromSettings } from './proxy.mjs'
+import { allowsVersionSwitch, nextUpgradeMarker, upgradeMarkerPath } from './upgrade-marker.mjs'
+import { planPluginGuard } from './plugin-floor.mjs'
 
 const PACKAGE = '@deepseek-ai/dsh'
 
@@ -52,9 +54,16 @@ const NATIVE_BUILD_PKGS = [
  * 壳要求的最低 dsh 版本。0.1.6-alpha.2 起 dsh 自带插件管理（Web 侧边栏
  * Plugins 页 + @deepseek-ai/dsh-plugin-manager），壳内自建插件管理已整体移除，
  * 因此低于该版本的 dsh 会让用户彻底失去插件管理入口。npm 的 latest tag 目前仍是
- * 0.1.5-rc.2（不含插件管理），所以安装/升级目标取 max(latest, 地板)。
+ * 0.1.5-rc.3（不含插件管理），所以安装/升级目标取 max(latest, 地板)。
+ *
+ * 2026-09-25 抬到 0.1.7-rc.2：随壳分发的预装插件把 dsh 下限声明为
+ * `@deepseek-ai/dsh*` 的可选 peer（kanban / model-reasoning / turn-nav 均为
+ * `>=0.1.7-rc.1`），而 dsh ≥ 0.1.7 的兼容门禁会据此**拒绝加载**不兼容的插件——
+ * 地板若停在 0.1.6-alpha.2，用户启用预装插件时会被直接拦下并提示
+ * `dsh plugin allow-version`。地板与预装 bundle 必须**同一批**落地：旧 bundle
+ * （如 kanban 0.2.8）用的是 0.1.7 已删除的图标名，单独抬地板会让它们在新运行时上崩。
  */
-const MIN_DSH_VERSION = '0.1.6-alpha.2'
+const MIN_DSH_VERSION = '0.1.7-rc.2'
 
 // ── args ───────────────────────────────────────────────────────────────────
 function parseArgs(argv) {
@@ -145,9 +154,29 @@ process.on('unhandledRejection', (reason) => {
 })
 
 // ── node + npm resolution ──────────────────────────────────────────────────
+// npm CLI 的落点随 Node 分发方式而不同，两种布局都要认：
+//   - Windows zip / 本仓库 fetch-node：<nodeDir>/node_modules/npm/bin/npm-cli.js
+//   - POSIX（nvm / actions/setup-node / 发行版包）：<nodeDir>/../lib/node_modules/npm/bin/npm-cli.js
+// 只认第一种时，`node scripts/test-*.mjs` 这类"用系统 node 跑 manager"的场景
+// 会把 npm 调用退化成 `node view …`（报 "Node.js v<ver>" 后退出码 1）。
 const nodeDir = dirname(process.execPath)
-const npmCli = join(nodeDir, 'node_modules', 'npm', 'bin', 'npm-cli.js')
-const npmViaCli = existsSync(npmCli)
+const npmCliCandidates = [
+  join(nodeDir, 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+  join(nodeDir, '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+]
+const npmCli = npmCliCandidates.find(candidate => existsSync(candidate)) ?? null
+// 两条都找不到时退回 PATH 上的 npm（Windows 是 npm.cmd），保底不退化。
+// 显式解析成绝对路径：spawn 按名查找依赖父进程 PATH，而在 Windows 上
+// 走 PATH 还需要 shell/扩展名处理，绕开它更稳。
+const npmOnPathName = process.platform === 'win32' ? 'npm.cmd' : 'npm'
+const npmOnPath = (() => {
+  for (const dir of (process.env.PATH ?? '').split(pathDelimiter)) {
+    if (!dir) continue
+    const candidate = join(dir, npmOnPathName)
+    if (existsSync(candidate)) return candidate
+  }
+  return npmOnPathName
+})()
 
 // Registry: explicit --registry > env DSH_DESKTOP_REGISTRY > official. Users
 // behind slow international links should set DSH_DESKTOP_REGISTRY (e.g. the
@@ -193,7 +222,7 @@ function npmLineToDisplay(raw) {
  * @param {{cwd?: string, timeoutMs?: number, stream?: boolean,
  *          throttleAll?: boolean, tool?: string}} opts
  */
-function runChild(cmdArgs, { cwd, timeoutMs = 600_000, stream = false, throttleAll = false, tool = 'npm' } = {}) {
+function runChild(cmdArgs, { cwd, timeoutMs = 600_000, stream = false, throttleAll = false, tool = 'npm', exe = process.execPath } = {}) {
   return new Promise((resolvePromise, rejectPromise) => {
     // Native deps (koffi, node-pty) run `node` from PATH during postinstall,
     // but the bundled Node is NOT on PATH — prepend its directory so
@@ -202,7 +231,7 @@ function runChild(cmdArgs, { cwd, timeoutMs = 600_000, stream = false, throttleA
       ...process.env,
       PATH: `${dirname(process.execPath)}${process.env.PATH ? pathDelimiter + process.env.PATH : ''}`,
     }
-    const child = spawn(process.execPath, cmdArgs, { cwd, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env })
+    const child = spawn(exe, cmdArgs, { cwd, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env })
     let stdout = ''
     let stderr = ''
     let settled = false
@@ -301,8 +330,11 @@ function runChild(cmdArgs, { cwd, timeoutMs = 600_000, stream = false, throttleA
 }
 
 function npm(argsList, { timeoutMs = 600_000, stream = false, quiet = true } = {}) {
-  const cmdArgs = npmViaCli ? [npmCli, ...argsList, ...NPM_FETCH_FLAGS] : [...argsList, ...NPM_FETCH_FLAGS]
-  return runChild(cmdArgs, { timeoutMs, stream, tool: 'npm' })
+  const flags = [...argsList, ...NPM_FETCH_FLAGS]
+  // 首选：捆绑/系统 Node 自带的 npm-cli.js（受 process.execPath 解释，跨布局一致）。
+  if (npmCli !== null) return runChild([npmCli, ...flags], { timeoutMs, stream, tool: 'npm' })
+  // 退化路径：PATH 上的 npm（不是 `node view …` —— 那是 bug 不是回退）。
+  return runChild(flags, { timeoutMs, stream, tool: 'npm', exe: npmOnPath })
 }
 
 /**
@@ -791,6 +823,27 @@ async function installDshUpdate({ force = false, version } = {}) {
   } catch (err) {
     log(`profile bundles restore threw: ${err.message}`)
   }
+  // 升级归因（S9）：确有旧版本时才写标记，供壳在"下次启动失败"时归因与回退。
+  // 原子写（临时文件 + rename）：半截标记会让壳读到坏 JSON。
+  try {
+    // 回退（target < current）同样要写标记（kind='rollback'）：回退本身失败时
+    // 用户同样需要知道是回退导致的，且 attempts 累加能阻止两版本间来回跳。
+    if (typeof current === 'string' && current !== '') {
+      const markerPath = upgradeMarkerPath(args.runtimeDir)
+      let previous = null
+      try { previous = JSON.parse(readFileSync(markerPath, 'utf8')) } catch { previous = null }
+      const kind = versionGt(current, target) ? 'rollback' : 'update'
+      const marker = nextUpgradeMarker(previous, current, target, kind)
+      if (marker !== null) {
+        const tmp = `${markerPath}.tmp-${process.pid}`
+        writeFileSync(tmp, JSON.stringify(marker, null, 2) + '\n')
+        renameSync(tmp, markerPath)
+        log(`upgrade marker: ${marker.from} -> ${marker.to}（kind=${marker.kind}, attempts=${marker.attempts}, 版本切换${allowsVersionSwitch(marker) ? '可用' : '已停用'}）`)
+      }
+    }
+  } catch (err) {
+    log(`upgrade marker write failed: ${err.message}`)
+  }
   emitUpdateStatus(false)
   return true
 }
@@ -953,6 +1006,25 @@ function writeShellManifest(runtimeDir, manifest) {
   writeFileSync(join(runtimeDir, SHELL_MANIFEST), JSON.stringify(manifest, null, 2) + '\n')
 }
 
+/**
+ * 写回 web profile 的 bundles（保留 manifest 其它字段；原子写：tmp + rename，
+ * 半截 manifest 会让 dsh 用模板重建 → 用户插件全丢，见 2026-09-07 事故）。
+ * 与 Rust 侧 write_web_profile_bundles 同语义（两边都可能被触发）。
+ */
+function writeWebProfileBundles(runtimeDir, bundles) {
+  const path = webProfileManifestPath(runtimeDir)
+  let doc = {}
+  try { doc = JSON.parse(readFileSync(path, 'utf8')) } catch { doc = {} }
+  if (typeof doc !== 'object' || doc === null) doc = {}
+  if (typeof doc.dsh !== 'object' || doc.dsh === null) doc.dsh = {}
+  if (typeof doc.dsh.profile !== 'object' || doc.dsh.profile === null) doc.dsh.profile = {}
+  doc.dsh.profile.bundles = bundles
+  const tmp = `${path}.tmp-${process.pid}`
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(tmp, JSON.stringify(doc, null, 2) + '\n')
+  renameSync(tmp, path)
+}
+
 /** Web profile manifest 路径（dsh-home/profiles/web/package.json）。 */
 function webProfileManifestPath(runtimeDir) {
   return join(runtimeDir, 'dsh-home', 'profiles', 'web', 'package.json')
@@ -1041,22 +1113,75 @@ function preinstalledTopLevelEntries(resourceDir) {
   return entries
 }
 
+/**
+ * 运行时地板守卫（见 plugin-floor.mjs）：插件声明的 dsh 地板若高于**已装** dsh，
+ * ① 不要把它的副本装进 runtime；② 若它已在 profile bundles 里启用，必须摘掉 ——
+ * 否则 dsh 的 web boot fail-closed，整个界面停在「Failed to load plugins」打不开
+ * （2026-09-25 真机事故）。只在插件**自己声明了地板**且不被满足时动手。
+ */
+function applyPluginFloorGuard(runtimeDir, srcRoot) {
+  const bundled = []
+  for (const name of readdirSync(srcRoot)) {
+    const pkgJsonPath = join(srcRoot, name, 'package.json')
+    if (!statSync(join(srcRoot, name)).isDirectory() || !existsSync(pkgJsonPath)) continue
+    try {
+      const pkgJson = JSON.parse(readFileSync(pkgJsonPath, 'utf8'))
+      bundled.push({ name: pkgJson.name ?? name, version: pkgJson.version ?? null, pkgJson })
+    } catch { /* 坏包交给后面的一致性门禁报错 */ }
+  }
+  const enabled = snapshotWebProfileBundles(runtimeDir) ?? []
+  const plan = planPluginGuard({ installedDsh: installedVersion(runtimeDir), bundled, enabled })
+  for (const w of plan.warnings) log(`plugin-floor: ${w}`)
+  if (plan.skipInstall.length > 0) {
+    for (const p of plan.skipInstall) {
+      log(`plugin-floor: 跳过 ${p.name}@${p.version ?? '?'}（要求 ${p.requires} "${p.floor}"，已装 dsh 不满足）`)
+    }
+  }
+  if (plan.quarantine.length > 0) {
+    const names = new Set(plan.quarantine.map((p) => p.name))
+    const path = webProfileManifestPath(runtimeDir)
+    const stamp = Date.now()
+    try {
+      if (existsSync(path)) copyFileSync(path, `${path}.bak-plugin-floor-${stamp}`)
+      writeWebProfileBundles(runtimeDir, enabled.filter((b) => !names.has(b)))
+      const manifest = readShellManifest(runtimeDir)
+      manifest.quarantinedPlugins = plan.quarantine.map((p) => ({
+        name: p.name, version: p.version, requires: p.requires, floor: p.floor, at: stamp,
+      }))
+      writeShellManifest(runtimeDir, manifest)
+      for (const p of plan.quarantine) {
+        log(`plugin-floor: 隔离 ${p.name}@${p.version ?? '?'}（要求 ${p.requires} "${p.floor}" > 已装 dsh）—— 已从 profile bundles 摘掉（文件保留、manifest 已备份）`)
+      }
+    } catch (err) {
+      log(`plugin-floor: 隔离失败（${err.message}）—— dsh 可能仍起不来，建议用「停用第三方插件」自救`)
+    }
+  }
+  return plan
+}
+
 function ensurePreinstalled(runtimeDir, resourceDir) {
   const srcRoot = resolve(resourceDir, 'preinstalled')
   if (!existsSync(srcRoot)) {
     log('no preinstalled bundles in resources')
     return
   }
+  const guard = applyPluginFloorGuard(runtimeDir, srcRoot)
+  const skip = new Set(guard.skipInstall.map((p) => p.name))
   const manifest = readShellManifest(runtimeDir)
   const names = []
+  const versions = {}
   for (const name of readdirSync(srcRoot)) {
     const src = join(srcRoot, name)
     if (!statSync(src).isDirectory()) continue
     // The package's true name comes from its manifest, not the dir name.
     const pkgJson = join(src, 'package.json')
     if (!existsSync(pkgJson)) continue
-    const pkgName = JSON.parse(readFileSync(pkgJson, 'utf8')).name ?? name
+    const pkgMeta = JSON.parse(readFileSync(pkgJson, 'utf8'))
+    const pkgName = pkgMeta.name ?? name
     names.push(pkgName)
+    // 版本顺手记下（关于弹窗/排查用；新增字段，不动 preinstalled: string[]）。
+    versions[pkgName] = typeof pkgMeta.version === 'string' ? pkgMeta.version : null
+    if (skip.has(pkgName)) continue // 地板守卫：装了也不会激活（见 applyPluginFloorGuard）
     const dest = join(runtimeDir, 'node_modules', pkgName)
     const updating = existsSync(dest) && !sameTree(src, dest)
     if (!existsSync(dest) || updating) {
@@ -1066,8 +1191,9 @@ function ensurePreinstalled(runtimeDir, resourceDir) {
     }
   }
   if (names.length === 0) return
-  // Preserve other shell fields (devMode) while recording the list.
+  // Preserve other shell fields (devMode) while recording the list + versions.
   manifest.preinstalled = names
+  manifest.preinstalledVersions = versions
   writeShellManifest(runtimeDir, manifest)
   log(`preinstalled bundles: ${names.join(', ')}`)
 }

@@ -14,10 +14,12 @@
 #   hosts: [string]      host gate. Entries are `host` (implicitly https) or
 #                        `scheme://host[:port]`; a leading `*.` is ignored.
 #                        Defaults to ['https://opencode.ai'] (subdomains
-#                        included). `['*']` DISABLES the gate (any host gets
-#                        the header while a session stream is active) — use
-#                        only for a mirror you fully trust. Unusable entries
-#                        are reported in the startup log.
+#                        included). Entries that are empty after trimming count
+#                        as not supplied; when no usable entry is left the
+#                        default rule applies. `['*']` DISABLES the gate (any
+#                        host gets the header while a session stream is
+#                        active) — use only for a mirror you fully trust.
+#                        Unusable entries are reported in the startup log.
 #   mode: 'session-id' | 'uuid'
 #                        'session-id' (default): header value = the DSH
 #                        session id that already travels with each model call
@@ -30,16 +32,21 @@
 #                        flow via ctx.logger, and reveal raw values in
 #                        request-level records.
 #   debugFile: path      optional absolute path; each streamed call appends
-#                        one JSON line (kind:"stream"), and when
-#                        debugRequests is on, each injected or host-blocked
-#                        request appends one too (kind:"inject"|"skip").
-#                        Append-only, no rotation. Values are hashed unless
-#                        debug is also true.
+#                        one JSON line (kind:"stream"), and each injected or
+#                        host-blocked request appends one too
+#                        (kind:"inject"|"skip") whenever this file is
+#                        configured — debugRequests only adds the console
+#                        line. A configured-but-unregistered provider route
+#                        appends kind:"diagnostic". Append-only, no rotation.
+#                        Values are hashed unless debug is also true.
 #   debugRequests: true|false
-#                        write one request-level record at the real fetch
-#                        moment ({"ts","kind","reason","host","provider",
-#                        "valueHash","valueLen"}). This is what proves whether
-#                        the header was actually attached.
+#                        log one line per request-level record at the real
+#                        fetch moment ({"ts","kind","reason","host","provider",
+#                        "valueHash","valueLen"} for an injected record; a skip
+#                        record has no valueHash/valueLen, and a discovery
+#                        record has no provider). The JSON record itself lands
+#                        in debugFile. This is what proves whether the header
+#                        was actually attached.
 #   discoveryFallback: true|false
 #                        (default false) inject a process-stable UUID into bare
 #                        discovery requests: only GET whose path ends in

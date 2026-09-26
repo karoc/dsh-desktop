@@ -263,6 +263,12 @@ jobs:
       - run: npm ci
       - run: npm run bundle -- --bundles appimage deb
 
+      # Slow behavioural suite (main/tag only, ~3.5 min): the install-stall
+      # fail-fast case waits out its own 180s stall window by design. It needs
+      # the bundled Node fetched by `npm run bundle`'s beforeBuildCommand.
+      - name: Slow behavioural tests (install stall)
+        run: npm run test:slow
+
       # Layout assertion (mirror of the Windows one, cheaper): resources must
       # be inside the AppImage at the path the Rust probe resolves. AppImage
       # packs the app under usr/lib/<productName>/, so probe that location.

@@ -8,3 +8,10 @@
 - insert:
     - id: desktop-notifications
       name: '@dsh-desktop/client-notifications'
+# 0.1.7-rc.2 起上游把侧栏浏览器页门控到 profileContext.name === 'desktop'
+# （packages/bundle/web-app/cordis.patch.yml），而外部壳只能用 profile 'web'
+# （CLI 硬拒 `--profile desktop`）→ 这里按官方 README 的写法显式覆盖回启用。
+# 注意：恢复的是 iframe 版浏览器；且用户在界面上无法再自行禁用它。
+# 契约门禁：scripts/test-patch-targets.mjs（目标行改名会变红）。
+- id: ui-sidebar-browser
+  disabled: false

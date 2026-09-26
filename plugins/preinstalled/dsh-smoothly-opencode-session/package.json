@@ -1,6 +1,6 @@
 {
   "name": "@karoc/dsh-smoothly-opencode-session",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Smoothly OpenCode Session (Smoothly OCS) — 思磨力 OpenCode 会话头: external DeepSeek Harness host plugin that attaches the OpenCode-required x-opencode-session header to model calls routed to OpenCode / OpenCode Go provider routes (stable per-conversation id; fixes 400 MissingSessionID, in effect for OpenCode Go since 2026-09-05).",
   "type": "module",
   "main": "lib/index.js",
@@ -75,5 +75,11 @@
     "@deepseek-ai/cordis": "^4.0.2",
     "@types/node": "^24.0.0",
     "tsdown": "^0.22.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-llm": ">=0.1.0-rc.7"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-llm": { "optional": true }
   }
 }

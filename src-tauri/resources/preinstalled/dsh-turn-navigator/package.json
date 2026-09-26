@@ -1,6 +1,6 @@
 {
   "name": "dsh-turn-navigator",
-  "version": "0.4.4",
+  "version": "0.4.6",
   "description": "Smoothly Turn Nav (Smoothly TN): full-history piano-key turn rail for DeepSeek Harness (dsh) web conversations — see every turn at a glance, hover to preview, click to jump anywhere, and replace the official (non-disableable) turn rail.",
   "type": "module",
   "main": "lib/index.js",
@@ -44,11 +44,15 @@
     "bundle": "tsdown --config ./tsdown.config.ts",
     "prepare": "tsdown --config ./tsdown.config.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsc --noEmit && node scripts/test-client-dispose.mjs",
+    "test": "tsc --noEmit && node scripts/test-client-dispose.mjs && node scripts/check-guarantees.mjs && node scripts/test-negative-controls.mjs",
     "release:check": "node scripts/release-check.mjs",
     "prepack": "node scripts/release-check.mjs",
     "prepublishOnly": "node scripts/release-check.mjs && tsdown --config ./tsdown.config.ts",
-    "postpublish": "node scripts/post-publish-check.mjs"
+    "postpublish": "node scripts/post-publish-check.mjs",
+    "verify:guarantees": "node scripts/check-guarantees.mjs",
+    "test:controls": "node scripts/test-negative-controls.mjs",
+    "verify:all": "node scripts/verify-all.mjs",
+    "verify:fresh": "node scripts/verify-all.mjs --check-fresh"
   },
   "engines": {
     "node": ">=18"
@@ -90,6 +94,12 @@
     "typescript": "^5.6.0"
   },
   "peerDependencies": {
+    "@deepseek-ai/dsh-client-ui-conversation": ">=0.1.7-rc.1",
     "react": "^18.2.0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-client-ui-conversation": {
+      "optional": true
+    }
   }
 }

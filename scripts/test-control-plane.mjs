@@ -229,8 +229,9 @@ const code = await new Promise((resolvePromise) => child.on('exit', (c) => resol
 assert.equal(code, 0, 'manager exits 0 on SIGTERM')
 
 // ── scenario 8: 低于最低版本地板时走兼容闸门，且失败不阻塞启动 ─────────────
-// 壳依赖 dsh 0.1.6-alpha.2 起的自带插件管理（壳内自建管理已整体移除），而 npm
-// latest 仍是 0.1.5-rc.2（不含插件管理）→ 低于地板的运行时必须被升级到地板。
+// 壳依赖 dsh 0.1.6-alpha.2 起的自带插件管理（壳内自建管理已整体移除），且随壳
+// 分发的预装插件要求 dsh ≥ 0.1.7-rc.1（可选 peer，由 dsh 的兼容门禁判定）→
+// 低于地板的运行时必须被升级到地板。
 // 沙箱里 registry 指向一个必然连不上的地址：升级会失败，但 dsh **必须照样被拉起**
 // （失败只降级为"没有插件管理"，绝不能变成"起不来"）。
 const oldRuntime = join(work, 'runtime-old')

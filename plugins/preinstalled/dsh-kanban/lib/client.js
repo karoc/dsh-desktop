@@ -79,7 +79,8 @@ window.__ModuleLoader__.load({
 		//#endregion
 		//#region src/client/BoardPage.tsx
 		/**
-		* The full-screen kanban board page (external plugin).
+		* The kanban board page: the keyed occupant of the global "main" panel
+		* (sidebar.panellist entry + main slot) — not an overlay of its own.
 		*
 		* Reads the workspace's KANBAN.json through the host webServer route
 		* (GET/POST /kanban/api) and renders three columns (todo / in_progress / done)
@@ -363,7 +364,7 @@ window.__ModuleLoader__.load({
 									}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
 										variant: "primary",
 										size: "md",
-										icon: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconPlusOutline16, {}),
+										icon: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconPlusOutlineRegular, {}),
 										disabled: draftTitle.trim() === "",
 										onClick: addCard,
 										children: t("add")
@@ -631,7 +632,7 @@ window.__ModuleLoader__.load({
 						children: [t("workspaceLabel"), ":"]
 					}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
 						className: "kb-workspace-trigger",
-						children: [selected?.title ?? t("workspaceChoose"), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronDownOutline14, {})]
+						children: [selected?.title ?? t("workspaceChoose"), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronDownOutlineRegular, {})]
 					})]
 				})
 			});
@@ -679,7 +680,7 @@ window.__ModuleLoader__.load({
 								children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 									className: "kb-card-title-text",
 									children: card.title
-								}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconInspectOutline12, { className: "kb-card-detail-icon" })]
+								}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconInspectOutlineRegular, { className: "kb-card-detail-icon" })]
 							}),
 							card.description !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
 								className: "kb-card-desc",
@@ -701,7 +702,7 @@ window.__ModuleLoader__.load({
 							}),
 							missing.length > 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("p", {
 								className: "kb-card-missing",
-								children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconWarningOutline16, {}), t("missingFields", { fields: missing.map((field) => qualityFieldLabel(field, t)).join("、") })]
+								children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconWarningOutlineRegular, {}), t("missingFields", { fields: missing.map((field) => qualityFieldLabel(field, t)).join("、") })]
 							})
 						]
 					}),
@@ -720,7 +721,7 @@ window.__ModuleLoader__.load({
 									type: "button",
 									className: "kb-source-btn",
 									onClick: () => onOpenSession(card.sourceSessionId),
-									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconQueueOutline14, {}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: t("sourceSession") })]
+									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconQueueOutlineRegular, {}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: t("sourceSession") })]
 								}),
 								/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Menu, {
 									open: statusOpen,
@@ -749,7 +750,7 @@ window.__ModuleLoader__.load({
 								/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
 									variant: "ghost",
 									size: "sm",
-									icon: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconTrashOutline16, {}),
+									icon: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconTrashOutlineRegular, {}),
 									"aria-label": t("remove"),
 									onClick: () => setConfirmDelete(true),
 									className: "kb-trash-btn"
@@ -771,7 +772,7 @@ window.__ModuleLoader__.load({
 						}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
 							variant: "primary",
 							size: "sm",
-							icon: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconTrashOutline16, {}),
+							icon: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconTrashOutlineRegular, {}),
 							onClick: () => {
 								onRemove(card.id);
 								setConfirmDelete(false);
@@ -802,17 +803,17 @@ window.__ModuleLoader__.load({
 				{
 					label: t("fieldSummary"),
 					value: card.summary,
-					icon: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconGoalOutline16, {})
+					icon: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconGoalOutlineRegular, {})
 				},
 				{
 					label: t("fieldRationale"),
 					value: card.rationale,
-					icon: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconThinkOutline16, {})
+					icon: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconThinkOutlineRegular, {})
 				},
 				{
 					label: t("fieldRejected"),
 					value: card.rejected,
-					icon: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconWarningOutline16, {})
+					icon: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconWarningOutlineRegular, {})
 				}
 			].filter((section) => section.value !== void 0 && section.value !== "");
 			const hasDescription = card.description !== void 0 && card.description !== "";
@@ -846,7 +847,7 @@ window.__ModuleLoader__.load({
 							className: "kb-detail-close",
 							"aria-label": t("close"),
 							onClick: onClose,
-							children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCloseOutline16, { size: 14 })
+							children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCloseOutlineRegular, { size: 14 })
 						})]
 					}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 						className: "kb-detail-scroll",
@@ -855,7 +856,7 @@ window.__ModuleLoader__.load({
 								className: "kb-detail-block",
 								children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 									className: "kb-detail-block-label",
-									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconListPenOutline16, {}), t("fieldDescription")]
+									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconListPenOutlineRegular, {}), t("fieldDescription")]
 								}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
 									className: "kb-detail-block-body",
 									children: card.description
@@ -881,7 +882,7 @@ window.__ModuleLoader__.load({
 									type: "button",
 									className: "kb-source-btn",
 									onClick: () => onOpenSession(card.sourceSessionId),
-									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconQueueOutline14, {}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: t("sourceSession") })]
+									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconQueueOutlineRegular, {}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: t("sourceSession") })]
 								}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
 									className: "kb-detail-times",
 									children: [t("detailCreated", { time: formatTime(card.createdAt) }), card.updatedAt !== card.createdAt && ` · ${t("detailUpdated", { time: formatTime(card.updatedAt) })}`]
@@ -913,14 +914,14 @@ window.__ModuleLoader__.load({
 					props.onRefresh !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
 						variant: "ghost",
 						size: "md",
-						icon: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconRefreshOutline16, {}),
+						icon: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconRefreshOutlineRegular, {}),
 						onClick: props.onRefresh,
 						children: props.t("refresh")
 					}),
 					/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
 						variant: "ghost",
 						size: "md",
-						icon: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronLeftOutline14, {}),
+						icon: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronLeftOutlineRegular, {}),
 						onClick: props.onClose,
 						children: props.t("backToChat")
 					})
@@ -985,7 +986,7 @@ window.__ModuleLoader__.load({
 			const { open } = (0, react.useSyncExternalStore)(subscribeCounts, getCountsSnapshot);
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
 				className: "kb-panel-icon",
-				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChecklistOutline14, { size: props.size }), open > 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChecklistOutlineRegular, { size: props.size }), open > 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 					className: "kb-panel-badge",
 					title: `${open} open`,
 					children: open > 99 ? "99+" : String(open)
@@ -1618,7 +1619,7 @@ body .kb-detail-modal { width: min(560px, 100%); }
 			};
 		}
 		/**
-		* Browser plugin body: registers the sidebar entry and the full-screen page.
+		* Browser plugin body: registers the sidebar entry and the global-panel page.
 		* @param ctx - client root context.
 		*/
 		function apply(ctx) {

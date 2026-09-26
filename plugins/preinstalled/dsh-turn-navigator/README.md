@@ -24,12 +24,12 @@ In the default DSH web UI, the official turn rail historically showed only the *
 | 🗺️ **Full-history minimap** | All turns visible immediately — read from the persisted session log as data, **zero prepends** into the conversation flow on open (long sessions stay responsive) |
 | 🎹 **Piano-key design** | One capsule per turn, ~3px tall, right-aligned on the right edge; auto-sizing (up to 30vh) with an internal hidden scrollbar |
 | 🌊 **Wave hover** | Hovered capsule glows with the theme color and widens 150% leftward; its two neighbours widen 125% — a ripple across the rail |
-| 💬 **Rich tooltip** | Turn **number, timestamp, and full user-message summary**, always fully inside the viewport |
+| 💬 **Rich tooltip** | Turn **number, timestamp, and user-message summary** (the full first message for turns read from the journal), clamped inside the viewport |
 | 🎯 **Jump to any turn** | Precise `scrollTop` targeting (no `scrollIntoView` fights); out-of-window jumps extend the window on demand with a "Locating turn N…" pulse + bubble; the oldest-turn jump loads to the **true first turn** (`hasMore = false`) |
 | 👁️ **Follow-scroll highlight** | The capsule of the turn at the reading line is tinted as you scroll — and the rail's own viewport keeps the active turn in view |
 | ⬆️⬇️ **Scroll buttons** | Click or hover-hold to scroll the rail; greyed out when there is nothing to scroll |
 | 🎛️ **Rail mode switch** | Settings → General → *Turn navigation*: `DSH official` / `Smoothly TN` (default) / `Hide all` — persisted across reloads, so the official rail can finally be **turned off** |
-| 🔌 **Pure external plugin** | No DSH source code modified; no host changes; no new dependencies; read-only DOM access |
+| 🔌 **Pure external plugin** | No DSH source code modified; no host changes; no new dependencies; no conversation writes (the only DOM writes are an injected `style` tag, one `body` class and a transient jump highlight) |
 
 ## vs. the official DSH turn rail
 
@@ -39,11 +39,11 @@ The official built-in `TurnNavigator` has **no off-switch** and is always render
 |---|---|---|
 | Turns shown | **Every turn** — host `turnOutline` projection (0.1.3+) | Every persisted turn — **client-side** journal read |
 | Full-history robustness | Depends on the host `turnOutline` projection — **not driven** by browser-synthesized sessions (e.g. `?fixture`), where it falls back to the loaded window | Always full — reads the persisted journal directly, no host projection required (verified full on both real and fixture sessions) |
-| How full history is read | Host-side projection embedded in the snapshot | Client pages the persisted journal (`session/page`); older dsh falls back to `sessions.history` RPC — **zero host changes** |
+| How full history is read | Host-side `turnOutline` projection, read by the chat view (the conversation snapshot carries no projection values) | Client pages the persisted journal (`session/page`); older dsh falls back to `sessions.history` RPC — **zero host changes** |
 | Jump to a turn outside the window | ✅ (0.1.3+ unloaded anchor pages history by seq) | ✅ on-demand window extension + "Locating turn N…" pulse/bubble |
 | Long-session open performance | Reads the projection | **Zero prepend** — plain data, no flow re-render, no stall |
 | Follow-scroll highlight | ✅ (0.1.3+ keeps the active mark in the rail viewport, with a pointer guard) | ✅ (v0.4.1+, same pointer-guarded follow) |
-| Hover preview | Prompt + response (≤3 lines each), no timestamp | Turn number + **timestamp** + full user-message summary |
+| Hover preview | Prompt (1 line) + response (≤3 lines), no timestamp | Turn number + **timestamp** + user-message summary (full first message for journal-read turns; the host's bounded prompt preview for turns still in the loaded window) |
 | Wave ripple animation | ❌ (fixed-pitch ticks widen instead) | ✅ wave ripple |
 | Scroll buttons (click / hover-hold) | ❌ (wheel + gradient fade) | ✅ click / hover-hold |
 | Rail height | Dynamic band (natural height … 420px) | Auto-sized (≤30vh), internal hidden scrollbar |
@@ -52,7 +52,7 @@ The official built-in `TurnNavigator` has **no off-switch** and is always render
 | Keyboard accessibility | ✅ focus ring + `aria-current`/`aria-busy`/`aria-describedby` | ✅ focusable buttons (`Turn N — time — summary` aria-label) |
 | Source | Built-in, cannot be disabled | External plugin, **can be replaced/disabled** |
 
-As of dsh 0.1.3 the built-in rail caught up on full-session scope and out-of-window jumps. What still sets Smoothly TN apart: you can **switch it off** (the official rail cannot), the tooltip carries the **timestamp + full summary**, there are **scroll buttons and wave hover**, and it remains an **external, read-only plugin with zero host changes**. And on dsh ≤ 0.1.2 the built-in rail is simpler still (loaded window only), so the gap Smoothly TN closes is even larger there.
+As of dsh 0.1.3 the built-in rail caught up on full-session scope and out-of-window jumps. What still sets Smoothly TN apart: you can **switch it off** (the official rail cannot), the tooltip carries the **timestamp** (and the full first message for turns read from the journal), there are **scroll buttons and wave hover**, and it remains an **external plugin with zero host changes and no conversation writes**. And on dsh ≤ 0.1.2 the built-in rail is simpler still (loaded window only), so the gap Smoothly TN closes is even larger there.
 
 **Verified on dsh 0.1.3-alpha.1 (2026-09-06, Playwright against the live web UI)**: on a real 42-turn session both rails show all 42 turns (the official one via its host projection, ours via the journal); on a `?fixture` browser-synthesized session the official rail degrades to the loaded window (24/75) while Smoothly TN still shows all 75 — because our full history never depends on the host projection. Jumps, follow-scroll highlight, the mode switch, and the subtractive takeover of the official rail (`display: none` via the stylesheet override) all verified working.
 
@@ -67,8 +67,10 @@ Which Smoothly TN release matches which dsh:
 | **v0.4.2** | dsh 0.1.2+, incl. **0.1.3-alpha.1** | Comparison/positioning updated against the 0.1.3 official rail (see above) |
 | **v0.4.3** | dsh 0.1.2+, incl. **0.1.3-alpha.1** | This release: brand naming standardized to **Smoothly**（思磨力）/ **Smoothly Turn Nav**（**Smoothly TN**）/ **思磨力轮次胶囊条** — technical IDs (npm package `dsh-turn-navigator`, plugin/slot IDs, locale namespace, CSS prefix, localStorage key) unchanged |
 | **v0.4.4** | dsh 0.1.2+, client contract re-checked against **0.1.6-alpha.2** | This release: the official-rail body class gained a dispose hook (disabling or reloading the bundle live from the dsh Plugins page restores the built-in rail), and two stale `inject` entries are gone |
+| **v0.4.5** | dsh **0.1.7+** | This release: icon imports follow the 0.1.7 visual-language rename (`*Regular` stroke variants; rendered sizes unchanged) — the client half requires 0.1.7 from here; **v0.4.4 remains the release for 0.1.2–0.1.6** |
+| **v0.4.6** | dsh **0.1.7+** | This release: the 0.1.7 floor is declared in `package.json` as an optional peer dependency on `@deepseek-ai/dsh-client-ui-conversation` (`>=0.1.7-rc.1`); a host that ships dsh's peer evaluator (**0.1.7-rc.1+**) can refuse to load a plugin whose floor it does not meet and print the exact `dsh plugin allow-version` remedy. No behaviour change; runtimes without the evaluator are unaffected — **use v0.4.4 on 0.1.2–0.1.6** |
 
-The official-rail comparison in this README targets **dsh 0.1.3-alpha.1**; on older dsh the official rail is simpler, so Smoothly TN's advantage is larger there.
+The official-rail comparison in this README targets **dsh 0.1.3-alpha.1**; on older dsh the official rail is simpler, so Smoothly TN's advantage is larger there. **v0.4.6** declares the 0.1.7 floor in `package.json` (see the version map above). DSH's peer evaluator ships from **0.1.7-rc.1**, and every runtime that has it already satisfies `>=0.1.7-rc.1` — so the declaration puts the floor in machine-readable form and is what lets a *later* raised floor be refused by the host with the `dsh plugin allow-version` remedy; it is **not** a guard for older runtimes (0.1.6 and earlier, and 0.1.7-alpha.N, ship no evaluator and simply load the bundle), so **v0.4.4 remains the release for 0.1.2–0.1.6**. The explicit `-rc.1` floor is deliberate: `>=0.1.7` and `^0.1.7` do not match a `0.1.7-rc.N` runtime.
 
 ## Installation
 
@@ -104,15 +106,16 @@ The plugin registers **two additive slots** — **no DSH source code is modified
 - **On-demand jumps**: clicking a turn already in the window scrolls directly; for a turn outside it, the rail extends the window page by page through the official session store (`loadOlder`, with the authoritative `hasMore` as the loop terminator) until the target is in view — the only path that touches the flow, and it runs only when you click.
 - **Precise scrolling**: the rail locates the turn's first chat-node key, finds its DOM row via `data-chat-anchor-key`, and sets the scrollport's `scrollTop` directly (more predictable than `scrollIntoView`).
 - **Replacing the official rail**: the official rail lives inside the conversation scroll container; a container-scoped stylesheet rule (driven by the mode switch) hides it, and the rail takes over its right-edge center position. Verified structurally against dsh 0.1.3-alpha.1 — the `[data-conversation-scroll] nav` hide rule still matches. If a future dsh changes that structure, the worst case is the official rail reappearing (side by side) — never a crash.
-- **Read-only**: the plugin never writes to DSH state, never sends data anywhere, and only reads the DOM for targeting.
+- **No data leaves the browser, no conversation writes**: the plugin never sends data anywhere, never writes conversation content, and only reads the DOM to find jump targets. Its visible side effects are the injected `style` tag, the `tn-hide-official` body class (removed on dispose), a transient highlight class on the target row, and the on-demand window extension you trigger by clicking an out-of-window turn.
 
 ## Compatibility
 
 - DeepSeek Harness (dsh) with the web client (`dsh web`); developed and verified against dsh 0.1.2+ and **verified against dsh 0.1.3-alpha.1** (Playwright re-test, 2026-09-06: full-history rail, jumps, follow highlight, mode switch, and the official-rail stylesheet takeover all passing).
 - Requires the `conversation.session.header.utilities` and `settings.general.item` slot declarations (present in current DSH).
-- Client contract re-checked against **dsh 0.1.6-alpha.2** (2026-09-22): the `conversation.session.header.utilities`, `settings.general.item` and `shell.overlay` slot declarations, the `ui-primitives` exports the rail uses, and the `--dsw-alias-*` tokens it references all still exist. The interactive Playwright re-test was **not** re-run on 0.1.6 (the 2026-09-06 run remains the last interactive verification).
+- Client contract re-checked against **dsh 0.1.6-alpha.2** (2026-09-22): the `conversation.session.header.utilities` and `settings.general.item` slot declarations, the `ui-primitives` exports the rail uses, and the `--dsw-alias-*` tokens it references all still exist. The interactive Playwright re-test was **not** re-run on 0.1.6 (the 2026-09-06 run remains the last interactive verification).
 - Default `Smoothly TN` mode hides the official rail (stylesheet override) and centers our rail in its place; `DSH official` mode shows the built-in rail instead; `Hide all` hides both. Both rails auto-hide below 900px width.
-- Coexists with full-screen plugin pages (e.g. the kanban board): the rail sits below their overlay layer.
+- Coexists with DSH global panels (e.g. the kanban board): a panel takes over the `main` slot entry, so the conversation view (and this rail with it) is swapped out rather than layered under.
+- **Known limitation (DOM fallback)**: when there is no session store to read (older hosts), the rail extends the window by clicking the flow's own paging control, and that path recognises only the control's **Chinese and English** labels (idle and in-flight) — on a third-language shell it cannot extend the window. The primary journal path (dsh 0.1.2+) does not read labels at all.
 
 ## Development
 

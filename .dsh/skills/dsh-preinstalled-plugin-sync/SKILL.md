@@ -58,7 +58,7 @@ curl -s https://registry.npmjs.org/<pkg> | node -e "let d='';process.stdin.on('d
    | 文件 | 处理 |
    |---|---|
    | `package.json` / `cordis.patch.yml` / `lib/index.js` / `lib/client.js` / `LICENSE` | 原样拷贝（version、dsh.bundle.patch、dsh.client.inject、exports 都在这） |
-   | `README.md` | 拷但要**去掉 `English \| [简体中文](README.zh.md)` 行及其后空行**（README.zh.md 不随壳发，留链接是坏链） |
+   | `README.md` | 拷但要**去掉整行含 `README.zh.md` 的那一行及其后的空行**（README.zh.md 不随壳发，留链接是坏链）。⚠️ **不要把格式写死**：各仓不同 —— kanban / model-reasoning 是 `English \| [简体中文](README.zh.md)`，**turn-nav 是 `**English · [简体中文](README.zh.md)**`**（粗体 + 间隔号），**opencode 的 README 根本没有这一行**（规则对它必须是空操作）。2026-09-25 预演时用固定管道式正则，turn-nav 的 README 就残留了坏链。 |
    | `skills/kanban-use/SKILL.md` + `scripts/install-skill.mjs` | **仅 dsh-kanban**：0.2.x 的 host 半区（skill-sync）功能上随包分发技能（`skillSourceFile()` 解析 `<pkg>/skills/kanban-use/SKILL.md`），缺失会每次 dsh web 启动 warn「skill auto-install skipped」且手动兜底提示（引用 `<pkg>/scripts/install-skill.mjs`）失效 |
    | `README.zh.md` / `CHANGELOG.md` / `CONTRIBUTING.md` / `docs/` 图片 / `*.map` / `src/` / `tsdown.config.ts` | **不随包**（非运行时必要，保持精简） |
 
@@ -69,6 +69,25 @@ curl -s https://registry.npmjs.org/<pkg> | node -e "let d='';process.stdin.on('d
    ```sh
    node scripts/sync-resources.mjs   # 输出 "resources synced"
    ```
+
+## 3.5 同步有脚本了（2026-09-26 起，优先用它）
+
+```bash
+npm run sync:plugin -- dsh-model-reasoning            # 同步 npm latest
+npm run sync:plugin -- dsh-model-reasoning 0.2.6      # 指定版本
+npm run sync:plugin -- dsh-kanban 0.2.8 --check        # 只比对不落盘（演练）
+```
+`scripts/sync-preinstalled-plugin.mjs` 把本文约定固化：下载 tarball → 按**包作者在 tarball `package.json` 里声明的 `files`**（registry 元数据不可靠，abbreviated packument 会省略它）减去壳的 denylist（README.zh.md / CHANGELOG / CONTRIBUTING / *.map / docs/）+ npm 隐式文件（package.json / README / LICENSE）→ README 裁剪（删含 `README.zh.md` 的整行**及其后的空行**，保留其前的空行）→ 与现有拷贝逐文件比对 → 落盘 → 跑 `sync-resources.mjs`。host-only 插件（无 `lib/client.js`）同样支持。
+
+**发布前后各一条命令**（发布未完成也能先同步 —— 壳的预装插件不从 npm 取，而 `npm publish` 上传的就是 `npm pack` 的产物，构建确定性已验证：同一 tag 连打三次 sha1 一致）：
+```bash
+npm pack                                       # 在插件仓：得到待发布 tarball
+node scripts/sync-preinstalled-plugin.mjs <pkg> --tarball <该 tgz>          # 发布前：先把壳恢复可用
+node scripts/sync-preinstalled-plugin.mjs <pkg> <ver> --check               # 发布后：从 registry 复核，期望零 diff
+```
+发布后那次 `--check` 若不为零 diff ⇒ **以 registry 上的字节为准重跑同步**（说明本地构建与上传产物不一致，必须查原因）。
+
+**演练判据（务必先跑）**：对一个"已发布且已是最新"的版本做 `--check`，结果必须**零 diff**。这条演练在首次落地时立刻抓出三处偏差：① 我把链接行**之前**的空行也删了（约定是删其后的）→ 标题与徽章贴在一起；② 我最初的硬编码收文件规则会**删掉 dsh-kanban 的技能资产**（`skills/kanban-use/SKILL.md`、`scripts/install-skill.mjs`）——正是本文档记过的历史事故，改按作者 `files` 收集后消失；③ host-only 插件没有 `lib/client.js`，必需文件表写死会误报。四个预装包（model-reasoning / kanban / turn-navigator / opencode-session）演练现已全部零 diff。
 
 ## 4. 验证（缺一不可）
 
@@ -88,6 +107,8 @@ diff -r plugins/preinstalled src-tauri/resources/preinstalled && echo IDENTICAL
 ```
 
 再加一道心智校验：新版本相对旧版新增了什么**随包资产**（看 npm 包 `files` 字段与 tarball 实际内容）——新增了运行时被引用的文件就必须带上，别让「精简约定」砍掉功能（kanban 技能资产就是这次的教训）。
+
+**流程已端到端预演过（2026-09-25）**：在 dsh-desktop@HEAD 的 scratch clone 里用当时已发布的四个版本走完整条链（`npm pack` → 按 §3 拷入 → `node scripts/sync-resources.mjs` → §4 的验证），结果 `git status` **完全干净**。判据就取这个：**同步「已发布且已是最新」的版本应当零 diff**；出现 diff 就是拷贝约定没对齐（README 裁剪格式的坑正是这样发现的）。
 
 ## 5. 提交推送
 
@@ -123,5 +144,21 @@ git push origin main
 | registry 探测打 E404 错误块 | 别用 `npm view`，`fetch`/`curl` 直查；404 = 未发布/未同步 = 预期 |
 | 目录名 ≠ npm 包名（dsh-turn-nav vs dsh-turn-navigator） | 一律读 bundle 自身 `package.json` 的 `name` |
 | 精简约定砍掉了运行时被引用的资产（kanban 技能） | 每次对照 npm 包 `files`/tarball 内容，新增随包资产要带上 |
+| README 双语链接行格式因仓而异（管道式 / 粗体·式 / 没有） | 用「删除含 `README.zh.md` 的整行」这条通用规则，别写死某种格式 |
 | 已最新插件仍想「顺手同步」 | 别动 —— lib/package.json 一致即已最新，差异只是壳内精简 |
 | 只改了源树，用户问「怎么桌面里还是旧版」 | 讲清边界：runtime 拷贝走控制台更新（npm 源、用户门控），源树随下次发版生效 |
+
+## 6.5 预装插件与 dsh 版本存在**服务级耦合**（2026-09-26 新增，同步前必查）
+
+插件不是"任何 dsh 版本都能跑"：客户端服务的增删会直接决定插件能否激活，而 dsh 的 web boot 对**未激活**的条目是 fail-closed —— 一个插件 pending 就会让整个 Web UI 停在「Failed to load plugins」（不是"少个功能"，是"打不开"）。
+
+实录：dsh **0.1.7 移除**了客户端服务 `settingsScope`（0.1.6 有 18 个文件、0.1.7 为 0），改用 `settingsSchema` + `configForms`；预装 `dsh-model-reasoning` 0.2.4 仍在等 `settingsScope` → 真机 0.1.7 下 UI 全黑（诊断页给出 `pending (waiting for service: settingsScope)`）。插件仓 0.2.6 已迁移（`ctx.configForms.get(ns)`），因此 **0.2.5+ 要求 dsh ≥ 0.1.7**。
+
+**同步插件时必做的三件事**：
+1. 读目标插件版本的 `package.json` 里对 `@deepseek-ai/dsh` 的 peer 声明（可能是 optional peer）与 README 的兼容性小节，确认它要求的 dsh 下限；
+2. 与壳的 `scripts/server-manager.mjs` 里 `MIN_DSH_VERSION` 对照：**壳会把 dsh 抬到哪个版本**，插件的地板必须 ≤ 它；
+3. 同步后做一次真机/等价验证：dsh 起来后页面**不出现** `Failed to load plugins`，插件的设置分区/控件真的渲染（`scripts/verify-dev-ui.ps1 -Action dump` 找分区标题即可，无需人工看）。
+
+⚠️ 反向风险同样存在：把**新插件**发给**旧 dsh**（地板升级失败、离线、用户锁在旧版）会得到同样的 pending + 卡死界面。所以"插件版本"与"dsh 地板"要在同一版壳里成对抬升。
+
+**壳仓已有静态门禁替你拦这一类**：`scripts/test-plugin-dsh-compat.mjs`（在 `npm test` 链尾）会 ① 检查已移除客户端服务在插件产物里的残留用法（去注释后匹配，按**版本行**判移除是否生效）② 检查插件声明的 `@deepseek-ai/dsh*` peer 地板是否被壳的 `MIN_DSH_VERSION` 满足（缺声明只警告）。它当前对 `dsh-model-reasoning@0.2.4` **是红的**——这是刻意的：插件 0.2.4 + 地板 0.1.7-rc.2 装出来就是打不开的 UI；同步到 0.2.6 后应自动转绿。同步完成后**先跑这道门禁**再看别的。

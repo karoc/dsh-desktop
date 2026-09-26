@@ -37,6 +37,26 @@
   // 推挤让出；position:fixed 全屏浮层（插件 overlay）相对视口、不受 padding
   // 影响，须读取 --dsh-shell-menubar-h 自行让出顶部（见下方「自适应推挤」）。
   const SHELL_BAR_H = 36;
+  // 客户端标题栏高度：官方 Electron 壳用 40（apps/desktop/src/windows-layout.ts），
+  // 客户端的侧栏开关/圆角/全屏面板避让都按它算 —— caption 模式必须给同一个值。
+  const WINDOWS_TITLEBAR_H = 40;
+
+  /**
+   * caption 模式（S8）的唯一决策点：**纯函数**，契约测试在 vm 里断言返回值
+   * （而不是对源码做字符串匹配 —— 那种断言会随实现方式改变而失效）。
+   * @param {boolean} captioned 是否启用官方顶栏契约
+   * @returns {{paddingTop: number|null, cssVars: Record<string,string>,
+   *            dataset: Record<string,string>, hostClass: string}}
+   *   paddingTop=null 表示"由客户端自己预留标题栏"（我们不推挤，避免双重让位：
+   *   实测 html padding 36 + 客户端 .frame padding 36 = 内容下移 72px）。
+   */
+  function computeCaptionPlan(captioned) {
+    const cssVars = { '--dsh-shell-menubar-h': SHELL_BAR_H + 'px' };
+    if (!captioned) return { paddingTop: SHELL_BAR_H, cssVars, dataset: {}, hostClass: '' };
+    cssVars['--dsh-windows-titlebar-height'] = WINDOWS_TITLEBAR_H + 'px';
+    return { paddingTop: null, cssVars, dataset: { windowsTitlebar: '' }, hostClass: 'caption' };
+  }
+  const TITLEBAR_CONTRACT = globalThis.__DSH_TITLEBAR_CONTRACT__ === true;
 
   const SHELL_MENUS = [
     {
@@ -52,6 +72,9 @@
         { id: 'check-update', label: '检查更新…' }, // 有更新时翻转为「有更新 vX」
         { id: 'dev-mode', label: '开发者模式', type: 'checkbox' },
         { id: 'gpu-accel', label: 'GPU 加速', type: 'checkbox' },
+        // S8 实验项（默认关）：把顶栏交还给 Web 客户端布局。观感/遮挡只能在
+        // Windows 实机上判定，所以放在菜单里可即时开关 + 刷新即可对比。
+        { id: 'titlebar-contract', label: '顶栏契约（实验）', type: 'checkbox' },
         { type: 'sep' },
         { id: 'refresh', label: '刷新页面' },
         { id: 'restart', label: '重启服务' },
@@ -74,24 +97,26 @@
   const ACTIONS = {
     'proxy-settings': { ipc: 'open_settings', bridge: '/shell/open-settings' },
     // 安全网：把 profile bundles 回退到 dsh 自带两层（确认弹窗后调用）。
-    'disable-plugins': { ipc: 'disable_third_party_plugins', bridge: '/shell/disable-third-party-plugins' },
+    // confirm: 壳拥有确认窗（S4-1）——页面发起的危险动作必须在壳窗口里点确认。
+    'disable-plugins': { ipc: 'disable_third_party_plugins', bridge: '/shell/disable-third-party-plugins', confirm: true },
     'check-update': { ipc: 'check_update', bridge: '/check-update' },
     // 壳自更新（A-1）：状态查询 + 触发检查。与 dsh 更新严格分开——壳更新只做
     // 只读展示，绝不触发下载/安装（一期的负向保证）。
     'shell-update': { ipc: 'get_shell_update_status', bridge: '/shell-update-status', method: 'GET' },
     'check-shell-update': { ipc: 'check_shell_update', bridge: '/check-shell-update' },
-    'update-now': { ipc: 'update_now', bridge: '/update-dsh' },
-    'dev-mode': { ipc: 'toggle_dev_mode', bridge: '/shell/dev-mode-toggle' },
-    'gpu-accel': { ipc: 'toggle_gpu_accel', bridge: '/shell/gpu-accel-toggle' },
+    'update-now': { ipc: 'update_now', bridge: '/update-dsh', confirm: true },
+    'dev-mode': { ipc: 'toggle_dev_mode', bridge: '/shell/dev-mode-toggle', confirm: true },
+    'gpu-accel': { ipc: 'toggle_gpu_accel', bridge: '/shell/gpu-accel-toggle', confirm: true },
+    'titlebar-contract': { ipc: 'toggle_titlebar_contract', bridge: '/shell/titlebar-toggle', confirm: true },
     refresh: { ipc: 'refresh_page', bridge: '/refresh' },
-    restart: { ipc: 'restart_server', bridge: '/restart' },
-    'open-data': { ipc: 'open_data_dir', bridge: '/shell/open-data-dir' },
+    restart: { ipc: 'restart_server', bridge: '/restart', confirm: true },
+    'open-data': { ipc: 'open_data_dir', bridge: '/shell/open-data-dir', confirm: true },
     // 缓存清理（A-3 L1）：清可重建缓存，弹窗确认后调用（结果如实展示，不假成功）。
-    'cache-cleanup': { ipc: 'cleanup_caches', bridge: '/shell/cleanup-caches' },
+    'cache-cleanup': { ipc: 'cleanup_caches', bridge: '/shell/cleanup-caches', confirm: true },
     // 服务异常退出后，条幅上的「打开证据目录」按钮（Rust 侧定位最近一次取证）。
     'open-evidence': { ipc: 'open_evidence_dir', bridge: '/shell/open-evidence' },
     'shell-status': { ipc: 'get_shell_status', bridge: '/shell/status', method: 'GET' },
-    quit: { ipc: 'quit_app', bridge: '/shell/quit' },
+    quit: { ipc: 'quit_app', bridge: '/shell/quit', confirm: true },
     // 窗口控制（本地页走 IPC 命令 window_control；远程页走桥端点）。
     minimize: { ipc: 'window_control', args: { action: 'minimize' }, bridge: '/window/minimize' },
     'toggle-maximize': { ipc: 'window_control', args: { action: 'toggle-maximize' }, bridge: '/window/toggle-maximize' },
@@ -103,7 +128,9 @@
   };
 
   if (TEST_HOOK) {
-    TEST_HOOK.config = { SHELL_MENUS, ACTIONS };
+    // computeCaptionPlan 一并暴露：契约测试**断言它的返回值**（而不是对源码做
+    // 字符串匹配）—— S8 的关键行为是"caption 模式不推挤 + 给客户端契约变量"。
+    TEST_HOOK.config = { SHELL_MENUS, ACTIONS, computeCaptionPlan, WINDOWS_TITLEBAR_H, SHELL_BAR_H };
     return;
   }
 
@@ -133,7 +160,9 @@
     if (!BRIDGE_PORT) return Promise.resolve(null);
     const opts = { method: method || 'POST' };
     if (method !== 'GET') {
-      opts.headers = { 'Content-Type': 'application/json' };
+      // 桥的阶段 0 准入：非 GET/HEAD/OPTIONS 必须带该头（跨源简单请求无法携带
+      // 自定义头 → 恶意网页即使猜到端口也会先触发预检，而预检不放行它）。
+      opts.headers = { 'Content-Type': 'application/json', 'X-DSH-Shell': '1' };
       opts.body = JSON.stringify(args || {});
     }
     return fetch(`http://127.0.0.1:${BRIDGE_PORT}${path}`, opts)
@@ -148,7 +177,15 @@
     const a = ACTIONS[actionId];
     if (!a) return Promise.resolve(null);
     if (hasTauri) return invoke(a.ipc, a.args || args || {});
-    return bridge(a.bridge, a.method, args);
+    return bridge(a.bridge, a.method, args).then((res) => {
+      // 阶段 1（S4-1）：远程页的危险动作不在桥里执行 —— 桥登记一次性槽位并打开
+      // 壳确认窗，这里立刻拿到 {pending:true}。必须给出可见反馈，否则用户会以为
+      // "点了没反应"（2026-09-01 事故同形）。
+      if (res && res.pending === true) {
+        miniToast(res.duplicate ? '该操作已在确认窗中等待确认' : '已在壳内确认窗中等待确认…');
+      }
+      return res;
+    });
   }
 
   function getShellState() {
@@ -260,6 +297,19 @@
          （app-region 生效时 mousedown 不触发，两者天然互斥）。 */
       -webkit-app-region: drag;
     }
+    /* ── caption 模式（Windows 顶栏契约，S8；默认关闭）───────────────────
+       客户端自己画标题栏背景并预留高度，所以这里：不推挤（见 computeCaptionPlan）、
+       整条 bar 不接收指针事件（否则会盖住客户端 fixed 在 left:12 的侧栏开关），
+       只有我们的按钮/菜单/拖动区各自 pointer-events:auto。
+       ⚠️ 必须加在 .bar 上而不是 :host 上：下拉/壳内模态/故障条幅/mini toast 都是
+       shadow root 的直接子节点，:host 上置 none 会把它们一起点不动（真 Chromium
+       实测：.dd 计算值 none、elementFromPoint 命中页面元素）。 */
+    :host(.caption) { height: ${WINDOWS_TITLEBAR_H}px; }
+    :host(.caption) .bar { background: transparent; pointer-events: none; }
+    :host(.caption) .bar > * { pointer-events: auto; }
+    :host(.caption) .menus { margin-left: var(--dsh-windows-menu-start, 48px); }
+    :host(.caption) .dragger { pointer-events: auto; cursor: default; }
+    :host(.caption) .spacer { align-self: stretch; }
     .menus { display: flex; align-items: stretch; height: 100%; }
     .menu-btn {
       display: flex; align-items: center; justify-content: center;
@@ -460,8 +510,9 @@
   bar.className = 'bar';
   const menusWrap = document.createElement('div');
   menusWrap.className = 'menus';
+  // 这个元素同时是"撑开菜单与窗口三键之间的空间"和"caption 模式下的显式拖动区"。
   const spacer = document.createElement('div');
-  spacer.className = 'spacer';
+  spacer.className = 'spacer dragger';
   const controls = document.createElement('div');
   controls.className = 'controls';
 
@@ -513,12 +564,23 @@
   // 插件应 `padding-top: var(--dsh-shell-menubar-h, 0px)` 让出顶部——纯 dsh
   // （无壳）时变量不存在，回退 0、行为不变。
   let pushActive = false;
+  const captionPlan = computeCaptionPlan(TITLEBAR_CONTRACT);
   if (typeof location !== 'undefined' && location.protocol !== 'tauri:') {
     const rootEl = document.documentElement;
-    rootEl.style.paddingTop = SHELL_BAR_H + 'px';
-    rootEl.style.boxSizing = 'border-box';
-    rootEl.style.setProperty('--dsh-shell-menubar-h', SHELL_BAR_H + 'px');
-    pushActive = true;
+    if (captionPlan.paddingTop !== null) {
+      rootEl.style.paddingTop = captionPlan.paddingTop + 'px';
+      rootEl.style.boxSizing = 'border-box';
+      pushActive = true;
+    }
+    for (const [k, v] of Object.entries(captionPlan.cssVars)) rootEl.style.setProperty(k, v);
+    for (const [k, v] of Object.entries(captionPlan.dataset)) rootEl.dataset[k] = v;
+    if (captionPlan.hostClass) host.classList.add(captionPlan.hostClass);
+    if (TITLEBAR_CONTRACT) {
+      // 客户端在 render 时读 data-windows-titlebar 算列宽（AppFrame.tsx），而本
+      // 脚本在 on_page_load 之后才注入 —— 已渲染的列宽不会自动重算，补一次
+      // resize 事件触发它的布局监听（无副作用；最坏情况是一次空重排）。
+      window.dispatchEvent(new Event('resize'));
+    }
   }
 
   // ── 小工具 ─────────────────────────────────────────────────────
@@ -688,6 +750,17 @@
     }
     const row = root.querySelector('[data-item="dev-mode"]');
     if (row) row.setAttribute('aria-checked', String(devMode));
+  }
+
+  // S8：顶栏契约默认关（与 dsh.json webview.titlebarContract 默认一致）。
+  let titlebarContract = TITLEBAR_CONTRACT;
+  function setTitlebarContract(on) {
+    titlebarContract = !!on;
+    for (const el of root.querySelectorAll('[data-check="titlebar-contract"]')) {
+      el.textContent = titlebarContract ? '✓' : '';
+    }
+    const row = root.querySelector('[data-item="titlebar-contract"]');
+    if (row) row.setAttribute('aria-checked', String(titlebarContract));
   }
 
   let gpuAccel = true; // 默认 GPU 开启（与 dsh.json webview.gpu 默认一致）
@@ -865,7 +938,20 @@
 
   setInterval(() => setFullscreenMode(probeFullscreen()), FULLSCREEN_PROBE_MS);
 
-  // 「关于」弹窗：软件名称 / 版本 / 构建日期 / dsh 本体版本 + 确定。
+  // 预装插件版本（/shell/state 的 preinstalled 映射，由 manager 写进 dsh.json）。
+  // 关于弹窗里展示，便于用户对照 npm 上的最新版；界面**不提供升级**——预装包
+  // 版本随壳发布（见 README「插件」节的能力边界）。
+  let preinstalledVersions = null;
+  function appendPreinstalledRows(body) {
+    const entries = Object.entries(preinstalledVersions || {});
+    if (entries.length === 0) return;
+    body.appendChild(el('div', '预装插件（随壳发布，界面不提供升级）', 'dlg-note'));
+    for (const [name, version] of entries) {
+      body.appendChild(dlgRow(name, version ? String(version) : '（版本未知）'));
+    }
+  }
+
+  // 「关于」弹窗：软件名称 / 版本 / 构建日期 / dsh 本体版本 / 预装插件 + 确定。
   function openAboutDialog() {
     const cur = updateInfo.current || '—';
     const dev = PRODUCT_NAME.indexOf('Dev') >= 0 ? '（开发版）' : '';
@@ -877,6 +963,17 @@
       body.appendChild(dlgRow('版本', `v${SHELL_VERSION}${dev}`));
       body.appendChild(dlgRow('构建日期', BUILD_DATE));
       body.appendChild(dlgRow('dsh 本体', `v${cur}`));
+      appendPreinstalledRows(body);
+      if (preinstalledVersions === null) {
+        // 首次打开时补拉一次（失败静默：只影响展示）。
+        // 必须用 shell-state：它带 preinstalled 字段（/shell/status 的 JSON 没有，
+        // 真机上用错端点会导致这几行完全不渲染）。
+        call('shell-state').then((r) => {
+          if (!r || !r.preinstalled || typeof r.preinstalled !== 'object') return;
+          preinstalledVersions = r.preinstalled;
+          appendPreinstalledRows(body);
+        }).catch(() => {});
+      }
       body.appendChild(el('div', 'DeepSeek Harness 桌面壳 —— 自带 Node 运行时，自动更新 dsh 官方 npm 包。', 'dlg-note'));
       card.appendChild(body);
       const actions = document.createElement('div');
@@ -1089,6 +1186,13 @@
 
   // 「检查更新」弹窗：展示当前/最新版本信息 + 确定 + 立即更新。
   // 无已知版本时先触发 /check-update 并轮询 /update-status（上限 15s）。
+  // dsh ≥0.1.7-alpha.1 起会话按 v4 写入，旧读取器**拒绝**读新代文件；而迁移是
+  // "旁挂新代文件"，所以回退旧版会看到升级前的旧快照 —— 不能以"还能打开"判定
+  // 回滚成功。回滚 = 还原升级前的数据目录备份（README「升级与数据安全」）。
+  const UPGRADE_ROLLBACK_WARNING =
+    '⚠ 升级后无法回退读取新数据：dsh 0.1.7 起会话按 v4 写入，旧版读不到升级后的内容' +
+    '（只会看到升级前的快照）。请先用「打开数据目录」备份，回滚时还原该备份 —— 不要以"还能打开"判定回滚成功。';
+
   function openCheckUpdateDialog() {
     const info = Object.assign({}, updateInfo);
     const startedAt = Date.now();
@@ -1108,7 +1212,11 @@
     const btnClose = mkDlgBtn('确定');
     const btnUpdate = mkDlgBtn('立即更新', true);
     btnUpdate.hidden = true;
-    actions.append(btnClose, btnUpdate);
+    // 升级前先备份的入口：dsh ≥0.1.7 起会话格式 v4 单向（回退旧版读不到升级后的
+    // 内容），所以「先打开数据目录备份」是升级动作的一部分，而不是附加说明。
+    const btnData = mkDlgBtn('打开数据目录');
+    btnData.addEventListener('click', () => { call('open-data').catch(() => {}); });
+    actions.append(btnClose, btnData, btnUpdate);
     card.append(title, body, actions);
     bd.appendChild(card);
     bd.addEventListener('mousedown', (e) => {
@@ -1158,6 +1266,7 @@
         body.appendChild(dlgRow('当前版本', `v${info.current || '?'}`));
         body.appendChild(dlgRow('最新版本', `v${info.latest || '?'}`));
         body.appendChild(el('div', '发现 dsh 新版本，可点击「立即更新」升级到最新稳定版。', 'dlg-note'));
+        body.appendChild(el('div', UPGRADE_ROLLBACK_WARNING, 'dlg-note'));
         btnUpdate.hidden = false;
         btnUpdate.disabled = false;
         btnUpdate.textContent = '立即更新';
@@ -1166,6 +1275,7 @@
         body.appendChild(dlgRow('当前版本', `v${info.current || '?'}`));
         body.appendChild(dlgRow('预发布', `v${info.next}（${info.nextTag || 'pre'} 通道，非正式版）`));
         body.appendChild(el('div', '最新稳定版无需更新；存在预发布通道版本，按需自选。', 'dlg-note'));
+        body.appendChild(el('div', UPGRADE_ROLLBACK_WARNING, 'dlg-note'));
         btnUpdate.hidden = false;
         btnUpdate.disabled = false;
         btnUpdate.textContent = '立即更新';
@@ -1310,6 +1420,14 @@
       call('gpu-accel').then((r) => {
         if (r && typeof r.gpu === 'boolean') setGpuAccel(r.gpu);
       });
+    } else if (id === 'titlebar-contract') {
+      call('titlebar-contract').then((r) => {
+        if (r && typeof r.titlebarContract === 'boolean') {
+          setTitlebarContract(r.titlebarContract);
+          // 注入前缀只在页面加载时写入 —— 切换后必须刷新才能看到效果。
+          miniToast('顶栏契约已' + (r.titlebarContract ? '开启' : '关闭') + '：刷新页面（Ctrl+R）生效');
+        }
+      });
     } else {
       call(id);
     }
@@ -1327,20 +1445,28 @@
 
   // 拖动窗口：mousedown → 桥/IPC → start_dragging（Tauri 官方 drag-region
   // 同款机制；不使用 CSS app-region，避免 WebView2 中按钮点击被拖拽吞掉）。
-  bar.addEventListener('mousedown', (e) => {
+  const onBarMouseDown = (e) => {
     if (e.button !== 0) return;
     if (e.target.closest('button')) return;
     if (openMenuId) closeMenus();
     e.preventDefault();
     call('drag');
-  });
-
-  bar.addEventListener('dblclick', (e) => {
+  };
+  const onBarDblClick = (e) => {
     if (e.target.closest('button')) return;
     call('toggle-maximize').then((r) => {
       if (r && typeof r.maximized === 'boolean') setMaximized(r.maximized);
     });
-  });
+  };
+  // caption 模式下 .bar 整体 pointer-events:none（让出客户端的侧栏开关），
+  // 所以拖动只能挂在显式的 .dragger 上；两种模式都保留双击最大化。
+  if (TITLEBAR_CONTRACT) {
+    spacer.addEventListener('mousedown', onBarMouseDown);
+    spacer.addEventListener('dblclick', onBarDblClick);
+  } else {
+    bar.addEventListener('mousedown', onBarMouseDown);
+    bar.addEventListener('dblclick', onBarDblClick);
+  }
 
   // 最大化状态跟随真实窗口（Aero 拖拽/Win+↑ 等外部路径会漂移）。
   window.addEventListener('resize', () => {
@@ -1419,6 +1545,7 @@
     if (!r) return;
     if (typeof r.devMode === 'boolean') setDevMode(r.devMode);
     if (typeof r.gpu === 'boolean') setGpuAccel(r.gpu);
+    if (typeof r.titlebarContract === 'boolean') setTitlebarContract(r.titlebarContract);
     if (r.update && typeof r.update.updateAvailable === 'boolean') {
       updateInfo = r.update;
       renderUpdateItem();
