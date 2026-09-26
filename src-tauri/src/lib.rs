@@ -1215,6 +1215,128 @@ mod cookie_tests {
 }
 
 #[cfg(test)]
+mod close_confirm_tests {
+    use super::close_needs_confirmation;
+
+    #[test]
+    fn first_hide_asks_once_and_linux_never_asks() {
+        // 未确认过 → 问；已确认 → 不再问
+        assert!(close_needs_confirmation(false, false));
+        assert!(!close_needs_confirmation(true, false));
+        // Linux 退化为最小化（没有托盘），永不确认
+        assert!(!close_needs_confirmation(false, true));
+        assert!(!close_needs_confirmation(true, true));
+    }
+}
+
+#[cfg(test)]
+mod danger_action_tests {
+    use super::dangerous_bridge_action;
+
+    #[test]
+    fn covers_the_agreed_danger_set_and_nothing_else() {
+        // D4 定稿的危险端点（+S8 的顶栏契约切换）
+        let expected = [
+            ("/shell/quit", "quit"),
+            ("/restart", "restart"),
+            ("/restart-dsh", "restart-dsh"),
+            ("/update-dsh", "update-dsh"),
+            ("/shell/disable-third-party-plugins", "disable-plugins"),
+            ("/shell/cleanup-caches", "cleanup-caches"),
+            ("/shell/legacy-cleanup", "legacy-cleanup"),
+            ("/shell/dev-mode-toggle", "dev-mode"),
+            ("/shell/gpu-accel-toggle", "gpu-accel"),
+            ("/shell/titlebar-toggle", "titlebar-contract"),
+            ("/shell/open-data-dir", "open-data"),
+        ];
+        for (path, id) in expected {
+            let action = dangerous_bridge_action("POST", path).unwrap_or_else(|| panic!("{path} 未纳入危险表"));
+            assert_eq!(action.id, id, "{path}");
+            assert!(!action.title.is_empty() && !action.detail.is_empty(), "{path} 文案不能为空");
+        }
+        // 非危险端点与只读方法一律不拦
+        for path in ["/window/state", "/window/drag", "/alive", "/log", "/notify", "/pending-open", "/shell/state", "/shell/status", "/devtools"] {
+            assert!(dangerous_bridge_action("POST", path).is_none(), "{path} 不应被拦");
+            assert!(dangerous_bridge_action("GET", path).is_none(), "GET {path} 不应被拦");
+        }
+        for path in ["/shell/quit", "/restart", "/update-dsh"] {
+            assert!(dangerous_bridge_action("GET", path).is_none(), "GET {path} 不是执行路径");
+        }
+    }
+}
+
+#[cfg(test)]
+mod bridge_guard_tests {
+    use super::{bridge_cors_headers, bridge_origin_allowed, bridge_request_decision};
+
+    const PORT: u16 = 41234;
+
+    #[test]
+    fn host_must_match_the_live_bridge_port() {
+        assert!(bridge_request_decision("GET", Some("127.0.0.1:41234"), None, false, PORT).is_ok());
+        assert!(bridge_request_decision("GET", Some("localhost:41234"), None, false, PORT).is_ok());
+        // 端口不符 / 别的 host / 缺 Host —— 全部拒绝（DNS rebinding 的第一道门）
+        for host in [Some("127.0.0.1:1"), Some("evil.com:41234"), Some("127.0.0.1"), None, Some("")] {
+            assert_eq!(
+                bridge_request_decision("GET", host, None, false, PORT),
+                Err("bad-host"),
+                "host={host:?} 应被拒"
+            );
+        }
+    }
+
+    #[test]
+    fn origin_is_whitelisted_and_absent_origin_is_allowed() {
+        // 白名单：本地页两种形态 + 回环页（端口任意）
+        for origin in [
+            "tauri://localhost",
+            "http://tauri.localhost",
+            "http://127.0.0.1:19387",
+            "http://localhost:5",
+        ] {
+            assert!(bridge_origin_allowed(origin), "{origin} 应在白名单");
+            assert!(bridge_request_decision("GET", Some("127.0.0.1:41234"), Some(origin), false, PORT).is_ok());
+        }
+        // 非白名单：外部站点 / 只差一个字符的伪装 host / https
+        for origin in ["https://evil.com", "http://127.0.0.1.evil.com", "http://localhost.evil.com", "https://127.0.0.1:1"] {
+            assert!(!bridge_origin_allowed(origin), "{origin} 不应被放行");
+            assert_eq!(
+                bridge_request_decision("GET", Some("127.0.0.1:41234"), Some(origin), false, PORT),
+                Err("bad-origin")
+            );
+        }
+        // 无 Origin（非浏览器调用方）放行
+        assert!(bridge_request_decision("GET", Some("127.0.0.1:41234"), None, false, PORT).is_ok());
+    }
+
+    #[test]
+    fn mutating_methods_need_the_shell_header() {
+        for method in ["POST", "PUT", "DELETE", "PATCH"] {
+            assert_eq!(
+                bridge_request_decision(method, Some("127.0.0.1:41234"), None, false, PORT),
+                Err("missing-shell-header"),
+                "{method} 缺头应被拒"
+            );
+            assert!(bridge_request_decision(method, Some("127.0.0.1:41234"), None, true, PORT).is_ok());
+        }
+        // GET/HEAD/OPTIONS 不需要（预检不带自定义头；GET 只读）
+        for method in ["GET", "HEAD", "OPTIONS"] {
+            assert!(bridge_request_decision(method, Some("127.0.0.1:41234"), None, false, PORT).is_ok());
+        }
+    }
+
+    #[test]
+    fn cors_headers_echo_only_whitelisted_origins() {
+        let ok = bridge_cors_headers(Some("http://127.0.0.1:19387"));
+        assert!(ok.contains("Access-Control-Allow-Origin: http://127.0.0.1:19387"), "{ok}");
+        assert!(ok.contains("x-dsh-shell"), "预检必须放行自定义头，否则壳自身动作全被挡死: {ok}");
+        assert!(!ok.contains("Access-Control-Allow-Origin: *"), "不再无条件通配");
+        assert_eq!(bridge_cors_headers(Some("https://evil.com")), "");
+        assert_eq!(bridge_cors_headers(None), "");
+    }
+}
+
+#[cfg(test)]
 mod nav_fallback_tests {
     use super::{nav_fallback_interval_secs, NAV_FALLBACK_MAX_ATTEMPTS};
 
@@ -1548,6 +1670,41 @@ fn preinstalled_names(runtime: &std::path::Path) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// `<runtime>/upgrade.json`：manager 在成功安装新版本后写的升级标记（S9）。
+/// 启动成功（页面 POST /alive）时删除；启动失败时随 `manager-exit` 上报，
+/// 供启动页做"上次升级 vA → vB 后启动失败"的归因与一键回退。
+/// 读不到/损坏 → Null（只影响归因展示，不影响任何行为）。
+fn upgrade_marker_json(app: &AppHandle) -> serde_json::Value {
+    let path = runtime_dir(app).join("upgrade.json");
+    std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .filter(|v| v.is_object())
+        .unwrap_or(serde_json::Value::Null)
+}
+
+/// 启动成功即确认升级：删除标记（下一次失败才不会被误归因到这次升级）。
+fn clear_upgrade_marker(app: &AppHandle) {
+    let path = runtime_dir(app).join("upgrade.json");
+    if path.exists() {
+        match std::fs::remove_file(&path) {
+            Ok(()) => log_line(&app_data_dir(app), "upgrade marker cleared (startup succeeded)"),
+            Err(err) => log_line(&app_data_dir(app), &format!("upgrade marker clear failed: {err}")),
+        }
+    }
+}
+
+/// `<runtime>/dsh.json` 的 `preinstalledVersions` 映射（关于弹窗显示预装包版本用）。
+/// 缺失/损坏时返回空对象 —— 只影响展示，不影响任何行为。
+fn preinstalled_versions(runtime: &std::path::Path) -> serde_json::Value {
+    let raw = std::fs::read_to_string(runtime.join("dsh.json")).unwrap_or_default();
+    serde_json::from_str::<serde_json::Value>(&raw)
+        .ok()
+        .and_then(|v| v.get("preinstalledVersions").cloned())
+        .filter(|v| v.is_object())
+        .unwrap_or_else(|| serde_json::json!({}))
+}
+
 // ── dev mode (P3) ───────────────────────────────────────────────────────────
 // dsh.json `devMode`: freezes dsh updates in the manager and unlocks the
 // WebView2 devtools. Module-level HMR roots are NOT available in production
@@ -1595,6 +1752,36 @@ fn gpu_accel(runtime: &std::path::Path) -> bool {
         .unwrap_or(true)
 }
 
+/// dsh.json `webview.titlebarContract`（S8，默认 false）：启用后壳不再自己推挤
+/// 顶栏高度，而是设 `html[data-windows-titlebar]` + `--dsh-windows-titlebar-height`，
+/// 让 Web 客户端自己预留标题栏、把侧栏开关搬进标题栏（官方 Electron 壳的做法）。
+/// **默认关**：这是观感/遮挡问题，只能 Windows 实机判定（见 README runbook）。
+fn titlebar_contract(runtime: &std::path::Path) -> bool {
+    let raw = std::fs::read_to_string(runtime.join("dsh.json")).unwrap_or_default();
+    serde_json::from_str::<serde_json::Value>(&raw)
+        .ok()
+        .and_then(|v| v.get("webview").and_then(|w| w.get("titlebarContract").and_then(|t| t.as_bool())))
+        .unwrap_or(false)
+}
+
+/// Persist dsh.json webview.titlebarContract, preserving every other field.
+fn set_titlebar_contract(runtime: &std::path::Path, on: bool) -> Result<(), String> {
+    let path = runtime.join("dsh.json");
+    let mut value: serde_json::Value = if let Ok(raw) = std::fs::read_to_string(&path) {
+        serde_json::from_str(&raw).unwrap_or(serde_json::Value::Object(Default::default()))
+    } else {
+        serde_json::Value::Object(Default::default())
+    };
+    if let Some(obj) = value.as_object_mut() {
+        let webview = obj.entry("webview").or_insert_with(|| serde_json::json!({}));
+        if let Some(w) = webview.as_object_mut() {
+            w.insert("titlebarContract".into(), serde_json::json!(on));
+        }
+    }
+    std::fs::write(&path, format!("{}\n", serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?))
+        .map_err(|e| e.to_string())
+}
+
 /// Persist dsh.json webview.gpu, preserving every other field.
 fn set_gpu_accel(runtime: &std::path::Path, on: bool) -> Result<(), String> {
     let path = runtime.join("dsh.json");
@@ -1636,6 +1823,29 @@ fn toggle_gpu_accel_impl(app: &AppHandle) -> Result<serde_json::Value, String> {
     Ok(serde_json::json!({ "gpu": !on }))
 }
 
+/// 切换 dsh.json webview.titlebarContract（S8）。改完需刷新页面生效
+///（下一次页面加载时注入前缀才会带上新值）。
+fn toggle_titlebar_contract_impl(app: &AppHandle) -> Result<serde_json::Value, String> {
+    let runtime = runtime_dir(app);
+    let on = titlebar_contract(&runtime);
+    set_titlebar_contract(&runtime, !on)?;
+    show_toast(
+        app,
+        "Windows 顶栏契约".into(),
+        if !on {
+            "已开启（顶栏交给 Web 客户端布局）：刷新页面后生效；若观感异常请关掉".into()
+        } else {
+            "已关闭：恢复壳自绘顶栏 + 自己推挤高度".into()
+        },
+    );
+    log_line(
+        &app_data_dir(app),
+        &format!("titlebar-contract toggled: {}", !on),
+    );
+    Ok(serde_json::json!({ "ok": true, "titlebarContract": !on }))
+}
+
+
 /// Minimal loopback HTTP server (std only): the injected client page POSTs
 /// `/notify` (raise a toast) and `/alive` (loading canary). CORS-open, binds
 /// 127.0.0.1:0 only — same attack surface as dsh web itself.
@@ -1662,6 +1872,325 @@ fn start_bridge(app: AppHandle) {
     });
 }
 
+/// 桥请求的准入判定（**纯函数**，平台无关 → CI 的 ubuntu `check` job 会执行其单测；
+/// 本机只能对 windows 目标做类型检查，跑不了二进制，所以判定逻辑必须与 Tauri 解耦）。
+///
+/// 规则（2026-09-09 审计定稿的分阶段方案阶段 0/3）：
+/// - `Host` 必须是 `127.0.0.1:<bridge_port>` 或 `localhost:<bridge_port>`
+///   （挡 DNS rebinding：攻击域名解析到 127.0.0.1 时浏览器仍会带自己的 Host）；
+/// - `Origin` 缺省放行（非浏览器调用方：测试脚本、本机工具），
+///   出现时必须在白名单内（`tauri://localhost` / `http://tauri.localhost` /
+///   `http://127.0.0.1:*` / `http://localhost:*`）；
+/// - 非 GET/HEAD/OPTIONS 必须带 `X-DSH-Shell: 1`：跨源**简单请求**无法携带自定义
+///   头，恶意网页即使猜到端口也会先触发预检，而预检不放行该头。
+fn bridge_request_decision(
+    method: &str,
+    host: Option<&str>,
+    origin: Option<&str>,
+    has_shell_header: bool,
+    bridge_port: u16,
+) -> Result<(), &'static str> {
+    let host = host.unwrap_or("").trim();
+    let host_ok = host.eq_ignore_ascii_case(&format!("127.0.0.1:{bridge_port}"))
+        || host.eq_ignore_ascii_case(&format!("localhost:{bridge_port}"));
+    if !host_ok {
+        return Err("bad-host");
+    }
+    if let Some(origin) = origin.map(str::trim).filter(|o| !o.is_empty()) {
+        if !bridge_origin_allowed(origin) {
+            return Err("bad-origin");
+        }
+    }
+    let needs_header = !matches!(method, "GET" | "HEAD" | "OPTIONS");
+    if needs_header && !has_shell_header {
+        return Err("missing-shell-header");
+    }
+    Ok(())
+}
+
+/// Origin 白名单（壳自身页面：本地页 `tauri://localhost` / `http://tauri.localhost`；
+/// 远程 dsh 回环页 `http://127.0.0.1:<任意端口>` / `http://localhost:<任意端口>`）。
+fn bridge_origin_allowed(origin: &str) -> bool {
+    let o = origin.trim().to_ascii_lowercase();
+    if o == "tauri://localhost" || o == "http://tauri.localhost" {
+        return true;
+    }
+    let Some(rest) = o.strip_prefix("http://") else { return false };
+    let host = rest.split('/').next().unwrap_or("");
+    let host = host.split(':').next().unwrap_or("");
+    host == "127.0.0.1" || host == "localhost"
+}
+
+/// 桥的 CORS 响应头（阶段 3：不再无条件 `*`）。`None` = 不回 ACAO（浏览器读不到响应）。
+fn bridge_cors_headers(origin: Option<&str>) -> String {
+    match origin.map(str::trim).filter(|o| !o.is_empty()) {
+        Some(o) if bridge_origin_allowed(o) => format!(
+            "Access-Control-Allow-Origin: {o}\r\nAccess-Control-Allow-Methods: POST, GET, OPTIONS\r\nAccess-Control-Allow-Headers: content-type, x-dsh-shell\r\n"
+        ),
+        // 非浏览器调用方（无 Origin）：不需要 CORS 头，也不回 `*`。
+        None => String::new(),
+        Some(_) => String::new(),
+    }
+}
+
+// ── 关窗首次确认（S5）──────────────────────────────────────────────────────
+// 官方语义（apps/desktop/src/background-notice.ts）：关窗 = 隐藏到托盘，但**首次**
+// 隐藏前必须确认一次（"任务不会中断，可从托盘找回"），标记落盘后不再打扰；
+// Esc/关窗不记录确认。Linux 退化为最小化（GNOME 可能没有托盘），不需要确认。
+/// 关窗是否需要弹确认（纯函数 → CI 可执行单测）。
+fn close_needs_confirmation(marker_exists: bool, linux: bool) -> bool {
+    !linux && !marker_exists
+}
+
+/// `<app_data>/background-close-confirmed`：用户已确认过"关窗进托盘"。
+fn close_marker_path(app: &AppHandle) -> std::path::PathBuf {
+    app.path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+        .join("background-close-confirmed")
+}
+
+/// 是否已确认过（读不到就是没确认过 —— 宁多问一次，不少问一次）。
+fn close_confirmed(app: &AppHandle) -> bool {
+    close_marker_path(app).exists()
+}
+
+/// 写确认标记；失败只记日志（不阻止隐藏，与官方一致）。
+fn write_close_marker(app: &AppHandle) {
+    let path = close_marker_path(app);
+    if let Err(err) = std::fs::write(&path, b"1\n") {
+        log_line(&app_data_dir(app), &format!("close-confirm: 标记写入失败 {}: {err}", path.display()));
+    }
+}
+
+/// 关窗确认用的合成动作（不走桥，只复用确认窗与槽位机制）。
+const CLOSE_HIDE_ACTION: DangerAction = DangerAction {
+    id: "close-hide",
+    title: "隐藏窗口到托盘",
+    detail: "窗口会隐藏到系统托盘，dsh 与正在运行的任务都不会中断；从托盘图标或再次启动可以找回窗口。确认后不再重复询问。",
+};
+
+// ── 阶段 1：危险动作的壳内确认（D4 / 2026-09-09 审计定稿）──────────────────
+// 桥线程**不执行**危险动作，只登记一个一次性槽位并打开壳拥有的确认窗；真正的
+// 执行由确认窗通过 IPC `resolve_pending_action` 触发。这样：
+//   - 同源第三方插件无法靠 `fetch` 直接达成危险动作（必须在壳窗口里点确认）；
+//   - 桥线程不阻塞（非阻塞设计，避免同步 IPC 与主线程互等）；
+//   - 槽位一次一个 + 60s 过期 + 同动作去重（防脚本刷窗）。
+/// 危险动作的展示文案**由 Rust 生成**（调用方只能给 action id，不能伪造文案）。
+#[derive(Clone, Copy)]
+struct DangerAction {
+    id: &'static str,
+    title: &'static str,
+    detail: &'static str,
+}
+
+/// 危险端点表（纯函数，平台无关 → CI 的 ubuntu job 会跑它的单测）。
+fn dangerous_bridge_action(method: &str, path: &str) -> Option<DangerAction> {
+    if method != "POST" {
+        return None;
+    }
+    let action = |id, title, detail| Some(DangerAction { id, title, detail });
+    match path {
+        "/shell/quit" => action("quit", "退出应用", "将结束 dsh 服务及其全部子进程；正在运行的任务会被中断。"),
+        "/restart" => action("restart", "重启服务", "结束当前 dsh 服务并重新启动；页面会重新加载，运行中的任务会中断。"),
+        "/restart-dsh" => action("restart-dsh", "重启 dsh（不重装）", "只重启 dsh 进程，不检查更新。"),
+        "/update-dsh" => action(
+            "update-dsh",
+            "更新 dsh 本体",
+            "安装 npm 上的新版本并重启。dsh 0.1.7 起会话按 v4 写入：升级后无法回退读取新数据，建议先用「打开数据目录」备份。",
+        ),
+        "/shell/disable-third-party-plugins" => action(
+            "disable-plugins",
+            "停用全部第三方插件",
+            "把 profile 的启用列表回退到 dsh 自带两层；改动前会先备份 profile 配置。",
+        ),
+        "/shell/cleanup-caches" => action(
+            "cleanup-caches",
+            "清理缓存",
+            "会**先停止服务**，再删除运行时 node_modules —— 下次启动需要重新安装约 590 个包（数分钟）。",
+        ),
+        "/shell/legacy-cleanup" => action(
+            "legacy-cleanup",
+            "清理旧版残留",
+            "删除旧版孤儿卸载器与指向旧版的快捷方式（会先备份；旧版仍在运行时拒绝执行）。",
+        ),
+        "/shell/dev-mode-toggle" => action(
+            "dev-mode",
+            "切换开发者模式",
+            "开发者模式会解除 dsh 更新冻结，并解锁页面 DevTools（调试用）。",
+        ),
+        "/shell/gpu-accel-toggle" => action("gpu-accel", "切换 GPU 加速", "写入 dsh.json 的 webview.gpu；需重启应用才生效。"),
+        "/shell/open-data-dir" => action("open-data", "打开数据目录", "在文件管理器中打开壳的数据目录（含 dsh-home、日志与备份入口）。"),
+        "/shell/titlebar-toggle" => action(
+            "titlebar-contract",
+            "切换 Windows 顶栏契约",
+            "把顶栏交还给 Web 客户端布局（实验项）：写入 dsh.json 的 webview.titlebarContract，刷新页面后生效。",
+        ),
+        _ => None,
+    }
+}
+
+/// 待确认的一次性槽位。
+struct PendingConfirm {
+    action: DangerAction,
+    nonce: String,
+    body: String,
+    created: std::time::Instant,
+}
+
+static PENDING_CONFIRM: Mutex<Option<PendingConfirm>> = Mutex::new(None);
+/// 确认窗请求计数（仅用于生成不可预测的 nonce，不是安全边界）。
+static CONFIRM_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// 确认槽位的有效期（超时后必须重新发起）。
+const CONFIRM_TTL_SECS: u64 = 60;
+
+/// 生成 nonce（时间 + 序号 + pid 混合；只用于把确认窗绑定到某次请求）。
+fn new_confirm_nonce() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let seq = CONFIRM_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    format!("{nanos:x}-{seq:x}-{:x}", std::process::id())
+}
+
+/// 登记槽位并打开确认窗；已有未过期的槽位时返回 `Err("pending")`（单飞 + 去重）。
+fn request_confirmation(app: &AppHandle, action: DangerAction, body: String) -> Result<String, &'static str> {
+    let nonce = {
+        let mut slot = PENDING_CONFIRM.lock().unwrap();
+        if let Some(pending) = slot.as_ref() {
+            if pending.created.elapsed().as_secs() < CONFIRM_TTL_SECS {
+                // 已有未过期槽位（含同一动作重复请求）：聚焦已有窗口而不是叠窗。
+                let duplicate = pending.action.id == action.id;
+                drop(slot);
+                if let Some(w) = app.get_webview_window("confirm") {
+                    let _ = w.show();
+                    let _ = w.set_focus();
+                }
+                return Err(if duplicate { "pending" } else { "busy" });
+            }
+            // 过期槽位直接丢弃（窗口可能还开着，由 get_pending_action 返回 null 收尾）。
+            *slot = None;
+        }
+        let nonce = new_confirm_nonce();
+        *slot = Some(PendingConfirm { action, nonce: nonce.clone(), body, created: std::time::Instant::now() });
+        nonce
+    };
+    open_confirm_window(app);
+    Ok(nonce)
+}
+
+/// 打开（或聚焦）壳拥有的确认窗。窗口是普通带边框小窗：可键盘操作、Esc 取消。
+fn open_confirm_window(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("confirm") {
+        let _ = w.show();
+        let _ = w.set_focus();
+        return;
+    }
+    let _ = tauri::WebviewWindowBuilder::new(app, "confirm", tauri::WebviewUrl::App("confirm.html".into()))
+        .title(format!("{} — 确认操作", app.package_info().name))
+        .inner_size(560.0, 320.0)
+        .min_inner_size(460.0, 260.0)
+        .resizable(false)
+        .always_on_top(true)
+        .center()
+        .build();
+}
+
+/// 确认窗读取当前待确认动作（文案全部来自 Rust，页面只负责渲染）。
+#[tauri::command(async)]
+fn get_pending_action() -> serde_json::Value {
+    match PENDING_CONFIRM.lock().unwrap().as_ref() {
+        Some(p) if p.created.elapsed().as_secs() < CONFIRM_TTL_SECS => serde_json::json!({
+            "nonce": p.nonce,
+            "id": p.action.id,
+            "title": p.action.title,
+            "detail": p.action.detail,
+        }),
+        _ => serde_json::Value::Null,
+    }
+}
+
+/// 确认窗的答复：批准则执行危险动作，取消则丢弃；两种情况都清空槽位。
+#[tauri::command(async)]
+fn resolve_pending_action(app: AppHandle, nonce: String, approved: bool) -> Result<serde_json::Value, String> {
+    let pending = {
+        let mut slot = PENDING_CONFIRM.lock().unwrap();
+        let expired = slot.as_ref().map(|p| p.created.elapsed().as_secs() >= CONFIRM_TTL_SECS).unwrap_or(false);
+        match slot.take() {
+            Some(p) if !expired && p.nonce == nonce => Some(p),
+            Some(p) if expired => {
+                let _ = p;
+                return Err("expired".into());
+            }
+            other => {
+                *slot = other;
+                return Err("stale".into());
+            }
+        }
+    };
+    if let Some(w) = app.get_webview_window("confirm") {
+        let _ = w.close();
+    }
+    let Some(pending) = pending else { return Err("stale".into()) };
+    let data = app.path().app_data_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    if !approved {
+        log_line(&data, &format!("danger-action: {} declined", pending.action.id));
+        return Ok(serde_json::json!({ "ok": true, "declined": true }));
+    }
+    log_line(&data, &format!("danger-action: {} approved", pending.action.id));
+    let outcome = execute_danger_action(&app, pending.action.id, &pending.body);
+    Ok(serde_json::json!({ "ok": outcome.is_ok(), "error": outcome.err() }))
+}
+
+/// 执行危险动作（唯一执行点：桥/页面都只能经确认窗走到这里）。
+fn execute_danger_action(app: &AppHandle, id: &str, body: &str) -> Result<(), String> {
+    match id {
+        "quit" => quit_app(app.clone(), app.state::<ServerState>()),
+        "restart" => restart_server(app.clone(), app.state::<ServerState>()),
+        "restart-dsh" => {
+            send_manager(&mut app.state::<ServerState>().stdin.lock().unwrap(), "restart-dsh");
+            Ok(())
+        }
+        "update-dsh" => {
+            let version = serde_json::from_str::<serde_json::Value>(body)
+                .ok()
+                .and_then(|v| v.get("version").and_then(|v| v.as_str()).map(String::from));
+            let line = if let Some(v) = version {
+                serde_json::json!({ "cmd": "update-dsh", "version": v }).to_string()
+            } else {
+                serde_json::json!({ "cmd": "update-dsh" }).to_string()
+            };
+            send_line(&mut app.state::<ServerState>().stdin.lock().unwrap(), &line);
+            Ok(())
+        }
+        "disable-plugins" => {
+            let r = disable_third_party_plugins(app.clone())?;
+            if r.get("ok").and_then(|v| v.as_bool()) == Some(true) { Ok(()) } else { Err(r.to_string()) }
+        }
+        "cleanup-caches" => {
+            let _ = cleanup_caches(app.clone());
+            Ok(())
+        }
+        "legacy-cleanup" => {
+            let r = cleanup_legacy_install(app.clone());
+            if r.get("ok").and_then(|v| v.as_bool()) == Some(true) { Ok(()) } else { Err(r.to_string()) }
+        }
+        "dev-mode" => { toggle_dev_mode(app.clone()).map(|_| ()) }
+        "gpu-accel" => { toggle_gpu_accel(app.clone()).map(|_| ()) }
+        "titlebar-contract" => { toggle_titlebar_contract(app.clone()).map(|_| ()) }
+        "open-data" => open_data_dir(app.clone()),
+        "close-hide" => {
+            // 关窗确认：写标记 + 隐藏主窗口（隐藏失败如实返回错误）。
+            write_close_marker(app);
+            let w = app.get_webview_window("main").ok_or("main window missing")?;
+            w.hide().map_err(|e| e.to_string())
+        }
+        other => Err(format!("unknown danger action: {other}")),
+    }
+}
+
 fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
     use std::io::{Read as _, Write as _};
     let Ok(peer) = stream.try_clone() else { return };
@@ -1674,6 +2203,9 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
     let method = parts.next().unwrap_or("");
     let path = parts.next().unwrap_or("");
     let mut content_length = 0usize;
+    let mut host: Option<String> = None;
+    let mut origin: Option<String> = None;
+    let mut has_shell_header = false;
     let mut header = String::new();
     loop {
         header.clear();
@@ -1681,10 +2213,59 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
             break;
         }
         if let Some((k, v)) = header.split_once(':') {
-            if k.trim().eq_ignore_ascii_case("content-length") {
-                content_length = v.trim().parse().unwrap_or(0);
+            let key = k.trim();
+            let val = v.trim();
+            if key.eq_ignore_ascii_case("content-length") {
+                content_length = val.parse().unwrap_or(0);
+            } else if key.eq_ignore_ascii_case("host") {
+                host = Some(val.to_string());
+            } else if key.eq_ignore_ascii_case("origin") {
+                origin = Some(val.to_string());
+            } else if key.eq_ignore_ascii_case("x-dsh-shell") && val == "1" {
+                has_shell_header = true;
             }
         }
+    }
+    // 阶段 0：Host / Origin / 自定义头三重准入。失败一律 403 且**不回** CORS 头
+    //（浏览器读不到响应；本机工具能看到原因，便于排障）。
+    let bridge_port = BRIDGE_PORT.load(std::sync::atomic::Ordering::SeqCst);
+    if let Err(reason) = bridge_request_decision(method, host.as_deref(), origin.as_deref(), has_shell_header, bridge_port) {
+        let data = app.path().app_data_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        log_line(&data, &format!("bridge reject: {reason} method={method} path={path} origin={origin:?} host={host:?}"));
+        let body = format!("{{\"ok\":false,\"reason\":\"{reason}\"}}");
+        let resp = format!(
+            "HTTP/1.1 403 Forbidden\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let _ = stream.write_all(resp.as_bytes());
+        let _ = stream.flush();
+        return;
+    }
+    // 阶段 1（D4）：危险动作不在桥线程执行 —— 登记一次性槽位 + 打开壳拥有的
+    // 确认窗，立即以 202 返回（非阻塞；真正执行在 confirm 窗的 IPC 里）。
+    if let Some(action) = dangerous_bridge_action(method, path) {
+        let mut body_bytes = vec![0u8; content_length];
+        let _ = reader.read_exact(&mut body_bytes);
+        let body_text = String::from_utf8_lossy(&body_bytes).into_owned();
+        let (status, payload) = match request_confirmation(app, action, body_text) {
+            Ok(nonce) => (
+                "202 Accepted",
+                serde_json::json!({ "ok": false, "pending": true, "nonce": nonce, "action": action.id }),
+            ),
+            Err(reason) => (
+                "202 Accepted",
+                serde_json::json!({ "ok": false, "pending": true, "duplicate": true, "reason": reason }),
+            ),
+        };
+        let payload = payload.to_string();
+        let resp = format!(
+            "HTTP/1.1 {status}\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+            bridge_cors_headers(origin.as_deref()),
+            payload.len()
+        );
+        let _ = stream.write_all(resp.as_bytes());
+        let _ = stream.flush();
+        return;
     }
     let mut body = vec![0u8; content_length];
     let _ = reader.read_exact(&mut body);
@@ -1716,6 +2297,8 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
                 .unwrap_or_else(|_| std::path::PathBuf::from("."));
             // 页面 JS 已运行：导航兜底以此作为"真正渲染完成"信号。
             CLIENT_READY.store(true, std::sync::atomic::Ordering::SeqCst);
+            // 启动成功 = 本次升级（若有）已确认可用 → 清掉归因标记（S9）。
+            clear_upgrade_marker(app);
             log_line(&data, &format!("client-ready (http): {body}"));
             eprintln!("[dsh-desktop] client-ready (http): {body}");
             ("200 OK", String::new())
@@ -1923,6 +2506,10 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
                 serde_json::json!({ "ok": false, "error": e }).to_string(),
             ),
         },
+        ("POST", "/shell/titlebar-toggle") => match toggle_titlebar_contract_impl(app) {
+            Ok(v) => ("200 OK", v.to_string()),
+            Err(e) => ("500 Internal Server Error", serde_json::json!({ "ok": false, "error": e }).to_string()),
+        },
         ("POST", "/shell/gpu-accel-toggle") => match toggle_gpu_accel_impl(app) {
             Ok(v) => ("200 OK", v.to_string()),
             Err(e) => (
@@ -1954,6 +2541,8 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
                     "version": env!("CARGO_PKG_VERSION"),
                     "devMode": dev_mode(&runtime_dir(app)),
                     "gpu": gpu_accel(&runtime_dir(app)),
+                    "titlebarContract": titlebar_contract(&runtime_dir(app)),
+                    "preinstalled": preinstalled_versions(&runtime_dir(app)),
                     "update": {
                         "current": upd.current,
                         "latest": upd.latest,
@@ -1967,7 +2556,7 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
         }
         ("GET", "/shell/status") => {
             let state = app.state::<ServerState>();
-            ("200 OK", shell_status_json(&state).to_string())
+            ("200 OK", shell_status_json(app, &state).to_string())
         }
         ("GET", "/shell/legacy") => {
             ("200 OK", legacy_check_json(app).to_string())
@@ -1981,7 +2570,8 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
         _ => ("404 Not Found", "not found".into()),
     };
     let resp = format!(
-        "HTTP/1.1 {status}\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: POST, GET, OPTIONS\r\nAccess-Control-Allow-Headers: content-type\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{resp_body}",
+        "HTTP/1.1 {status}\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{resp_body}",
+        bridge_cors_headers(origin.as_deref()),
         resp_body.len()
     );
     let _ = stream.write_all(resp.as_bytes());
@@ -2295,11 +2885,13 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
                             upd.next_available = next_available;
                         }
                         // Flip the tray item between "检查更新…" and "有更新 vX（点击更新）".
+                        // 托盘是壳内入口（不经桥的确认窗），所以把"先备份"的提示直接
+                        // 写进标签：dsh ≥0.1.7 起会话按 v4 写入，回退旧版读不到新数据。
                         let guard = state.update_item.lock().unwrap();
                         if let Some(item) = guard.as_ref() {
                             let text = if available {
                                 format!(
-                                    "有更新 {}（当前 {}）→ 点击更新",
+                                    "有更新 {}（当前 {}）→ 点击更新（建议先备份数据目录）",
                                     latest.as_deref().unwrap_or("?"),
                                     current.as_deref().unwrap_or("?"),
                                 )
@@ -2319,7 +2911,7 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
                                 &handle,
                                 "dsh 有更新".into(),
                                 format!(
-                                    "{} → {}，点托盘「有更新」可一键更新",
+                                    "{} → {}，点托盘「有更新」可一键更新；升级后无法回退读取新数据，建议先备份数据目录",
                                     current.as_deref().unwrap_or("?"),
                                     latest.as_deref().unwrap_or("?"),
                                 ),
@@ -2788,6 +3380,7 @@ fn handle_manager_exit(app: &AppHandle, generation: u64, detected_by: &str) {
             "detectedBy": exit.detected_by,
             "evidenceDir": exit.evidence_dir,
             "summary": summary,
+            "upgrade": upgrade_marker_json(app),
         }),
     );
     let _ = app.emit("server-down", ());
@@ -2968,7 +3561,7 @@ fn ack_dump_done(app: &AppHandle) {
 
 /// 壳健康状态（chrome 故障条幅轮询 / 启动页）：最近故障摘要 + manager 真实
 /// 存活 + 最近一次退出的退出码与证据目录。
-fn shell_status_json(state: &ServerState) -> serde_json::Value {
+fn shell_status_json(app: &AppHandle, state: &ServerState) -> serde_json::Value {
     let last_error = state.last_error.lock().unwrap().clone();
     let alive = manager_alive(state);
     let (phase, pid, last_exit) = {
@@ -2991,6 +3584,10 @@ fn shell_status_json(state: &ServerState) -> serde_json::Value {
             "detectedBy": e.detected_by,
             "evidenceDir": e.evidence_dir,
             "summary": manager_guard::describe_exit(e.code),
+            // 升级归因（S9）：启动页读的是本结构（get_shell_status / 桥 /shell/status），
+            // 不是 manager-exit 事件负载 —— 只加到 emit 上等于死代码（2026-09-25 dev 实测：
+            // 标记文件在、失败态却没有任何升级文案）。
+            "upgrade": upgrade_marker_json(app),
         })),
     })
 }
@@ -3125,11 +3722,12 @@ fn inject_shell_chrome(app: &AppHandle) {
         return;
     };
     let mut prefix = format!(
-        "window.__DSH_SHELL_VERSION__={};window.__DSH_PRODUCT_NAME__={};window.__DSH_BUILD_DATE__={}",
+        "window.__DSH_SHELL_VERSION__={};window.__DSH_PRODUCT_NAME__={};window.__DSH_BUILD_DATE__={};window.__DSH_TITLEBAR_CONTRACT__={}",
         serde_json::to_string(env!("CARGO_PKG_VERSION")).unwrap_or_else(|_| "\"\"".into()),
         serde_json::to_string(app.package_info().name.as_str())
             .unwrap_or_else(|_| "\"DSH Smoothly Desktop\"".into()),
-        serde_json::to_string(env!("DSH_BUILD_DATE")).unwrap_or_else(|_| "\"\"".into())
+        serde_json::to_string(env!("DSH_BUILD_DATE")).unwrap_or_else(|_| "\"\"".into()),
+        if titlebar_contract(&runtime_dir(app)) { "true" } else { "false" }
     );
     // 真实应用图标：打包进二进制的 logo.png → data URI，顶栏按钮与下拉品牌项使用
     // （页面 origin 无 img 权限问题，跨 tauri:// 也不会被第三方 CSP 拦）。
@@ -3352,8 +3950,16 @@ fn check_shell_update(state: State<'_, ServerState>) -> Result<(), String> {
 
 /// One-click: install the newest dsh, then restart the service.
 #[tauri::command]
-fn update_now(state: State<'_, ServerState>) -> Result<(), String> {
-    send_manager(&mut state.stdin.lock().unwrap(), "update-dsh");
+fn update_now(state: State<'_, ServerState>, version: Option<String>) -> Result<(), String> {
+    // 可选目标版本：启动页的「回退到 vX」用它装回升级前的版本（S9）。
+    // 菜单路径不传 → None → manager 用 dist-tags.latest。
+    match version.filter(|v| !v.trim().is_empty()) {
+        Some(v) => send_line(
+            &mut state.stdin.lock().unwrap(),
+            &serde_json::json!({ "cmd": "update-dsh", "version": v }).to_string(),
+        ),
+        None => send_manager(&mut state.stdin.lock().unwrap(), "update-dsh"),
+    }
     Ok(())
 }
 
@@ -3447,6 +4053,8 @@ fn get_shell_state(app: AppHandle, state: State<'_, ServerState>) -> serde_json:
         "liveUrl": live_url,
         "devMode": dev_mode(&runtime_dir(&app)),
         "gpu": gpu_accel(&runtime_dir(&app)),
+        "titlebarContract": titlebar_contract(&runtime_dir(&app)),
+        "preinstalled": preinstalled_versions(&runtime_dir(&app)),
         "update": {
             "current": upd.current,
             "latest": upd.latest,
@@ -3461,6 +4069,12 @@ fn get_shell_state(app: AppHandle, state: State<'_, ServerState>) -> serde_json:
 #[tauri::command]
 fn toggle_dev_mode(app: AppHandle) -> Result<serde_json::Value, String> {
     toggle_dev_mode_impl(&app)
+}
+
+/// IPC: 切换顶栏契约（壳菜单 checkbox）。刷新页面生效。
+#[tauri::command]
+fn toggle_titlebar_contract(app: AppHandle) -> Result<serde_json::Value, String> {
+    toggle_titlebar_contract_impl(&app)
 }
 
 /// Toggle GPU acceleration (see toggle_gpu_accel_impl).
@@ -3479,8 +4093,8 @@ fn open_settings(app: AppHandle) -> Result<(), String> {
 /// 壳健康状态（chrome 故障条幅轮询用）：最近故障摘要 + manager 真实存活 +
 /// 最近一次退出的退出码/证据目录。见 shell_status_json。
 #[tauri::command]
-fn get_shell_status(state: State<'_, ServerState>) -> serde_json::Value {
-    shell_status_json(&state)
+fn get_shell_status(app: AppHandle, state: State<'_, ServerState>) -> serde_json::Value {
+    shell_status_json(&app, &state)
 }
 
 /// 安全网：把 web profile 的 bundle 列表回退到 dsh 自带的模板两层，并备份原 manifest。
@@ -3555,7 +4169,7 @@ pub fn run() {
             // settings / plugins 是工具窗：不参与窗口状态记忆（记忆恢复会在
             // 创建时覆盖 builder 的 .center()，表现为"弹窗先闪一下居中、又跳回
             // 上次的左边位置"）。主窗口仍保留位置/大小/最大化记忆。
-            .with_denylist(&["settings"])
+            .with_denylist(&["settings", "confirm"])
             .build())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // Toast click / external activation: remember the session to
@@ -3861,11 +4475,20 @@ pub fn run() {
                         // 隐藏会让窗口"消失且无法找回"——退化为最小化
                         // （任务栏可见，双击/托盘/激活都能恢复）。
                         api.prevent_close();
+                        // Windows：首次隐藏前确认一次（S5）；确认过就直接隐藏。
+                        // 我们自己的菜单 ☓ / Alt+F4 / 任务栏关闭都走同一个事件，
+                        // 所以三者的"首次确认"行为一致。
+                        #[cfg(not(target_os = "linux"))]
+                        {
+                            if close_needs_confirmation(close_confirmed(&handle), false) {
+                                let _ = request_confirmation(&handle, CLOSE_HIDE_ACTION, String::new());
+                            } else if let Some(w) = handle.get_webview_window("main") {
+                                let _ = w.hide();
+                            }
+                        }
+                        #[cfg(target_os = "linux")]
                         if let Some(w) = handle.get_webview_window("main") {
-                            #[cfg(target_os = "linux")]
                             let _ = w.minimize();
-                            #[cfg(not(target_os = "linux"))]
-                            let _ = w.hide();
                         }
                     }
                     tauri::WindowEvent::Focused(true) => {
@@ -4006,6 +4629,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             restart_server,
+            get_pending_action,
+            resolve_pending_action,
             open_data_dir,
             open_evidence_dir,
             quit_app,
@@ -4023,6 +4648,7 @@ pub fn run() {
             get_shell_state,
             toggle_dev_mode,
             toggle_gpu_accel,
+            toggle_titlebar_contract,
             open_settings,
             get_shell_status,
             disable_third_party_plugins,

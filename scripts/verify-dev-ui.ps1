@@ -1,15 +1,17 @@
 # Windows dev-build UI verification over WSL interop (no manual eyeballing).
 #
 # Verifies the dsh-desktop shell UI on a REAL WebView2 window from WSL:
-#   - dump   : enumerate UIA elements (name / type / physical rect) — WebView2
+#   - dump   : enumerate UIA elements (name / type / physical rect) -- WebView2
 #              exposes a UIA tree, so DOM buttons and the injected shell chrome
 #              (menubar buttons, hover strip) are all visible here
 #   - shot   : PrintWindow(PW_RENDERFULLCONTENT) capture of the window without
 #              stealing focus (DWM-composited content, works for WebView2)
 #   - invoke : UIA InvokePattern on a named control (no mouse movement)
 #   - click  : real cursor move + physical click on a named control (restores
-#              the cursor afterwards) — use to prove hit-testing/clickability
+#              the cursor afterwards) -- use to prove hit-testing/clickability
 #   - hover  : move the cursor to the top edge (y=2) for ~1s, then restore
+#   - windows: list top-level windows (is the main window hidden? is a dialog up?)
+#   - text   : print every named control (used to assert dialog copy)
 #
 # Chinese control labels are built from \u escapes so this file stays pure
 # ASCII and survives PowerShell 5.1 ANSI file decoding.
@@ -22,11 +24,17 @@
 # "DSH Smoothly Desktop Dev"); /mnt/c and /mnt/d are read-only in WSL, so any
 # D-drive write (screenshots) must go through this Windows-side script.
 param(
-  [Parameter(Mandatory = $true)][ValidateSet("dump", "shot", "invoke", "click", "hover")][string]$Action,
+  [Parameter(Mandatory = $true)][ValidateSet("dump", "shot", "invoke", "click", "hover", "windows", "text")][string]$Action,
   [string]$Key = "",
+  [string]$Name = "",
   [string]$Out = "D:\Dev\_shots\dev-ui.png",
   [string]$Title = "DSH Smoothly Desktop Dev",
-  [int]$Max = 60
+  [int]$Max = 60,
+  # Window role: "main" = the shell's main window (exact $Title); "other" = any
+  # other top-level window whose name CONTAINS $Title -- that is the confirm
+  # window ("<product> - confirm action") and the About/settings dialogs. Keeps
+  # the command line pure ASCII (non-ASCII titles never have to be typed).
+  [ValidateSet("main", "other")][string]$Window = "main"
 )
 
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -54,17 +62,44 @@ $labels["disableplugins"] = [regex]::Unescape("\u505C\u7528\u5168\u90E8\u7B2C\u4
 $labels["strip"]   = [regex]::Unescape("\u663E\u793A\u83DC\u5355\u680F")     # hover strip
 $labels["restart"] = [regex]::Unescape("\u91CD\u542F\u670D\u52A1")           # errbanner: restart service
 $labels["evidence"] = [regex]::Unescape("\u6253\u5F00\u8BC1\u636E\u76EE\u5F55") # errbanner: open evidence dir
+$labels["confirm-ok"]  = [regex]::Unescape("\u786E\u8BA4\u6267\u884C")     # danger-action confirm: approve
+$labels["confirm-no"]  = [regex]::Unescape("\u53D6\u6D88")                 # danger-action confirm: cancel
+$labels["about"]       = [regex]::Unescape("\u5173\u4E8E") + " DSH Smoothly Desktop Dev"  # About menu item
+$labels["rollback"]    = [regex]::Unescape("\u56DE\u9000\u5230")           # launcher: rollback to vX (prefix match)
 
 $root = [System.Windows.Automation.AutomationElement]::RootElement
-$wcond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty, $Title)
-$win = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $wcond)
-if ($null -eq $win) { Write-Output "WINDOW-NOT-FOUND ($Title)"; exit 1 }
+$win = $null
+foreach ($w in $root.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)) {
+  $n = $w.Current.Name
+  if ($null -eq $n -or $n -eq "") { continue }
+  if ($Window -eq "main" -and $n -eq $Title) { $win = $w; break }
+  if ($Window -eq "other" -and $n -ne $Title -and $n.Contains($Title)) { $win = $w; break }
+}
+if ($null -eq $win) { Write-Output ("WINDOW-NOT-FOUND role=" + $Window + " title~" + $Title); exit 1 }
+Write-Output ("WINDOW role=" + $Window + " name=[" + $win.Current.Name + "]")
 
 function Find-ByName([string]$name) {
   $c = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty, $name)
-  return $win.FindAll([System.Windows.Automation.TreeScope]::Descendants, $c)
+  $exact = $win.FindAll([System.Windows.Automation.TreeScope]::Descendants, $c)
+  if ($exact.Count -gt 0) { return $exact }
+    # (see window-role selector below)
+  $all = $win.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
+  $hits = New-Object System.Collections.ArrayList
+  foreach ($e in $all) { $n = $e.Current.Name; if ($n -and $n.StartsWith($name)) { [void]$hits.Add($e) } }
+  return $hits
 }
-function Get-Hwnd { return (Get-Process | Where-Object { $_.MainWindowTitle -eq $Title } | Select-Object -First 1).MainWindowHandle }
+function Resolve-Target {
+  if ($Name -ne "") { return $Name }
+  if ($labels.ContainsKey($Key)) { return $labels[$Key] }
+  return $null
+}
+function Get-Hwnd {
+  # Prefer the resolved UIA window's native handle (works for dialogs, which are
+  # not a process MainWindow), fall back to the process main window.
+  $h = $win.Current.NativeWindowHandle
+  if ($h -and $h -ne 0) { return [IntPtr]$h }
+  return (Get-Process | Where-Object { $_.MainWindowTitle -eq $Title } | Select-Object -First 1).MainWindowHandle
+}
 
 switch ($Action) {
   "dump" {
@@ -98,21 +133,41 @@ switch ($Action) {
     $bmp.Dispose()
     Write-Output ("SHOT ok=" + $ok + " rect=" + $w + "x" + $ht + " -> " + $Out)
   }
+  "windows" {
+    # UIA top-level children: unlike Get-Process.MainWindowTitle this SEES dialog
+    # windows of the same process (the confirm window is a second webview in the
+    # shell process, so a process-based listing is blind to it).
+    foreach ($w in $root.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)) {
+      $n = $w.Current.Name
+      if ($null -eq $n -or $n -eq "") { continue }
+      $p = ""
+      try { $p = $w.Current.ProcessId } catch { }
+      Write-Output ("TOPWINDOW pid=" + $p + " [" + $w.Current.ControlType.ProgrammaticName + "] " + $n)
+    }
+    Write-Output ("MAIN-VISIBLE " + [bool](Get-Process | Where-Object { $_.MainWindowTitle -eq $Title } | Select-Object -First 1))
+  }
+  "text" {
+    # print every named control (dialog copy included) -- used to assert dialog content
+    $all = $win.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
+    foreach ($e in $all) { $n = $e.Current.Name; if ($n) { Write-Output ("TEXT [" + $e.Current.ControlType.ProgrammaticName + "] " + $n) } }
+  }
   "invoke" {
-    if (-not $labels.ContainsKey($Key)) { Write-Output "UNKNOWN-KEY"; exit 2 }
-    $els = Find-ByName $labels[$Key]
-    if ($els.Count -eq 0) { Write-Output ("ELEMENT-NOT-FOUND [" + $labels[$Key] + "]"); exit 1 }
+    $target = Resolve-Target
+    if ($null -eq $target) { Write-Output "UNKNOWN-KEY (pass -Key or -Name)"; exit 2 }
+    $els = Find-ByName $target
+    if ($els.Count -eq 0) { Write-Output ("ELEMENT-NOT-FOUND [" + $target + "]"); exit 1 }
     $el = $els[0]
     $pats = @($el.GetSupportedPatterns() | ForEach-Object { $_.ProgrammaticName })
     if ($pats -contains "InvokePatternIdentifiers.Pattern") {
       ($el.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)).Invoke()
-      Write-Output ("INVOKED [" + $labels[$Key] + "]")
-    } else { Write-Output ("NO-INVOKE-PATTERN [" + $labels[$Key] + "]"); exit 3 }
+      Write-Output ("INVOKED [" + $target + "]")
+    } else { Write-Output ("NO-INVOKE-PATTERN [" + $target + "]"); exit 3 }
   }
   "click" {
-    if (-not $labels.ContainsKey($Key)) { Write-Output "UNKNOWN-KEY"; exit 2 }
-    $els = Find-ByName $labels[$Key]
-    if ($els.Count -eq 0) { Write-Output ("ELEMENT-NOT-FOUND [" + $labels[$Key] + "]"); exit 1 }
+    $target = Resolve-Target
+    if ($null -eq $target) { Write-Output "UNKNOWN-KEY (pass -Key or -Name)"; exit 2 }
+    $els = Find-ByName $target
+    if ($els.Count -eq 0) { Write-Output ("ELEMENT-NOT-FOUND [" + $target + "]"); exit 1 }
     $el = $null
     foreach ($e in $els) { $r = $e.Current.BoundingRectangle; if ($r.Y -ge 0 -and $r.Width -gt 0) { $el = $e } }
     if ($null -eq $el) { Write-Output "NO-VISIBLE-MATCH"; exit 1 }
@@ -127,7 +182,7 @@ switch ($Action) {
     [Native.Ui]::mouse_event(0x0004, 0, 0, 0, [System.UIntPtr]::Zero) | Out-Null
     Start-Sleep -Milliseconds 500
     [Native.Ui]::SetCursorPos($p.X, $p.Y) | Out-Null
-    Write-Output ("CLICKED [" + $labels[$Key] + "] at " + $cx + "," + $cy + " (cursor restored)")
+    Write-Output ("CLICKED [" + $target + "] at " + $cx + "," + $cy + " (cursor restored)")
   }
   "hover" {
     $scr = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds

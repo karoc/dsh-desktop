@@ -51,7 +51,10 @@ window.__ModuleLoader__.load({
       if (!BRIDGE_PORT || BRIDGE_PORT.startsWith('__DSH')) return Promise.resolve()
       return fetch(`http://127.0.0.1:${BRIDGE_PORT}${path}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        // 桥的阶段 0 准入：非 GET/HEAD/OPTIONS 必须带该头（跨源简单请求无法携带
+        // 自定义头 → 外部网页即使猜到端口也会先触发预检，而预检不放行它）。
+        // GET /pending-open 不需要。
+        headers: { 'Content-Type': 'application/json', 'X-DSH-Shell': '1' },
         body: JSON.stringify(payload || {}),
       }).catch(() => {})
     }

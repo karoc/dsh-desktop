@@ -37,6 +37,10 @@ html, body {
   justify-content: center;
   gap: 30px;
   padding: 24px;
+  /* 失败态的按钮会随状态增减（重试 / 打开证据目录 / 停用插件 / 回退到 vX），
+     窗口最小 900x600 —— 允许换行并留出滚动，避免多一项就顶出可点区域。 */
+  overflow-y: auto;
+  flex-wrap: wrap;
 }
 
 /* 顶部信息区：无框，直接浮在深色背景上 */

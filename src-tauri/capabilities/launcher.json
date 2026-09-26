@@ -1,7 +1,11 @@
 {
   "identifier": "launcher",
   "description": "Local shell pages (launcher + standalone settings window): core defaults (event listen, invoke, window) for the loading/error UI and proxy settings.",
-  "windows": ["main", "settings"],
+  "windows": [
+    "main",
+    "settings",
+    "confirm"
+  ],
   "permissions": [
     "core:default",
     "core:window:allow-close"

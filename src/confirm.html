@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DSH Smoothly Desktop — 确认操作</title>
+    <link rel="icon" type="image/png" href="logo.png" />
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        margin: 0; font: 13px/1.6 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+        background: #0d1117; color: #e6edf3; display: flex; flex-direction: column;
+        height: 100vh; box-sizing: border-box; padding: 18px 20px;
+      }
+      h2 { margin: 0 0 6px; font-size: 15px; font-weight: 600; }
+      p.detail { margin: 0 0 14px; color: #9da7b3; white-space: pre-wrap; }
+      .spacer { flex: 1; }
+      .actions { display: flex; gap: 8px; justify-content: flex-end; }
+      button {
+        font: inherit; padding: 6px 14px; border-radius: 6px; cursor: pointer;
+        border: 1px solid #30363d; background: #21262d; color: #e6edf3;
+      }
+      button:hover { background: #2d333b; }
+      button.primary { background: #d29922; border-color: #d29922; color: #161b22; font-weight: 600; }
+      button.primary:hover { background: #e3b341; }
+      button:focus-visible { outline: 2px solid #1f6feb; outline-offset: 2px; }
+      .hint { margin-top: 10px; color: #8b949e; font-size: 12px; }
+      @media (prefers-color-scheme: light) {
+        body { background: #ffffff; color: #1f2328; }
+        p.detail { color: #59636e; }
+        button { border-color: #d1d9e0; background: #f6f8fa; color: #1f2328; }
+        button:hover { background: #eef1f4; }
+        .hint { color: #59636e; }
+      }
+    </style>
+  </head>
+  <body>
+    <!-- 壳拥有的确认窗：危险动作（退出/重启/更新/停用插件/清缓存/开发者模式…）
+         只能在这里被批准。文案全部来自 Rust（get_pending_action），页面不接收
+         调用方提供的任何文案 —— 防「确认框写刷新、实际 quit」。 -->
+    <h2 id="title">确认操作</h2>
+    <p class="detail" id="detail">正在读取待确认操作…</p>
+    <div class="spacer"></div>
+    <div class="actions">
+      <button id="cancel">取消</button>
+      <button id="approve" class="primary">确认执行</button>
+    </div>
+    <div class="hint" id="hint">按 Esc 取消；确认后动作立即执行，无法撤销。</div>
+    <script src="confirm.js"></script>
+  </body>
+</html>
