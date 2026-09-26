@@ -41,9 +41,9 @@ five parameter groups:
   fuses search into the dropdown itself — open it and type to narrow long model
   lists by name / id (display-only; stored order and write path untouched).
   **Apply to all models** copies only
-  the CHECKED dimensions from the editor to every model on the route, plus the
-  route default thinking level (`providers.<route>.reasoning`) that unset
-  models inherit.
+  the CHECKED dimensions from the editor to every model on the route; this
+  group also holds the route default thinking level
+  (`providers.<route>.reasoning`) that unset models inherit.
 - **Retry & backoff**: `retryPolicy.mode` (`normal` bounded transient retries vs
   `always` unbounded retries), `maxRetries`, `retryableCodes` (the five stable
   preset codes plus custom entries), and the shared exponential backoff
@@ -69,14 +69,14 @@ inherits the route fallback or catalog value; the four other groups are 「整�
 schema, so one shared value is the whole truth (the badge's hover tooltip says
 so; no duplicate text sits beside it).
 
-Every field shows the effective adapter default as its placeholder while unset;
-clearing a field removes the override instead of writing an echo of the default.
+A field with an adapter default shows it as the placeholder while unset; clearing
+a field removes the override instead of writing an echo of the default.
 Local validation mirrors the host's own resolution rules, so most mistakes are
 caught before the write; anything the host still refuses surfaces verbatim from
 `settings.mutate`. The write path uses revision fencing, so a concurrent change
 is refused rather than silently overwritten. An **Apply to all models** action
-copies the current model's reasoning declaration to every model on the route at
-once.
+copies the checked dimensions of the current model's editor to every model on
+the route at once.
 
 ### Custom wire spelling (adapt to any upstream vocabulary)
 
@@ -103,7 +103,7 @@ hinted while the settings document loads.
 
 **Prerequisites:** a DeepSeek Harness install with the `dsh` CLI, plus [pnpm](https://pnpm.io) (the `dsh plugin` command runs pnpm under the hood). This is an installable **bundle** — it is loaded by `dsh`, not imported as a library.
 
-**Compatibility:** since v0.2.2 the page writes through the settings **Remote** namespace dsh 0.1.2 introduced (`ctx.remote.settings`); dsh builds older than 0.1.2 (the `connection.api` RPC face) are not supported.
+**Compatibility:** since v0.2.5 the page reads through the settings-forms service (`ctx.configForms`) and writes through the settings **Remote** namespace (`ctx.remote.settings`, the write path since v0.2.2); dsh builds older than 0.1.7 — which removed the predecessor `settingsScope` client seam — are not supported (v0.2.4 remains the release for dsh 0.1.2–0.1.6). The floor is also declared in `package.json` as an optional `@deepseek-ai/dsh-client-ui-settings` peer dependency (`>=0.1.7-rc.1`), making it machine-readable for the peer gate that ships from dsh 0.1.7-rc.1 on: an out-of-range bundle is refused with the exact `dsh plugin allow-version` remedy. Runtimes older than that gate evaluate no peers, so nothing refuses them: on 0.1.2–0.1.6 the page simply never loads, while the 0.1.7 alphas (seam present, gate absent) work as before.
 
 ### From npm (recommended)
 
@@ -150,7 +150,7 @@ cordis.patch.yml                # bundle layer: mounts the row that the client-m
 package.json                    # dsh.bundle (patch) + dsh.client (web) + exports["./client"]
 tsdown.config.ts                # self-contained build: node half + module-table client bundle
 src/index.ts                    # host apply (no-op)
-src/client/index.ts             # client apply: settingsScope.bind(llm-pi-ai) + register settings.section
+src/client/index.ts             # client apply: configForms.get(llm-pi-ai) + register settings.section
 src/client/ProviderParamsSection.tsx  # the settings page (route → group tabs → editors)
 src/client/params.ts            # managed-field registry: domains, defaults, host-mirroring
                                 # validators, draft model, minimal-op diff engine
@@ -182,15 +182,16 @@ module table; everything else is inlined.
 - Credential management (`apiKeyEnv`), `displayName`, `baseURL`, protocol
   (`api`), and the models list structure stay on the built-in **Models** page;
   this plugin does not duplicate them.
-- Wire spellings default to the level name; to rename a level on the wire (e.g.
-  `max: ultra`) edit `settings.yaml` for that model.
+- Wire spellings default to the level name and are edited per selected level in
+  the page; the same per-model field can be set directly in `settings.yaml`
+  (e.g. `max: ultra`).
 - Legacy profile keys removed upstream (`provider`, `maxRetries`,
   `maxRetryDelayMs` at route level) are never written by this plugin.
 - **Section nav icon is shell-assigned, not plugin-assigned.** The built-in
   `ui-settings-general` `SettingsRoot.tsx` `navIcon(id)` maps known ids and
   falls back to a gear for every other id — including this section's
   `provider-params`. When DSH exposes a per-section icon, use
-  `IconThinkOutline16` from `dsh-client-ui-primitives` for this section.
+  `IconThinkOutlineRegular` from `dsh-client-ui-primitives` for this section.
 
 ## License
 
