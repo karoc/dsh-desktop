@@ -1937,6 +1937,10 @@ fn bridge_cors_headers(origin: Option<&str>) -> String {
 // 官方语义（apps/desktop/src/background-notice.ts）：关窗 = 隐藏到托盘，但**首次**
 // 隐藏前必须确认一次（"任务不会中断，可从托盘找回"），标记落盘后不再打扰；
 // Esc/关窗不记录确认。Linux 退化为最小化（GNOME 可能没有托盘），不需要确认。
+// 关窗隐藏分支只在 `#[cfg(not(target_os = "linux"))]` 下编译（Windows/macOS）；Linux 走最小化，
+// 于是这三项在 Linux 的 lib 构建里「未使用」→ CI 的 `clippy -D warnings` 会报 dead_code。
+// 纯函数 close_needs_confirmation 保留跨平台（CI 的 ubuntu job 跑它的单测），故用 allow 而非 cfg 掉。
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 /// 关窗是否需要弹确认（纯函数 → CI 可执行单测）。
 fn close_needs_confirmation(marker_exists: bool, linux: bool) -> bool {
     !linux && !marker_exists
@@ -1950,6 +1954,7 @@ fn close_marker_path(app: &AppHandle) -> std::path::PathBuf {
         .join("background-close-confirmed")
 }
 
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 /// 是否已确认过（读不到就是没确认过 —— 宁多问一次，不少问一次）。
 fn close_confirmed(app: &AppHandle) -> bool {
     close_marker_path(app).exists()
@@ -1963,6 +1968,7 @@ fn write_close_marker(app: &AppHandle) {
     }
 }
 
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 /// 关窗确认用的合成动作（不走桥，只复用确认窗与槽位机制）。
 const CLOSE_HIDE_ACTION: DangerAction = DangerAction {
     id: "close-hide",
