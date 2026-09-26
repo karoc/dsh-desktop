@@ -1863,28 +1863,26 @@
     },
     {
       "id": "card-477d24e3-585a-4759-9fb7-6d0c53f930fd",
-      "title": "预装 dsh-model-reasoning 适配 0.1.7（选路①）：0.2.6 已同步进壳（门禁转绿/14 套全绿）；仅剩 npm 发布 + 发布后复核",
+      "title": "预装 dsh-model-reasoning 适配 0.1.7（选路①）：①–⑤ 全部完成（0.2.6 已发布、壳同步零 diff、门禁 15 套全绿）",
       "description": "真机证据（dev 版 0.11.0 + dsh 0.1.7-rc.2）：页面停在 dsh 的「Failed to load plugins / web boot: 1 entry did not activate / dsh-model-reasoning: pending (waiting for service: settingsScope)」；受控实验——把 `dsh-model-reasoning` 从 `runtime/dsh-home/profiles/web/package.json` 的 `dsh.bundles` 摘掉并重启 → UI 立即恢复正常。服务侧对比：0.1.6 的 `@deepseek-ai/*` 有 18 个文件提供/使用 `settingsScope`（提供方是 `@deepseek-ai/dsh-client-ui-settings`，`super(ctx, \"settingsScope\")`），0.1.7 全树 0 命中，0.1.7 官方源码 `src/` 也 0 命中；0.1.7 的该包改注册 `settingsSchema` + `configForms`。影响面：四个预装插件里**只有 dsh-model-reasoning**（2 个文件）依赖旧服务，kanban / turn-navigator / opencode-session 不受影响。三个可选处置：① 插件仓改用 `settingsSchema`/`configForms`（推荐，插件侧改动）；② 发版前暂不抬高 `MIN_DSH_VERSION`（保 0.1.6 地板）；③ 该插件暂不进预装。**决策未定，两个仓都要动之前先选路**。",
-      "rationale": "用户选\"改插件\"这条路。核实发现代码迁移早已在插件仓完成（0.2.6），真正缺的是发布 + 壳同步；而壳的发布门禁里**没有任何一道检查\"插件要求的能力 vs 壳强制的 dsh 地板\"** —— 这正是本次事故能一路走到真机的原因。所以除排链路外，必须补上这道静态门禁。",
-      "rejected": "① 不把\"缺 dsh 地板声明\"做成 FAIL（会让门禁变成\"四个插件都得先改一遍\"的噪音门禁 → 改为警告并列出）；② 不把门禁放在链首（`&&` 会短路后续套件，失去其余信号 → 放链尾）；③ 不用严格 semver 判\"服务移除是否生效\"（会把 0.1.7-rc.2 误判成还没到 0.1.7，**正好漏掉本次真实事故** → 改按版本行比较，已被自检抓出）；④ 不靠人工核对（把判据写进脚本 + 13 条比较器自检 + 正/负向对照）。",
+      "rationale": "用户选路①（改插件适配最新 dsh），目标 ①–⑤ 逐项完成。核实发现插件仓代码迁移早已完成，真正缺的是\"发布 + 壳同步\"；而壳侧没有任何门禁把\"插件要求的能力\"与\"壳强制的 dsh 地板\"放在一起看，这正是事故能走到真机的原因——所以除排链路外补了静态门禁 + 运行时守卫。",
+      "rejected": "① 不只用\"源码断言绿\"充当验收（真机 + registry 复核各一道）；② 不在未发布时把本地构建字节直接写进壳仓而不留复核（改为记录 shasum 并在发布后逐字节复核，事后证明零偏差）；③ 不把门禁做成\"缺 peer 声明即 FAIL\"（噪音门禁 → 只警告）或\"忽略 prerelease 排序\"（会漏掉 rc 行，正是本次事故形态）；④ 不做\"直接删插件/隐式重启\"的运行时守卫（改用户状态且违背\"改配置不隐式重启\"约定 → 改为摘启用列表 + 备份 + 记账 + 保留文件 + 不动未声明地板者）。",
       "sourceSessionId": "session-c852547f-89db-4736-8a28-f3dd6ec7be25",
-      "status": "in_progress",
+      "status": "done",
       "tags": [
         "dsh-0.1.7",
         "preinstalled",
         "plugins",
         "release",
-        "plugin-repo-side",
         "verified-machine",
+        "verified-registry",
         "gate",
-        "tooling",
-        "rollback-edge",
-        "npm-auth",
-        "waiting-user"
+        "guard",
+        "done"
       ],
       "createdAt": 1790329268449,
-      "updatedAt": 1790412774724,
-      "summary": "① **真机验证 ✅**（0.2.6 under dsh 0.1.7-rc.2：UI 正常、设置分区「思磨力提供方参数」注册渲染）。③ **已完成 ✅**（本轮）：从**本地 tarball** 同步 0.2.6（不必等发布——壳的预装插件不从 npm 取，且 `npm publish` 上传的就是 `npm pack` 产物；构建确定性已验证：同一 tag 连打三次 sha1 一致 = `49dc4a3d5deb3846d38b2b48eae8b30f0d892912`）。结果：变更 3（lib/client.js、package.json、README.md）、新增 0、删除 0，与 §13.7 预演完全一致；`sync-resources` 已跑；幂等复核**零 diff**；`plugins/preinstalled/` 与 `resources/preinstalled/` 两处都是 **0.2.6**；`test-copy-consistency` 绿；**`test-plugin-dsh-compat` 由红转绿**（真实产物上的红→绿，非仅正向对照）；**`npm test` 14 套全绿 exit 0** ⇒ 壳恢复可发布。④ 收口：静态门禁（兼容性）+ 运行时缺口（回退按钮 title/日志 + README 写明根因与自救路径，断言 3 条 + 2 变异红）。② **仍待用户**：`npm login`（token 现为 401）→ `cd ~/dsh-model-reasoning && npm publish`；发布后**必须**跑 `node scripts/sync-preinstalled-plugin.mjs dsh-model-reasoning 0.2.6 --check`（期望零 diff；若不为零 ⇒ 以 registry 字节为准重跑同步）——这条复核命令已写进技能 §3.5。不影响壳发布，但影响 (a) 第三方 `dsh plugin add` 拿到的仍是 0.2.4（0.1.7 下打不开界面）(b) \"仓库字节 == registry 字节\"不变量尚未建立。⑤ 文档：技能 §3.5/§6.5、方案 §13.5–§13.9、Note Addendum 2。**下一步**：用户 npm login+publish → 我跑发布后复核 → 壳发版 PR 由用户合并。"
+      "updatedAt": 1790452962793,
+      "summary": "① **真机验证 ✅**：0.2.6 在真实 dsh 0.1.7-rc.2 上 UI 不再卡「Failed to load plugins」，设置分区「思磨力提供方参数」注册并正常渲染（截图 `D:\\Dev\\_shots\\mr-026-*.png`）。② **发布 ✅**：`dsh-model-reasoning@0.2.6` 已上 npm（`latest=0.2.6`，2026-09-26T15:18:36Z）；此前阻塞是用户侧 npm token 失效（401），已定位并交回用户 `npm login`+`publish`。③ **壳同步 ✅ + 发布后复核 ✅**：0.2.4→0.2.6（变更 3 文件、新增/删除 0），两处副本一致；**registry `dist.shasum` 与我同步所用 tarball 完全一致**（`49dc4a3d…2912`），从 registry 拉取 `--check` **零 diff**（6 文件不变）⇒ \"仓库字节 == registry 字节\"成立。④ **兼容边界 ✅**：静态门禁 `test-plugin-dsh-compat`（去注释后查已移除服务用法 + peer 地板必须被壳地板满足；真实产物上红→绿）+ 运行时守卫 `scripts/plugin-floor.mjs`（manager 在 `ensurePreinstalled` 前隔离地板不满足的插件，先备份 manifest、原子写回、记入 `dsh.json.quarantinedPlugins`；不动 `@deepseek-ai/*`、不动未声明地板者、不删文件）+ 回退按钮/日志/README 明示降级风险与自救路径。⑤ **收口 ✅**：方案 §13.1–§13.11 与 §14、技能 `dsh-preinstalled-plugin-sync` §3.5/§6.5、Agent Note Addendum 2、同步器 `sync-preinstalled-plugin.mjs`（`--tarball`/`--check`、演练零 diff 判据）、README/CONTRIBUTING 套数 15。门禁：`npm test` **15 套全绿 exit 0**；新增门禁均有负向对照（累计 4+3+4+2 个变异变红）。代码已推送：分支 `feat/shell-hardening-0.1.7`（`1ca0188`），PR 因 gh token 无 createPullRequest 权限需用户在 Web 开。仍未做（登记）：`quarantinedPlugins` 的界面呈现、不一致态守卫的 E2E 实测。"
     },
     {
       "id": "card-c2051cfa-b7f1-486b-98ad-1461e2caede7",

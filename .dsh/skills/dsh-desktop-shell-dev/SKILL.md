@@ -245,6 +245,20 @@ dev 数据目录 = `%APPDATA%\dsh.smoothly.desktop.dev`，证据 = `<runtime>\re
 - `[string]::Concat([char]...)` 在 PS 5.1 会抛 ArgumentNullException → 用 `[regex]::Unescape` 或 `+`。
 - 置前不可靠（`AppActivate`/`UIA SetFocus` 实测失败），**不要靠抢焦点**，用 PrintWindow + UIA。
 
+### 4.5 gh token 与 PR（agent 必读：**别用裸 `gh`**）
+
+本项目按项目隔离 GitHub 凭据（详见 CONTRIBUTING「gh token（按项目隔离）」）：项目专用 fine-grained PAT 放在
+`~/.config/gh-dsh-desktop/token`（600，`#` 注释行忽略），只授权 `karoc/dsh-desktop`，权限含 **Pull requests / Administration / Actions → write**。
+
+- **开 PR / 调 GitHub API 一律用包装命令**：`./scripts/gh pr create …`（等价 gh，但带项目 token）。
+- **裸 `gh` 会踩坑**：agent 的 bash 会话是非交互 `bash -c`，**direnv 不生效**（`.envrc` 不会被加载）→ `GH_TOKEN` 为空
+  → gh 退回全局 `~/.config/gh/hosts.yml` 的 token，那枚**没有** PR 写权限 → `gh pr create` 报
+  `403 Resource not accessible by personal access token`。
+- **判定技巧（区分"token 缺权限"与"参数写错"）**：看响应头 `X-Accepted-Github-Permissions: pull_requests=write`
+  —— 403 + 该头 = token 缺这项权限；**422 + 该头 = 授权已通过**（只是 head/参数不合法）。用无效 head 做探测即可零副作用验证：
+  `./scripts/gh api -i -X POST repos/karoc/dsh-desktop/pulls -f title=probe -f head=no-such-branch -f base=main`
+- `git push` 走 SSH key（`git@github.com:…`），与 token 无关；CI 用 `secrets.GITHUB_TOKEN`，也与个人 token 无关。
+
 ## 5. Tauri 2 踩坑速查（本轮新踩，先查再写）
 | 坑 | 真相 |
 |---|---|
