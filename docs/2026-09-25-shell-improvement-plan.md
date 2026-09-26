@@ -653,3 +653,11 @@ node scripts/sync-preinstalled-plugin.mjs dsh-model-reasoning 0.2.6 --check   # 
 - **副产品验证**：manager 模块图同步**自动**带上了 `plugin-floor.mjs`（S0 的"按相对导入闭包拷贝"修复在真实新增模块上生效）。
 
 **仍未做（登记）**：把 `quarantinedPlugins` 呈现到界面（当前只在 `dsh.json` + manager 日志里）；不一致态下的守卫 E2E 实测（需在 dev runtime 装回 dsh 0.1.6 + `devMode: true` 冻结地板）。
+
+### 13.11 发布后复核结果（2026-09-26，用户已发布 0.2.6）
+
+- registry：`dsh-model-reasoning@0.2.6` **已发布**（`dist-tags.latest = 0.2.6`，发布于 `2026-09-26T15:18:36.728Z`）。
+- **上传产物指纹一致**：registry 的 `dist.shasum = 49dc4a3d5deb3846d38b2b48eae8b30f0d892912`，与我同步进壳所用的本地 `npm pack` 产物**逐字节相同** ⇒ 当时"用本地 tarball 先同步"的决策事后被证明没有引入任何偏差。
+- **发布后复核 = 零 diff**：`node scripts/sync-preinstalled-plugin.mjs dsh-model-reasoning 0.2.6 --check`（从 registry 拉 tarball 与壳内拷贝逐文件比对）→ `新增 0 / 变更 0 / 删除 0 / 不变 6`，`CHECK PASS`。**"仓库字节 == registry 字节"这条不变量成立**。
+- 门禁复跑：`test-plugin-dsh-compat` ✅、`test-copy-consistency` ✅。
+- 结论：目标 ①–⑤ 全部完成（②③ 的最终验收即本节）。剩余仅壳侧发版流程（用户在 Web 合并 PR → release-please）。

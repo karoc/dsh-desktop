@@ -13,7 +13,8 @@ one upstream backend and keeps OpenCode's prompt cache warm across its turns
 ## What it does
 
 - **Fixes the 400** by always attaching `x-opencode-session` to requests that
-  are routed to a configured OpenCode(Go) provider.
+  are routed to an OpenCode(Go) provider on an allowed host (the host gate
+  decides, so no provider list has to be configured).
 - **Keeps the cache/affinity benefit** by using a value that is unique **per
   conversation** and stable across that conversation's turns, compaction,
   retries and process restarts (by default the DSH session id itself — the
@@ -21,8 +22,10 @@ one upstream backend and keeps OpenCode's prompt cache warm across its turns
   `x-deepseek-harness-session-id`).
 - **Leaves everything else untouched**: a request whose **initial URL** is not
   an allowed host is never modified (host gate, default `https://opencode.ai`),
-  as are requests that already carry the header, other providers, and calls
-  without a session id. See [hosts](#hosts).
+  as are requests that already carry the header and calls without a session id.
+  A provider is covered through its target host, not through its name, so
+  restricting injection to particular routes takes an explicit `providers`
+  list. See [hosts](#hosts) and [providers](#providers).
 
 ## How it works
 
@@ -60,7 +63,7 @@ profile) is entirely optional — the code fills defaults for missing keys.
     - id: dsh-smoothly-opencode-session
       name: '@karoc/dsh-smoothly-opencode-session'
       config:
-        providers: [opencode, opencode-go]
+        # providers: [opencode, opencode-go]  # optional narrowing; unset = host gate decides
         mode: session-id
         debug: false
 ```
@@ -88,11 +91,13 @@ The host gate: a request is only modified when its target host is allowed
 (default `['https://opencode.ai']`, subdomains included). Entries are `host`
 (implicitly `https`) or `scheme://host[:port]`; a leading `*.` is ignored; IDN
 entries normalize to punycode; unusable entries are reported in the startup log
-instead of being ignored silently. `['*']` disables the gate entirely — use it
-only for a mirror you fully trust. If you reach OpenCode through a reverse
-proxy or a mirror, list that host here (write the full scheme, and note that a
-bare `host` entry means `https`) or the header will silently not be attached;
-the plugin warns once per blocked provider/host pair.
+instead of being ignored silently, and entries that are empty after trimming
+count as not supplied — when no usable entry is left, the default rule above
+applies. `['*']` disables the gate entirely — use it only for a mirror you
+fully trust. If you reach OpenCode through a reverse proxy or a mirror, list
+that host here (write the full scheme, and note that a bare `host` entry means
+`https`) or the header will silently not be attached; the plugin warns once per
+blocked provider/host pair.
 
 ### mode
 
@@ -108,25 +113,34 @@ the plugin warns once per blocked provider/host pair.
   via `ctx.logger` (the dsh process console), and reveal raw values in
   request-level records.
 - `debugFile: <absolute path>` — append one JSON line per streamed call
-  (`kind: "stream"`, with `provider`/`model`/`session`/`value`) and, when
-  `debugRequests` is on, per injected or host-blocked request
-  (`kind: "inject" | "skip"`). The stream-level record only means the call
-  entered the injection flow; the request-level records are what prove what was
-  actually attached. **The stream-level record carries the raw session id and
-  value (its 0.1.0 format, kept for compatibility); only the request-level
-  records are hashed by default.** The file is append-only (no rotation;
-  roughly one record per injected request) and written fire-and-forget, so a
-  short-lived process can lose its tail.
+  (`kind: "stream"`, with `provider`/`model`/`session`/`value`) and one per
+  injected or host-blocked request (`kind: "inject" | "skip"`, appended
+  whenever the file is configured; `debugRequests` adds the console line, not
+  the file record). A configured-but-unregistered provider route appends one
+  `kind: "diagnostic"` record instead (see [providers](#providers)). The
+  stream-level record only means the call entered the injection flow; the
+  request-level records are what prove what was actually attached. **The
+  stream-level record carries the raw session id and value (its 0.1.0 format,
+  kept for compatibility); only the request-level records are hashed by
+  default.** The file is append-only (no rotation; an injected call writes two
+  records, the stream one and the request one) and written fire-and-forget, so
+  a short-lived process can lose its tail.
 
 ### debugRequests
 
-`debugRequests: true` writes one request-level record **at the real fetch
-moment**: `{"ts","kind","reason","host","provider","valueHash","valueLen"}`
-with `reason` in `session` / `discovery` / `host-not-allowed` /
-`already-present`. These records are hashed by default: the value is reduced to
-a 12-hex-character SHA-256 prefix, and the raw value appears only when
-`debug: true` is set as well. (The separate stream-level record described above
-keeps the raw session id — see its note.)
+`debugRequests: true` logs one line per request-level record **at the real fetch
+moment** through `ctx.logger` (the dsh process console); the JSON record itself
+is appended to `debugFile` when one is configured (see above). Its `reason` is
+one of `session` / `discovery` / `host-not-allowed` / `already-present`. An
+injected record carries
+`{"ts","kind","reason","host","provider","valueHash","valueLen"}`; a `skip`
+record describes the request without a fingerprint
+(`ts`/`kind`/`reason`/`host`/`provider`, with `host` absent when the URL cannot
+be parsed), and a `discovery` record has no `provider` (a bare discovery
+request belongs to no route). Values are hashed by default: the value is
+reduced to a 12-hex-character SHA-256 prefix, and the raw value appears only
+when `debug: true` is set as well. (The separate stream-level record described
+above keeps the raw session id — see its note.)
 
 ### discoveryFallback
 
@@ -143,6 +157,8 @@ form is id-targeted, not `insert` — see [Install](#install).
 
 ## Install
 
+**Compatibility:** the earliest dsh release whose seams this plugin needs (`llm/stream`, `GenerateOptions.sessionId`, the `commands` service) is **0.1.0-rc.7** — that is the declared floor, derived from seam availability, not from a test pass on every release in between. It is declared as an optional peer dependency on `@deepseek-ai/dsh-llm: ">=0.1.0-rc.7"`, which DSH evaluates against its own runtime version: a runtime outside the range is refused at load time — the plugin's layer is skipped and the exact `dsh plugin allow-version` remedy is printed. That evaluation itself only ships since dsh 0.1.7-rc.1, and every release that has it already satisfies this floor, so the declaration states the contract rather than enforcing it today; a dsh older than 0.1.7-rc.1 loads the plugin unchecked. The peer is `peerDependenciesMeta.optional` because the host supplies `dsh-llm` at runtime, so npm installs nothing extra. The range deliberately spells the prerelease (`>=0.1.0-rc.7`, not `>=0.1.0`): a released-version range does **not** match a prerelease runtime.
+
 ### From npm (recommended)
 
 ```sh
@@ -153,7 +169,8 @@ Then **fully restart** your dsh profile (bundle layers are read at startup).
 The startup log shows:
 
 ```
-[dsh-smoothly-opencode-session] active for providers [opencode, opencode-go] with mode session-id
+[dsh-smoothly-opencode-session] active with mode session-id; provider narrowing: (none — the host gate decides)
+[dsh-smoothly-opencode-session] host gate: https://opencode.ai
 ```
 
 If you run DSH from a source checkout instead, load it as an overlay:
@@ -197,7 +214,7 @@ lib/                    built output (npm package entry)
 ```sh
 npm install       # installs dev deps (tsdown, @deepseek-ai/cordis types, @types/node)
 npm run bundle    # emits lib/index.js
-npm test          # node --test tests/*.test.ts (runs TypeScript directly)
+npm test          # node --test tests/*.test.ts (runs TypeScript directly) + the guarantee gate
 ```
 
 `pnpm` works too (`pnpm bundle`, `pnpm test`); this checkout documents the npm
@@ -205,10 +222,12 @@ path because pnpm is not always on PATH.
 
 ## Notes / limitations
 
-- **Scope:** only chat/streaming requests inside an `llm/stream` call receive
-  the header. The one-shot model listing used by the Models page
-  (`GET <baseURL>/models`) is a separate flow and does not receive it; if your
-  OpenCode endpoint rejects that listing too, that is a separate issue.
+  - **Scope:** only requests made inside an `llm/stream` call receive the header —
+    the decision rides on that **context**, not on the URL path. The one-shot
+    model listing used by the Models page (`GET <baseURL>/models`) is fetched
+    outside it and therefore receives nothing by default; enable
+    [`discoveryFallback`](#discoveryfallback) if your OpenCode endpoint rejects
+    that listing too.
 - **Implementation dependency:** injection rides on Node's global `fetch`. If
   a future DSH version swaps its network stack, the header silently stops
   being sent (the 400 comes back) — uninstall then. This is an external-plugin

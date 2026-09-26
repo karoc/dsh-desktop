@@ -142,7 +142,7 @@ window.__ModuleLoader__.load({
 		*
 		* Used by the scroll-follow highlight: the scroll listener finds the topmost
 		* visible `[data-chat-anchor-key]` row, then this function maps its key back
-		* to a turn number so the drawer can highlight the matching entry.
+		* to a turn number so the rail can highlight the matching entry.
 		*
 		* @param snap - the conversation snapshot.
 		* @param key - the chat-node key from the DOM anchor.
@@ -397,14 +397,16 @@ window.__ModuleLoader__.load({
 		* Registered into `conversation.session.header.utilities` (session scope), so
 		* this component reads the live `ConversationSnapshot` via `useSession`.
 		*
-		* DATA & PERFORMANCE: the rail's turn list is read from the HOST through the
-		* `sessions.history` browser→host RPC — every persisted turn (including ones
-		* far outside the conversation's window) is shown as plain data, with ZERO
-		* prepends into the conversation flow. The flow window is only extended
-		* (via the "Load earlier" paging button) on demand, when a capsule is
-		* clicked to jump to a turn that is not yet in the window. This keeps a very
-		* long conversation (hundreds of turns) responsive: opening it never re-
-		* renders the flow, and jumping loads only what is needed to reach the target.
+		* DATA & PERFORMANCE: the rail's turn list is read from the persisted log as
+		* plain data — the 0.1.2+ journal channel (`ctx.remote.session.page`) first,
+		* the legacy `sessions.history` browser→host RPC on older hosts — so every
+		* persisted turn (including ones far outside the conversation's window) is
+		* shown with ZERO prepends into the conversation flow. The flow window is only
+		* extended on demand, when a capsule for a turn outside it is clicked: through
+		* the official session store's `loadOlder` (0.1.2+), or by clicking the flow's
+		* own "Load earlier" button on older hosts. This keeps a very long
+		* conversation (hundreds of turns) responsive: opening it never re-renders the
+		* flow, and jumping loads only what is needed to reach the target.
 		*/
 		/** Scrollport selector: the active conversation's scroll container. */
 		const SCROLL_SELECTOR = "[data-conversation-scroll]";
@@ -784,14 +786,14 @@ window.__ModuleLoader__.load({
 					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "tn-scroll-btn",
-						"aria-label": "scroll rail up",
+						"aria-label": t("scrollUp"),
 						disabled: !canScrollUp,
 						onClick: () => scrollRail(railRef.current, -1),
 						onMouseEnter: () => {
 							if (canScrollUp) startHoverScroll(-1);
 						},
 						onMouseLeave: stopHoverScroll,
-						children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronUpOutline14, { size: 12 })
+						children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronUpOutlineRegular, { size: 12 })
 					}),
 					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 						ref: railRef,
@@ -818,14 +820,14 @@ window.__ModuleLoader__.load({
 					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "tn-scroll-btn",
-						"aria-label": "scroll rail down",
+						"aria-label": t("scrollDown"),
 						disabled: !canScrollDown,
 						onClick: () => scrollRail(railRef.current, 1),
 						onMouseEnter: () => {
 							if (canScrollDown) startHoverScroll(1);
 						},
 						onMouseLeave: stopHoverScroll,
-						children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronDownOutline14, { size: 12 })
+						children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronDownOutlineRegular, { size: 12 })
 					}),
 					jumpState !== null && (0, react_dom.createPortal)(/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 						className: `tn-jump-feedback${jumpState.phase === "error" ? " tn-jump-error" : ""}`,
@@ -922,7 +924,7 @@ window.__ModuleLoader__.load({
 						onClick: () => {
 							setOpen((value) => !value);
 						},
-						children: [t(selectedLabel), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronDownOutline14, { className: "tn-mode-chevron" })]
+						children: [t(selectedLabel), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronDownOutlineRegular, { className: "tn-mode-chevron" })]
 					})
 				})]
 			});
@@ -933,6 +935,8 @@ window.__ModuleLoader__.load({
 		/** English strings (the key-set source of truth for this pair). */
 		const en = {
 			rail: "Turn navigation",
+			scrollUp: "Scroll rail up",
+			scrollDown: "Scroll rail down",
 			turnLabel: "Turn {n}",
 			noSummary: "(no user message)",
 			locatingTurn: "Locating turn {n}…",
@@ -946,6 +950,8 @@ window.__ModuleLoader__.load({
 		/** Chinese strings (same keys as {@link en}). */
 		const zh = {
 			rail: "轮次导航",
+			scrollUp: "向上滚动胶囊条",
+			scrollDown: "向下滚动胶囊条",
 			turnLabel: "第 {n} 轮",
 			noSummary: "（无用户消息）",
 			locatingTurn: "正在定位第 {n} 轮…",
@@ -973,9 +979,11 @@ window.__ModuleLoader__.load({
    The whole wrapper is pointer-events:auto so the wheel scrolls the rail
    anywhere on it; buttons sit above and below the rail.
    z-index is deliberately LOW (10): above the conversation flow content
-   (max 8) but below full-screen overlays like the kanban board plugin
-   (z-index 50) — same order of magnitude as the header's "Session log"
-   button, so an open full-screen page always paints over the rail. */
+   (max 8) but below the shell's own overlay layers — same order of magnitude
+   as the header's "Session log" button, so anything the shell paints over the
+   conversation also paints over the rail. A DSH global panel (e.g. the kanban
+   board) takes over the 'main' slot entry instead of overlaying, so the rail
+   is not rendered while one is open. */
 .tn-wrap {
   position: fixed;
   right: 6px;

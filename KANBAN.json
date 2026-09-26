@@ -1905,6 +1905,28 @@
       ],
       "createdAt": 1790405310811,
       "updatedAt": 1790405310811
+    },
+    {
+      "id": "card-354118b1-1413-48b8-bc56-a59ab54325b4",
+      "title": "§14 两项处置完成：恢复路径判定已解决 + manager 运行时地板守卫已实施（15 套门禁全绿，已推送）",
+      "description": "**① 不一致态恢复路径（用户指令：确认没问题即标记解决）**：证据链逐环实测过——失败页上壳菜单栏照常渲染（dump 实测 `[Button] 菜单`，截图 s8-caption-on.png）；菜单可点开且列出「停用全部第三方插件…」「重启服务」；这些动作走壳确认窗（实测批准成功）；`disable_third_party_plugins` 先备份 profile manifest 再写回两层模板；需一次重启生效，而重启入口存在（菜单「重启服务」；manager 死时有启动页「重试」）；manager 死亡时启动页另有「停用第三方插件」安全网。⇒ 手动恢复 = 停用插件 → 重启服务，**标记为已解决**（用户约定：以后不生效再回报）。\n**② manager 侧地板守卫（用户指令：梳理方案并开始实施）→ 已实施**：新增纯逻辑 `scripts/plugin-floor.mjs`（`collectDshFloors` 只取 `@deepseek-ai/dsh*` peer + `planPluginGuard` → skipInstall/quarantine + 9 条 semver 自检）；manager 在 `ensurePreinstalled` 开头调用 `applyPluginFloorGuard`：地板不满足的预装插件不装进 runtime；已启用且地板不满足的**从 profile bundles 摘掉**（先 `package.json.bak-plugin-floor-<ts>` 备份、原子写回、记入 `dsh.json.quarantinedPlugins`）让 dsh web 能起来；补了 JS 侧 `writeWebProfileBundles`（保留字段 + tmp/rename，避免\"半截 manifest → 模板重建 → 插件全丢\"）。**负向保证**：不动 `@deepseek-ai/*`、不动未声明地板的插件（只告警）、不删文件、dsh 版本未知不判断。**验证**：单测 8 组 + **4 个负向对照变红**；`npm test` **15 套全绿 exit 0**；manager 模块图同步**自动**带上新模块（证明 S0 的闭包拷贝修复有效）。**仍未做**：把 `quarantinedPlugins` 呈现到界面（当前只在 dsh.json + 日志）、不一致态下守卫的 E2E 实测（需在 dev runtime 装回 dsh 0.1.6 + devMode 冻结地板）。代码已提交推送：`62d910e`（分支 `feat/shell-hardening-0.1.7`）。",
+      "rationale": "用户明确要求：先把工作树改动提交推送，然后把「不一致态恢复路径」梳理确认后标记解决、把「manager 地板守卫」梳理方案并开始实施。三项都属于\"闭环\"性质的工作：不落地就会以\"待办\"形式一直漂着。",
+      "rejected": "① 不为「恢复路径」做昂贵的真实 E2E（需装回 dsh 0.1.6 + 590 包 + 两次重启）——用户明确说\"确认没问题就标记解决\"；改为逐环引用已实测证据并说明仍需一次重启。② 地板守卫不采用\"直接删插件/隐式重启\"（会破坏用户资产或违背\"改配置不隐式重启\"约定），改为\"摘启用列表 + 备份 + 记账 + 保留文件\"。③ 不动未声明地板的插件（没有证据就改用户状态 = 更大的风险）。④ 不把守卫做成\"仅日志告警\"（那不能阻止 UI 打不开，等于没解决 fail-closed）。",
+      "sourceSessionId": "session-c852547f-89db-4736-8a28-f3dd6ec7be25",
+      "status": "done",
+      "tags": [
+        "dsh-0.1.7",
+        "preinstalled",
+        "plugins",
+        "manager",
+        "guard",
+        "gate",
+        "done",
+        "rollback-edge"
+      ],
+      "createdAt": 1790443492387,
+      "updatedAt": 1790443723293,
+      "summary": "① 恢复路径：逐环梳理并**标记已解决**（失败页壳菜单仍渲染 → 菜单可开 → 停用插件走壳确认窗 → `disable_third_party_plugins` 先备份 profile manifest 再写回两层模板 bundles → 需一次重启，而重启入口存在；manager 死时另有启动页「停用第三方插件」安全网）。② manager 地板守卫：**已实施**——新增 `scripts/plugin-floor.mjs`（`collectDshFloors` 只取 `@deepseek-ai/dsh*` peer + `planPluginGuard` + 9 条 semver 自检）；manager 在 `ensurePreinstalled` 开头跑 `applyPluginFloorGuard`：地板不满足的预装插件不装进 runtime；已启用且不满足的**从 profile bundles 摘掉**（先 `package.json.bak-plugin-floor-<ts>` 备份、tmp+rename 原子写回、记入 `dsh.json.quarantinedPlugins`）；新增 JS 侧 `writeWebProfileBundles`（保留其它字段）。负向保证：不动 `@deepseek-ai/*`、不动未声明地板者（只告警）、不删文件、dsh 版本未知不判断。验证：单测 8 组 + **4 个负向对照变红**；`npm test` **15 套全绿 exit 0**（32 条 PASS）；manager 模块图同步**自动**带上新模块（证明 S0 闭包拷贝修复有效）。已提交推送 `62d910e`（分支 `feat/shell-hardening-0.1.7`）。仍未做：`quarantinedPlugins` 的界面呈现、不一致态下守卫的 E2E 实测（需装回 dsh 0.1.6 + devMode 冻结地板）。"
     }
   ]
 }

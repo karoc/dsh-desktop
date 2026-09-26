@@ -1,7 +1,7 @@
 {
   "name": "dsh-kanban",
-  "version": "0.2.8",
-  "description": "Smoothly Kanban (思磨力看板): external DeepSeek Harness plugin — a cross-session, workspace-scoped kanban board for plans and todos, persisted to a git-trackable KANBAN.json. Model-facing tools (board_list/board_add/board_update/board_remove) plus a sidebar '思磨力看板' entry with a full-screen three-column board page.",
+  "version": "0.2.10",
+  "description": "Smoothly Kanban (思磨力看板): external DeepSeek Harness plugin — a cross-session, workspace-scoped kanban board for plans and todos, persisted to a git-trackable KANBAN.json. Model-facing tools (board_list/board_add/board_update/board_remove) plus a sidebar '思磨力看板' entry with a global-panel three-column board page (sidebar glyph + the keyed main panel, no overlay).",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -46,7 +46,7 @@
     "bundle": "tsdown --config ./tsdown.config.ts",
     "prepare": "tsdown --config ./tsdown.config.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsc --noEmit && node --test scripts/board-core.spec.mjs scripts/workspace-pick.spec.mjs && node scripts/check-card-discipline.mjs && node scripts/check-tokens.mjs --self-test && node scripts/check-client-wiring.mjs && node scripts/verify-tools.mjs && node scripts/verify-spec.mjs && node scripts/verify-context.mjs && node scripts/verify-skill-sync.mjs && node scripts/verify-skill-runtime.mjs",
+    "test": "tsc --noEmit && node --test scripts/board-core.spec.mjs scripts/workspace-pick.spec.mjs && node scripts/check-card-discipline.mjs && node scripts/check-tokens.mjs --self-test && node scripts/check-client-wiring.mjs && node scripts/verify-tools.mjs && node scripts/verify-spec.mjs && node scripts/verify-context.mjs && node scripts/verify-skill-sync.mjs && node scripts/verify-skill-runtime.mjs && node scripts/check-guarantees.mjs && node scripts/test-negative-controls.mjs",
     "check:spec": "node scripts/check-note-spec.mjs",
     "check:cards": "node scripts/check-card-discipline.mjs",
     "check:tokens": "node scripts/check-tokens.mjs --self-test",
@@ -59,7 +59,11 @@
     "release:check": "node scripts/release-check.mjs",
     "prepack": "node scripts/release-check.mjs",
     "prepublishOnly": "node scripts/release-check.mjs && tsdown --config ./tsdown.config.ts",
-    "postpublish": "node scripts/post-publish-check.mjs"
+    "postpublish": "node scripts/post-publish-check.mjs",
+    "verify:guarantees": "node scripts/check-guarantees.mjs",
+    "test:controls": "node scripts/test-negative-controls.mjs",
+    "verify:all": "node scripts/verify-all.mjs",
+    "verify:fresh": "node scripts/verify-all.mjs --check-fresh"
   },
   "engines": {
     "node": ">=18"
@@ -96,6 +100,12 @@
     "typescript": "^5.6.0"
   },
   "peerDependencies": {
+    "@deepseek-ai/dsh-client-ui-slots": ">=0.1.7-rc.1",
     "react": "^18.2.0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-client-ui-slots": {
+      "optional": true
+    }
   }
 }
