@@ -6,7 +6,7 @@
 
 DSH Smoothly Desktop（**DSH SD**）把 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）打包成可独立运行的 Windows 桌面 App。
 
-- **dsh 更新由你决定**：启动时只检查 npm 上 `@deepseek-ai/dsh` 的稳定版（`latest` tag）与预发布（`next`/`alpha` tag），**不自动安装**。有新版时托盘菜单高亮「有更新 vX → 点击更新」，壳菜单「检查更新…」弹窗也能一键更新（含预发布，想升才升）；点一下即下载安装并自动重启。dsh 永远来自官方 npm 包（经内置 pnpm 安装），本地零改动。**唯一例外是版本地板**：壳要求 dsh ≥ `0.1.6-alpha.2`（该版本起 dsh 自带插件管理，见下条），低于地板的运行时会先自动升到地板，失败则如实提示并继续启动。
+- **dsh 更新由你决定**：启动时只检查 npm 上 `@deepseek-ai/dsh` 的稳定版（`latest` tag）与预发布（`next`/`alpha` tag），**不自动安装**。有新版时托盘菜单高亮「有更新 vX → 点击更新」，壳菜单「检查更新…」弹窗也能一键更新（含预发布，想升才升）；点一下即下载安装并自动重启。dsh 永远来自官方 npm 包（经内置 pnpm 安装），本地零改动。**唯一例外是版本地板**：壳要求 dsh ≥ `0.1.7-rc.2`（0.1.6-alpha.2 起 dsh 才自带插件管理；0.1.7 起随壳分发的预装插件才能通过 dsh 的插件兼容门禁，见下条），低于地板的运行时会先自动升到地板，失败则如实提示并继续启动。
 - **插件管理在 dsh 自己的页面里**：dsh 0.1.6-alpha.2 起自带插件管理（Web 侧边栏 **Plugins** 页：安装/卸载/启用/停用/行级开关/构建脚本审批/插件配置页）。壳内不再有自建的插件管理窗口——dsh 起不来时用壳菜单「停用全部第三方插件…」自救（会先备份 profile `package.json`）。
 - **升级后自动清理残留嵌套包**：pnpm 的 hoisted 安装不清理上一版留下的嵌套目录，而 Node 解析嵌套副本优先于提升到根的新版 —— 实测 0.1.5-rc.2 → 0.1.6-alpha.2 后 `dsh-session-persistence-jsonl/node_modules/@deepseek-ai/*` 仍是旧版（不导出新版需要的 `./message-projections`）→ dsh 启动即崩。壳在**升级后与每次启动**都检查一次，只删版本与父包不一致的嵌套副本（不重建整棵树、不需要联网）。
 - **内置 Node 24 运行时**：安装包自带 Node（满足 dsh 的运行要求），用户机器无需装 Node。
@@ -130,7 +130,9 @@ node_modules 符号链接树、写迁移标记、绝不上移覆盖已有新数�
 ## 本地验证（Linux 可跑的部分）
 
 ```bash
-npm test                 # 全量 9 套：通知插件 / 控制面 / 代理 / 代理e2e / 启动页设置 / 壳顶栏契约 / 启动器扫动 / 请求头预算 / 副本一致性
+npm test                 # 全量 14 套：清单一致性 / overlay 目标行 / 升级标记 / 通知插件 / 控制面 / 代理 / 代理e2e /
+                         #   启动页设置 / 壳顶栏契约 / 启动器扫动 / 请求头预算 / 半截安装自愈 / 副本一致性
+npm run test:slow        # 安装卡死快速失败（~3 分钟，不进 PR 门禁；CI 的 linux job 会跑）
 npm run test:plugin      # 通知插件行为测试（纯 Node，无浏览器）
 npm run test:control     # manager 控制面（11 场景，含版本地板闸门）
 npm run test:proxy       # 内置正向代理（12 场景）
@@ -170,7 +172,7 @@ node scripts/server-manager.mjs \
 - 首次启动：用内置 pnpm 冷安装 dsh + 注入插件（视网络 1~3 分钟，之后走 pnpm 缓存秒开）；再启动会快速检测更新（稳定版 + 预发布）。
 - 更新失败（离线等）：保留现有版本继续启动，不阻塞；registry 会失败自动切换镜像并给出清晰报错。
 - 服务异常退出：加载页显示日志，"重试"按钮 → `restart_server`。
-- 关窗（含顶栏关闭键）→ 隐藏到托盘；顶栏/托盘"退出" → 杀掉整棵服务进程树并退出。
+- 关窗（含顶栏关闭键、Alt+F4、任务栏关闭）→ 隐藏到托盘：**Windows 上首次隐藏前会弹一次确认**（说明任务不会中断、可从托盘找回；确认一次后不再询问，标记在数据目录的 `background-close-confirmed`）；Linux 退化为最小化（GNOME 可能没有托盘）。顶栏/托盘"退出" → 杀掉整棵服务进程树并退出。
 - 点系统通知 → 窗口回到前台并打开对应会话（不重复启动第二个实例）。
 
 ## 壳菜单栏（自绘顶栏）
@@ -211,7 +213,7 @@ Web 侧边栏有 **Plugins** 页（安装 / 卸载 / 启用 / 停用 / bundle �
 - **预装插件（随壳自带，默认关闭）**：`dsh-kanban`（看板）、`dsh-model-reasoning`（按模型推理档位）、`dsh-turn-navigator`（会话轮次导航）、`@karoc/dsh-smoothly-opencode-session`（OpenCode 会话头，无它会 `400 MissingSessionID`）。它们随安装包发布、被复制进运行时并**版本锁定**（离线可用）；在 dsh 的 **Plugins** 页打开开关即可启用。
 - **用户自装插件**：在 dsh 的 **Plugins** 页按包名 / Git 地址 / tarball / 本地路径安装与卸载（走壳内置 pnpm，壳已把 pnpm shim 挂到 `dsh web` 子进程的 PATH）。
 - **能力边界（相对已移除的壳内控制台）**：① dsh 起不来时无法在图形界面里管理插件（改用壳菜单「停用全部第三方插件…」，它不依赖 dsh）；② 新管理器没有"更新到新版本"操作——需要时用 `dsh plugin --profile web update <包名>`，或卸载后重装；③ 预装插件不再支持"从 npm 升级 / 恢复出厂"，版本随壳发布走。
-- **dsh 更新**：壳菜单「检查更新…」弹窗显示当前/可升版本。稳定版（`latest` tag）随时可一键升；若 npm 有更新的**预发布**（`next`/`alpha` tag）也会提示「（预发布）」可升，想升才升，不点就保持原版本。**版本地板**：dsh < `0.1.6-alpha.2` 时启动会自动升到地板（该版本才有插件管理），失败会如实提示并继续启动；`dsh.json` 的 `devMode` 会冻结这一自动升级。
+- **dsh 更新**：壳菜单「检查更新…」弹窗显示当前/可升版本。稳定版（`latest` tag）随时可一键升；若 npm 有更新的**预发布**（`next`/`alpha` tag）也会提示「（预发布）」可升，想升才升，不点就保持原版本。**版本地板**：dsh < `0.1.7-rc.2` 时启动会自动升到地板（0.1.6-alpha.2 起才有自带插件管理，0.1.7 起预装插件才被兼容门禁放行），失败会如实提示并继续启动；`dsh.json` 的 `devMode` 会冻结这一自动升级。
 - 代理设置入口在**顶栏菜单「代理设置…」**（独立设置窗口，托盘菜单同样可达）。
 
 ## 环境变量（可选）
@@ -239,6 +241,30 @@ dsh 页面以纯远程页面加载，只授予 loopback 权限
 
 **版本演进策略**：正式版安装目录名 / 快捷方式名一经定型不得随版本改动；
 升级一律"就地覆盖安装"。标识（identifier）变更属特殊事件，必须配整套旧版接管。
+
+**dsh 升级是单向的（0.1.7 起，重要）**：
+- dsh **0.1.7-alpha.1 起**把会话按 **v4** 格式写入，而旧读取器**拒绝读**新代文件；
+  写入方式是"旁挂新代文件"，升级前的 v3 快照仍在原地。
+- 因此**不要用"装回旧版本"当回滚手段**：回退到 0.1.6 及更早，只会看到**升级前**的
+  快照，升级后产生的会话/改动**读不到**。更不能以"旧版本还能打开"判定回滚成功。
+- **正确的回滚 = 还原升级前的数据目录备份**：升级前用壳菜单「检查更新…」弹窗里的
+  「打开数据目录」复制整个数据目录（或至少 `runtime/dsh-home/`），回滚时整目录还原。
+- 升级入口的提示已就位：检查更新弹窗会显示这条警告；托盘「有更新 vX」的标签与
+  通知文案也带「建议先备份数据目录」。
+- **回退 dsh 会让新版插件可能失效**：回退是降级 dsh；若新版预装插件依赖旧版没有的客户端服务（例如 0.1.7 的 `configForms`），dsh 的插件加载是 fail-closed → **界面会停在「Failed to load plugins」打不开**。自救：启动页点「停用第三方插件」（会先备份 profile 配置），或恢复升级前的数据目录备份。
+- **升级后启动失败会自动归因**：manager 在装完成后写 `<runtime>/upgrade.json`，
+  启动成功（页面就绪）即被壳删除；若这次启动失败且标记仍在，启动页会显示
+  「上次升级 vA → vB 后启动失败」并提供「回退到 vA」（装回旧版本，**不还原数据**
+  —— 数据回滚仍走备份还原）。同一对版本反复失败（attempts ≥ 2）时不再提供一键
+  切换，只保留归因与证据目录，避免两版本之间来回跳。
+
+**顶栏契约（实验项，默认关）**：壳菜单「顶栏契约（实验）」可切换
+`dsh.json` 的 `webview.titlebarContract`。开启后壳**不再自己推挤**顶栏高度，而是给
+页面设 `html[data-windows-titlebar]` + `--dsh-windows-titlebar-height: 40px`，由 Web
+客户端（0.1.7 起支持该契约）自己预留标题栏并把侧栏开关搬进标题栏 —— 与官方
+Electron 壳一致。切换后**必须刷新页面**（注入前缀只在页面加载时写入）。默认关的
+原因：这是观感/遮挡问题，只能 Windows 实机判定；若出现「侧栏开关点不到 / 内容被
+标题栏压住 / 菜单起点错位」请关掉该项并回报。
 
 **数据迁移**：0.3.x → 0.4.x 品牌统一时，旧数据目录（`%APPDATA%\dev.dsh.desktop`）
 在首次启动整体搬入新目录（`%APPDATA%\dsh.smoothly.desktop`），原子 rename + marker，
@@ -289,7 +315,7 @@ dsh 页面以纯远程页面加载，只授予 loopback 权限
 
 - **分支/合并**：功能走短分支 + PR，**squash merge** 进 main（一提交一功能）；main 有分支保护（需 PR + CI 快层通过）。
 - **提交规范**：Conventional Commits（`feat/fix/docs/ci/refactor/test/chore` + 中文描述），规范直接驱动版本发布。详见 `CONTRIBUTING.md`。
-- **CI 分层**：PR 只跑快层（check：`cargo check` + `fmt --check` + `clippy -D warnings`；test：`npm test` 全量，~5min）；main push / `v*` tag 跑全量（windows NSIS 打包 + 布局断言 + runtime smoke、linux 打包、linux-smoke canary）。
+- **CI 分层**：PR 只跑快层（check：`cargo check` + `clippy -D warnings` + `cargo test --lib`；test：`npm test` 全量，~5min）；main push / `v*` tag 跑全量（windows NSIS 打包 + 布局断言 + runtime smoke、linux 打包、linux-smoke canary）。
 - **发布**：release-please 自动 bump 三处版本（Cargo.toml / tauri.conf.json / package.json）→ CHANGELOG.md → release PR → admin 合并 → 打 tag + 建 Release → **在 tag 上派发一次 `build.yml` 才有安装包**（见下）。
 
 ## 发布（release-please 自动出包 + GitHub Release）

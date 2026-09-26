@@ -908,18 +908,21 @@
       "id": "card-29b6f966-de46-495c-a44d-8ecbb0fe11c0",
       "title": "安全：桥端点鉴权（token 挡不住同源插件 → 危险动作改壳内确认窗 + IPC）",
       "description": "【决策（用户 2026-09-09，D4；详见 docs/2026-09-09-pending-cards-solutions.md §0.1/§3）】接受\"页面里的壳菜单退出/重启也走确认窗\"：远程 dsh 页的壳菜单同样经桥调用，\"请求是否来自壳 chrome\"在页面主世界无法区分（插件能读一切）→ **托盘菜单是免确认的壳内入口**；**不采用**\"壳 chrome 加标记\"（插件可伪造，防护归零）。\n\n【核心结论（有证据）】**token 挡不住同源插件**：注入在页面主世界（inject_shell_chrome 用 w.eval，lib.rs:2281 → wry 0.55.1 ExecuteScript）；项目自己依赖同世界（server-manager.mjs:988-997 把桥端口烘焙进预装插件 client.js 并注释保留 globalThis 读取路径\"给外部注入者\"；插件侧读 globalThis.__DSH_BRIDGE_PORT__）；放 header 不改变泄露面（值仍必须来自全局才能被 bridge() 读取，同世界插件还能 patch fetch）→ **只要秘密交给页面，就属于页面**。\n\n【其他事实】桥零校验（lib.rs:1371-1389 只看 content-length，**不看 Origin/Host/peer_addr**）→ DNS rebinding 当前可实现；OPTIONS 已处理（:1392 返回 204）但 Allow-Headers 仅 content-type（:1772）→ 加 token 头必须同步改否则预检失败；端点 38 个、危险集 9 个（/shell/quit、/restart、/shell/legacy-cleanup、/update-dsh、/plugins/install、/plugins/remove、/shell/open-data-dir、/shell/dev-mode-toggle、/shell/gpu-accel-toggle）；/notify /log /pending-open /alive 的调用方是预装通知插件（只有烘焙端口、无 token）→ 不能一刀切、**绝不把 token 烘焙进 client.js**；\"危险动作改 IPC-only\"不可行（远程页无 __TAURI__、capabilities 无 core:default，放开等于暴露整个 invoke_handler）；现有壳内弹窗渲染在页面 DOM 的 shadow root → 同世界插件可伪造/点击 → **必须改成壳拥有的独立 webview**（照 open_plugins_window 模式）。\n\n【推荐分阶段】**阶段 0**（半天，零行为变更）Host 校验（须 127.0.0.1:<port>/localhost:<port>）+ Origin 白名单（tauri://localhost、http://127.0.0.1:*、http://localhost:*）否则 403 → 挡外部网页与 DNS rebinding；**阶段 1**（对同源插件唯一有效）9 个危险端点从\"执行\"改为\"桥只登记 PENDING_CONFIRM + 打开壳拥有的 confirm 窗 + 新 IPC resolve_pending_action(nonce) 执行\"，**动作描述由 Rust 生成**（防\"确认框写刷新、实际 quit\"）、槽位一次一个 + 60s 过期，shell-chrome.js:71-91 ACTIONS 加 confirm:true；**阶段 2** token 每次页面加载轮换（只宣称防外部，豁免通知插件四端点）；**阶段 3** CORS 收窄（可选）。\n【测试】test-shell-chrome.mjs 增断言（危险集必须 confirm:true；危险端点 match 臂内不再直接执行；含 __DSH_BRIDGE_TOKEN__ 且 bridge() 设头）；新增 test-bridge-guards.mjs 做源码级 Host/Origin 判定断言。",
-      "rationale": "原卡三个候选未经验证。调研用证据否掉了\"token 能挡同源插件\"的隐含假设（注入在页面主世界、项目自己依赖 globalThis 读取），故主方案收敛为\"危险动作 → 壳拥有独立确认窗 + IPC 执行\"，token/Origin 降级为防外部网页的纵深防御。用户 D4 确认接受\"页面壳菜单也确认一次\"的体验代价。",
+      "rationale": "2026-09-01「菜单点了没反应」事故后确认：桥的 30 个环回端点里有一批能退出/重启/装更新/停用插件/清缓存，而 token 随 URL 进页面、同源插件照样读得到 —— 鉴权挡不住真正的威胁模型（页面内脚本发起危险动作）。所以在 0.1.7 升级窗口期一起收口。",
       "sourceSessionId": "session-9f06f767-640a-4cdc-9a05-afb32d45bcb4",
-      "status": "todo",
+      "status": "done",
       "tags": [
         "security",
         "bridge",
         "dsh-web",
-        "follow-up"
+        "confirm-window",
+        "done",
+        "dsh-0.1.7"
       ],
       "createdAt": 1788893072651,
-      "updatedAt": 1788952318687,
-      "rejected": "1) 敏感端点单独 token：同源插件照样读到 token → 无效；2) Origin 白名单单独用：挡不住同源插件 → 保留为阶段 0；3) 危险动作改 IPC-only：远程页无 __TAURI__ 且 capabilities 无 core:default → 放开等于暴露整个 invoke_handler；4) 用现有壳内模态弹窗做确认：渲染在页面 DOM，同世界插件可伪造/点击 → 不够；5) 端口随机化当主防线：端口在日志与 manager 命令行可见，对同用户本机进程无效；6) 给预装通知插件烘焙 token：落盘且与其\"无 token\"现实矛盾 → 禁止；7) 给壳 chrome 加身份标记以跳过确认：插件可伪造，防护归零 → 不采用。"
+      "updatedAt": 1790313913461,
+      "rejected": "① 桥端点整体加 token 校验——被否（token 在同源页面里，挡不住；还会打乱远程页首屏时序）；② 危险动作同步弹窗（桥线程等用户点击）——被否（本仓 IPC 命令是同步的、在主线程执行，桥线程等主线程 = 死锁）；③ 只做 Host 校验不做 Origin/自定义头——被否（只挡 DNS rebinding，挡不住同源页面 fetch）；④ 把确认逻辑放在插件侧——被否（插件不可信，且第三方插件不该有机会\"批准\"壳动作）。",
+      "summary": "按\"阶段 0 收窄请求面 + 阶段 1 危险动作收口\"实施（计划文档 S4-0/S4-1）。阶段 0：`bridge_request_decision` 纯函数（Host 必须等于活的桥端口 / Origin 白名单 / 非 GET·HEAD·OPTIONS 必须带 `X-DSH-Shell: 1`），响应改由 `bridge_cors_headers(origin)` 生成、不再通配 `ACAO: *`、`Allow-Headers` 含 `x-dsh-shell`，拒绝回 403 + 记 `bridge reject` 日志；两个调用方（shell-chrome 的 bridge()、通知插件 post()）同批加头。阶段 1：`dangerous_bridge_action` 表（10 → 11 项，含 S8 的顶栏契约切换），桥不执行而是登记一次性槽位（一次一个/60s 过期/同动作去重/不同动作 busy）+ 打开壳拥有的确认窗 `src/confirm.html`（文案 Rust 生成、Esc=取消、默认焦点取消），立即回 202 `{pending:true}`；`get_pending_action`/`resolve_pending_action` 均为 async IPC，唯一执行点 `execute_danger_action`；capabilities 加 confirm 窗口、window-state denylist 加 confirm、8 个 ACTIONS 标 `confirm: true`、pending 时给 toast。验证：npm test 13 套 exit 0；clippy windows 目标 0 error；桥准入 4 个纯函数单测经\"机械抽取 + rustc --test\"真实执行通过（6/6 含危险表与关窗）；负向对照 7/7 变红。**未覆盖（待 Windows 实机）**：浏览器预检的真实行为、确认窗观感/置顶、主窗口全屏时的表现 —— 已登记在\"待 Windows 实机验收（9 项）\"卡。"
     },
     {
       "id": "card-2506a383-e1d8-44fb-8170-3ba98be9f07a",
@@ -1693,6 +1696,215 @@
       ],
       "createdAt": 1790086590014,
       "updatedAt": 1790086590014
+    },
+    {
+      "id": "card-6b4125f0-54e8-474f-909f-1cdb14a756a3",
+      "title": "对比官方 dsh 0.1.7-rc.2 桌面端（apps/desktop + apps/desktop-host）与 dsh-desktop，出深度利弊报告",
+      "description": "范围：官方 apps/desktop（Electron 壳）+ apps/desktop-host（Node 宿主进程）全量机制；我方 src-tauri（Tauri 壳）+ scripts/server-manager.mjs + plugins + 发布通道。产出：一份分维度、带 file:line 证据、明确「官方更好 / 我方更好 / 可借鉴 / 不采纳」的报告。禁止：把官方未发布/假设的能力当既有事实（外部论断须标 [已验证: 命令] / [假设]）。",
+      "rationale": "用户要求「对比官方 dsh 0.1.7-rc.2 里的 desktop 内容，看区别与利弊，深入切实、不漏点」。旧结论（docs/2026-09-17-official-desktop-takeaways.md 等）基于 0.1.6 时「官方桌面端未发布」的状态，本次官方这条线已完整落地（59 src 文件 / 127 脚本 / 135 测试 / 自研 C++ NSIS / COS 更新链），必须重建事实基线再判断，否则会拿过期结论做决策。",
+      "rejected": "① 不逐条读 1963 个上游提交（改为按「壳依赖的外部契约面」定向检索）；② 不把官方未发布/未验收的能力当既有事实（账号登录、强更实机效果等一律标 [假设]/[本机不可验证]/[未覆盖]）；③ 不照搬官方方案清单（每条建议都带成本与「为什么现在」，并单列「明确不做 8 项」；已论证过的 NSIS fork、Electron 重写、强更、Python/Office 全量载荷一律不重开）；④ 未在本机跑任何构建/实机启动验证（本报告不替代验证，落地前每项各需可失败对照）。",
+      "sourceSessionId": "session-c852547f-89db-4736-8a28-f3dd6ec7be25",
+      "status": "done",
+      "tags": [
+        "dsh",
+        "desktop",
+        "electron",
+        "tauri",
+        "comparison",
+        "report",
+        "research",
+        "done"
+      ],
+      "createdAt": 1790271599111,
+      "updatedAt": 1790272912369,
+      "summary": "交付报告 docs/2026-09-25-official-desktop-0.1.7-rc.2-vs-dsh-desktop.md（668 行）：0 摘要 11 条 / 1 前提 / 2 二十二维度总览表 / 3 分维度详述（3.1–3.21）/ 4 结构性三类差距 / 5 建议清单（P0×3、P1×6、P2×7、明确不做 8 项）/ 6 升级动作清单（3 阻断 + 4 需改 + 1 高优先验证 + 6 仅需验证 + 4 负面约束）/ 7 现状与缺口（含宿主机实测）/ 8 附录（证据速查 + 17 条不确定性 + 方法与边界）。取证：官方 /srv/deepseek-harness@477b4f4205 只读，7 条独立深挖线（s1–s7）落盘到 .tmp-investigate/desktop-0.1.7/；npm registry 实查；宿主机 /mnt/c 只读抽查。核心结论：差距是结构性的（官方向进程内 in-process boot + 打包期物化 + EV 签名 + 自有 CDN，我们靠外部 CLI/HTTP 契约），但 22 维度里我们有 4 项明确领先（内置代理、完成通知、预装插件、Linux 产物），最高性价比借鉴是 data-windows-titlebar 顶栏契约（P0-1）；本次新增的实质风险：会话格式 v4 使降级不可读（回滚必须改备份还原）、侧栏浏览器页被 profile 名门控停用、插件 peer 兼容闸门引入「装上但静默停用」新失效模式。"
+    },
+    {
+      "id": "card-3672001c-c84c-4aa6-bb79-e449e5846a52",
+      "title": "0.1.6-alpha.2 → 0.1.7-rc.2 对外部壳/外部插件的破坏性变更分析（s7-016-to-017-breaks）",
+      "rationale": "壳停在 0.1.6-alpha.2，升级 0.1.7-rc.2 前必须知道哪些外部契约面被动过。壳不读 dsh 内部 API，只靠「CLI 参数 + HTTP 契约 + DOM/CSS + 第三方客户端插件」存活，所以上游 1963 提交里任何一处外部面变更都会让壳静默失效 —— 而\"静默\"是最贵的失败模式（431 那次就是：上游没动，我们以为动了）。本卡把\"哪些真有证据是破坏性、哪些只是新增能力\"分开，避免把\"新增能力\"当\"破坏\"去过度改造。",
+      "rejected": "① 放弃逐条读 1963 提交（626 merge，上下文不可承受），改按外部契约面定向检索；② 放弃复用 .tmp-investigate/dsh-0.1.5-rc.2 与 dsh-0.1.6-alpha.2 目录（那是包解包产物，不含 0.1.7 代码）；③ 放弃逐文件读 apps/desktop（307 文件、Electron 栈与我们不同），只提取会影响共享 Web UI 的标记与门控层；④ 放弃展开 packages/client 的 UI 细节（1700 文件），只保留可判定的槽位键+kind+scope；⑤ **未做** locale/i18n 文案表逐条比对（4 个插件都 inject dsh-client-locale）→ 登记为覆盖缺口，并入清单第 14 项回归一起跑。",
+      "sourceSessionId": "8bcb66d5-1fdc-491a-8771-033f1eaa9ed1",
+      "status": "done",
+      "tags": [
+        "dsh-0.1.7",
+        "upgrade",
+        "breaking-changes",
+        "readonly"
+      ],
+      "createdAt": 1790271859747,
+      "updatedAt": 1790272774943,
+      "summary": "产出 .tmp-investigate/desktop-0.1.7/s7-016-to-017-breaks.md（365 行）。范围：dsh-v0.1.6-alpha.2(ddefc45fbc)..dsh-v0.1.7-rc.2(477b4f4205) = **1963 提交 / 626 merge / 6783 文件 / +511548−135822**。\n\n关键结论（均带 file:line 或 commit sha）：\n① **唯一槽位破坏**：`conversation.session.header.leading` → 改名 `conversation.header.leading`（commit 8019d37d3f）；槽位 70→89，新增 19 个全为新增能力；我们 4 个预装插件用的 4 个槽位（sidebar.panellist / settings.section / settings.general.item / conversation.session.header.utilities）存在性+kind+scope 全未变。\n② **`dsh web` 参数面零破坏**：packages/bundle/web-app/src/{startup.ts,index.ts} 在本区间 **git diff 为空**；`--host/--port/--no-open/--trusted-host/--patch` 语义不变；`rejectElectronProfile`（禁 `--profile desktop`）alpha.2 已存在。\n③ **新增插件 peer 兼容闸门**（commit 2c67633990）：命中 `@deepseek-ai/dsh*` peer 不满足 → profile 启动时静默 `row.disabled=true`（compatibility-preflight.ts:79-84,114-118）+ `dsh plugin add` 拒装 exit 1（operations.ts:324-334）+ 新文件 `compatibility.json`。我们 4 个插件只声明 `react` peer（被 plugin-compatibility.ts:75 过滤）→ **不受影响**；但壳绕过 `dsh plugin add`（用裸 pnpm，server-manager.mjs:745），拿不到安装期拒绝，只会在启动期被静默停用 = 新失效模式。\n④ **431 上游零修复**：`max-http-header-size`/`maxHeaderSize`/431 在 rc.2 的 packages|apps src 中零命中；cookie 名仍是 `dsh-auth-<sha256(authority)>`（browser-auth.ts:16,106-107），authority 绑定 + `--port 0` → 累积路径未变 → 现有 P0 janitor + P1 NODE_OPTIONS 注入**仍然必需**。\n⑤ **`ui-sidebar-browser` 被 profile 名门控**（`disabled: !!js \"ctx.get('profileContext')?.name !== 'desktop'\"`，commit 3eab1714bc）：`dsh web`（profile=web）**从开启变停用** = 能力回退；修法是壳 overlay 加 `disabled: false`（官方 README 记录，ui-sidebar-browser/README.md:28,36）。\n⑥ **会话格式 v3→v4**（generated.ts:17 currentVersion:4；新增 session-format-v3-to-v4）：文档原文 **\"V3 readers refuse the newer generation\"** → **降级回 0.1.6-alpha.2 后新会话不可读 = 回滚受阻断**。\n⑦ `/alive` 上游两 tag 都**不存在**（它是壳自有桥端点 src-tauri/src/lib.rs:1712）；上游就绪信号是 stdout 的 `dsh web:` 行。`data-windows-titlebar`/`--dsh-windows-menu-start` 两 tag 未变，且壳两属性都不设；`data-platform` 全仓**只认 `darwin`**（90 命中，windows/linux/win32 零命中）。\n⑧ 输出 20 条升级动作清单（阻断/需改/仅需验证 三档）+ 3 个不确定点。\n\n副产品：更正了同期看板卡「s6 桌面标记族注入」的前提（详见该卡 description）。"
+    },
+    {
+      "id": "card-713e888c-f208-4c63-916c-9c2232c4bc81",
+      "title": "可复刻项（s6 新证据）：用 WebView2 init script 注入「桌面标记族」解锁官方桌面专属 UI 分支",
+      "description": "【s7 更正 — 原假设部分不成立】原卡前提「注入桌面标记族即可解锁官方桌面专属 UI 分支」经 git 证据核对后需拆分。完整依据：.tmp-investigate/desktop-0.1.7/s7-016-to-017-breaks.md §5.5。\n\n(a) `data-platform` 在本仓源码中**只认 `darwin`**：`grep -rhoP \"data-platform[='\\\"]{1,2}(darwin|windows|linux|win32)\"` 统计 = darwin 90 次，windows/linux/win32 **零命中**；生产者仅 apps/desktop/src/preload-platform.ts:11。→ 注入 `data-platform='windows'` 是 no-op；注入 `'darwin'` 会激活 macOS 专属布局（base.css:55/67/72/89 的 drag 规则、recall.ts:63 的 drag-recall watcher、traffic-light 让位），Windows 上是错布局。\n\n(b) Windows 侧真正的解锁键是 **`data-windows-titlebar`**（apps/desktop/src/preload-windows.ts:12）+ 配套 `--dsh-windows-titlebar-height`（:13），两 tag 未变。另有 `--dsh-windows-menu-start` 是**共享 UI 发布、desktop 消费**的（ui-sidebar/src/client/SidebarRoot.module.css:89 发布 84px；apps/desktop/src/preload-menu.ts:16 消费，默认 48px）→ 低风险纯消费点，壳可直接读它把菜单对齐到 New Session 之后。\n\n(c) 最想要的**侧边栏浏览器页注入 DOM 解锁不了**（服务端门控）：packages/bundle/web-app/cordis.patch.yml 中 `disabled: !!js \"ctx.get('profileContext')?.name !== 'desktop'\"` 在 Host 侧 composition 期求值；而 CLI 硬拒 `--profile desktop`（apps/cli/src/args.ts:83-85，该函数 alpha.2 已存在）。唯一路径 = 壳 overlay 加 `- id: ui-sidebar-browser` / `disabled: false`，官方文档明确记录此路径（packages/client/ui-sidebar-browser/README.md:28,36），壳已有 --patch 通道（src-tauri/resources/patch/dsh-desktop.patch.yml）。这是 alpha.2 有、rc.2 被收走的能力（commit 3eab1714bc）。\n\n→ 建议拆卡：**该做** = overlay 开 ui-sidebar-browser（+可选读 --dsh-windows-menu-start 对齐菜单）；**不该做/需重定义** = 注入 data-platform、把「标记族注入」当解锁桌面专属 UI 的通法。",
+      "rationale": "官方 Web 前端的「我在桌面端」判定不是 flag 而是一组 globalThis 契约（apps/desktop/src/preload-app.ts:61,75,81,84,88,99,102），而官方自己的 e2e 用 page.addInitScript 注入最小集合就复现了桌面行为（desktop-onboarding.e2e.ts:88-97 / desktop-updates.e2e.ts:34-41 / shortcuts-desktop.e2e.ts:47-67 / desktop-locale.e2e.ts:35-52）——这是官方自证的可复刻 seam；我们已有注入通道（on_page_load），不做的代价是永远比官方桌面端少一截客户端行为。",
+      "rejected": "① 不注入 `data-platform`：0.1.7-rc.2 全仓只认 `darwin`（windows/win32/linux 零命中），注入 'windows' 是 no-op、'darwin' 会激活 macOS 专属拖拽布局（base.css:55,67,72,89 + recall.ts:63）；Windows 侧真正的解锁键是 `data-windows-titlebar`（已另立 P0-1 卡）。② 不指望用 DOM 注入修回侧边栏浏览器页：它是服务端 Cordis 门控（profileContext.name !== 'desktop'），注入任何全局都无效，只能走 --patch overlay（见「升级 0.1.7-rc.2 必办」卡 M-1，本卡 description 已由 s7 更正）。③ 不为了复刻 preload 把页面换成自定义 scheme：那会丢掉 isLoopback，进而丢 settings 文档编辑与 SettingsDocumentStore（connection/src/client/index.ts:248、ui-settings/src/client/index.ts:39）。风险提示：注入时机必须早于 apps/web/src/main.ts:11 读取 dshDesktopBoot，本机未在 WebView2 实测 → 先做 spike。",
+      "sourceSessionId": "87c7257b-15f1-4999-806d-4b570ed62d51",
+      "status": "todo",
+      "tags": [
+        "dsh",
+        "desktop",
+        "webview2",
+        "shell",
+        "optional",
+        "s6",
+        "s7-corrected",
+        "follow-up"
+      ],
+      "createdAt": 1790272674208,
+      "updatedAt": 1790272929832,
+      "summary": "（未开始）用 WebView2 文档创建期脚本成套注入官方桌面标记族中的安全子集：`__DSH_LOCALE__`（语言跟随）为第一步试点；`dshOnboarding`+`dshDesktop`+`dshPlatform` 三件套一起给才能解锁账号区，缺一会抛 `desktop login bridge unavailable` 或关掉浏览器凭据引导。"
+    },
+    {
+      "id": "card-c148db81-69c1-43dc-94e7-f9f78f62474a",
+      "title": "P0-1：注入官方顶栏契约 data-windows-titlebar（对齐 Web 客户端避让，替换我们的 padding hack）",
+      "summary": "已实施（计划 S8，flag 门控默认关）：壳读取 dsh.json 的 webview.titlebarContract（Rust titlebar_contract/set_titlebar_contract，保留其它字段；两处 shell-state JSON 都带该字段；注入前缀带 __DSH_TITLEBAR_CONTRACT__），开启时 computeCaptionPlan(true) 返回 paddingTop=null（不推挤）+ html[data-windows-titlebar] + --dsh-windows-titlebar-height:40px + :host(.caption)（.bar 透明且 pointer-events:none，仅 .bar；子元素恢复 auto），菜单起点 var(--dsh-windows-menu-start,48px)，拖动/双击最大化挂显式拖动区，注入晚于首帧时补发 resize；壳菜单新增「顶栏契约（实验）」checkbox（走壳确认窗）。默认关，行为与今天完全一致。验证：vm 里真实执行 computeCaptionPlan 的 10 条断言 + 6 个变异全红 + npm test 13 套 exit 0 + clippy 0 error。实机 6 项视觉对照登记在「待 Windows 实机验收（9 项）」卡。",
+      "rationale": "客户端的 data-windows-titlebar 契约是官方 Electron 壳的做法（apps/desktop 用 40px 标题栏 + 客户端自绘），我们自绘顶栏 + html padding 推挤与它结构性冲突（客户端 .frame 也会 padding-top，两边都留 = 72px 双重让位，真 Chromium 实测）。改成契约模式可同时解决「侧栏开关被我们的 bar 盖住」与「内容被压」，但观感只能在 Windows 判定，所以默认关 + 菜单可切 + 刷新生效。",
+      "rejected": "① 直接默认开启（无实机判定就改用户默认观感 = 把风险推给用户）；② 只加 data-windows-titlebar 而不给 --dsh-windows-titlebar-height（客户端拿不到高度，列宽/圆角算错）；③ 把 pointer-events:none 加在 :host 上（真 Chromium 实测：下拉/模态/条幅全点不动，因为它们是 shadow root 的直接子节点）；④ 继续用注入 CSS 覆盖客户端（上游 0.1.7 客户端已按契约自绘，覆盖会被后续版本打破）。",
+      "sourceSessionId": "session-c852547f-89db-4736-8a28-f3dd6ec7be25",
+      "status": "done",
+      "tags": [
+        "dsh",
+        "desktop",
+        "shell",
+        "ui",
+        "p0",
+        "contract",
+        "done",
+        "dsh-0.1.7"
+      ],
+      "createdAt": 1790272929843,
+      "updatedAt": 1790313970678
+    },
+    {
+      "id": "card-4b682f5c-e34f-41df-b818-829645165c8d",
+      "title": "升级 0.1.7-rc.2 必办三项：M-1 侧栏浏览器页 overlay 恢复 / B-1 备份式回滚纪律 / M-3 插件 peer 兼容自检",
+      "summary": "三项逐条落定：M-1 侧栏浏览器页 overlay 恢复——resources/patch/dsh-desktop.patch.yml 追加 - id: ui-sidebar-browser / disabled: false，三重验收（--dump-config 显示 disabled:false、overlay id 契约门禁、页面插件名册计数 1 vs 0 双向实测）。B-1 备份式回滚纪律——README 新增「dsh 升级是单向的（0.1.7 起）」：v4 自 0.1.7-alpha.1 起生效、回退旧版只看到升级前快照、回滚 = 还原升级前备份、「还能打开」不是判据；检查更新弹窗显示该警告并新增「打开数据目录」按钮；托盘标签与更新通知带「建议先备份数据目录」。M-3 插件 peer 兼容自检——审计 A 证伪了前提：本仓预装包（kanban/model-reasoning/turn-navigator/opencode-session）与通知插件的 package.json 都不声明对 @deepseek-ai/dsh 的 peer 依赖，上游 0.1.7 新增的 fail-closed 兼容闸门对我们不触发；结论为「无需动作」，已写入计划 §1 与 Agent Note。",
+      "rationale": "这是 0.1.7-rc.2 升级的三条硬约束：侧栏浏览器页在 0.1.7 被 gated 到 profileContext.name==='desktop'（我们的 web profile 拿不到，必须用 patch overlay 显式打开）；v4 会话格式单向使「装回旧版」不再是回滚手段，必须在 UI 与文档里说清；peer 兼容闸门是 0.1.7 新增的 fail-closed 机制，需要确认是否影响我们的插件。",
+      "rejected": "① M-1 不用 patch overlay 而在事后改页面 DOM（脆弱且会与后续版本冲突）；② B-1 只改文档不做 UI 提示（用户看不到，装回旧版仍会被当成回滚）；③ M-3 不核实就照抄上游说明给预装包加 peer 声明（审计证明声明不存在，加了反而可能触发 fail-closed 闸门）；④ 把回退按钮说成数据回滚（回退只切版本，数据回滚必须走备份还原，README 已写明）。",
+      "sourceSessionId": "session-c852547f-89db-4736-8a28-f3dd6ec7be25",
+      "status": "done",
+      "tags": [
+        "dsh-0.1.7",
+        "upgrade",
+        "plugins",
+        "rollback",
+        "sidebar-browser",
+        "p1",
+        "done"
+      ],
+      "createdAt": 1790272929853,
+      "updatedAt": 1790313970678
+    },
+    {
+      "id": "card-736a0437-d0c9-4852-8eea-c19f525c81aa",
+      "title": "实施方案 + 多角度审计（P0/P1/0.1.7 必办/P2；审计到无阻断问题再实施）",
+      "summary": "全部实施完成并收口。**方案与审计**：v1→v2→v3（458 行），含三角度审计记录、逐项设计（改动点/验收/回滚/副作用）、§7 实机清单、§10 实施记录。**已实施 11 项**：S0 仓库卫生（manager npm 定位回退、孤儿测试接线+进程树回收、清单门禁、overlay 目标行门禁、四处版本一致、CI 接 test:slow）、S1 侧栏浏览器页 overlay 恢复（三重双向验收）、S3 升级单向性与回滚纪律、S4-0 桥请求面收窄（Host/Origin/X-DSH-Shell + CORS 不再通配）、S4-1 危险动作收口（11 项危险表 + 一次性槽位 60s + 壳拥有确认窗 + 两个 async IPC + 唯一执行点 + 8 个 ACTIONS 标 confirm）、S5 关窗首次确认、S6 失败态指向证据目录、S8 顶栏契约（flag 默认关 + computeCaptionPlan 纯函数 + caption CSS + 菜单开关 + 桥端点）、S9 升级归因与一键回退（纯逻辑模块 + 原子写标记 + /alive 清除 + attempts≥2 防 ping-pong）、S10 关于弹窗预装版本、S11 isolated 实验（登记待 Windows 验证）。**门禁**：`npm test` 13 套 exit 0（58–67s）；`cargo clippy --target x86_64-pc-windows-msvc --lib --tests -D warnings` 0 error；纯函数单测经「机械抽取 + rustc --test」真实执行 6/6；**38 个变异全部按预期变红**；新增文档套数门禁（README/CONTRIBUTING 的「全量 N 套」必须等于 npm test 链长——实施中出现过 9/11/12/13 四个数字并存）。**收口**：Agent Note `architecture/2026-09-25-shell-hardening-bridge-confirm-caption.md`、技能 §5.5/§5.6、README/CONTRIBUTING 同步、看板闭环（桥鉴权/P0-1/必办三项转 done，isolated 卡并入 9 项实机卡）。**能力外（已登记）**：待 Windows 实机验收 9 项（桥预检真实行为、确认窗观感与置顶、关窗首次确认含关机路径、顶栏契约 6 项视觉、升级归因回退、关于弹窗、证据目录按钮、isolated 布局）、签名证书、以及一处非本次改动的工作树文件（.dsh/skills/dsh-preinstalled-plugin-sync/SKILL.md，待用户确认来源）。",
+      "rationale": "用户要求「先出方案 → 尽可能详尽审计 → 有问题就改方案直到没问题 → 再按方案实施 → 每项带可失败验证与回滚点 → 收口（看板+Note+交付清单与覆盖缺口）」。方案 v3 是审计后的定稿：三角度审计（A 契约事实 494 行 / B 副作用 279 行 / C 可验证性 565 行）+ 5 项代码级取证，共证伪 v1 的 13 处断言、找到 3 条阻断（S4 同源误判与同步死锁、S8 注入时序、S7 locale 形状），并把 S2/S7 移出实施。",
+      "rejected": "① 不做「审计只复述方案」的形式审计（三角度对着代码/夹具核验并各自给出负向对照方法）；② 不把 [假设] 当结论（S7 locale 形状、S2 semver 等价因此移出实施）；③ 不在缺 Windows 实机时把观感/键位写成「已验证」（降级为 flag 门控 + runbook + 实机清单）；④ 不为「都做完」跳过负向对照（每个新门禁都先证明会变红，其中 5 次因谓词太松/变异不匹配/注释误匹配被自我纠正后才变红）；⑤ 不顺带做 S11 的 hoisted 移除（Linux 实验不足以支撑 Windows 结论）。",
+      "sourceSessionId": "session-c852547f-89db-4736-8a28-f3dd6ec7be25",
+      "status": "done",
+      "tags": [
+        "dsh",
+        "desktop",
+        "shell",
+        "plan",
+        "audit",
+        "p0",
+        "p1",
+        "implementation",
+        "done"
+      ],
+      "createdAt": 1790309486524,
+      "updatedAt": 1790313985401
+    },
+    {
+      "id": "card-047fa114-89ba-4bbf-a5d6-08ce9a3b1f44",
+      "title": "方案审计（角度 C：可验证性/顺序/效率/漏项）已完成 → 结论：S1/S2/S7 三处验收与前提有硬伤，需 v2 修订后再实施",
+      "summary": "交付 .tmp-investigate/plan-audit/c-verifiability.md（8 节：逐项判定表 / 逐项详审含恒真注入方式 / Linux 可跑性矩阵 + 一条完整命令序列（真实 dsh 冷装+启动+patch 断言+清理）与 isolated 实验序列 / 修正后顺序与可并行组 / 效率对比 6 组 / 漏项清单 20 条 / CI 门禁覆盖对照 5 个 job / 三条最关键修正）。取证：curl 解包 dsh/dsh-app-boot/dsh-web-app/dsh-client-locale/dsh-client-ui-layout/dsh-client-ui-sidebar/dsh-client-modules/dsh-client-ui-sidebar-browser 七个 0.1.7-rc.2 包；实测 cargo check --lib 失败于 libdbus-sys（缺 dbus-1）；实测内置 linux-x64 node v24.18.0 已在、smoke-windows.mjs 本机可跑。附带发现：Cargo.lock 版本漂移（0.6.3 vs 0.11.0）会让任何本机 cargo 命令改脏工作树（已 git checkout 还原，未留改动）。",
+      "rationale": "父会话 in_progress 卡要求\"多角度审计到无阻断问题再实施\"。角度 C 交付物在 .tmp-investigate/plan-audit/c-verifiability.md（564 行）。三条最关键：① S1 的 stderr 断言（disabling/skipping）对\"上游改名导致补丁打空\"恒绿，必须换成 curl /plugins/ui-sidebar-browser/client.js 阳性探针 + 目标行 id 存在性契约断言；② S2 的前提不成立——随壳发布的 4 个预装包与通知插件都没有 @deepseek-ai/dsh* peer（实测 peerDependencies 只有 react / dsh-client-runtime），上游兼容闸门对它们永不触发，且漏了 profiles/web/node_modules（用户经 dsh Plugins 页装的插件）；S7 的 __DSH_LOCALE__.read() 形状错（须返回 {languages[],preference}，否则 parseLocaleBootstrap 抛 TypeError）；③ 顺序修正：S1 与 S11 必须同一次跑、S4→S5 是硬依赖（S5 需异步+单飞入口）、S3 口径先于 S9；门禁须 fetch-node+sync-resources 先于任何 cargo，跨平台 Rust 单测进 check job（windows job 在 PR 不跑）。另实测本机 cargo 当前不可用（libdbus-sys 缺 dbus-1），方案 §1.1 给 4 项打的\"✅ 完全可验\"不成立。",
+      "rejected": "放弃了\"只审文本、不拉上游包\"的做法：S1/S2/S7/S8 的判定全部依赖上游 0.1.7-rc.2 源码（层序、disabled schema、peer 闸门语义、locale bootstrap 形状、titlebar CSS），只读方案文本会把 S7 的形状错误与 S2 的不实前提原样放过。也放弃了\"跑真实 dsh 冷装\"来验 S1——本机 cargo 不可用 + 冷装耗时，改用\"解包上游源码 + 可复跑命令序列\"给出可失败探针。",
+      "sourceSessionId": "e2ea9094-b909-46e1-b169-51eaa69a40e2",
+      "status": "done",
+      "tags": [
+        "dsh",
+        "plan",
+        "audit",
+        "verifiability",
+        "p0",
+        "blocker"
+      ],
+      "createdAt": 1790310451988,
+      "updatedAt": 1790310451988
+    },
+    {
+      "id": "card-eafae188-6801-45e8-a908-8b2af195a24b",
+      "title": "待 Windows 实机验收（9 项）：桥预检/确认窗/关窗与关机路径/顶栏契约视觉/升级归因回退/关于弹窗/证据目录/isolated 布局",
+      "description": "本机（WSL/Linux）无法验证的 9 项，方案 §7 有逐条判据：① 桥准入预检真实行为（DevTools 看 preflight 200 + allow-headers 含 x-dsh-shell）；② 危险动作确认窗（文案 Rust 生成/取消无副作用/重复点只聚焦）；③ 确认窗 always_on_top 与 Esc/默认焦点；④ 关窗首次确认 + **系统关机路径不被确认窗拖住**（若被拖住 = 缺陷，改关机时直接隐藏）；⑤ 顶栏契约 6 项视觉对照（侧栏开关可点/内容不被压/菜单起点/拖动与双击最大化/全屏隐藏/三键 hover）；⑥ 升级归因与一键回退（含 attempts≥2 消失、/alive 后 upgrade.json 被删）；⑦ 关于弹窗预装版本与 runtime 实际一致；⑧ 失败态「打开证据目录」指向正确目录；⑨ isolated 布局（去掉 --node-linker=hoisted）冷安装 + 插件可解析。",
+      "rationale": "上一轮把 S4-0/S4-1/S5/S8/S9/S10/S6 的实现标为\"已完成但行为待 Windows 实机验证\"，用户追问\"不是有 dev 流程吗\"——对的：interop + Windows 工具链 + D:\\Dev\\dsh-desktop-dev 检出 + 仓库自带 verify-dev-ui.ps1 都在，我之前的\"本机不可验证\"是过度概括。本轮实机跑通，并因此抓出 4 个本地门禁全绿却真实存在的缺陷。",
+      "rejected": "① 不靠\"源码断言绿\"充当行为验证；② 不用合成键鼠乱点用户桌面——确认窗用 UIA InvokePattern、菜单用元素坐标点击且恢复光标；③ 不做真实关机（`shutdown /s`）——关机路径仍是人工项；④ 不在发现插件阻断后继续\"顺手升级\"用户的正式版（那是发版决策）。",
+      "sourceSessionId": "session-c852547f-89db-4736-8a28-f3dd6ec7be25",
+      "status": "done",
+      "tags": [
+        "windows",
+        "verify",
+        "dsh-0.1.7",
+        "bridge",
+        "confirm-window",
+        "caption",
+        "done"
+      ],
+      "createdAt": 1790313888207,
+      "updatedAt": 1790329260410,
+      "summary": "9 项里 **7 项已在真机验证并留证**（截图 + UIA dump + curl + 落盘文件）：① 桥预检/准入 10/10（含 `allow-headers: content-type, x-dsh-shell`）② 危险确认窗（Rust 生成文案、取消/确认、Esc）③ 关窗首次确认 + 第二次静默隐藏 ④ 顶栏契约 caption 几何与视觉（菜单 x 5→77、三键 54→60、内容上移 27px、透明栏无遮挡）⑤ 升级归因与一键回退（含 `/alive` 清标记）⑥ 关于弹窗数据面（dsh.json + /shell/state；**UI 行渲染**因 shadow DOM 不支持 UIA Invoke、物理点击偶发被吞，仅数据面确认——登记为残项）⑦ 失败态「打开证据目录」。**未做**：真实关机路径（需你决定何时 `shutdown /s`）、去掉 `--node-linker=hoisted` 的冷安装（isolated 布局）。**副产品**：修复 4 个真机缺陷（打包漏 manager 模块 / 危险表缺执行分支 / 关于弹窗读错端点 / 归因字段进了没人读的结构），每个都补了可失败门禁 + 负向对照；`npm test` 13 套 exit 0、clippy 0 error。**同时发现升级阻断项**：dsh 0.1.7 移除了 `settingsScope` 服务，预装 `dsh-model-reasoning` 0.2.4 因此永不激活并使 Web UI 停在「Failed to load plugins」（受控实验证实）——已单独开卡。"
+    },
+    {
+      "id": "card-477d24e3-585a-4759-9fb7-6d0c53f930fd",
+      "title": "预装 dsh-model-reasoning 适配 0.1.7（选路①）：0.2.6 已同步进壳（门禁转绿/14 套全绿）；仅剩 npm 发布 + 发布后复核",
+      "description": "真机证据（dev 版 0.11.0 + dsh 0.1.7-rc.2）：页面停在 dsh 的「Failed to load plugins / web boot: 1 entry did not activate / dsh-model-reasoning: pending (waiting for service: settingsScope)」；受控实验——把 `dsh-model-reasoning` 从 `runtime/dsh-home/profiles/web/package.json` 的 `dsh.bundles` 摘掉并重启 → UI 立即恢复正常。服务侧对比：0.1.6 的 `@deepseek-ai/*` 有 18 个文件提供/使用 `settingsScope`（提供方是 `@deepseek-ai/dsh-client-ui-settings`，`super(ctx, \"settingsScope\")`），0.1.7 全树 0 命中，0.1.7 官方源码 `src/` 也 0 命中；0.1.7 的该包改注册 `settingsSchema` + `configForms`。影响面：四个预装插件里**只有 dsh-model-reasoning**（2 个文件）依赖旧服务，kanban / turn-navigator / opencode-session 不受影响。三个可选处置：① 插件仓改用 `settingsSchema`/`configForms`（推荐，插件侧改动）；② 发版前暂不抬高 `MIN_DSH_VERSION`（保 0.1.6 地板）；③ 该插件暂不进预装。**决策未定，两个仓都要动之前先选路**。",
+      "rationale": "用户选\"改插件\"这条路。核实发现代码迁移早已在插件仓完成（0.2.6），真正缺的是发布 + 壳同步；而壳的发布门禁里**没有任何一道检查\"插件要求的能力 vs 壳强制的 dsh 地板\"** —— 这正是本次事故能一路走到真机的原因。所以除排链路外，必须补上这道静态门禁。",
+      "rejected": "① 不把\"缺 dsh 地板声明\"做成 FAIL（会让门禁变成\"四个插件都得先改一遍\"的噪音门禁 → 改为警告并列出）；② 不把门禁放在链首（`&&` 会短路后续套件，失去其余信号 → 放链尾）；③ 不用严格 semver 判\"服务移除是否生效\"（会把 0.1.7-rc.2 误判成还没到 0.1.7，**正好漏掉本次真实事故** → 改按版本行比较，已被自检抓出）；④ 不靠人工核对（把判据写进脚本 + 13 条比较器自检 + 正/负向对照）。",
+      "sourceSessionId": "session-c852547f-89db-4736-8a28-f3dd6ec7be25",
+      "status": "in_progress",
+      "tags": [
+        "dsh-0.1.7",
+        "preinstalled",
+        "plugins",
+        "release",
+        "plugin-repo-side",
+        "verified-machine",
+        "gate",
+        "tooling",
+        "rollback-edge",
+        "npm-auth",
+        "waiting-user"
+      ],
+      "createdAt": 1790329268449,
+      "updatedAt": 1790412774724,
+      "summary": "① **真机验证 ✅**（0.2.6 under dsh 0.1.7-rc.2：UI 正常、设置分区「思磨力提供方参数」注册渲染）。③ **已完成 ✅**（本轮）：从**本地 tarball** 同步 0.2.6（不必等发布——壳的预装插件不从 npm 取，且 `npm publish` 上传的就是 `npm pack` 产物；构建确定性已验证：同一 tag 连打三次 sha1 一致 = `49dc4a3d5deb3846d38b2b48eae8b30f0d892912`）。结果：变更 3（lib/client.js、package.json、README.md）、新增 0、删除 0，与 §13.7 预演完全一致；`sync-resources` 已跑；幂等复核**零 diff**；`plugins/preinstalled/` 与 `resources/preinstalled/` 两处都是 **0.2.6**；`test-copy-consistency` 绿；**`test-plugin-dsh-compat` 由红转绿**（真实产物上的红→绿，非仅正向对照）；**`npm test` 14 套全绿 exit 0** ⇒ 壳恢复可发布。④ 收口：静态门禁（兼容性）+ 运行时缺口（回退按钮 title/日志 + README 写明根因与自救路径，断言 3 条 + 2 变异红）。② **仍待用户**：`npm login`（token 现为 401）→ `cd ~/dsh-model-reasoning && npm publish`；发布后**必须**跑 `node scripts/sync-preinstalled-plugin.mjs dsh-model-reasoning 0.2.6 --check`（期望零 diff；若不为零 ⇒ 以 registry 字节为准重跑同步）——这条复核命令已写进技能 §3.5。不影响壳发布，但影响 (a) 第三方 `dsh plugin add` 拿到的仍是 0.2.4（0.1.7 下打不开界面）(b) \"仓库字节 == registry 字节\"不变量尚未建立。⑤ 文档：技能 §3.5/§6.5、方案 §13.5–§13.9、Note Addendum 2。**下一步**：用户 npm login+publish → 我跑发布后复核 → 壳发版 PR 由用户合并。"
+    },
+    {
+      "id": "card-c2051cfa-b7f1-486b-98ad-1461e2caede7",
+      "title": "待做三项（用户决定先不做，仅登记）：关机路径确认 / 关于弹窗渲染复验 / isolated 冷安装",
+      "description": "三项都有精确步骤，写在方案 §12；用户 2026-09-25 明确\"先不做，登记就好\"。① **关机/注销路径确认**（约 2 分钟，需用户）：删 `%APPDATA%\\dsh.smoothly.desktop.dev\\background-close-confirmed` → 启动 dev 版 → `shutdown /s /t 30`（`/a` 可取消）→ 判据：关机照常完成、无确认窗拖住；**机制已核实**：`tao 0.35.3` 不处理 `WM_QUERYENDSESSION`（`platform_impl/windows/event_loop.rs:2382` 注释掉），只在 `WM_ENDSESSION` 销毁事件循环并回 `LRESULT(0)` ⇒ 关机不走 `CloseRequested` ⇒ 不会\"阻止关机\"（源码结论，未实机复核）。残余面：任务管理器「结束任务」/`taskkill`（不带 /F）会走确认分支 → 点确认只隐藏不退出，任务管理器会报无法结束任务。② **关于弹窗「预装插件」渲染复验**（10 秒，需用户点击）：前置是先把 `dsh-model-reasoning` 从 dev profile bundles 摘掉（0.1.7 阻断项会让 UI 卡在失败页）→ 点左上角 DSH 图标 →「关于」→ 判据：出现「预装插件（随壳发布，界面不提供升级）」+ 四行版本。③ **isolated 布局冷安装**（15–20 分钟，**我可代做**）：去掉 `--node-linker=hoisted` → 冷装 → 验证插件可解析、UI 起得来；不动正式版，失败回滚。证据落点：`/mnt/d/Dev/_shots/*.png`（已存在）。",
+      "rationale": "这三项是本轮真机验证唯一没做完的部分：关机路径是唯一改机器电源状态的动作（必须用户做）、关于弹窗渲染只差\"眼睛\"（UIA 对 shadow DOM 无 InvokePattern、物理点击偶发被吞）、isolated 冷安装会重装 dev runtime（用户选择暂不做）。不支持\"不登记就放着\"：关机路径若是缺陷会影响关机体验，关于弹窗若是缺陷用户看不到预装版本，isolated 关系到能否去掉 hoisted 强制。所以把机制核实结论、精确步骤、判据、证据路径全部落到看板 + 方案 §12 + Agent Note，任何会话接手即可直接做。",
+      "rejected": "① 不把关机路径留成\"未知风险\"（先看源码把能定的定死：tao 不接 WM_QUERYENDSESSION ⇒ 机制上排除，再把\"未实机复核\"标成假设，而不是含糊的待办）；② 不为省事在用户明确\"先不做\"时硬做（关机是用户机器状态，isolated 会重装 dev runtime）；③ 不把这三项混进已 done 的实机验收卡（那卡已按 7/9 验证结果收口，混进去会让\"已完成\"失真）。",
+      "sourceSessionId": "session-c852547f-89db-4736-8a28-f3dd6ec7be25",
+      "status": "todo",
+      "tags": [
+        "verify",
+        "waiting-user",
+        "windows",
+        "coverage-gap",
+        "shutdown-path",
+        "about-dialog",
+        "isolated-layout"
+      ],
+      "createdAt": 1790405310811,
+      "updatedAt": 1790405310811
     }
   ]
 }

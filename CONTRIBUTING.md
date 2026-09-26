@@ -37,10 +37,12 @@
 ## 门禁（提交前本地跑）
 
 ```bash
-npm test                          # 全量 9 套（行为 + 契约 + 副本一致性）
+npm test                          # 全量 14 套（行为 + 契约 + 副本一致性 + 清单/补丁目标门禁 + 升级标记）
 node scripts/test-copy-consistency.mjs  # 副本一致性（改了 scripts/ 或 plugins/ 后先 npm run sync:resources）
 node scripts/test-shell-chrome.mjs  # 壳契约（菜单 id ↔ ACTIONS ↔ lib.rs）
-# Rust：cargo fmt --check + cargo clippy -D warnings（CI 快层会跑，本地有工具链时先跑）
+# Rust：cargo clippy -D warnings + cargo test --lib（CI 快层会跑；本地有工具链时先跑）
+# 注意：cargo fmt --check **不在 CI 里**（build.yml 里被注释：60 处历史格式差异），
+# 格式靠自律——禁止提交全仓格式化 diff（会淹没真实改动）。
 ```
 
 CI 分层：PR 只跑快层（check + test，~5min）；main/tag 跑全量（windows 打包+冒烟、linux）。
@@ -80,7 +82,7 @@ git fetch origin release-please--branches--main
 git checkout FETCH_HEAD
 node -e "…四处版本一致性…"        # package.json / .release-please-manifest.json / tauri.conf.json / Cargo.toml
 grep -n "^## \[<version>\]" CHANGELOG.md
-npm test                          # 9 套
+npm test                          # 14 套（另：npm run test:slow 跑安装卡死用例，约 3 分钟，不进 PR 门禁）
 node scripts/audit-preinstalled.mjs
 ```
 

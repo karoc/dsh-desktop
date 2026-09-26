@@ -275,6 +275,51 @@ dev 数据目录 = `%APPDATA%\dsh.smoothly.desktop.dev`，证据 = `<runtime>\re
 | Job Object 与 dsh 兼容 | 只设 `KILL_ON_JOB_CLOSE` + `BREAKAWAY_OK`，**不设** UI 限制：dsh 自己会 `AssignProcessToJobObject`（嵌套 job）和可能的 breakaway spawn，限制住会让它启动失败。失败只记日志，别让壳起不来 |
 | dump/取证类"回执"必须绑定完成 | 去重命中就回执 → 等待方（manager）会抢先杀掉被挂起进程，dump 归零（实测 OpenProcess 0x80070057）。回执只能在**写盘完成后**发；等待方再配上"最近回执时间"容忍相位差 |
 
+## 5.5 桥的准入与危险动作确认（2026-09-25 起，改桥前后必读）
+
+**准入（`bridge_request_decision`，lib.rs 纯函数）**：`Host` 必须精确等于
+`127.0.0.1:<当前桥端口>` / `localhost:<当前桥端口>`；`Origin` 缺省放行、出现须在白名单
+（`tauri://localhost`、`http://tauri.localhost`、回环任意端口）；**非 GET/HEAD/OPTIONS
+必须带 `X-DSH-Shell: 1`**。响应头由 `bridge_cors_headers(origin)` 生成（**不再通配
+`*`**，`Allow-Headers` 含 `content-type, x-dsh-shell`）。
+
+- 新增桥 POST 端点时：调用方（`shell-chrome.js` 的 `bridge()` 或插件）自动带头 ✅；
+  但如果你在别处手写 `fetch` 打桥，必须自己加 `'X-DSH-Shell': '1'`，否则 403。
+- 改白名单/新增头时**必须同步改两处**：`bridge_origin_allowed` 与 `Allow-Headers`；
+  漏改 Allow-Headers 的症状是"浏览器预检通过不了 → 远程页整条壳菜单静默失效"。
+- 只读 GET 端点不受影响。
+
+**危险动作（`dangerous_bridge_action` 表 + 确认窗）**：表里的端点桥**不执行**，只登记
+一次性槽位（一次一个 / 60s 过期 / 同动作去重）并打开壳确认窗 `src/confirm.html`，立即
+返回 `202 {pending:true}`；执行发生在 `resolve_pending_action`（**必须
+`#[tauri::command(async)]`**，同步命令会冻住主线程 = 确认窗自己点不动）。
+
+- 加危险端点 = 三处同改：① `dangerous_bridge_action` 表（文案由 Rust 生成，调用方只能
+  给 action id）② `execute_danger_action` 的执行分支 ③ chrome 的 `ACTIONS` 标 `confirm: true`
+  （契约测试会双向核对：标了 confirm 的桥路径必须在表里，表里的关键路径必须能执行）。
+- 本地页（launcher / settings）走 IPC，**不经确认窗**；托盘同理 —— 只有"页面发起的桥请求"才确认。
+- 改 window-state denylist 时记得 `["settings", "confirm"]` 一起；确认窗的权限在
+  `capabilities/launcher.json` 的 `windows` 里，漏加 = invoke 不可用。
+
+**关窗语义**：Windows 首次隐藏到托盘前确认一次（标记 `<app_data>/background-close-confirmed`，
+合成动作 `close-hide`）；Linux 最小化、不确认。
+
+## 5.6 升级归因与顶栏契约（两个 flag 的边界）
+
+- `<runtime>/upgrade.json`：manager 安装成功后原子写（只在确有旧版本时写，同一
+  `(from,to)` 失败累加 `attempts`，回退记 `kind='rollback'`）；壳随 `manager-exit` 上报、
+  页面 `POST /alive` 时删除。启动页在 `attempts < 2` 时才给「回退到 vA」（**只切版本，
+  不还原数据**）。
+- `dsh.json` 的 `webview.titlebarContract`（默认 **false**）：开启后
+  `computeCaptionPlan(true)` → 不推挤 + `html[data-windows-titlebar]` +
+  `--dsh-windows-titlebar-height: 40px` + `:host(.caption)`（`.bar` 透明 +
+  `pointer-events:none`，**只能加在 `.bar` 上**：加在 `:host` 会让下拉/模态点不动 —— 真
+  Chromium 实测）。菜单起点 `var(--dsh-windows-menu-start, 48px)`；拖动/双击挂显式
+  拖动区；注入晚于首帧，切换后必须刷新。
+- 本机（WSL/Linux）**跑不了 Windows 二进制**：Rust 侧只能
+  `PATH=<llvm-rc 桩>:$PATH cargo check/clippy --target x86_64-pc-windows-msvc --lib --tests`；
+  纯函数单测可用"机械抽取 + `rustc --test`"在本机真实执行（见计划文档 §10）。
+
 ## 6. 验证与门禁
 
 - 快速契约：`node scripts/test-shell-chrome.mjs`（vm 沙箱加载 chrome 暴露配置——文件内有
@@ -282,7 +327,9 @@ dev 数据目录 = `%APPDATA%\dsh.smoothly.desktop.dev`，证据 = `<runtime>\re
   桥端点/命令注册三方不漂移 + dev identity 配置 + **manager 看护契约**：退出处理区域不得出现
   `start_server`/`restart_server`/`Command::new`（D1 不自动重启）、`stop_child` 必须先 `try_wait`、
   `/shell/status` 字段名、`is_shell_local_url`）。
-- 全量：`npm test`（9 套，含 manager/代理/通知插件/壳契约/副本一致性）。
+- 全量：`npm test`（**13 套**：manager/代理/通知插件/壳契约/副本一致性/启动页与扫描 + 清单门禁
+  `test-manifest-consistency.mjs` + overlay 目标行门禁 `test-patch-targets.mjs` +
+  升级标记 `test-upgrade-marker.mjs`；慢速行为测试 `npm run test:slow` 走 CI 的 linux job）。
 - 改 chrome 渲染逻辑后：用最小 DOM 桩跑渲染路径（createElement/attachShadow/querySelector 等
   手写桩，注意 createTextNode 也要桩；断言宿主/下拉数/按钮数）。
 - Rust 单测：`cargo test --manifest-path src-tauri/Cargo.toml --lib`（纯逻辑：证据目录写入/保留、
