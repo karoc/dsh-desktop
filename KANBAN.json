@@ -1925,6 +1925,26 @@
       "createdAt": 1790443492387,
       "updatedAt": 1790443723293,
       "summary": "① 恢复路径：逐环梳理并**标记已解决**（失败页壳菜单仍渲染 → 菜单可开 → 停用插件走壳确认窗 → `disable_third_party_plugins` 先备份 profile manifest 再写回两层模板 bundles → 需一次重启，而重启入口存在；manager 死时另有启动页「停用第三方插件」安全网）。② manager 地板守卫：**已实施**——新增 `scripts/plugin-floor.mjs`（`collectDshFloors` 只取 `@deepseek-ai/dsh*` peer + `planPluginGuard` + 9 条 semver 自检）；manager 在 `ensurePreinstalled` 开头跑 `applyPluginFloorGuard`：地板不满足的预装插件不装进 runtime；已启用且不满足的**从 profile bundles 摘掉**（先 `package.json.bak-plugin-floor-<ts>` 备份、tmp+rename 原子写回、记入 `dsh.json.quarantinedPlugins`）；新增 JS 侧 `writeWebProfileBundles`（保留其它字段）。负向保证：不动 `@deepseek-ai/*`、不动未声明地板者（只告警）、不删文件、dsh 版本未知不判断。验证：单测 8 组 + **4 个负向对照变红**；`npm test` **15 套全绿 exit 0**（32 条 PASS）；manager 模块图同步**自动**带上新模块（证明 S0 闭包拷贝修复有效）。已提交推送 `62d910e`（分支 `feat/shell-hardening-0.1.7`）。仍未做：`quarantinedPlugins` 的界面呈现、不一致态下守卫的 E2E 实测（需装回 dsh 0.1.6 + devMode 冻结地板）。"
+    },
+    {
+      "id": "card-ccc4c178-e88c-466e-98ba-d9e012b5e219",
+      "title": "跟进（评审发现，非阻断）：确认窗版本旁路 / Rust manifest 非原子写 / 关窗槽位不清 / 预装记账错归因 + 3 项收紧",
+      "description": "**来源**：PR #55（已合并 `84269d9`）的独立评审（时间盒 + 深度两轮，结论\"无阻断问题\"）。以下均为**非阻断**发现，按优先级排列，修复时应并入下一个实质 PR（不要碎片化发布）。\n\n**重要（信息/语义缺口）**\n1. `src-tauri/src/lib.rs:2005` + `:2162-2171`：`/update-dsh` 确认窗文案固定为「安装 npm 上的新版本」，但真正安装的版本来自**调用方 body 的 `version`**（`server-manager.mjs:690-694` 以它为 target）→ 确认框的信息优势被调用方参数旁路（用户以为在升级，实际可换成任意/更旧版本）。修法：把 Rust 解析出的 version 写进确认文案（detail 由 Rust 生成，调用方不能伪造）。\n2. `src-tauri/src/lib.rs:1634-1660`（Rust `write_web_profile_bundles` 用非原子 `std::fs::write`）vs `scripts/server-manager.mjs:1014-1029`（新 JS 版 tmp+rename，注释自称「与 Rust 侧同语义」）→ **等价性不成立**，「半截 manifest → dsh 模板重建 → 用户插件全丢」（2026-09-07 事故）在 Rust 路径（菜单「停用第三方插件」/启动页安全网）仍敞着；且两侧 manifest 不可解析时都静默退回 `{}`（丢 `dependencies`）。修法：Rust 侧也 tmp+rename；解析失败要告警而非静默 `{}`。\n\n**次要**\n3. `lib.rs:2076-2079`/`:2089-2090`/`:4490`：用窗口 X 关掉确认窗后**槽位不清**，60s 内再发起会命中 Err 分支（该分支只在窗口仍存在时 show/focus）→ 最长 60 秒「点关窗/点退出没反应」，且桥回 `duplicate:true` 提示「已在确认窗中等待确认」（窗口其实已不在）。\n4. `lib.rs:2153` 注释「唯一执行点：桥/页面都只能经确认窗走到这里」与技能 `SKILL.md:328`「本地页走 IPC，不经确认窗」矛盾：Linux 本地页（`tauri:`）走 IPC 不经确认窗；Windows 本地页是 `http://tauri.localhost` → 走桥、经确认窗（行为更严无害，但「唯一」是错的）。修法：改注释 + 技能措辞，写明平台差异。\n5. `scripts/server-manager.mjs:1181-1196`：`ensurePreinstalled` 在 `skipInstall` 判断**之前**就记 `manifest.preinstalled`/`preinstalledVersions` → 被地板守卫拒装的插件仍出现在关于弹窗版本列表、并被「停用第三方插件」归类为壳自带（错归因）。修法：跳过安装的插件不记账（或标注为「已隔离」）。\n\n**建议**\n6. `scripts/test-shell-chrome.mjs:256`：`/建议先备份数据目录/` 在托盘标签（lib.rs:2900）**或**通知（lib.rs:2920）任一处存在即为真 → 删掉托盘那处仍 exit 0（评审实测）。收紧到具体行片段（本会话同类错误已出现 4 次）。\n7. `scripts/sync-resources.mjs:24`：导入闭包只匹配 `from './x.mjs'`（单引号 + from 形式）；`import './x.mjs'`、双引号、动态 `import()` 会漏（当前 4 个模块恰好都是该形式，已 grep 确认无实际漏拷）。\n8. `docs/2026-09-25-shell-improvement-plan.md` §13.5 写「npm test 现在 exit 1…套数同步为 14」与现状（15 套全绿）不符——历史段落，标注已过期。\n\n**明确未发现问题（评审原话）**：桥准入无本地页/远程页绕过路径（上游 ACL 已证：tauri 2.11.5 对非本地页强制 ACL，远程页无法 invoke 绕过确认窗）、无凭据泄漏（8200 行 diff grep 0 命中）、四处版本号一致、两处 preinstalled 逐字节一致、`applyPluginFloorGuard` 不误伤用户插件/`@deepseek-ai/*`、不删文件、版本未知不动、原子写+备份。",
+      "rationale": "PR #55 的独立评审（用户要求\"启动 subagent 评审\"）产出了 2 重要 + 3 次要 + 3 建议，均判为非阻断。用户规则是\"没问题就合并\"，所以先合并；但这些发现必须落到持久媒介（评审是只读的，它自己不写看板），否则下次会话就丢了。修法都已写清，可并入下一个实质 PR。",
+      "rejected": "① 不因这些非阻断发现阻塞合并（评审明确判非阻断，且用户在等合并；阻塞会让\"评审→合并\"的链路停在半途）。② 不在合并前顺手改（会推进 HEAD → 评审结论按\"HEAD 一动旧结论作废\"失效，等于没有评审）。③ 不为它们单独发一个补丁版本（CONTRIBUTING 禁止碎片化发布）——并入下一个实质 PR。④ 未采纳\"把桥 Origin 白名单收紧到壳自己的端口\"作为本轮修复（评审也判为相对 main 非回归：main 原本是 ACAO `*`；且需要设计每启动 nonce 才能区分壳页面与其它本地页）。",
+      "sourceSessionId": "session-c852547f-89db-4736-8a28-f3dd6ec7be25",
+      "status": "todo",
+      "tags": [
+        "pr55",
+        "review-findings",
+        "follow-up",
+        "shell",
+        "confirm-window",
+        "manifest-atomic",
+        "gate-tightening"
+      ],
+      "createdAt": 1790456609709,
+      "updatedAt": 1790456609709
     }
   ]
 }

@@ -21,6 +21,18 @@
 >
 > 详情见 `.agents/notes/implemented/bug-fix/2026-09-08-legacy-uninstaller-name-kill.md`。
 
+## [0.12.0](https://github.com/karoc/dsh-desktop/compare/v0.11.0...v0.12.0) (2026-09-26)
+
+
+### Features
+
+* **shell:** 0.1.7 加固 + 预装插件适配（含运行时地板守卫） ([#55](https://github.com/karoc/dsh-desktop/issues/55)) ([84269d9](https://github.com/karoc/dsh-desktop/commit/84269d9de37104ed84fa9f32fceb8fe78938a3bf))
+
+
+### Chores
+
+* **board:** v0.11.0 发布结案 + 待用户安装卡 ([4b05664](https://github.com/karoc/dsh-desktop/commit/4b056644289930a6121402d2f40627f9a62b69ce))
+
 ## [0.11.0](https://github.com/karoc/dsh-desktop/compare/v0.10.1...v0.11.0) (2026-09-22)
 
 
