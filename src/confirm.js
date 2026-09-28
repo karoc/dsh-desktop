@@ -48,7 +48,9 @@ async function load() {
   }
   nonce = String(pending.nonce);
   titleEl.textContent = String(pending.title || '确认操作');
-  detailEl.textContent = String(pending.detail || '');
+  detailEl.textContent = String(pending.detail || '')
+    // 目标版本来自 Rust 解析的请求体（不是调用方文案）：升级类动作必须让用户看到真实目标。
+    + (pending.target ? ` ｜ 目标版本：v${pending.target}` : '');
   cancelBtn.focus();
 }
 
