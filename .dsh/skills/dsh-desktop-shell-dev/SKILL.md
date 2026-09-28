@@ -295,6 +295,15 @@ CI 的 `check` 作业跑的是 **host（ubuntu）** 的 `cargo clippy -- -D warn
 ⇒ 走查页面内容一律用 `invoke`；`click` 只用于**本身就要验证鼠标命中路径**的场景（如壳顶栏悬停唤出）。
 反例：`设置` 这类侧栏项**没有 InvokePattern**（`NO-INVOKE-PATTERN`），需要 click 或键盘——遇到就换目标或用键盘，别怀疑页面坏了。
 
+
+**当 UIA 点不到页面内容时，用 CDP 驱动 headless Chrome 直连 dsh web**（2026-09-29 实测有效，绕开 WebView2 的 UIA 局限）：
+```bash
+# 1) Chrome 无头 + CDP（必须给大视口，否则侧栏不渲染）
+"$PS" -Command "Start-Process 'C:\Program Files\Google\Chrome\Application\chrome.exe' -ArgumentList '--headless=new','--disable-gpu','--window-size=1920,1200','--remote-debugging-port=9335','--user-data-dir=C:\Temp\cdp-dsh','<dsh web url + token>'"
+# 2) Windows 侧 node 连 CDP：Runtime.enable → Emulation.setDeviceMetricsOverride{1920,1200} → Runtime.evaluate 点按钮/读 innerText
+& 'C:\Program Files\nodejs\node.exe' D:\Dev\_cdp.mjs 9335
+```
+要点：① `Emulation.setDeviceMetricsOverride` 必须设（默认 800×600 下侧栏不渲染）② 点击目标用「叶子节点 + `closest('button,[role=button],a,li')`」（SPA 无 `<a href>`）③ token 只放命令行/临时文件，**不落任何持久媒介**。
 ### 4.9 dsh 0.2 的 CLI / 首启差异（回归时踩到）
 
 - **`dsh web` 不接受 `--profile`**：`dsh web --profile web` → `error: option '--profile <name>' … select a profile only once`。
