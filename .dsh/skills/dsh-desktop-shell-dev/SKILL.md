@@ -273,6 +273,19 @@ CI 的 `check` 作业跑的是 **host（ubuntu）** 的 `cargo clippy -- -D warn
 - WSL 本地跑不了 host 目标（缺 GTK/WebKit 系统依赖，`cairo-sys-rs` 等直接失败）⇒ **Linux 侧只能靠 CI 判定**，
   推完必须看 `./scripts/gh pr checks <n>` 的 `check` 作业。
 
+### 4.7 提交一律走 PR；误直推 `main` 的补救（2026-09-27 实录）
+
+`main` 的分支保护**禁止 force-push**（`GH006: Cannot force-push to this branch`）但**不禁止**普通直推
+（`enforce_admins` 关闭）——所以误直推一旦发生，**历史无法倒退**，唯一补救是两支 PR：
+
+1. `revert` 走 PR 撤回该提交（撤回时**排除 `KANBAN.json``：看板是持久记忆不是代码状态，
+   `git checkout HEAD -- KANBAN.json` 把它从 revert 里剔掉，否则看板内容会跟着回退）；
+2. 再用分支 + PR 重新提交同一批改动（revert PR #57 + 重新提交 PR #58 就是这么做的）。
+
+- **动手前先看分支**：`git branch --show-current` —— 改完一堆文件、且刚做过 `git checkout main` 时最容易踩。
+- 普通 PR 的 `check`/`test` 会正常上报，走正常合并即可；`--admin` 只留给 release-please 的 bot PR。
+- 直推 main 会触发全量 CI 兜底（`check`+`test`+`windows`+`linux`），内容仍会被验证，但"**没走评审**"这点 CI 弥补不了。
+
 ## 5. Tauri 2 踩坑速查（本轮新踩，先查再写）
 | 坑 | 真相 |
 |---|---|
