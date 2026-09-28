@@ -21,11 +21,7 @@ const collectManagerModules = (file) => {
   if (managerModules.has(file)) return
   managerModules.add(file)
   const text = readFileSync(join(root, 'scripts', file), 'utf8')
-  // 覆盖四种写法（2026-09-27 评审）：from './x.mjs' / from "./x.mjs" /
-    // import './x.mjs'（副作用导入）/ import('./x.mjs')（动态导入）—— 只匹配单引号 from 会漏拷。
-    for (const m of text.matchAll(/(?:from\s*|import\s*\(?\s*)['"]\.\/([^'"]+\.mjs)['"]/g)) {
-      collectManagerModules(m[1])
-    }
+  for (const m of text.matchAll(/from\s+'\.\/([^']+\.mjs)'/g)) collectManagerModules(m[1])
 }
 collectManagerModules('server-manager.mjs')
 for (const name of managerModules) {
