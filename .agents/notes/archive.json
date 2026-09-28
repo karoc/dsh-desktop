@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "archived": [
+    {
+      "id": "card-bb8a88e0-c99d-41a4-8645-9f7826560b2a",
+      "title": "内置本地正向代理（manager 内嵌，CONNECT + HTTP + 路由 + Basic 认证）",
+      "description": "方案 B：manager(Node) 内嵌 127.0.0.1 正向代理作为 dsh 唯一出口；按主机路由——勾选主机走上游代理(可选 user/pass)，未勾选直连；默认全直连；绝不动 dsh 官方代码（只注入 Node 运行时环境变量 NODE_USE_ENV_PROXY + HTTP_PROXY + NO_PROXY）。",
+      "sourceSessionId": "session-2eeecd95-3717-4181-84e3-8149c899b472",
+      "status": "done",
+      "tags": [
+        "proxy"
+      ],
+      "createdAt": 1786959259229,
+      "updatedAt": 1786959259229,
+      "summary": "见 commit f801d79：tools(diagnose): report installed shell version, dsh broken-install state, and manager.log markers",
+      "rationale": "任务见标题；实现见 commit f801d79。",
+      "rejected": "未记录（历史卡片；决策依据见 commit 信息）。"
+    }
+  ]
+}

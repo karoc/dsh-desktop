@@ -715,3 +715,18 @@ e2e `apps/web/tests/settings-import.e2e.ts` 断言"只导入一次 + 值真的�
 **CLI 契约新发现**：0.2 的 `dsh web` **不接受 `--profile`**（`error: option '--profile <name>' … select a profile only once`）。我们的 manager 启动参数（`web --patch … --no-open --host --port`，不带 `--profile`）在 0.2 上正确 ✅；但工具/文档里凡是要 dump 配置的，仍用全局形式 `dsh --profile web --dump-config`（该形式在 0.2 上实测可用）。
 
 **对"是否把地板抬到 0.2"的输入**：迁移是**先改名后搬移、失败段不丢**的安全设计，机制上可接受；剩余前置是 ① 在副本上验证正式版配置的"值到达页面" ② 0.2 目前仍是 `next` 预发布（是否跟进是产品决定）。
+
+### 15.6 UI 走查的工具边界与残留覆盖缺口（2026-09-29 第 6 轮）
+
+**侧栏 `设置` 在本轮三条路都不通**（插件页可正常打开，`invoke` 对已暴露 InvokePattern 的元素有效）：
+| 尝试 | 结果 |
+|---|---|
+| `-Action invoke -Name 设置` | `NO-INVOKE-PATTERN [设置]`（该按钮不暴露 InvokePattern） |
+| `-Action click -Name 设置`（含先 `AppActivate` 到前台） | 点击已发出（`CLICKED [设置] at 212,1186`，坐标取自 UIA rect `17,1154 390x63`），**页面不变**（控件数仍 62，仍是插件页） |
+| `SendKeys '^,'`（常见设置快捷键） | 无效 |
+
+⇒ 记录为**工具边界**：能 `invoke` 的元素才可程序化操作；其余（无 InvokePattern 的侧栏项）目前**没有可靠的自动化路径**。可选后续：给 `verify-dev-ui.ps1` 增加"按 UIA 树键盘导航（Tab/方向键）"或"CDP 驱动"能力；或改用 dsh 的 HTTP 设置 API（本轮未在上游源码里定位到路由，`apps/web/src` 不在该路径）。
+
+**因此 `model-reasoning` 设置分区在 0.2 上的"渲染"这一步仍是覆盖缺口**（0.1.7 上有截图实证 `mr-026-section.png`；本轮的支持证据是：`configForms` 服务在 0.2 仍是 `super(ctx, "configForms")`、`settings.section` 槽位仍有 16 处声明、插件代码零改动且已启用）。
+
+**死插件 `@dsh-desktop/plugin-console` 的清理：本轮决定"先不清"**。理由：它仍可能被**用户 profile 的 bundles 列表**引用，直接删掉会让 `dsh web` 解析不到该 bundle（界面打不开）。要清理得先做迁移（检测并剔除 profile 里的引用，或保留空壳），属于独立小任务 —— 记为清理项（方案 §15.2 已登记）。
