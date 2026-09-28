@@ -15,6 +15,21 @@
       "summary": "见 commit f801d79：tools(diagnose): report installed shell version, dsh broken-install state, and manager.log markers",
       "rationale": "任务见标题；实现见 commit f801d79。",
       "rejected": "未记录（历史卡片；决策依据见 commit 信息）。"
+    },
+    {
+      "id": "card-2550f5d7-824d-4edf-afce-086a372acd4e",
+      "title": "代理配置持久化 + Rust 桥命令（dsh.json proxy 段 + get/set_proxy_config）",
+      "description": "设置存 <runtime>/dsh.json 的 proxy 段；Rust 提供 get_proxy_config/set_proxy_config 命令；manager 读取并注入 dsh env；启动页/托盘可进设置。",
+      "sourceSessionId": "session-2eeecd95-3717-4181-84e3-8149c899b472",
+      "status": "done",
+      "tags": [
+        "proxy"
+      ],
+      "createdAt": 1786959259242,
+      "updatedAt": 1786959259242,
+      "summary": "见 commit fa91e36：docs: unify install/update/proxy messaging across README, ENGINEERING-NOTES, console plan",
+      "rationale": "任务见标题；实现见 commit fa91e36。",
+      "rejected": "未记录（历史卡片；决策依据见 commit 信息）。"
     }
   ]
 }

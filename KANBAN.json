@@ -2,36 +2,6 @@
   "version": 1,
   "cards": [
     {
-      "id": "card-bb8a88e0-c99d-41a4-8645-9f7826560b2a",
-      "title": "内置本地正向代理（manager 内嵌，CONNECT + HTTP + 路由 + Basic 认证）",
-      "description": "方案 B：manager(Node) 内嵌 127.0.0.1 正向代理作为 dsh 唯一出口；按主机路由——勾选主机走上游代理(可选 user/pass)，未勾选直连；默认全直连；绝不动 dsh 官方代码（只注入 Node 运行时环境变量 NODE_USE_ENV_PROXY + HTTP_PROXY + NO_PROXY）。",
-      "sourceSessionId": "session-2eeecd95-3717-4181-84e3-8149c899b472",
-      "status": "done",
-      "tags": [
-        "proxy"
-      ],
-      "createdAt": 1786959259229,
-      "updatedAt": 1786959259229,
-      "summary": "见 commit f801d79：tools(diagnose): report installed shell version, dsh broken-install state, and manager.log markers",
-      "rationale": "任务见标题；实现见 commit f801d79。",
-      "rejected": "未记录（历史卡片；决策依据见 commit 信息）。"
-    },
-    {
-      "id": "card-2550f5d7-824d-4edf-afce-086a372acd4e",
-      "title": "代理配置持久化 + Rust 桥命令（dsh.json proxy 段 + get/set_proxy_config）",
-      "description": "设置存 <runtime>/dsh.json 的 proxy 段；Rust 提供 get_proxy_config/set_proxy_config 命令；manager 读取并注入 dsh env；启动页/托盘可进设置。",
-      "sourceSessionId": "session-2eeecd95-3717-4181-84e3-8149c899b472",
-      "status": "done",
-      "tags": [
-        "proxy"
-      ],
-      "createdAt": 1786959259242,
-      "updatedAt": 1786959259242,
-      "summary": "见 commit fa91e36：docs: unify install/update/proxy messaging across README, ENGINEERING-NOTES, console plan",
-      "rationale": "任务见标题；实现见 commit fa91e36。",
-      "rejected": "未记录（历史卡片；决策依据见 commit 信息）。"
-    },
-    {
       "id": "card-eca7e36d-047e-4a92-8bed-165edc270eda",
       "title": "启动页 ⚙ 设置面板 + 托盘「代理设置…」入口",
       "description": "启动页右上角 ⚙ 打开设置面板（代理 section）；托盘菜单加「代理设置…」导航回设置视图；首次安装 dsh 前提示先配代理。",
@@ -1930,10 +1900,10 @@
       "id": "card-ccc4c178-e88c-466e-98ba-d9e012b5e219",
       "title": "跟进（评审发现，非阻断）：确认窗版本旁路 / Rust manifest 非原子写 / 关窗槽位不清 / 预装记账错归因 + 3 项收紧",
       "description": "**来源**：PR #55（已合并 `84269d9`）的独立评审（时间盒 + 深度两轮，结论\"无阻断问题\"）。以下均为**非阻断**发现，按优先级排列，修复时应并入下一个实质 PR（不要碎片化发布）。\n\n**重要（信息/语义缺口）**\n1. `src-tauri/src/lib.rs:2005` + `:2162-2171`：`/update-dsh` 确认窗文案固定为「安装 npm 上的新版本」，但真正安装的版本来自**调用方 body 的 `version`**（`server-manager.mjs:690-694` 以它为 target）→ 确认框的信息优势被调用方参数旁路（用户以为在升级，实际可换成任意/更旧版本）。修法：把 Rust 解析出的 version 写进确认文案（detail 由 Rust 生成，调用方不能伪造）。\n2. `src-tauri/src/lib.rs:1634-1660`（Rust `write_web_profile_bundles` 用非原子 `std::fs::write`）vs `scripts/server-manager.mjs:1014-1029`（新 JS 版 tmp+rename，注释自称「与 Rust 侧同语义」）→ **等价性不成立**，「半截 manifest → dsh 模板重建 → 用户插件全丢」（2026-09-07 事故）在 Rust 路径（菜单「停用第三方插件」/启动页安全网）仍敞着；且两侧 manifest 不可解析时都静默退回 `{}`（丢 `dependencies`）。修法：Rust 侧也 tmp+rename；解析失败要告警而非静默 `{}`。\n\n**次要**\n3. `lib.rs:2076-2079`/`:2089-2090`/`:4490`：用窗口 X 关掉确认窗后**槽位不清**，60s 内再发起会命中 Err 分支（该分支只在窗口仍存在时 show/focus）→ 最长 60 秒「点关窗/点退出没反应」，且桥回 `duplicate:true` 提示「已在确认窗中等待确认」（窗口其实已不在）。\n4. `lib.rs:2153` 注释「唯一执行点：桥/页面都只能经确认窗走到这里」与技能 `SKILL.md:328`「本地页走 IPC，不经确认窗」矛盾：Linux 本地页（`tauri:`）走 IPC 不经确认窗；Windows 本地页是 `http://tauri.localhost` → 走桥、经确认窗（行为更严无害，但「唯一」是错的）。修法：改注释 + 技能措辞，写明平台差异。\n5. `scripts/server-manager.mjs:1181-1196`：`ensurePreinstalled` 在 `skipInstall` 判断**之前**就记 `manifest.preinstalled`/`preinstalledVersions` → 被地板守卫拒装的插件仍出现在关于弹窗版本列表、并被「停用第三方插件」归类为壳自带（错归因）。修法：跳过安装的插件不记账（或标注为「已隔离」）。\n\n**建议**\n6. `scripts/test-shell-chrome.mjs:256`：`/建议先备份数据目录/` 在托盘标签（lib.rs:2900）**或**通知（lib.rs:2920）任一处存在即为真 → 删掉托盘那处仍 exit 0（评审实测）。收紧到具体行片段（本会话同类错误已出现 4 次）。\n7. `scripts/sync-resources.mjs:24`：导入闭包只匹配 `from './x.mjs'`（单引号 + from 形式）；`import './x.mjs'`、双引号、动态 `import()` 会漏（当前 4 个模块恰好都是该形式，已 grep 确认无实际漏拷）。\n8. `docs/2026-09-25-shell-improvement-plan.md` §13.5 写「npm test 现在 exit 1…套数同步为 14」与现状（15 套全绿）不符——历史段落，标注已过期。\n\n**明确未发现问题（评审原话）**：桥准入无本地页/远程页绕过路径（上游 ACL 已证：tauri 2.11.5 对非本地页强制 ACL，远程页无法 invoke 绕过确认窗）、无凭据泄漏（8200 行 diff grep 0 命中）、四处版本号一致、两处 preinstalled 逐字节一致、`applyPluginFloorGuard` 不误伤用户插件/`@deepseek-ai/*`、不删文件、版本未知不动、原子写+备份。",
-      "rationale": "PR #55 的独立评审（用户要求\"启动 subagent 评审\"）产出了 2 重要 + 3 次要 + 3 建议，均判为非阻断。用户规则是\"没问题就合并\"，所以先合并；但这些发现必须落到持久媒介（评审是只读的，它自己不写看板），否则下次会话就丢了。修法都已写清，可并入下一个实质 PR。",
-      "rejected": "① 不因这些非阻断发现阻塞合并（评审明确判非阻断，且用户在等合并；阻塞会让\"评审→合并\"的链路停在半途）。② 不在合并前顺手改（会推进 HEAD → 评审结论按\"HEAD 一动旧结论作废\"失效，等于没有评审）。③ 不为它们单独发一个补丁版本（CONTRIBUTING 禁止碎片化发布）——并入下一个实质 PR。④ 未采纳\"把桥 Origin 白名单收紧到壳自己的端口\"作为本轮修复（评审也判为相对 main 非回归：main 原本是 ACAO `*`；且需要设计每启动 nonce 才能区分壳页面与其它本地页）。",
+      "rationale": "PR #55 的独立评审给的 2 重要 + 3 次要 + 3 建议都是真问题（不是风格问题）：确认窗信息旁路、manifest 非原子写、孤儿槽位 60s 无响应、拒装插件错归因、以及三处门禁/闭包缺口。用户指令\"两个跟进卡上的都按你的建议推进\"——卡里的建议就是\"并入下一个实质 PR\"。",
+      "rejected": "① 不为它单独发补丁版本（CONTRIBUTING 禁止碎片化发布）。② Rust 侧不用 `#[cfg]` 掉死代码那套，而是补齐原子写+备份告警，让两侧真正同语义。③ 不把「预装记账」做成只加日志（错归因会留在关于弹窗里）——改为不记账 + 单列 preinstalledSkipped。④ 未采纳\"把桥 Origin 白名单收到壳自己端口\"（需要每启动 nonce，另案）。",
       "sourceSessionId": "session-c852547f-89db-4736-8a28-f3dd6ec7be25",
-      "status": "todo",
+      "status": "done",
       "tags": [
         "pr55",
         "review-findings",
@@ -1944,7 +1914,8 @@
         "gate-tightening"
       ],
       "createdAt": 1790456609709,
-      "updatedAt": 1790456609709
+      "updatedAt": 1790571171533,
+      "summary": "**8 项全部处置**（提交 `16c8b93`，11 文件 +256/−59）：① `/update-dsh` 目标版本进槽位→`get_pending_action` 回传→`confirm.js` 显示「目标版本：vX」（堵信息旁路）；② Rust `write_web_profile_bundles` 改 tmp+rename 原子写，解析失败先备份 `package.json.bak-corrupt-<ts>`+落日志（JS 侧同语义，注释不再自称\"等价\"却不等价）；③ 孤儿槽位：改为「未过期且窗口仍在」才算占用、`duplicate` 仅在动作相同时为真（消除最长 60s「点关窗没反应」+ 误提示）；④ 注释与技能写明平台差异（Windows 主窗口 `http://tauri.localhost` → 走桥/确认窗）；⑤ 记账移到 `skipInstall` 之后并单列 `manifest.preinstalledSkipped`（不再把拒装插件算作壳自带）；⑥ `test-shell-chrome` 备份提示改**数量断言**（≥2）；⑦ `sync-resources` 导入闭包覆盖双引号/副作用/动态 import；⑧ 方案 §13.5 加\"已过期\"标注。**验证**：`npm test` 15 套全绿（32 PASS）；Windows 目标 clippy（lib+tests，-D warnings）通过；负向对照 ①删托盘提示→`test-shell-chrome` 红 ✅ ②import 改双引号→闭包仍收录 `plugin-floor.mjs` ✅；**覆盖缺口（如实登记）**：⑤ 的记账改动**没有语义门禁**——对照③的红来自 copy-consistency 而非语义断言。**流程偏差（已报告用户）**：这批第一次被我误直接推到 `main`（应走 PR），分支保护**禁止 force-push**（`GH006 Cannot force-push to this branch`）故无法回退；已按\"不重写历史\"收尾，main 的全量 CI 兜底结果：`check` ✅ `test` ✅（windows/linux 构建仍在跑）。"
     },
     {
       "id": "card-185d0d43-d234-499e-85db-e847bda98691",
@@ -1964,6 +1935,31 @@
       ],
       "createdAt": 1790523474553,
       "updatedAt": 1790523474553
+    },
+    {
+      "id": "card-668fe7e2-f8b8-436e-a095-ad0b01908a5f",
+      "title": "dsh 0.2.0-rc.1 全面回归与适配（壳契约 + 四个预装插件）",
+      "description": "**目标**：dsh `next` 通道新版本 `0.2.0-rc.1`（2026-09-28T12:34Z，261 提交/区间 `dsh-v0.1.7-rc.2..dsh-v0.2.0-rc.1`）的全面回归 + 壳与四个预装插件的适配。\n\n**分阶段（每阶段都要能独立判定成败）**\n1. **契约实证（先做，成本最低）**：装 `@deepseek-ai/dsh@0.2.0-rc.1` 到临时前缀 → `dsh web --dump-config` 生成新配置 → 与现有 fixture（182 ids）对比 → 跑 `scripts/test-patch-targets.mjs`；另验 `dsh web --patch <我们的 yml>` 仍能应用。判定：patch 目标有无改名/消失，`ui-sidebar-browser` 与 `insert` 是否仍成立（静态读源码已初见成立，需实证）。\n2. **dev 运行时升级 + 实机回归**：dev runtime 从 `0.1.7-rc.2` → `0.2.0-rc.1`（`dsh.json` 的 devMode 可控升级）→ 重启 dev 壳 → 跑 `scripts/verify-dev-ui.ps1`（UIA dump/菜单/文本/点击/截图）与 `scripts/verify-bridge-guards.ps1`（桥准入 10 项）。重点：**caption/顶栏几何**（上游动了 `fix(client): unify overlay clearance and preserve the Windows caption`、`fix(windows): preserve caption gaps across dialogs and fullscreen`）、插件页、通知插件、桥、**新的「0.2 预览版确认」页面状态**（我们的模态/全屏判定可能要跟着改）。\n3. **壳侧适配**：`MIN_DSH_VERSION` 抬到 0.2.0-rc.1（若决定跟进）、patch yml 目标、fixture 刷新、`test-patch-targets`/`test-manifest-consistency`（版本引用四处 + 文档）等门禁跑绿；文档（README/方案/技能）里所有 dsh 版本引用同步。\n4. **四个预装插件全量适配**：`dsh-model-reasoning` 0.2.6 / `dsh-kanban` 0.2.10 / `dsh-turn-navigator` 0.4.6 / `@karoc/dsh-smoothly-opencode-session` 0.2.1 —— 逐个体检 0.2.0-rc.1 的客户端插件 API（seam：`slots`/`locale`/`remote`/`remote.settings`/`configForms`；槽位 id 是否有增删改名；peer 地板），改各自插件仓 → 版本 → **发布**（用户 npm 已登录）或本地 tarball 先行 → 用 `scripts/sync-preinstalled-plugin.mjs` 同步进壳 → `sync:resources` → 门禁（`test-plugin-dsh-compat`、`test-copy-consistency`）。\n5. **真机验收 + 收口**：四个插件在 0.2.0-rc.1 上逐个实机确认（UI 不卡、分区渲染、功能可用，截图留证）；看板卡 + Agent Note + 技能/方案同步；证据坐标（run id / 截图路径 / sha）。\n\n**已知事实（本轮已核，避免重复劳动）**\n- npm：`@deepseek-ai/dsh` 的 `latest=0.1.7-rc.2`、`next=0.2.0-rc.1`；无 scope 的 `dsh` 是 2016 年同名旧包（勿混）。\n- 上游 checkout `/srv/deepseek-harness` 已在 `4878cdabd8`（= 0.2.0-rc.1），可直接读源码对比。\n- 静态初判：patch 契约仍成立（`ui-sidebar-browser` 在 `packages/bundle/web-app/cordis.patch.yml:278`、desktop 门控仍在、CLI 仍拒 `--profile desktop`（`apps/cli/src/args.ts:84`）`- insert:` 形状未变）；区间内 `packages/client/*` 无 seam 语义变更（`settingsScope`/`configForms`/`slots` 关键词 0 命中）。**均为静态判读，需第 1、2 阶段实证**。",
+      "rationale": "用户指令：\"回归，并适配好。然后我们的预装插件也都要做好全面的适配。\" dsh 上了 next 版本 0.2.0-rc.1，壳依赖 dsh 的三类契约（web profile 的 patch 注入、CLI 参数、客户端插件 API），预装插件又依赖客户端 seam。此前 0.1.7 升级有过\"sources 全绿但真机 UI 打不开\"的教训，所以必须实证回归而非假设兼容。分阶段推进，每阶段都要能独立判定成败。",
+      "rejected": "① **不把 `MIN_DSH_VERSION` 抬到 0.2.0-rc.1**：0.2 仍在 `next` 预发布通道，抬地板会让所有用户被强制升到预览版（属产品决定，已在 §15.5 写明输入与建议）。② **不刷新 patch id fixture**：fixture 记录的是\"地板版本的上游形状\"，地板没动就不该动它（否则等于偷换门禁判据）。③ **不因门禁报\"id 不存在\"就删掉 `ui-sidebar-browser` 覆盖**：先用真机 runtime 复跑并读 dump，定位到是门禁解析口径问题 —— 删覆盖会丢掉侧栏浏览器页的恢复能力。④ **不用 `click` 继续做 UI 走查**：WebView2 上 click 不可靠（模态两次点击无效、设置项点击无效），改用 `invoke`（UIA）与 CDP 驱动 headless Chrome；否则会把工具问题误判成上游 bug。⑤ **不直接删除死插件 `@dsh-desktop/plugin-console`**：它可能被用户 profile bundles 引用，直接删会让 `dsh web` 解析不到 bundle（需迁移式清理），已登记为独立任务。",
+      "sourceSessionId": "session-c852547f-89db-4736-8a28-f3dd6ec7be25",
+      "status": "done",
+      "tags": [
+        "dsh-0.2.0",
+        "upgrade",
+        "regression",
+        "preinstalled",
+        "plugins",
+        "adaptation",
+        "windows",
+        "verify",
+        "gate",
+        "done",
+        "verified-machine"
+      ],
+      "createdAt": 1790611604898,
+      "updatedAt": 1790614895898,
+      "summary": "**① 契约实证 ✅**：overlay 的 `insert` 与 `- id: ui-sidebar-browser, disabled: false` 在 0.2.0-rc.1 的**扁平化 dump** 里仍成立；id 集合 **182→183**（消失 `schedule`/`time-context`/`ui-schedule`，新增 `otel`/`product-analytics`/`desktop-product-telemetry`/`ui-settings-session-log`）；`dsh web` 在 0.2 **不接受 `--profile`**（我们 manager 的启动参数本来就是对的），dump 仍用全局形式。**顺带修掉门禁自身的假红**：`test-patch-targets.mjs` runtime 模式原先读原始 YAML + 列首锚定解析器 → 缩进行（`ui-sidebar-browser`）看不见；抽 `dumpConfigIds()` 统一走 `--dump-config`（PR #60）。\n**② dev 升级 + 实机回归 ✅**：dev 运行时升到 `0.2.0-rc.1`（manager 同参 pnpm，3m24s）；因旧产物都不可用（已安装壳缺地板守卫、`D:\\Dev\\dsh-desktop-dev` 脏工作区）且 `shell-chrome.js` 是 `include_str!`，**新 clone `main` + `tauri build --no-bundle` 重建**后实机验证：chrome 注入/caption 无错位（1942×1243 最大化）、页面完整可用、桥准入 **10/10 PASS**、四个预装同步、**未误报降级**、地板守卫未隔离任何插件。\n**③ 壳侧 ✅**：门禁全绿（`npm test` exit 0 / 32 PASS；fixture ✅ / 0.2 runtime ✅ / 兼容 ✅ / 地板守卫 ✅）；地板与 fixture **按决策不动**并写明理由。\n**④ 四插件适配 ✅（结论＝无需改代码）**：静态——用到的 seam（slots/locale/remote/remote.settings/configForms/sessions/workspaces/connection）与槽位 id 在 0.2 全部仍有提供者/声明；运行时——CDP 驱动 headless Chrome 实测三个客户端插件均渲染：kanban 侧栏「思磨力看板」、model-reasoning 设置导航「思磨力提供方参数」、turn-navigator 设置项「思磨力轮次胶囊条」；`@karoc/dsh-smoothly-opencode-session` 为 host-only 且用户未启用（非断点）。\n**⑤ 收口 ✅**：PR #60/#61/#62 全部合并（`main = 6b69baf`）；Agent Note `testing/2026-09-28-dsh-020-rc1-regression-and-adaptation.md`；技能 §4.8（invoke vs click + CDP 配方）/§4.9（0.2 的 CLI/首启/迁移差异）；方案 §15.1–§15.7；证据截图 `D:\\Dev\\_shots\\s12–s18-020-*.png`。\n**遗留（不阻塞，均已登记）**：① 地板是否抬到 0.2（产品决定，建议等 `latest`）② `@dsh-desktop/plugin-console` 的迁移式清理（§15.6）③ 通知插件的**功能级**验证需真实跑完一轮会话（注入路径已验、UI 无错）④ ocs 启用后的 host 半区加载。"
     }
   ]
 }

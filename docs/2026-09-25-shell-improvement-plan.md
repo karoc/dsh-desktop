@@ -749,3 +749,18 @@ node <script> 9335     # Windows 侧 node；Runtime.evaluate 里点按钮/读 in
 | `@karoc/dsh-smoothly-opencode-session` 0.2.1 | host-only，**用户从未启用**（不在 profile bundles）；本轮只做了 host 半区静态核对 |
 
 ⇒ **四个预装插件对 0.2.0-rc.1 的适配结论：无需改代码**（静态 seam/槽位全绿 + 三个客户端插件的 UI 实测渲染 + 版本已在 runtime 中）。第 5–6 轮记录的"设置分区/turn-nav 覆盖缺口"**至此关闭**。
+
+### 15.8 抬地板到 0.2.0-rc.1 + 清理死插件 plugin-console（2026-09-29 第 8–9 轮）
+
+**A. 地板抬升（用户指令）**：`scripts/server-manager.mjs` 的 `MIN_DSH_VERSION` `0.1.7-rc.2` → **`0.2.0-rc.1`**；
+patch id **fixture 已刷新**为 `dsh 0.2.0-rc.1 / 183 ids`（`--update-fixture --runtime <0.2 dev runtime>`）。
+- 三模式复跑：fixture ✅ / 0.2 dev runtime ✅ / **prod runtime（仍 0.1.6-alpha.1）❌ —— 预期**：正式版下次启动会被地板强制升到 0.2，升级前那条红是状态而非缺陷。
+- 负向对照：fixture 换成 0.2 后塞不存在的 id → 仍变红 ✅。
+- **顺带修掉一个潜伏 bug**：`test-patch-targets.mjs` 的 `--update-fixture` 分支在上一轮重构后漏了 `const ids = dumpConfigIds(runtimeDir)` → 一跑就 `ReferenceError`（fixture/runtime 两种只读模式不受影响，所以 CI 一直绿）。**是"抬地板要刷 fixture"这一步把它暴露的**。
+
+**B. plugin-console 清理（用户指令）+ 迁移逻辑**：
+- **仓库侧其实早已干净**：`src-tauri/resources/plugin/@dsh-desktop/` 只剩 `client-notifications`，patch yml 也不再 insert 它。残留全部来自**陈旧的 cargo target 目录**（`D:\Dev\dsh-desktop-dev\src-tauri\target` 被跨 checkout 复用，tauri 不会清理旧 resources）→ 新构建把旧插件副本与旧 patch 一起带进产物。⚠️ **这解释了第 2 轮实机回归的一个偏差**：那次跑的是"陈旧 patch + 陈旧 plugin-console"，虽然应用正常（两者配套），但**测的不是仓库当前的 patch** —— 结论（桥/UI/插件/seam）仍成立，patch 相关结论已在第 1 轮用真机 dump 单独证过。
+- 已清理 3 个 target 目录里的陈旧副本 + 陈旧 patch，以及 dev runtime 里的旧副本。
+- **新增迁移逻辑（持久部分）**：`scripts/shell-plugins.mjs` 的 `planShellPluginCleanup({shipped,present,bundles})` + manager 的 `pruneStaleShellPlugins()`（在客户端插件同步后执行）：不再分发的 `@dsh-desktop/*` → runtime 副本改名 `.bak-stale-<ts>`（保留可回退、不硬删）+ profile bundles 里的悬空引用先备份 manifest 再原子写回；**只动 `@dsh-desktop/*` 命名空间，绝不碰用户第三方插件**。单测 4 组 + 负向对照（去掉命名空间过滤 → 变红）。门禁链 **15 → 16 套**。
+- **端到端验证**（真实注入 → 重启 dev 壳）：日志出现 `stale client plugin moved aside: @dsh-desktop/plugin-console` 与 `dropped stale plugin references from profile bundles: …`；runtime 副本变为 `plugin-console.bak-stale-1790615559394`；bundles 里引用消失；生成 `package.json.bak-stale-plugin-…` 备份 ✅。
+- **顺带发现（好性质）**：0.2 对**悬空 bundle 引用是优雅跳过**（日志 `dsh: skipping profile bundle "@dsh-desktop/plugin-console": … declares no dsh.bundle`）而非 fail-closed —— 即使用户 profile 残留引用，界面也不会打不开（我们的迁移因此是"清理"而非"救命"）。

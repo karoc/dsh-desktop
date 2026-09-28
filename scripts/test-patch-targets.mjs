@@ -76,6 +76,7 @@ if (updateFixture) {
   const dshPkg = join(runtimeDir, 'node_modules', '@deepseek-ai', 'dsh', 'package.json')
   const dshVersion = existsSync(dshPkg) ? JSON.parse(readFileSync(dshPkg, 'utf8')).version : null
   // id 集合取自 `--dump-config` 的**扁平化**结果（见 dumpConfigIds 的说明）。
+  const ids = dumpConfigIds(runtimeDir)
   const payload = {
     note: '由 scripts/test-patch-targets.mjs --update-fixture 生成；抬 dsh 地板时刷新',
     dshVersion,
