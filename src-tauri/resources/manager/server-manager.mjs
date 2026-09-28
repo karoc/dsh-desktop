@@ -1014,7 +1014,16 @@ function writeShellManifest(runtimeDir, manifest) {
 function writeWebProfileBundles(runtimeDir, bundles) {
   const path = webProfileManifestPath(runtimeDir)
   let doc = {}
-  try { doc = JSON.parse(readFileSync(path, 'utf8')) } catch { doc = {} }
+  try {
+    doc = JSON.parse(readFileSync(path, 'utf8'))
+  } catch (err) {
+    // 解析失败时**先备份再重建**（与 Rust 侧 write_web_profile_bundles 同语义）：静默退回 {}
+    // 会丢掉 dependencies 等字段且用户无从恢复（2026-09-27 评审）。
+    const backup = `${path}.bak-corrupt-${Date.now()}`
+    try { copyFileSync(path, backup) } catch { /* 文件可能不存在 */ }
+    log(`profile manifest 解析失败（${err.message}）：已备份到 ${backup}，本次按空对象重建 bundles`)
+    doc = {}
+  }
   if (typeof doc !== 'object' || doc === null) doc = {}
   if (typeof doc.dsh !== 'object' || doc.dsh === null) doc.dsh = {}
   if (typeof doc.dsh.profile !== 'object' || doc.dsh.profile === null) doc.dsh.profile = {}
@@ -1165,8 +1174,9 @@ function ensurePreinstalled(runtimeDir, resourceDir) {
     log('no preinstalled bundles in resources')
     return
   }
-  const guard = applyPluginFloorGuard(runtimeDir, srcRoot)
+const guard = applyPluginFloorGuard(runtimeDir, srcRoot)
   const skip = new Set(guard.skipInstall.map((p) => p.name))
+  const skipped = []
   const manifest = readShellManifest(runtimeDir)
   const names = []
   const versions = {}
@@ -1177,11 +1187,17 @@ function ensurePreinstalled(runtimeDir, resourceDir) {
     const pkgJson = join(src, 'package.json')
     if (!existsSync(pkgJson)) continue
     const pkgMeta = JSON.parse(readFileSync(pkgJson, 'utf8'))
-    const pkgName = pkgMeta.name ?? name
-    names.push(pkgName)
-    // 版本顺手记下（关于弹窗/排查用；新增字段，不动 preinstalled: string[]）。
-    versions[pkgName] = typeof pkgMeta.version === 'string' ? pkgMeta.version : null
-    if (skip.has(pkgName)) continue // 地板守卫：装了也不会激活（见 applyPluginFloorGuard）
+const pkgName = pkgMeta.name ?? name
+      const pkgVersion = typeof pkgMeta.version === 'string' ? pkgMeta.version : null
+      if (skip.has(pkgName)) {
+        // 地板守卫拒装：**不**记进 preinstalled/preinstalledVersions —— 否则关于弹窗会显示
+        // runtime 里并不存在的版本，且「停用第三方插件」会把它误归为壳自带（2026-09-27 评审）。
+        skipped.push(`${pkgName}@${pkgVersion ?? '?'}`)
+        continue
+      }
+      names.push(pkgName)
+      // 版本顺手记下（关于弹窗/排查用；新增字段，不动 preinstalled: string[]）。
+      versions[pkgName] = pkgVersion
     const dest = join(runtimeDir, 'node_modules', pkgName)
     const updating = existsSync(dest) && !sameTree(src, dest)
     if (!existsSync(dest) || updating) {
@@ -1192,8 +1208,10 @@ function ensurePreinstalled(runtimeDir, resourceDir) {
   }
   if (names.length === 0) return
   // Preserve other shell fields (devMode) while recording the list + versions.
-  manifest.preinstalled = names
-  manifest.preinstalledVersions = versions
+manifest.preinstalled = names
+    manifest.preinstalledVersions = versions
+    // 地板守卫拒装（未进 runtime）的：单独记账，供排查与界面区分「随壳发布但未启用」。
+    manifest.preinstalledSkipped = skipped
   writeShellManifest(runtimeDir, manifest)
   log(`preinstalled bundles: ${names.join(', ')}`)
 }

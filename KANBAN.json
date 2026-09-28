@@ -1945,6 +1945,25 @@
       ],
       "createdAt": 1790456609709,
       "updatedAt": 1790456609709
+    },
+    {
+      "id": "card-185d0d43-d234-499e-85db-e847bda98691",
+      "title": "跟进（发布流程）：release-please 不更新 Cargo.lock → 每个发布 PR 都被「四处版本一致」门禁判红",
+      "description": "**发现**：`.release-please-config.json` 未声明 `extra-files`，release-please 只更新 `.release-please-manifest.json` / `package.json` / `src-tauri/Cargo.toml` / `src-tauri/tauri.conf.json`，**从不更新 `src-tauri/Cargo.lock`**（v0.11.0 的发布提交 `5cfb629` 与 v0.12.0 的 `9e1856d` 都只动这四个文件，实测 `git show --stat`）。而本会话新增的清单门禁 `scripts/test-manifest-consistency.mjs` 要求**四处版本一致**（含 Cargo.lock）⇒ **每个发布 PR 一开始都是红的**，按 CONTRIBUTING「四处版本一致才 admin 合并」根本合不了，必须先补一刀。\n本次处置：在发布分支上把 `Cargo.lock` 里 `dsh-desktop` 的版本改成 0.12.0（机器性补丁，不是改版本决策）→ 门禁绿 → `--admin` 合并（`185038a`），并已确认补丁进入 main（`git show --stat 185038a` 含 `src-tauri/Cargo.lock`）。\n\n**修法二选一（建议 A）**：\n- **A. 让 release-please 自己更新 lock**（根治）：在 `.release-please-config.json` 的 packages 里加\n  `\"extra-files\": [{\"type\": \"toml\", \"path\": \"src-tauri/Cargo.lock\", \"jsonpath\": \"$.package[?(@.name=='dsh-desktop')].version\"}]`\n  —— 注意 Cargo.lock 是 TOML 且 `package` 是数组，实际生效的 updater 类型/表达式需**实测一次**（release-please 支持 `generic`/`json`/`toml`/`yaml` 的 extra-files；若 toml updater 不支持数组过滤，则退回 `generic` + 正则）。\n- **B. 改门禁口径**：清单门禁只校验三处 + manifest，并把 Cargo.lock 单独判为「允许滞后」（因为它由下一次 `cargo` 构建自动更新，不影响产物版本）。**不推荐**——那等于放弃一条真实的一致性检查（本次正是它抓出的偏差）。\n\n**验证要求**：无论选哪条，都要在**下一个发布 PR** 上验证（不能只改配置就算完）；A 的验证判据是「release-please 生成的发布分支里 Cargo.lock 已经是新版本」，B 的判据是「门禁在新发布 PR 上直接绿」。",
+      "rationale": "本会话把\"四处版本一致\"做成门禁后，第一次真实发布（v0.12.0）就在发布 PR 上撞到：release-please 不更新 Cargo.lock。这是\"门禁 vs 流程\"的口径不一致，必须修一处，否则每次发布都要人工补刀（易漏、且 CONTRIBUTING 的合并前置条件永远不满足）。用户此次让我合并发布 PR，我用临时补丁让它过去了；根治要落到配置或门禁口径上。",
+      "rejected": "① 不把「人工补 Cargo.lock」写成常态流程（每次发布多一步手改、且 release-please 会 force-push 分支，补丁可能被它覆盖——这次是靠\"补完立刻合并\"缩短窗口侥幸过关）。② 不直接删掉门禁里的 Cargo.lock 检查（它这次就抓到了真偏差；且 v0.5.0/0.6.0 打包旧 manager 的历史事故说明版本/产物漂移是真实风险）。③ 不在发布分支上顺手加 extra-files 配置（那是 release-please 的分支，下次生成会被覆盖；配置改动必须走正常 PR）。",
+      "sourceSessionId": "session-c852547f-89db-4736-8a28-f3dd6ec7be25",
+      "status": "todo",
+      "tags": [
+        "release",
+        "release-please",
+        "gate",
+        "process",
+        "follow-up",
+        "cicd"
+      ],
+      "createdAt": 1790523474553,
+      "updatedAt": 1790523474553
     }
   ]
 }
