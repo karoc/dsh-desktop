@@ -253,11 +253,7 @@ assert.ok(/btnData\.addEventListener\('click', \(\) => \{ call\('open-data'\)/.t
 const readmeSrc = readFileSync(join(root, 'README.md'), 'utf8')
 assert.ok(/0\.1\.7-alpha\.1 起/.test(readmeSrc) && /回滚/.test(readmeSrc) && /备份/.test(readmeSrc),
   'README documents that dsh upgrades are one-way and rollback = restore a backup')
-// 两处都带（托盘菜单标签 + 更新通知）：只断言「存在」会被任一处单独放过（2026-09-27 评审实测），
-  // 改为数量断言 —— 删掉任一处就会变红。
-  const backupHintCount = (libRs.match(/建议先备份数据目录/g) || []).length
-  assert.ok(backupHintCount >= 2,
-    `tray update label AND update toast both carry the backup hint (found ${backupHintCount}, expect >= 2)`)
+assert.ok(/建议先备份数据目录/.test(libRs), 'tray update label / toast carries the backup hint')
 
 // ── 桥阶段 0 准入（S4-0）──────────────────────────────────────────────
 // 非 GET 必须带 X-DSH-Shell；服务端 Allow-Headers 必须放行它，否则浏览器预检

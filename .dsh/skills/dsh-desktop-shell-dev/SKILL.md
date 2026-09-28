@@ -325,9 +325,7 @@ CI 的 `check` 作业跑的是 **host（ubuntu）** 的 `cargo clippy -- -D warn
 - 加危险端点 = 三处同改：① `dangerous_bridge_action` 表（文案由 Rust 生成，调用方只能
   给 action id）② `execute_danger_action` 的执行分支 ③ chrome 的 `ACTIONS` 标 `confirm: true`
   （契约测试会双向核对：标了 confirm 的桥路径必须在表里，表里的关键路径必须能执行）。
-- 只有 `tauri:` 协议的 launcher/settings 面板与托盘走 IPC、**不经确认窗**；**Windows 上主窗口是
-  `http://tauri.localhost`（`shell-chrome.js` 判 `protocol==='tauri:'` 为 false）→ 走桥 → 经确认窗**。
-  "本地页不经确认窗"这句因此有平台差异（2026-09-27 评审澄清；行为上更严，无害）。
+- 本地页（launcher / settings）走 IPC，**不经确认窗**；托盘同理 —— 只有"页面发起的桥请求"才确认。
 - 改 window-state denylist 时记得 `["settings", "confirm"]` 一起；确认窗的权限在
   `capabilities/launcher.json` 的 `windows` 里，漏加 = invoke 不可用。
 

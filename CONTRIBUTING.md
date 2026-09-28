@@ -58,12 +58,7 @@ CI 分层：PR 只跑快层（check + test，~5min）；main/tag 跑全量（win
 1. 合并到 main 后，release-please 依据 Conventional Commits 自动：
    版本 bump（Cargo.toml / tauri.conf.json / package.json 三处同步）→ CHANGELOG.md → 提 release PR。
 2. **合并 release PR 前，先在发布分支上跑一遍本地门禁**（见下「release PR 的门禁」）。
-3. 合并 release PR（**只能 admin 合并**，原因见下）→ release-please 自动打 `vX.Y.Z` tag。
-     ⚠️ **Cargo.lock 兜底**（2026-09-27）：`release-please-config.json` 的 `extra-files` 已尝试让
-     release-please 一并更新 `src-tauri/Cargo.lock` 里 `dsh-desktop` 的版本，但**该写法尚未在真实
-     发布 PR 上验证**。若发布分支的 Cargo.lock 仍是旧版本（`npm test` 的「四处版本一致」会立刻报红），
-     就在发布分支上补一刀（改 `[[package]] name = "dsh-desktop"` 的 version）再合并 —— 这正是
-     v0.12.0 的做法。
+3. 合并 release PR（**只能 admin 合并**，原因见下）→ release-please 自动打 `vX.Y.Z` tag
    **并创建一个不带安装包的 GitHub Release**。
 4. **在 tag 上派发一次构建**，否则 Release 永远没有安装包：
    ```bash
