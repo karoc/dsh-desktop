@@ -1636,9 +1636,30 @@ fn write_web_profile_bundles(runtime: &std::path::Path, bundles: &[String]) -> R
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let raw = std::fs::read_to_string(&path).unwrap_or_else(|_| "{}".into());
-    let mut value: serde_json::Value =
-        serde_json::from_str(&raw).unwrap_or(serde_json::Value::Object(Default::default()));
+let raw = std::fs::read_to_string(&path).unwrap_or_else(|_| "{}".into());
+    let mut value: serde_json::Value = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(err) => {
+            // 解析失败时**先备份再重建**：静默退回 {} 会丢掉 dependencies 等字段且用户无从恢复
+            // （2026-09-27 评审）。日志落到 app_data 目录（runtime 的父目录）。
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let backup = path.with_file_name(format!("package.json.bak-corrupt-{stamp}"));
+            let _ = std::fs::copy(&path, &backup);
+            if let Some(dir) = runtime.parent() {
+                log_line(
+                    dir,
+                    &format!(
+                        "profile manifest 解析失败（{err}）：已备份到 {}，本次按空对象重建 bundles",
+                        backup.display()
+                    ),
+                );
+            }
+            serde_json::Value::Object(Default::default())
+        }
+    };
     let obj = value
         .as_object_mut()
         .ok_or_else(|| "profile manifest must be an object".to_string())?;
@@ -1655,8 +1676,18 @@ fn write_web_profile_bundles(runtime: &std::path::Path, bundles: &[String]) -> R
         .as_object_mut()
         .ok_or_else(|| "dsh.profile must be an object".to_string())?;
     profile_obj.insert("bundles".into(), serde_json::json!(bundles));
-    let out = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())? + "\n";
-    std::fs::write(&path, out).map_err(|e| e.to_string())
+let out = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())? + "\n";
+    // 原子写（tmp + rename）：半截 manifest 会让 dsh 用模板重建 → 用户插件全丢（2026-09-07 事故）。
+    // 与 JS 侧 writeWebProfileBundles 同语义（2026-09-27 评审要求两侧一致）。
+    let tmp = path.with_file_name(format!(
+        "{}.tmp-{}",
+        path.file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "package.json".into()),
+        std::process::id()
+    ));
+    std::fs::write(&tmp, out).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, &path).map_err(|e| e.to_string())
 }
 
 /// Preinstalled plugin names from <runtime>/dsh.json.
@@ -2042,6 +2073,9 @@ struct PendingConfirm {
     nonce: String,
     body: String,
     created: std::time::Instant,
+    /// `/update-dsh` 的真实目标版本（来自调用方 body）。确认窗必须显示它 —— 否则文案说
+    /// 「安装 npm 上的新版本」而实际装的是调用方指定的任意版本（2026-09-27 评审）。
+    target: Option<String>,
 }
 
 static PENDING_CONFIRM: Mutex<Option<PendingConfirm>> = Mutex::new(None);
@@ -2064,23 +2098,43 @@ fn new_confirm_nonce() -> String {
 /// 登记槽位并打开确认窗；已有未过期的槽位时返回 `Err("pending")`（单飞 + 去重）。
 fn request_confirmation(app: &AppHandle, action: DangerAction, body: String) -> Result<String, &'static str> {
     let nonce = {
-        let mut slot = PENDING_CONFIRM.lock().unwrap();
-        if let Some(pending) = slot.as_ref() {
-            if pending.created.elapsed().as_secs() < CONFIRM_TTL_SECS {
-                // 已有未过期槽位（含同一动作重复请求）：聚焦已有窗口而不是叠窗。
-                let duplicate = pending.action.id == action.id;
-                drop(slot);
-                if let Some(w) = app.get_webview_window("confirm") {
-                    let _ = w.show();
-                    let _ = w.set_focus();
-                }
-                return Err(if duplicate { "pending" } else { "busy" });
+let mut slot = PENDING_CONFIRM.lock().unwrap();
+        // 只有「未过期 **且** 确认窗还在」才算被占用（聚焦而不是叠窗）。
+        // 用户用窗口 X 关掉确认窗后槽位会变孤儿：必须丢弃并重新登记，否则最长 60s 内
+        // 「点关窗/点退出没反应」，且桥会误报「已在确认窗中等待确认」（2026-09-27 评审）。
+        let occupied = matches!(
+            slot.as_ref(),
+            Some(p) if p.created.elapsed().as_secs() < CONFIRM_TTL_SECS
+                && app.get_webview_window("confirm").is_some()
+        );
+        if occupied {
+            let duplicate = slot.as_ref().map(|p| p.action.id == action.id).unwrap_or(false);
+            drop(slot);
+            if let Some(w) = app.get_webview_window("confirm") {
+                let _ = w.show();
+                let _ = w.set_focus();
             }
-            // 过期槽位直接丢弃（窗口可能还开着，由 get_pending_action 返回 null 收尾）。
-            *slot = None;
+            return Err(if duplicate { "pending" } else { "busy" });
         }
-        let nonce = new_confirm_nonce();
-        *slot = Some(PendingConfirm { action, nonce: nonce.clone(), body, created: std::time::Instant::now() });
+        // 过期槽位 / 孤儿槽位：丢弃后重新登记（过期时窗口可能还开着，由 get_pending_action 收尾）。
+        *slot = None;
+let nonce = new_confirm_nonce();
+        // /update-dsh 的真实目标版本在调用方 body 里：登记进槽位供确认窗显示，
+        // 否则文案说「安装 npm 上的新版本」而实际可能装任意版本（2026-09-27 评审）。
+        let target = if action.id == "update-dsh" {
+            serde_json::from_str::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|v| v.get("version").and_then(|x| x.as_str()).map(String::from))
+        } else {
+            None
+        };
+        *slot = Some(PendingConfirm {
+            action,
+            nonce: nonce.clone(),
+            body,
+            created: std::time::Instant::now(),
+            target,
+        });
         nonce
     };
     open_confirm_window(app);
@@ -2113,6 +2167,9 @@ fn get_pending_action() -> serde_json::Value {
             "id": p.action.id,
             "title": p.action.title,
             "detail": p.action.detail,
+            // 目标版本（None → null）：确认窗据此显示「目标版本：vX」，堵住
+            // 「文案说装最新版、实际装任意版本」的信息旁路（2026-09-27 评审）。
+            "target": p.target,
         }),
         _ => serde_json::Value::Null,
     }
@@ -2150,7 +2207,9 @@ fn resolve_pending_action(app: AppHandle, nonce: String, approved: bool) -> Resu
     Ok(serde_json::json!({ "ok": outcome.is_ok(), "error": outcome.err() }))
 }
 
-/// 执行危险动作（唯一执行点：桥/页面都只能经确认窗走到这里）。
+/// 执行危险动作。**桥路径的唯一执行点**：远程页与 `http://tauri.localhost` 的本地页都只能
+/// 经确认窗走到这里；`tauri:` 协议的 launcher/settings 面板走各自的 IPC 命令、不经确认窗
+/// —— Windows 主窗口是 `http://tauri.localhost`，所以那条路是经确认窗的（2026-09-27 评审澄清）。
 fn execute_danger_action(app: &AppHandle, id: &str, body: &str) -> Result<(), String> {
     match id {
         "quit" => quit_app(app.clone(), app.state::<ServerState>()),
@@ -2260,7 +2319,14 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
             ),
             Err(reason) => (
                 "202 Accepted",
-                serde_json::json!({ "ok": false, "pending": true, "duplicate": true, "reason": reason }),
+                serde_json::json!({
+                      "ok": false,
+                      "pending": true,
+                      // duplicate 仅在「同一个动作已在等待」时为真；被别的动作占用时如实回报 busy，
+                      // 免得 chrome 提示「该操作已在确认窗中等待确认」而实际待确认的是另一个动作。
+                      "duplicate": reason == "pending",
+                      "reason": reason,
+                  }),
             ),
         };
         let payload = payload.to_string();
