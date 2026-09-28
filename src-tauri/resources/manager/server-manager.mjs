@@ -26,6 +26,7 @@ import { fileURLToPath } from 'node:url'
 import { createForwardProxy, providerHostsFromSettings } from './proxy.mjs'
 import { allowsVersionSwitch, nextUpgradeMarker, upgradeMarkerPath } from './upgrade-marker.mjs'
 import { planPluginGuard } from './plugin-floor.mjs'
+import { planShellPluginCleanup } from './shell-plugins.mjs'
 
 const PACKAGE = '@deepseek-ai/dsh'
 
@@ -56,14 +57,16 @@ const NATIVE_BUILD_PKGS = [
  * 因此低于该版本的 dsh 会让用户彻底失去插件管理入口。npm 的 latest tag 目前仍是
  * 0.1.5-rc.3（不含插件管理），所以安装/升级目标取 max(latest, 地板)。
  *
- * 2026-09-25 抬到 0.1.7-rc.2：随壳分发的预装插件把 dsh 下限声明为
+ * 2026-09-29 抬到 0.2.0-rc.1：在 0.2.0-rc.1 上完成回归（overlay 目标行/CLI/客户端 seam 与槽位
+ * 全部成立，四个预装插件实机渲染正常，见 docs/2026-09-25-shell-improvement-plan.md §15）后抬升。
+ * 2026-09-25 曾抬到 0.1.7-rc.2：随壳分发的预装插件把 dsh 下限声明为
  * `@deepseek-ai/dsh*` 的可选 peer（kanban / model-reasoning / turn-nav 均为
  * `>=0.1.7-rc.1`），而 dsh ≥ 0.1.7 的兼容门禁会据此**拒绝加载**不兼容的插件——
  * 地板若停在 0.1.6-alpha.2，用户启用预装插件时会被直接拦下并提示
  * `dsh plugin allow-version`。地板与预装 bundle 必须**同一批**落地：旧 bundle
  * （如 kanban 0.2.8）用的是 0.1.7 已删除的图标名，单独抬地板会让它们在新运行时上崩。
  */
-const MIN_DSH_VERSION = '0.1.7-rc.2'
+const MIN_DSH_VERSION = '0.2.0-rc.1'
 
 // ── args ───────────────────────────────────────────────────────────────────
 function parseArgs(argv) {
@@ -957,6 +960,7 @@ function ensurePnpmWorkspace(runtimeDir) {
 }
 
 function ensurePlugin(runtimeDir, resourceDir) {
+  const shippedShellPlugins = []
   // Copy every desktop client plugin under resources/plugin/@dsh-desktop/*.
   // The true package name comes from each package.json (source dir names are
   // not the package name), so the runtime copy lands at the resolvable path.
@@ -980,6 +984,42 @@ function ensurePlugin(runtimeDir, resourceDir) {
     // Bake the live bridge port into the served client.js (idempotent: skips
     // the write when the port is unchanged, so sameTree stays stable).
     bakeBridgePort(dest)
+    shippedShellPlugins.push(pkgName)
+  }
+  pruneStaleShellPlugins(runtimeDir, shippedShellPlugins)
+}
+
+/**
+ * 清理"壳自有但已不再随包分发"的客户端插件（背景见 scripts/shell-plugins.mjs）：
+ * runtime 旧副本改名为 `.bak-stale-<ts>`（保留可回退，不直接删），profile bundles 里的悬空引用
+ * 先备份 manifest 再原子写回。**只动 `@dsh-desktop/*`**，绝不碰用户第三方插件。
+ */
+function pruneStaleShellPlugins(runtimeDir, shipped) {
+  const scopeDir = join(runtimeDir, 'node_modules', '@dsh-desktop')
+  const present = existsSync(scopeDir)
+    ? readdirSync(scopeDir).filter((e) => statSync(join(scopeDir, e)).isDirectory()).map((e) => `@dsh-desktop/${e}`)
+    : []
+  const bundles = snapshotWebProfileBundles(runtimeDir) ?? []
+  const plan = planShellPluginCleanup({ shipped, present, bundles })
+  const stamp = Date.now()
+  for (const name of plan.removeCopies) {
+    const dir = join(runtimeDir, 'node_modules', name)
+    try {
+      renameSync(dir, `${dir}.bak-stale-${stamp}`)
+      log(`stale client plugin moved aside: ${name}`)
+    } catch (err) {
+      log(`stale client plugin move failed (${name}): ${err.message}`)
+    }
+  }
+  if (plan.dropBundles.length > 0) {
+    const path = webProfileManifestPath(runtimeDir)
+    try {
+      if (existsSync(path)) copyFileSync(path, `${path}.bak-stale-plugin-${stamp}`)
+      writeWebProfileBundles(runtimeDir, bundles.filter((b) => !plan.dropBundles.includes(b)))
+      log(`dropped stale plugin references from profile bundles: ${plan.dropBundles.join(', ')}`)
+    } catch (err) {
+      log(`dropping stale plugin references failed: ${err.message}`)
+    }
   }
 }
 
