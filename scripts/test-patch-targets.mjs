@@ -54,23 +54,33 @@ function idsFromPatchYaml(text) {
 const overlayText = readFileSync(OVERLAY, 'utf8')
 const overlayIds = idsFromPatchYaml(overlayText)
 
+/**
+ * 取某个 runtime 的**扁平化**配置 id 集合（权威口径）：`dsh --profile web --dump-config`。
+ *
+ * 为什么不能直接读 package 里的 `cordis.patch.yml`：上游很多行嵌在 group 里（缩进 4 空格，
+ * 如 `ui-sidebar-browser`），而 overlay 的 `- id: <row>` 定向覆盖作用于**扁平化后**的树。
+ * 用 YAML 当来源会漏掉这些行 → 门禁**假红**（2026-09-28 在 dsh 0.2.0-rc.1 实测：
+ * `ui-sidebar-browser` 在 dump 里存在、在 YAML 里是缩进行）。
+ */
+function dumpConfigIds(runtimeDir) {
+  const dump = execFileSync(process.execPath, [
+    join(runtimeDir, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'),
+    '--profile', 'web', '--dump-config',
+  ], { encoding: 'utf8', timeout: 120_000, env: { ...process.env, DSH_HOME: mkdtempSync(join(tmpdir(), 'dsh-dump-')) } })
+  return [...new Set(idsFromPatchYaml(dump))].sort()
+}
+
 // ── 采集/刷新 fixture ──────────────────────────────────────────────────────
 if (updateFixture) {
   assert.ok(runtimeDir, '--update-fixture 需要 --runtime <dir>（或 DSH_TEST_RUNTIME）')
   const dshPkg = join(runtimeDir, 'node_modules', '@deepseek-ai', 'dsh', 'package.json')
   const dshVersion = existsSync(dshPkg) ? JSON.parse(readFileSync(dshPkg, 'utf8')).version : null
-  // id 集合取自 `--dump-config` 的**扁平化**结果，而不是 package 里的 YAML：
-  // 上游很多行是嵌在 group 里的（如 ui-sidebar-browser 缩进 4 空格），而 overlay
-  // 的 id 定向覆盖作用于扁平化后的树 —— dump 才是权威口径。
-  const dump = execFileSync(process.execPath, [
-    join(runtimeDir, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'),
-    '--profile', 'web', '--dump-config',
-  ], { encoding: 'utf8', timeout: 120_000, env: { ...process.env, DSH_HOME: mkdtempSync(join(tmpdir(), 'dsh-dump-')) } })
+  // id 集合取自 `--dump-config` 的**扁平化**结果（见 dumpConfigIds 的说明）。
   const payload = {
     note: '由 scripts/test-patch-targets.mjs --update-fixture 生成；抬 dsh 地板时刷新',
     dshVersion,
     capturedFrom: '@deepseek-ai/dsh-web-app/cordis.patch.yml',
-    ids: [...new Set(idsFromPatchYaml(dump))].sort(),
+    ids,
   }
   mkdirSync(dirname(FIXTURE), { recursive: true })
   writeFileSync(FIXTURE, JSON.stringify(payload, null, 2) + '\n')
@@ -82,10 +92,12 @@ if (updateFixture) {
 let upstreamIds
 let source
 if (runtimeDir !== undefined) {
+  // 与 fixture 同口径：用 `--dump-config` 的扁平化结果，而不是 package 里的 YAML
+  // （YAML 里嵌在 group 的缩进行会被列首锚定的解析器漏掉 → 假红；2026-09-28 实测）。
   const upstreamFile = join(runtimeDir, UPSTREAM_REL)
   assert.ok(existsSync(upstreamFile), `找不到上游 patch 文件: ${upstreamFile}`)
-  upstreamIds = new Set(idsFromPatchYaml(readFileSync(upstreamFile, 'utf8')))
-  source = `真实安装 ${upstreamFile}`
+  upstreamIds = new Set(dumpConfigIds(runtimeDir))
+  source = `真实安装 ${runtimeDir}（--dump-config 扁平化）`
 } else {
   assert.ok(existsSync(FIXTURE), `缺少 fixture: ${FIXTURE}（用 --update-fixture --runtime <dir> 生成）`)
   const fixture = JSON.parse(readFileSync(FIXTURE, 'utf8'))

@@ -286,6 +286,25 @@ CI 的 `check` 作业跑的是 **host（ubuntu）** 的 `cargo clippy -- -D warn
 - 普通 PR 的 `check`/`test` 会正常上报，走正常合并即可；`--admin` 只留给 release-please 的 bot PR。
 - 直推 main 会触发全量 CI 兜底（`check`+`test`+`windows`+`linux`），内容仍会被验证，但"**没走评审**"这点 CI 弥补不了。
 
+### 4.8 与 WebView2 内容交互：用 `invoke`，不要用 `click`（2026-09-29 dsh 0.2 回归实录）
+
+`verify-dev-ui.ps1` 的两种点法在 **WebView2 页面内容**上结果相反（同一按钮、坐标落在 UIA rect 中心）：
+- `-Action click`（真实鼠标移+点）→ **弹窗不消失**（试两次都无效）；
+- `-Action invoke`（UIA InvokePattern）→ **立即生效**。
+
+⇒ 走查页面内容一律用 `invoke`；`click` 只用于**本身就要验证鼠标命中路径**的场景（如壳顶栏悬停唤出）。
+反例：`设置` 这类侧栏项**没有 InvokePattern**（`NO-INVOKE-PATTERN`），需要 click 或键盘——遇到就换目标或用键盘，别怀疑页面坏了。
+
+### 4.9 dsh 0.2 的 CLI / 首启差异（回归时踩到）
+
+- **`dsh web` 不接受 `--profile`**：`dsh web --profile web` → `error: option '--profile <name>' … select a profile only once`。
+  正确：`dsh web --patch <file> --no-open --host 127.0.0.1 --port 0`（**我们 manager 的启动参数本来就是对的**）；
+  要 dump 配置仍用**全局形式**：`dsh --profile web --dump-config`（0.2 上实测可用，门禁就是这么调的）。
+- **首启是两步引导**：`预览版说明`（按钮 `继续`）→ `添加一个 API Key 开始使用`（`稍后配置` / `保存并继续`）。
+  自动化走查必须用 `invoke` 过这两步，否则侧栏控件在 UIA 里不可见、什么都点不到。
+- **`settings.yaml` 的一次性迁移**：0.2 会把 `<home>/settings.yaml` **先改名 `.imported` 再逐段搬进 profile**；
+  被拒的段只留在 `.imported`（不丢）。dev 首启要求重填 API Key 是正常的（dev 旧设置只有 `ui-onboarding`/`welcomeNoticeVersion`，密钥在 `.credentials.yaml`）。
+
 ## 5. Tauri 2 踩坑速查（本轮新踩，先查再写）
 | 坑 | 真相 |
 |---|---|

@@ -664,3 +664,54 @@ node scripts/sync-preinstalled-plugin.mjs dsh-model-reasoning 0.2.6 --check   # 
 - **发布后复核 = 零 diff**：`node scripts/sync-preinstalled-plugin.mjs dsh-model-reasoning 0.2.6 --check`（从 registry 拉 tarball 与壳内拷贝逐文件比对）→ `新增 0 / 变更 0 / 删除 0 / 不变 6`，`CHECK PASS`。**"仓库字节 == registry 字节"这条不变量成立**。
 - 门禁复跑：`test-plugin-dsh-compat` ✅、`test-copy-consistency` ✅。
 - 结论：目标 ①–⑤ 全部完成（②③ 的最终验收即本节）。剩余仅壳侧发版流程（用户在 Web 合并 PR → release-please）。
+
+## §15 dsh 0.2.0-rc.1 回归与适配（2026-09-28 起）
+
+### 15.1 契约实证（阶段 1，完成）
+- `scripts/test-patch-targets.mjs` 的 **runtime 模式口径 bug**：它读 package 原始 YAML 并用列首锚定解析器 → 上游嵌在 group 里（缩进 4 空格）的行（如 `ui-sidebar-browser`）看不见 → **假红**。已统一为 `dumpConfigIds()`（两种模式都走 `--dump-config` 扁平化）。对照：0.2.0-rc.1 ✅ / 0.1.7-rc.2 ✅ / fixture ✅ / 两个负向对照 ❌。
+- **id 集合 182 → 183**：消失 `schedule`/`time-context`/`ui-schedule`（0.2 schedule-bundle 重构）；新增 `otel`/`product-analytics`/`desktop-product-telemetry`/`ui-settings-session-log`。我们 overlay 的 `insert` 与 `ui-sidebar-browser` 覆盖**均不受影响**（后者仍带 `!!js ... !== 'desktop'` 门控）。
+
+### 15.2 dev 运行时升级 + 实机回归（阶段 2，进行中）
+- 升级方式：manager 第 770 行**同参**（runtime 自带 pnpm + 同一 store + `--node-linker=hoisted` + Windows bundled node v24.18.0）→ `Done in 3m 24.2s`，`@deepseek-ai/dsh = 0.2.0-rc.1`。
+- 实机基线：**重新构建**（`D:\Dev\dsh-020-regression` 全新 clone `1d9ec07` + `tauri build --config tauri.dev.conf.json --no-bundle`，复用 cargo 缓存；产物资源含 kanban 0.2.10 / model-reasoning 0.2.6 / turn-nav 0.4.6 / ocs 0.2.1 + `plugin-floor.mjs`）。⚠️ 旧产物都不能用：已安装 dev 壳缺地板守卫、`D:\Dev\dsh-desktop-dev` 是脏工作区（77 未提交，HEAD 9-21）。
+- **通过项**：壳菜单栏注入（`菜单 @5,2 60x54` + 三键 + 悬停条，1942x1243 最大化下无错位）；页面**没有**「Failed to load plugins」；截图 s12 可见正常 UI（`新对话`/`插件`/**`思磨力看板`**/工作区 `c-home`/会话列表/`设置`/模型选择器）⇒ **kanban 在 0.2 的 `sidebar.panellist` 槽位渲染成功**；桥准入 **10/10 PASS**（`allow-origin=http://127.0.0.1:62962`、`x-dsh-shell` 预检、危险动作未执行、三条 reject 审计）；manager：`installed 0.2.0-rc.1`、更新四个预装、`--max-http-header-size=65536` 仍注入、`npm latest 0.1.7-rc.2` 与已装 0.2.0-rc.1 比较**未提出降级**、地板守卫**未隔离任何插件**。
+- **新发现（待查，阻碍 UI 走查）**：0.2 的 **`预览版说明` 模态**（`继续` 按钮）在**真实鼠标点击按钮中心两次后仍未消失**（UIA 内它是 `[ControlType.Window] 预览版说明`，弹窗期间侧栏控件不可见）。证据：`D:\Dev\_shots\s{12,13,14}-020-*.png`。下一步：**直接用 token URL 在浏览器里点**，以区分「上游 bug」与「我们的壳干扰」。
+- **顺带发现（清理项）**：manager 仍同步 `@dsh-desktop/plugin-console`（日志 `updated client plugin @dsh-desktop/plugin-console`），但壳内插件管理面板早已移除 → 死插件仍随包。
+
+### 15.3 四个插件的静态适配预检（阶段 4 前置，全绿）
+seam（`slots`/`locale`/`remote`/`remote.settings`/`configForms`/`sessions`/`workspaces`/`connection`）与槽位 id（`settings.section`/`settings.general.item`/`conversation.session.header.utilities`/`sidebar.panellist`/`main`）在 0.2.0-rc.1 里**全部仍有提供者/声明**；`configForms` 仍是 `super(ctx, "configForms")`（`dsh-client-ui-settings/lib/client.js:1284`）。
+
+### 15.4 UI 走查与"模态点不掉"的结论（2026-09-29 第 3 轮）
+
+**结论：模态不是上游 bug，是我们的点击路径不可靠。** 同一按钮 `继续`：
+- `verify-dev-ui.ps1 -Action click`（真实鼠标移+点，坐标落在 UIA rect 中心）→ 弹窗**不消失**（两次）；
+- `-Action invoke`（UIA InvokePattern，程序化）→ **立即消失**。
+⇒ 对 **WebView2 内容**一律用 `invoke`，`click` 只用于验证"命中测试/可点性"这类本身要测鼠标路径的场景（与本会话早前"物理点击壳按钮 flaky"的观察一致）。已记入技能待补。
+
+**0.2 的引导是两步**：`预览版说明`（`继续`）→ **`添加一个 API Key 开始使用`**（`稍后配置` / `保存并继续`）。点 `稍后配置` 后 UI 完全可用：控件 37 个（`新会话`/`插件`/`思磨力看板`/`设置`/模型选择器 `DeepSeek-V41-Flash`（推理等级 High）/`发送消息`）。
+（过程中的红字 `请输入 API 密钥后继续。` 是我用键盘 SendKeys 误触"保存并继续"造成的，非缺陷。）
+
+**插件页可正常打开**：`插件` → 标题「插件 / 安装、启用和配置插件」+ 分组「**官方 8**」（智能体团队、自动授权审查、自动化任务、语音输入、终端、Agent 循环、子智能体、网页搜索，开关均关）。**我们的四个预装插件不在这一屏**（应在"第三方/已安装"分组，需要滚动或另开分组）——**待确认**。侧栏 `思磨力看板` 可见 ⇒ kanban 已加载并启用。
+
+**⚠️ 待验证的高风险点（下轮优先）**：dev 的 `dsh-home` 下是 **`settings.yaml.imported`**（迁移痕迹），且 0.2 首启要求重新填 API Key。需确认 **0.2 的设置迁移是否把已有 API Key 带过去**（对比正式版运行时的 `dsh-home`）——若没带，用户升级正式版后会"失去"密钥配置（虽然文件还在），必须先查清再决定是否把地板抬到 0.2。
+
+**证据坐标**：`D:\Dev\_shots\s12-020-after-notice.png`（预览说明+正常 UI）、`s13/s14`（click 无效）、`s15-020-invoke-try.png`（invoke 成功 → API Key 引导）、`s16-020-plugin-page.png`（插件页/官方 8 分组）。
+
+### 15.5 设置迁移（settings.yaml）实测与结论（2026-09-29 第 4 轮）
+
+**上游语义（读码 + e2e 双重取证）**：`packages/settings/settings/src/index.ts` 的 `SettingsForms.importLegacyDocument()` ——
+Loader 就绪后查找 `<profile.home>/settings.yaml`，**先改名 `.imported` 再逐段搬进当前 profile**；注释明确：
+*"a section the running composition rejects is logged and remains only in the renamed file"*（被拒的段只留在 `.imported`，**不丢**）。
+e2e `apps/web/tests/settings-import.e2e.ts` 断言"只导入一次 + 值真的到达页面"（`config('ui-theme').fontSize === 16`、旧文件消失、`.imported` 保留原文）。
+
+**沙箱实测（用**正式版**那份真实配置）**：把 prod `dsh-home/settings.yaml`（15275 B，含 `llm-pi-ai`/`providers`/`apiKey`/`baseURL`）+ `.credentials.yaml` 复制到 `/tmp/prod-home-migrate`，用 0.2.0-rc.1 起 `DSH_HOME=… dsh web --port 63999 --no-open`：
+- ✅ 旧文件被**原样改名**为 `settings.yaml.imported`（15073 B，`llm-pi-ai`/`providers`/`apiKey`/`baseURL` 全在）；
+- ✅ 生成 `profiles/`、`storages/`、`.anonymous-user-id`，web 正常起来（`dsh web: http://127.0.0.1:63999/?token=…`）；
+- ⚠️ 未在沙箱里断言"值到达页面"（需要页面/DOM 断言）——**升级正式版前应在副本上用同一配方补这一步**。
+
+**关键推论**：`llm-pi-ai` 段是**插件提供的命名空间**（我们的 `dsh-model-reasoning` 通过 configForms 提供）→ 迁移时只有当该插件在组合里**已加载**，这一段才会被接受并生效；我们的四个插件是预装的，正常情况下满足。
+**dev 首启要重新填 API Key 是正常的**：dev 的旧 `settings.yaml` 只有 52 B（`ui-onboarding`/`welcomeNoticeVersion`），本来就没有 provider 配置；密钥在 `.credentials.yaml`。
+
+**CLI 契约新发现**：0.2 的 `dsh web` **不接受 `--profile`**（`error: option '--profile <name>' … select a profile only once`）。我们的 manager 启动参数（`web --patch … --no-open --host --port`，不带 `--profile`）在 0.2 上正确 ✅；但工具/文档里凡是要 dump 配置的，仍用全局形式 `dsh --profile web --dump-config`（该形式在 0.2 上实测可用）。
+
+**对"是否把地板抬到 0.2"的输入**：迁移是**先改名后搬移、失败段不丢**的安全设计，机制上可接受；剩余前置是 ① 在副本上验证正式版配置的"值到达页面" ② 0.2 目前仍是 `next` 预发布（是否跟进是产品决定）。
