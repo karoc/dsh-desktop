@@ -730,3 +730,22 @@ e2e `apps/web/tests/settings-import.e2e.ts` 断言"只导入一次 + 值真的�
 **因此 `model-reasoning` 设置分区在 0.2 上的"渲染"这一步仍是覆盖缺口**（0.1.7 上有截图实证 `mr-026-section.png`；本轮的支持证据是：`configForms` 服务在 0.2 仍是 `super(ctx, "configForms")`、`settings.section` 槽位仍有 16 处声明、插件代码零改动且已启用）。
 
 **死插件 `@dsh-desktop/plugin-console` 的清理：本轮决定"先不清"**。理由：它仍可能被**用户 profile 的 bundles 列表**引用，直接删掉会让 `dsh web` 解析不到该 bundle（界面打不开）。要清理得先做迁移（检测并剔除 profile 里的引用，或保留空壳），属于独立小任务 —— 记为清理项（方案 §15.2 已登记）。
+
+### 15.7 四个插件的实机确认（2026-09-29 第 7 轮）——**三个客户端插件全部渲染成功**
+
+**方法（关键工具配方）**：WebView2 的 UIA 点不到侧栏项时，改用 **CDP 驱动 headless Chrome 直连 dev 的 dsh web URL**：
+```
+Chrome --headless=new --disable-gpu --window-size=1920,1200 --remote-debugging-port=9335 --user-data-dir=<tmp> "<dev url with token>"
+node <script> 9335     # Windows 侧 node；Runtime.evaluate 里点按钮/读 innerText
+```
+两个必须的细节：① **必须先 `Emulation.setDeviceMetricsOverride{width:1920,height:1200}`**（默认 800×600 视口下侧栏根本不渲染 → 找不到「设置」）② 用"叶子节点 + `closest('button,[role=button],a,li')`"定位点击目标（SPA 里没有 `<a href>`）。
+
+**证据（0.2.0-rc.1，dev 运行时，真实 dsh web + 我们的四个预装插件）**：
+| 插件 | 0.2 上的表现 |
+|---|---|
+| `dsh-kanban` 0.2.10 | 侧栏出现 **`思磨力看板`** ✅ |
+| `dsh-model-reasoning` 0.2.6 | 设置导航出现 **`思磨力提供方参数`** ✅（`configForms` 路径在 0.2 有效） |
+| `dsh-turn-navigator` 0.4.6 | 设置项出现 **`次胶囊条：DSH 官方、思磨力轮次胶囊条（Smoothly Turn…`** ✅（`settings.general.item` 槽位有效） |
+| `@karoc/dsh-smoothly-opencode-session` 0.2.1 | host-only，**用户从未启用**（不在 profile bundles）；本轮只做了 host 半区静态核对 |
+
+⇒ **四个预装插件对 0.2.0-rc.1 的适配结论：无需改代码**（静态 seam/槽位全绿 + 三个客户端插件的 UI 实测渲染 + 版本已在 runtime 中）。第 5–6 轮记录的"设置分区/turn-nav 覆盖缺口"**至此关闭**。
