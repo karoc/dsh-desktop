@@ -292,15 +292,24 @@ jobs:
   # URL event. This is the gate that would have caught the stuck-launcher
   # class of bugs before a user ever saw them.
   linux-smoke:
-    # Known issue: WebKitGTK stalls before setup() under CI's headless xvfb
-    # (binary produces zero output; same binary runs fine on a real desktop).
-    # Never went green since introduction (verified back to 2026-08-20, before
-    # the frameless-window work) — deliberately kept as a NON-BLOCKING canary
-    # (continue-on-error) so releases are never held hostage by an environment
-    # quirk. Diagnosis (2026-08-27): the xvfb stall is a GitHub-runner
-    # WebKitGTK limitation, not app code; "fixing" means dropping the env
-    # quirk, not changing the app. Wins on windows/check/test/linux gate the
-    # release artifact.
+    # Smoke the packaged Linux binary end-to-end (manager spawn + URL event).
+    #
+    # History (important): this job had NEVER gone green (traced back to
+    # 2026-08-20) and was kept NON-BLOCKING (continue-on-error) on the theory
+    # that WebKitGTK stalls before setup() under CI's headless xvfb. That theory
+    # is now suspect: the step picked its "binary" with a bare
+    # `find smoke -type f -perm -111 | head -1`, which matched the packaged Node
+    # toolchain (…/corepack/shims/yarn.cmd on the v0.13.0 run) and died inside
+    # `sh` with a syntax error — so the app was never executed and the canary
+    # proved nothing. Locally reproduced with a real deb (same `find` picked
+    # …/@npmcli/arborist/bin/index.js).
+    #
+    # Fixed 2026-09-30: locate the app via the deb's `usr/bin` entry point
+    # (fall back to `usr/lib` outside resources/, else fail loudly). Still
+    # non-blocking for exactly one more run, so we can see empirically whether a
+    # genuine xvfb/WebKitGTK limitation remains; promote to blocking once it is
+    # green (or keep non-blocking with fresh evidence if it is not).
+    # Wins on windows/check/test/linux gate the release artifact.
     if: github.event_name != 'pull_request'
     continue-on-error: true
     needs: linux
@@ -320,9 +329,23 @@ jobs:
           set -e
           cd artifact
           dpkg-deb -x deb/*.deb smoke/
-          BIN=$(find smoke -type f -perm -111 | grep -vE "\.so|\.desktop" | head -1)
+          # Locate the APP binary explicitly. A bare `find smoke -type f -perm -111`
+          # matched the packaged Node toolchain first (e.g. .../corepack/shims/yarn.cmd
+          # on the v0.13.0 run) and then died inside `sh` with "Syntax error: \"(\"
+          # unexpected — the canary never actually exercised the app. Prefer the deb's
+          # own `usr/bin` entry point, fall back to `usr/lib/<product>/` outside
+          # resources/, and fail loudly with a listing when neither exists.
+          BIN=$(find smoke/usr/bin -maxdepth 1 -type f -perm -111 2>/dev/null | head -1)
+          if [ -z "$BIN" ]; then
+            BIN=$(find smoke/usr/lib -maxdepth 3 -type f -perm -111 -not -path "*/resources/*" 2>/dev/null | head -1)
+          fi
+          if [ -z "$BIN" ] || [ ! -x "$BIN" ]; then
+            echo "FAIL: no app binary under smoke/usr/bin or smoke/usr/lib"
+            ls -la smoke/usr/bin 2>/dev/null || true
+            find smoke/usr/lib -maxdepth 2 -type d 2>/dev/null | head -10 || true
+            exit 1
+          fi
           echo "binary: $BIN"
-          test -x "$BIN"
 
           # Pre-seed a stub @deepseek-ai/dsh so the manager never hits npm and
           # instead gets an immediate URL line (validates the spawn+event path).
@@ -349,7 +372,9 @@ jobs:
           if [ -n "$ROOT" ] && test -f "$ROOT/node/linux-x64/node"; then
             echo "PASS: resources root resolves and node exists"
           else
-            echo "FAIL: resources root missing or node absent"; echo "--- smoke.log ---"; tail -50 smoke.log; exit 1
+            echo "FAIL: resources root missing or node absent"
+            echo "--- smoke.log head (no output at all == never reached setup) ---"; head -20 smoke.log
+            echo "--- smoke.log tail ---"; tail -50 smoke.log; exit 1
           fi
 
           echo "== URL event =="
