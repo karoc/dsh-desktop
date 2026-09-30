@@ -21,6 +21,25 @@
 >
 > 详情见 `.agents/notes/implemented/bug-fix/2026-09-08-legacy-uninstaller-name-kill.md`。
 
+## [0.13.0](https://github.com/karoc/dsh-desktop/compare/v0.12.0...v0.13.0) (2026-09-28)
+
+
+### Features
+
+* **manager:** 地板抬到 0.2.0-rc.1 + 壳自有插件迁移清理（plugin-console） ([#63](https://github.com/karoc/dsh-desktop/issues/63)) ([fc89ab5](https://github.com/karoc/dsh-desktop/commit/fc89ab5bfe04a0a732ead10e4d16ec4327758838))
+
+
+### Bug Fixes
+
+* **shell:** 处置 PR [#55](https://github.com/karoc/dsh-desktop/issues/55) 评审的 8 项发现 + release-please 的 Cargo.lock ([16c8b93](https://github.com/karoc/dsh-desktop/commit/16c8b93d7152bd98c34a4578c0887a39950ed114))
+* **shell:** 处置 PR [#55](https://github.com/karoc/dsh-desktop/issues/55) 评审的 8 项发现 + release-please 的 Cargo.lock ([#58](https://github.com/karoc/dsh-desktop/issues/58)) ([cdf6a2b](https://github.com/karoc/dsh-desktop/commit/cdf6a2bb0d16e9bd452a99918af86d3a9f837c38))
+* **tooling:** patch 目标门禁口径统一（runtime 模式走 --dump-config）+ 0.2.0-rc.1 回归记录 ([#60](https://github.com/karoc/dsh-desktop/issues/60)) ([99942fd](https://github.com/karoc/dsh-desktop/commit/99942fd2e0629aff31abbc840a6147b5b2635865))
+
+
+### Reverts
+
+* **shell:** 撤回被我误直推到 main 的评审修复批次，改走 PR ([#57](https://github.com/karoc/dsh-desktop/issues/57)) ([36e3b4f](https://github.com/karoc/dsh-desktop/commit/36e3b4f9bf97b77b2e44cafae90aa34e3d3a7251))
+
 ## [0.12.0](https://github.com/karoc/dsh-desktop/compare/v0.11.0...v0.12.0) (2026-09-26)
 
 
