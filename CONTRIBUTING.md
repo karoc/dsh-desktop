@@ -59,11 +59,13 @@ CI 分层：PR 只跑快层（check + test，~5min）；main/tag 跑全量（win
    版本 bump（Cargo.toml / tauri.conf.json / package.json 三处同步）→ CHANGELOG.md → 提 release PR。
 2. **合并 release PR 前，先在发布分支上跑一遍本地门禁**（见下「release PR 的门禁」）。
 3. 合并 release PR（**只能 admin 合并**，原因见下）→ release-please 自动打 `vX.Y.Z` tag。
-     ⚠️ **Cargo.lock 兜底**（2026-09-27）：`release-please-config.json` 的 `extra-files` 已尝试让
-     release-please 一并更新 `src-tauri/Cargo.lock` 里 `dsh-desktop` 的版本，但**该写法尚未在真实
-     发布 PR 上验证**。若发布分支的 Cargo.lock 仍是旧版本（`npm test` 的「四处版本一致」会立刻报红），
-     就在发布分支上补一刀（改 `[[package]] name = "dsh-desktop"` 的 version）再合并 —— 这正是
-     v0.12.0 的做法。
+     ⚠️ **Cargo.lock 必须手工同步（实测结论，非兜底）**：release-please **不会**更新
+     `src-tauri/Cargo.lock` 里 `dsh-desktop` 的版本 —— `extra-files` 里的 toml+jsonpath 写法
+     在 **v0.12.0 与 v0.13.0 两次发布上都不生效**（该条目已被删除，免得让人误以为它会自动做）。
+     所以合并前**必须**在发布分支上把它改成新版本（`[[package]] name = "dsh-desktop"` 的 version），
+     再跑 `node scripts/test-manifest-consistency.mjs`（「四处版本一致」门禁会立刻抓到遗漏）。
+     为什么不能自动化替代：release-please 是 bot PR，其 workflow run 恒为 `action_required`，
+     所以 CI 门禁**在发布 PR 上根本不上报** —— 这一步只能靠这份清单 + 手工执行。
    **并创建一个不带安装包的 GitHub Release**。
 4. **在 tag 上派发一次构建**，否则 Release 永远没有安装包：
    ```bash
