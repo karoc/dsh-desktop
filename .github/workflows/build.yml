@@ -291,6 +291,30 @@ jobs:
   # and assert the whole chain — resources root resolution, manager spawn,
   # URL event. This is the gate that would have caught the stuck-launcher
   # class of bugs before a user ever saw them.
+
+      # CI 能真正断言的部分：包内容完整性（比 smoke 作业可靠 —— 后者受 headless
+      # WebKitGTK stall 限制，见 linux-smoke 的注释）。这一段是阻断式的：缺二进制、
+      # 缺内置 node、缺 manager 模块或预装插件都会立刻让 linux 作业失败。
+      - name: Verify packaged Linux layout
+        run: |
+          set -e
+          # 不假设 cwd：直接在仓库里找 deb 产物（tauri 的 bundle 目录位置随 cwd/配置变化）
+          DEB=$(find . -path "*bundle/deb/*" -name "*.deb" 2>/dev/null | head -1)
+          if [ -z "$DEB" ]; then echo "FAIL: no .deb produced"; ls -la bundle 2>/dev/null || true; exit 1; fi
+          echo "deb: $DEB"
+          rm -rf /tmp/layout && mkdir -p /tmp/layout && dpkg-deb -x "$DEB" /tmp/layout
+          APP=$(find /tmp/layout/usr/bin -maxdepth 1 -type f -perm -111 2>/dev/null | head -1)
+          test -n "$APP" && test -x "$APP" || { echo "FAIL: no app binary in usr/bin"; ls -la /tmp/layout/usr/bin || true; exit 1; }
+          echo "app binary: $APP"
+          RES=$(dirname "$(find /tmp/layout/usr/lib -maxdepth 3 -type d -name resources | head -1)")
+          test -n "$RES" && test -d "$RES/resources" || { echo "FAIL: resources dir missing"; find /tmp/layout/usr/lib -maxdepth 3 -type d | head -10; exit 1; }
+          for f in node/linux-x64/node manager/server-manager.mjs manager/plugin-floor.mjs manager/shell-plugins.mjs patch/dsh-desktop.patch.yml; do
+            test -e "$RES/resources/$f" || { echo "FAIL: packaged resources missing $f"; exit 1; }
+          done
+          for p in dsh-kanban dsh-model-reasoning dsh-turn-navigator "@karoc/dsh-smoothly-opencode-session"; do
+            test -d "$RES/resources/preinstalled/$p" || { echo "FAIL: preinstalled plugin missing: $p"; exit 1; }
+          done
+          echo "PASS: packaged Linux layout (app binary + node + manager + patch + 4 preinstalled)"
   linux-smoke:
     # Smoke the packaged Linux binary end-to-end (manager spawn + URL event).
     #
@@ -304,11 +328,16 @@ jobs:
     # proved nothing. Locally reproduced with a real deb (same `find` picked
     # …/@npmcli/arborist/bin/index.js).
     #
-    # Fixed 2026-09-30: locate the app via the deb's `usr/bin` entry point
-    # (fall back to `usr/lib` outside resources/, else fail loudly). Still
-    # non-blocking for exactly one more run, so we can see empirically whether a
-    # genuine xvfb/WebKitGTK limitation remains; promote to blocking once it is
-    # green (or keep non-blocking with fresh evidence if it is not).
+    # Fixed 2026-09-30 (PR #66): locate the app via the deb's `usr/bin` entry
+    # point (fall back to `usr/lib` outside resources/, else fail loudly).
+    # CONFIRMED on run 36716676801 (commit 3e3d81c): the step now logs
+    # `binary: smoke/usr/bin/dsh-desktop`, the app finally executes, emits only
+    # `(dsh-desktop:NNNN): dbind-WARNING … AT-SPI: Error retrieving accessibility
+    # bus address` and then produces ZERO further output — i.e. the WebKitGTK
+    # stall under headless xvfb is real, and it is why this job can never assert
+    # app-level behaviour in CI. Kept NON-BLOCKING for that reason; the parts of
+    # this contract that CI *can* enforce now live in the blocking `linux` job
+    # ("Verify packaged Linux layout").
     # Wins on windows/check/test/linux gate the release artifact.
     if: github.event_name != 'pull_request'
     continue-on-error: true
