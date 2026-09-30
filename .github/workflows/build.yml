@@ -311,8 +311,12 @@ jobs:
           for f in node/linux-x64/node manager/server-manager.mjs manager/plugin-floor.mjs manager/shell-plugins.mjs patch/dsh-desktop.patch.yml; do
             test -e "$RES/resources/$f" || { echo "FAIL: packaged resources missing $f"; exit 1; }
           done
-          for p in dsh-kanban dsh-model-reasoning dsh-turn-navigator "@karoc/dsh-smoothly-opencode-session"; do
-            test -d "$RES/resources/preinstalled/$p" || { echo "FAIL: preinstalled plugin missing: $p"; exit 1; }
+          # 按 package.json 里声明的**包名**匹配，而不是按目录名：磁盘上的预装目录用去 scope 的
+          # 名字（dsh-smoothly-opencode-session），包名却是 @karoc/dsh-smoothly-opencode-session
+          # —— 首次上线该断言时正是按目录名写错、把 scoped 包判成缺失（假红，run 36718346505）。
+          for n in dsh-kanban dsh-model-reasoning dsh-turn-navigator "@karoc/dsh-smoothly-opencode-session"; do
+            grep -rqs "\"name\": *\"$n\"" "$RES/resources/preinstalled"/*/package.json \
+              || { echo "FAIL: preinstalled plugin missing: $n"; ls "$RES/resources/preinstalled"; exit 1; }
           done
           echo "PASS: packaged Linux layout (app binary + node + manager + patch + 4 preinstalled)"
   linux-smoke:
