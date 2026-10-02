@@ -1976,6 +1976,22 @@
       "createdAt": "2026-10-02T06:38:12.317Z",
       "updatedAt": "2026-10-02T06:38:12.317Z",
       "summary": "已同步并验证：lib 语法 ✅；壳副本 `lib/client.js` sha256 = `11cc70e734d3a8f6…`，与已发布 tarball 及插件仓构建三方一致（含 4 处 `turnLabel`、0 处 `no user message`）；`diff -r plugins/preinstalled src-tauri/resources/preinstalled` IDENTICAL；`test-copy-consistency.mjs` PASS、`test-plugin-dsh-compat.mjs` PASS（4 包 0 警告，壳地板 `0.2.0-rc.1` ≥ 插件 peer `>=0.1.7-rc.1`）、全量 `npm test` exit 0；`audit-preinstalled.mjs` 报四个包 up-to-date 且 turn-nav 3/3 随包资产与已发布 tarball 逐字节一致。边界：只改源树捆绑内容，已装应用的 runtime 拷贝走控制台用户门控更新，随下次壳发版生效。"
+    },
+    {
+      "id": "card-77bf91dd-5ef9-4c8b-bdb3-1cdf06087ee4",
+      "title": "预装 dsh-turn-navigator 同步到 0.4.8（tooltip 回复预览 + a11y 官方一致性）",
+      "description": "**背景**：壳内预装副本停在 0.4.7，npm latest 已是 0.4.8（2026-10-02 发布）。0.4.8 修掉两件用户可见的事：① tooltip 增加**回复预览**（用户在 49 轮会话里报「官方 turn 46 有内容、我们只有轮次号」——该轮没有人类提示词，官方的内容来自回复预览行）；② **a11y 与官方设计对齐**（可访问名 = 动作 `跳转到第 N 轮` / `加载并跳转到第 N 轮`，内容经 `aria-describedby` 指向 `role=\"tooltip\"`，带 `aria-current`/`aria-busy`，focus 也出预览）。\n\n**做法**：`npm run sync:plugin -- dsh-turn-navigator 0.4.8`（基准 = npm 已发布 tarball）→ `node scripts/sync-resources.mjs`。收录 6 文件、丢 4 个（壳 denylist），文件集与 0.4.7 一致（无新增随包资产）；README 双语链接行按通用规则裁剪。",
+      "rationale": "预装插件随壳版本锁定：壳内 0.4.7 不含这两项修复，桌面用户在壳更新前拿不到；且四个预装包必须与 npm latest 保持一致，否则审计门禁报 UPDATE/DRIFT。",
+      "rejected": "（1）手工 npm pack + 逐文件拷贝：历史上丢过 kanban 技能资产、删错 README 空行；（2）以插件仓 HEAD 为基准（权威是 npm 已发布版，且 HEAD 多出的都是非随包文件）；（3）把 0.4.7/0.4.8 拆两个 PR（0.4.7 已由 PR #69 合入 main，本次一条分支直达 0.4.8）；（4）顺手同步另外三个已最新的包。",
+      "status": "done",
+      "tags": [
+        "plugins",
+        "preinstalled",
+        "sync"
+      ],
+      "createdAt": "2026-10-02T08:23:05.494Z",
+      "updatedAt": "2026-10-02T08:23:05.494Z",
+      "summary": "已同步并验证：lib 语法 ✅；壳副本 `lib/client.js` sha256 `cd6b3932f03b59d2…` = 已发布 0.4.8 tarball = 插件仓构建（三方一致）✅；`diff -r plugins/preinstalled src-tauri/resources/preinstalled` IDENTICAL ✅；`test-copy-consistency` / `test-plugin-dsh-compat` PASS（4 包 0 警告）✅；全量 `npm test` exit 0 ✅；`audit-preinstalled` 四包 up-to-date、turn-nav 3/3 资产逐字节一致 ✅。边界：只改源树捆绑内容，已装应用 runtime 拷贝走控制台用户门控更新，随下次壳发版生效。遗留：早先分支 `chore/preinstalled-turn-nav-0.4.7` 已被本分支取代（无 PR）。"
     }
   ]
 }

@@ -52,6 +52,8 @@ window.__ModuleLoader__.load({
 					index: index + 1,
 					summary: item.prompt,
 					fullText: item.prompt,
+					response: typeof item.response === "string" ? item.response : "",
+					loaded: true,
 					startTime: turnTimings?.get(item.turn)?.startTime ?? loc?.start?.time,
 					status
 				};
@@ -83,6 +85,8 @@ window.__ModuleLoader__.load({
 					index: displayIndex,
 					summary,
 					fullText,
+					response: "",
+					loaded: true,
 					startTime,
 					status
 				});
@@ -145,6 +149,12 @@ window.__ModuleLoader__.load({
 		* summary and the full text when it is the only source. Anchor fields prefer the
 		* history entry's timestamp and the window's live status.
 		*
+		* The RESPONSE preview resolves window → outline, mirroring the official merge
+		* ("taking an outline preview only where the window's own is empty"): the loaded
+		* window's preview is computed from the nodes it holds (so it can already
+		* describe a still-running turn), while the outline commits its response at
+		* `turn/end`.
+		*
 		* @param history - journal-derived turns (may be empty).
 		* @param window - loaded-window turns (may be empty).
 		* @param outline - the `turnOutline` projection value, absent while the host
@@ -154,7 +164,7 @@ window.__ModuleLoader__.load({
 		function mergeRailTurns(history, window, outline) {
 			const historyByTurn = new Map(history.map((entry) => [entry.turn, entry]));
 			const windowByTurn = new Map(window.map((entry) => [entry.turn, entry]));
-			const outlineByTurn = new Map((outline ?? []).map((entry) => [entry.turn, entry.prompt]));
+			const outlineByTurn = new Map((outline ?? []).map((entry) => [entry.turn, entry]));
 			return [.../* @__PURE__ */ new Set([
 				...historyByTurn.keys(),
 				...windowByTurn.keys(),
@@ -163,12 +173,14 @@ window.__ModuleLoader__.load({
 				const fromHistory = historyByTurn.get(turn);
 				const fromWindow = windowByTurn.get(turn);
 				const fromOutline = outlineByTurn.get(turn);
-				const summary = firstText$1(fromHistory?.summary, fromWindow?.summary, fromOutline);
+				const summary = firstText$1(fromHistory?.summary, fromWindow?.summary, fromOutline?.prompt);
 				return {
 					turn,
 					index: position + 1,
 					summary,
 					fullText: firstText$1(fromHistory?.fullText, fromWindow?.fullText, summary),
+					response: firstText$1(fromWindow?.response, fromOutline?.response),
+					loaded: fromWindow !== void 0,
 					startTime: fromHistory?.startTime ?? fromWindow?.startTime,
 					status: fromWindow?.status ?? fromHistory?.status ?? "closed"
 				};
@@ -183,9 +195,27 @@ window.__ModuleLoader__.load({
 			return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 		}
 		/**
-		* Tooltip body for one turn: the turn number, its time when known, and the
-		* prompt — falling back to the localized turn label when no human prompt was
-		* read.
+		* Accessible NAME of one capsule: the ACTION the button performs, mirroring the
+		* official rail (`chat.turnNavigation.jump` for a loaded mark, `jumpLoad` for one
+		* whose content still has to be paged in). The prompt/response preview is the
+		* DESCRIPTION (`aria-describedby` → the `role="tooltip"` node), never baked into
+		* the name — a name has to answer "what does this button do?", not recite the
+		* conversation.
+		*
+		* @param entry - the rail entry behind the capsule.
+		* @param t - the plugin's translator.
+		* @returns the localised action label.
+		*/
+		function markLabel(entry, t) {
+			return t(entry.loaded ? "jumpToTurn" : "jumpToTurnLoad", { n: String(entry.turn) });
+		}
+		/**
+		* Tooltip body for one turn: turn number, time when known, the human prompt when
+		* one was read, and the response preview when the host has one.
+		*
+		* The prompt line is OMITTED when empty: the leading label already IS the turn
+		* number, so repeating it (a raw official-style prompt fallback would) spends
+		* the bubble's most valuable line on nothing.
 		*
 		* @param entry - the rail entry being previewed.
 		* @param t - the plugin's translator (provides `turnLabel`).
@@ -195,10 +225,12 @@ window.__ModuleLoader__.load({
 		function tooltipText(entry, t) {
 			const time = formatTime(entry.startTime);
 			const label = t("turnLabel", { n: String(entry.turn) });
-			const body = entry.fullText || entry.summary || label;
+			const prompt = (entry.fullText || entry.summary).trim();
+			const response = (entry.response ?? "").trim();
 			const lines = [label];
 			if (time !== "") lines.push(time);
-			lines.push(body);
+			if (prompt !== "") lines.push(prompt);
+			if (response !== "") lines.push(response);
 			return lines.join("\n");
 		}
 		//#endregion
@@ -399,6 +431,8 @@ window.__ModuleLoader__.load({
 				index: 0,
 				summary: t.summary,
 				fullText: t.fullText,
+				response: "",
+				loaded: false,
 				startTime: Number.isFinite(t.time) ? t.time : void 0,
 				startSeq: t.startSeq,
 				status: "closed"
@@ -566,6 +600,7 @@ window.__ModuleLoader__.load({
 			const [canScrollDown, setCanScrollDown] = (0, react.useState)(false);
 			const [jumpState, setJumpState] = (0, react.useState)(null);
 			const [officialRail, setOfficialRail] = (0, react.useState)(false);
+			const previewId = (0, react.useId)();
 			const railRef = (0, react.useRef)(null);
 			const tipRef = (0, react.useRef)(null);
 			const hoverScrollRef = (0, react.useRef)(null);
@@ -880,8 +915,17 @@ window.__ModuleLoader__.load({
 									const rect = e.currentTarget.getBoundingClientRect();
 									setHoverY(rect.top + rect.height / 2);
 								},
+								onFocus: (e) => {
+									setHoverIndex(i);
+									const rect = e.currentTarget.getBoundingClientRect();
+									setHoverY(rect.top + rect.height / 2);
+								},
+								onBlur: () => setHoverIndex(-1),
 								onClick: (e) => handleCapsuleClick(entry.turn, i, e),
-								"aria-label": tooltipText(entry, t).replace(/\n/g, " — "),
+								"aria-label": markLabel(entry, t),
+								"aria-current": isActive ? "true" : void 0,
+								"aria-busy": loading ? "true" : void 0,
+								"aria-describedby": previewId,
 								children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { className: "tn-cap" })
 							}, entry.turn);
 						})
@@ -907,6 +951,7 @@ window.__ModuleLoader__.load({
 					}), document.body),
 					hoverEntry !== void 0 && (0, react_dom.createPortal)(/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 						ref: tipRef,
+						id: previewId,
 						className: "tn-tip",
 						style: { top: tipTop },
 						role: "tooltip",
@@ -1007,6 +1052,8 @@ window.__ModuleLoader__.load({
 			scrollUp: "Scroll rail up",
 			scrollDown: "Scroll rail down",
 			turnLabel: "Turn {n}",
+			jumpToTurn: "Jump to turn {n}",
+			jumpToTurnLoad: "Load and jump to turn {n}",
 			locatingTurn: "Locating turn {n}…",
 			locateFailed: "Could not locate turn {n}",
 			modeRowTitle: "Turn navigation",
@@ -1021,6 +1068,8 @@ window.__ModuleLoader__.load({
 			scrollUp: "向上滚动胶囊条",
 			scrollDown: "向下滚动胶囊条",
 			turnLabel: "第 {n} 轮",
+			jumpToTurn: "跳转到第 {n} 轮",
+			jumpToTurnLoad: "加载并跳转到第 {n} 轮",
 			locatingTurn: "正在定位第 {n} 轮…",
 			locateFailed: "无法定位第 {n} 轮",
 			modeRowTitle: "轮次导航",
