@@ -1960,6 +1960,22 @@
       "createdAt": 1790611604898,
       "updatedAt": 1790614895898,
       "summary": "**① 契约实证 ✅**：overlay 的 `insert` 与 `- id: ui-sidebar-browser, disabled: false` 在 0.2.0-rc.1 的**扁平化 dump** 里仍成立；id 集合 **182→183**（消失 `schedule`/`time-context`/`ui-schedule`，新增 `otel`/`product-analytics`/`desktop-product-telemetry`/`ui-settings-session-log`）；`dsh web` 在 0.2 **不接受 `--profile`**（我们 manager 的启动参数本来就是对的），dump 仍用全局形式。**顺带修掉门禁自身的假红**：`test-patch-targets.mjs` runtime 模式原先读原始 YAML + 列首锚定解析器 → 缩进行（`ui-sidebar-browser`）看不见；抽 `dumpConfigIds()` 统一走 `--dump-config`（PR #60）。\n**② dev 升级 + 实机回归 ✅**：dev 运行时升到 `0.2.0-rc.1`（manager 同参 pnpm，3m24s）；因旧产物都不可用（已安装壳缺地板守卫、`D:\\Dev\\dsh-desktop-dev` 脏工作区）且 `shell-chrome.js` 是 `include_str!`，**新 clone `main` + `tauri build --no-bundle` 重建**后实机验证：chrome 注入/caption 无错位（1942×1243 最大化）、页面完整可用、桥准入 **10/10 PASS**、四个预装同步、**未误报降级**、地板守卫未隔离任何插件。\n**③ 壳侧 ✅**：门禁全绿（`npm test` exit 0 / 32 PASS；fixture ✅ / 0.2 runtime ✅ / 兼容 ✅ / 地板守卫 ✅）；地板与 fixture **按决策不动**并写明理由。\n**④ 四插件适配 ✅（结论＝无需改代码）**：静态——用到的 seam（slots/locale/remote/remote.settings/configForms/sessions/workspaces/connection）与槽位 id 在 0.2 全部仍有提供者/声明；运行时——CDP 驱动 headless Chrome 实测三个客户端插件均渲染：kanban 侧栏「思磨力看板」、model-reasoning 设置导航「思磨力提供方参数」、turn-navigator 设置项「思磨力轮次胶囊条」；`@karoc/dsh-smoothly-opencode-session` 为 host-only 且用户未启用（非断点）。\n**⑤ 收口 ✅**：PR #60/#61/#62 全部合并（`main = 6b69baf`）；Agent Note `testing/2026-09-28-dsh-020-rc1-regression-and-adaptation.md`；技能 §4.8（invoke vs click + CDP 配方）/§4.9（0.2 的 CLI/首启/迁移差异）；方案 §15.1–§15.7；证据截图 `D:\\Dev\\_shots\\s12–s18-020-*.png`。\n**遗留（不阻塞，均已登记）**：① 地板是否抬到 0.2（产品决定，建议等 `latest`）② `@dsh-desktop/plugin-console` 的迁移式清理（§15.6）③ 通知插件的**功能级**验证需真实跑完一轮会话（注入路径已验、UI 无错）④ ocs 启用后的 host 半区加载。"
+    },
+    {
+      "id": "card-0f837f48-59a0-466d-a9f3-9f92ca91d9ac",
+      "title": "预装 dsh-turn-navigator 同步到 0.4.7（胶囊标签占位符修复随壳分发）",
+      "description": "**背景**：npm 上 0.4.7 已发布（2026-09-30），修复了轮次胶囊 hover 提示显示 `(no user message)` 占位符与注入文本泄漏（数据层不再伪造标签、渲染层回退本地化轮次号、接入宿主 `turnOutline` 投影）；壳内预装副本仍是 0.4.6，桌面用户若不更新就仍拿到带该缺陷的版本。其余三个预装包已是最新。\n\n**做法**：走仓库脚本 `npm run sync:plugin -- dsh-turn-navigator 0.4.7`（基准 = npm 已发布 tarball）→ `node scripts/sync-resources.mjs`。收录 6 个文件（`lib/index.js`、`lib/client.js`、`cordis.patch.yml`、`README.md`、`LICENSE`、`package.json`），按壳 denylist 丢弃 4 个（CHANGELOG / CONTRIBUTING / README.zh.md / docs 图片）；README 的双语链接行按通用规则裁剪（实测只删该行 + 其后的空行）。",
+      "rationale": "预装插件随壳版本锁定，壳内副本与 npm 已发布 latest 的差距必须补齐，否则「装最新壳、拿旧 bundle」——本次差距恰好就是用户报告缺陷的修复版本。",
+      "rejected": "（1）手工 `npm pack` + 逐文件拷贝：历史上丢过 kanban 技能资产、删错 README 空行，改用仓库脚本；（2）以插件仓 HEAD 为基准：权威定义是 npm 已发布版，且 HEAD 之上还有发布后提交（CHANGELOG/门禁脚本，均不在随包 `files` 白名单内，两条基准对随包资产一致）；（3）顺手同步另外三个已最新的包：不动，差异只是壳内精简。",
+      "status": "done",
+      "tags": [
+        "plugins",
+        "preinstalled",
+        "sync"
+      ],
+      "createdAt": "2026-10-02T06:38:12.317Z",
+      "updatedAt": "2026-10-02T06:38:12.317Z",
+      "summary": "已同步并验证：lib 语法 ✅；壳副本 `lib/client.js` sha256 = `11cc70e734d3a8f6…`，与已发布 tarball 及插件仓构建三方一致（含 4 处 `turnLabel`、0 处 `no user message`）；`diff -r plugins/preinstalled src-tauri/resources/preinstalled` IDENTICAL；`test-copy-consistency.mjs` PASS、`test-plugin-dsh-compat.mjs` PASS（4 包 0 警告，壳地板 `0.2.0-rc.1` ≥ 插件 peer `>=0.1.7-rc.1`）、全量 `npm test` exit 0；`audit-preinstalled.mjs` 报四个包 up-to-date 且 turn-nav 3/3 随包资产与已发布 tarball 逐字节一致。边界：只改源树捆绑内容，已装应用的 runtime 拷贝走控制台用户门控更新，随下次壳发版生效。"
     }
   ]
 }

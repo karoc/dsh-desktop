@@ -1,6 +1,6 @@
 {
   "name": "dsh-turn-navigator",
-  "version": "0.4.6",
+  "version": "0.4.7",
   "description": "Smoothly Turn Nav (Smoothly TN): full-history piano-key turn rail for DeepSeek Harness (dsh) web conversations — see every turn at a glance, hover to preview, click to jump anywhere, and replace the official (non-disableable) turn rail.",
   "type": "module",
   "main": "lib/index.js",
@@ -44,12 +44,13 @@
     "bundle": "tsdown --config ./tsdown.config.ts",
     "prepare": "tsdown --config ./tsdown.config.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsc --noEmit && node scripts/test-client-dispose.mjs && node scripts/check-guarantees.mjs && node scripts/test-negative-controls.mjs",
+    "test": "tsc --noEmit && node scripts/test-client-dispose.mjs && node scripts/test-turn-labels.mjs && node scripts/check-guarantees.mjs && node scripts/test-negative-controls.mjs",
     "release:check": "node scripts/release-check.mjs",
     "prepack": "node scripts/release-check.mjs",
     "prepublishOnly": "node scripts/release-check.mjs && tsdown --config ./tsdown.config.ts",
     "postpublish": "node scripts/post-publish-check.mjs",
     "verify:guarantees": "node scripts/check-guarantees.mjs",
+    "verify:turn-labels": "node scripts/verify-turn-labels.mjs",
     "test:controls": "node scripts/test-negative-controls.mjs",
     "verify:all": "node scripts/verify-all.mjs",
     "verify:fresh": "node scripts/verify-all.mjs --check-fresh"

@@ -14,7 +14,7 @@ window.__ModuleLoader__.load({
 		* Extract the text of the first `type: 'text'` content block from a node's
 		* content array.
 		*/
-		function firstText$1(content) {
+		function firstText$2(content) {
 			if (content === void 0) return "";
 			for (const block of content) if (block.type === "text" && typeof block.text === "string") return block.text;
 			return "";
@@ -31,6 +31,11 @@ window.__ModuleLoader__.load({
 		* `ConversationSnapshot` (which had a `.chat` field) — so an upgrade never
 		* crashes if the host is still on the older shape.
 		*
+		* Turns without a human prompt (the host classifies every non-human
+		* `user/message` source as a `context`/`turn-trigger` node, and a human message
+		* claimed mid-turn as `steering`) keep an EMPTY summary: the rail resolves the
+		* label from the host `turnOutline` projection or its localized turn number.
+		*
 		* @param snap - the chat snapshot (structural subset).
 		* @returns ordered turn entries (empty when the snapshot has no turns).
 		*/
@@ -45,8 +50,8 @@ window.__ModuleLoader__.load({
 				return {
 					turn: item.turn,
 					index: index + 1,
-					summary: item.prompt || "(no user message)",
-					fullText: item.prompt || "",
+					summary: item.prompt,
+					fullText: item.prompt,
 					startTime: turnTimings?.get(item.turn)?.startTime ?? loc?.start?.time,
 					status
 				};
@@ -61,7 +66,6 @@ window.__ModuleLoader__.load({
 				const loc = timeline.turns.get(turn);
 				const status = loc?.status ?? "unknown";
 				const startTime = turnTimings?.get(turn)?.startTime ?? loc?.start?.time;
-				let summary = "";
 				let fullText = "";
 				const keys = chat.locations.getTurn(turn);
 				for (const key of keys) {
@@ -69,22 +73,15 @@ window.__ModuleLoader__.load({
 					if (node === void 0) continue;
 					if (node.kind === "user") {
 						const userData = node.data;
-						if (userData !== void 0) {
-							fullText = firstText$1(userData.content);
-							summary = fullText.length > SUMMARY_MAX_CHARS$1 ? `${fullText.slice(0, 79)}…` : fullText;
-						}
+						if (userData !== void 0) fullText = firstText$2(userData.content).trim();
 						break;
 					}
-					if (summary === "") {
-						const peek = peekNodeText(node);
-						fullText = peek;
-						summary = peek.length > SUMMARY_MAX_CHARS$1 ? `${peek.slice(0, 79)}…` : peek;
-					}
 				}
+				const summary = fullText.length > SUMMARY_MAX_CHARS$1 ? `${fullText.slice(0, 79)}…` : fullText;
 				entries.push({
 					turn,
 					index: displayIndex,
-					summary: summary || `[${kindLabel(turn, keys, chat)}]`,
+					summary,
 					fullText,
 					startTime,
 					status
@@ -97,32 +94,6 @@ window.__ModuleLoader__.load({
 			if (snap === void 0) return void 0;
 			if ("chat" in snap && snap.chat !== void 0) return snap.chat;
 			return snap;
-		}
-		/** Best-effort text peek from a non-user chat node's data (erased shape). */
-		function peekNodeText(node) {
-			const data = node.data;
-			if (data === void 0) return "";
-			for (const field of [
-				"summary",
-				"text",
-				"content",
-				"message",
-				"name"
-			]) {
-				const value = data[field];
-				if (typeof value === "string" && value.trim().length > 0) return value.trim();
-				if (Array.isArray(value)) {
-					for (const block of value) if (block !== null && typeof block === "object") {
-						const b = block;
-						if (typeof b.text === "string" && b.text.trim().length > 0) return b.text.trim();
-					}
-				}
-			}
-			return "";
-		}
-		/** Human label for a turn that has no readable first-node text. */
-		function kindLabel(turn, keys, chat) {
-			return `turn ${turn} (${chat.nodes.get(keys[0] ?? "")?.kind ?? "turn"})`;
 		}
 		/**
 		* Find the chat-node key of the first visible node in a given turn — the
@@ -155,10 +126,88 @@ window.__ModuleLoader__.load({
 			for (const turn of turnOrder) if (chat.locations.getTurn(turn).includes(key)) return turn;
 		}
 		//#endregion
+		//#region src/client/merge.ts
+		/** First string with visible content (empty/whitespace-only counts as absent). */
+		function firstText$1(...values) {
+			for (const value of values) if (value !== void 0 && value.trim() !== "") return value;
+			return "";
+		}
+		/**
+		* Merge the channels into the rail's ascending list.
+		*
+		* The TURN SET is the union of all three channels: the host outline names every
+		* turn of the session (that is how the official rail lists turns outside its
+		* window), so a turn neither of our read channels reached still gets a capsule
+		* instead of disappearing from the rail.
+		*
+		* Text resolution per turn: history → window → outline prompt. An outline prompt
+		* is bounded (the host caps it at one rail-card line), so it doubles as both the
+		* summary and the full text when it is the only source. Anchor fields prefer the
+		* history entry's timestamp and the window's live status.
+		*
+		* @param history - journal-derived turns (may be empty).
+		* @param window - loaded-window turns (may be empty).
+		* @param outline - the `turnOutline` projection value, absent while the host
+		*   unit is unmounted or no baseline carried the key.
+		* @returns every known turn, ascending, with the list position as `index`.
+		*/
+		function mergeRailTurns(history, window, outline) {
+			const historyByTurn = new Map(history.map((entry) => [entry.turn, entry]));
+			const windowByTurn = new Map(window.map((entry) => [entry.turn, entry]));
+			const outlineByTurn = new Map((outline ?? []).map((entry) => [entry.turn, entry.prompt]));
+			return [.../* @__PURE__ */ new Set([
+				...historyByTurn.keys(),
+				...windowByTurn.keys(),
+				...outlineByTurn.keys()
+			])].sort((a, b) => a - b).map((turn, position) => {
+				const fromHistory = historyByTurn.get(turn);
+				const fromWindow = windowByTurn.get(turn);
+				const fromOutline = outlineByTurn.get(turn);
+				const summary = firstText$1(fromHistory?.summary, fromWindow?.summary, fromOutline);
+				return {
+					turn,
+					index: position + 1,
+					summary,
+					fullText: firstText$1(fromHistory?.fullText, fromWindow?.fullText, summary),
+					startTime: fromHistory?.startTime ?? fromWindow?.startTime,
+					status: fromWindow?.status ?? fromHistory?.status ?? "closed"
+				};
+			});
+		}
+		//#endregion
+		//#region src/client/label.ts
+		/** Short HH:MM from a Unix-epoch-ms timestamp (empty when unknown). */
+		function formatTime(ms) {
+			if (ms === void 0 || ms === null || !Number.isFinite(ms)) return "";
+			const date = new Date(ms);
+			return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+		}
+		/**
+		* Tooltip body for one turn: the turn number, its time when known, and the
+		* prompt — falling back to the localized turn label when no human prompt was
+		* read.
+		*
+		* @param entry - the rail entry being previewed.
+		* @param t - the plugin's translator (provides `turnLabel`).
+		* @returns the multi-line tooltip text (the rail also renders it as the
+		*   capsule's `aria-label`, newlines flattened).
+		*/
+		function tooltipText(entry, t) {
+			const time = formatTime(entry.startTime);
+			const label = t("turnLabel", { n: String(entry.turn) });
+			const body = entry.fullText || entry.summary || label;
+			const lines = [label];
+			if (time !== "") lines.push(time);
+			lines.push(body);
+			return lines.join("\n");
+		}
+		//#endregion
 		//#region src/client/history.ts
 		const SUMMARY_MAX_CHARS = 80;
 		/** Safety cap on history pages read (50 events each). */
 		const MAX_HISTORY_PAGES = 500;
+		/** Surface operation of an appended (not replaced/superseded) log event. */
+		const APPEND_SURFACE_OP = "append";
 		/** Journal page size in MESSAGES (user/assistant count) — no host cap, fewer round trips. */
 		const JOURNAL_PAGE_MESSAGES = 200;
 		/** Safety cap on journal pages read. */
@@ -170,6 +219,32 @@ window.__ModuleLoader__.load({
 		}
 		function truncate(text) {
 			return text.length > SUMMARY_MAX_CHARS ? `${text.slice(0, 79)}…` : text;
+		}
+		/**
+		* Whether one log event is a turn's opening HUMAN prompt.
+		*
+		* Two rules, both taken from the host's own turn-outline fold
+		* (`packages/session/session-turn-outline/src/projection.ts`), which is the
+		* official rail's whole-log label source:
+		*
+		*  - `source.kind === 'user'` — only a human submission labels a turn. Other
+		*    `user/message` sources (`goal`, `plugin`, `runtime-context`,
+		*    `agent-message`, `subagent-settled`, `compact-checkpoint`, …) are
+		*    machine-woken turns: the official projection leaves their `prompt` empty
+		*    on purpose, because rendering that text would leak internal payloads
+		*    (`<goal_round> Objective: …`) into a navigation label.
+		*  - append-surface — a message the log appended. A replaced event (e.g. a
+		*    compaction checkpoint, whose `surfaceOp` is an object) is not the current
+		*    surface and must not label the turn. Legacy logs predate the field
+		*    entirely, so an absent `surfaceOp` counts as appended.
+		*
+		* @param event - one `user/message` log event.
+		* @returns whether this event may label its turn.
+		*/
+		function isHumanPrompt(event) {
+			if (event.data.source?.kind !== "user") return false;
+			const surfaceOp = event.surfaceOp;
+			return surfaceOp === void 0 || surfaceOp === APPEND_SURFACE_OP;
 		}
 		/**
 		* Read the full persisted history of a session and derive every turn.
@@ -267,7 +342,20 @@ window.__ModuleLoader__.load({
 			onPage(turns);
 			return turns;
 		}
-		/** Fold a (seq-ascending) event list into ordered turns. */
+		/**
+		* Fold a (seq-ascending) event list into ordered turns.
+		*
+		* A turn is labelled from its first text-bearing HUMAN prompt
+		* ({@link isHumanPrompt}); a turn that has none keeps an empty label, and the
+		* rail falls back to its localized turn number (`label.ts`) — the official
+		* behaviour. Fabricating a placeholder here would be a lie the render layer
+		* cannot undo, and would also defeat the outline fallback in `merge.ts`.
+		*
+		* Exported for `scripts/test-turn-labels.mjs`.
+		*
+		* @param events - durable log events (any order; sorted here).
+		* @returns turns ascending by number, `index` patched to the list position.
+		*/
 		function buildTurns(events) {
 			const sorted = [...events].sort((a, b) => a.seq - b.seq);
 			const turns = [];
@@ -291,8 +379,8 @@ window.__ModuleLoader__.load({
 						current = null;
 					}
 					break;
-				case "user/message": if (current !== null && current.summary === "") {
-					const text = firstText(event.data.content);
+				case "user/message": if (current !== null && current.summary === "" && isHumanPrompt(event)) {
+					const text = firstText(event.data.content).trim();
 					current.summary = truncate(text);
 					current.fullText = text;
 					current.time = event.time;
@@ -309,7 +397,7 @@ window.__ModuleLoader__.load({
 			return {
 				turn: t.turn,
 				index: 0,
-				summary: t.summary || "(no user message)",
+				summary: t.summary,
 				fullText: t.fullText,
 				startTime: Number.isFinite(t.time) ? t.time : void 0,
 				startSeq: t.startSeq,
@@ -458,30 +546,15 @@ window.__ModuleLoader__.load({
 		function clampFeedbackY(y) {
 			return Math.max(24, Math.min(y, window.innerHeight - 24));
 		}
-		/** Tooltip body for one turn: turn number, time, full summary. */
-		function tooltipText(entry, t) {
-			const time = formatTime(entry.startTime);
-			const label = t("turnLabel", { n: String(entry.turn) });
-			const body = entry.fullText || entry.summary || t("noSummary");
-			const lines = [label];
-			if (time !== "") lines.push(time);
-			lines.push(body);
-			return lines.join("\n");
-		}
-		/** Short HH:MM from a Unix-epoch-ms timestamp. */
-		function formatTime(ms) {
-			if (ms === void 0 || ms === null || !Number.isFinite(ms)) return "";
-			const date = new Date(ms);
-			return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
-		}
 		/**
 		* The piano-key rail. Session scope: reads the conversation snapshot directly
 		* and renders a floating vertical capsule per turn (full history read from
 		* the host as data; the flow window is extended only on click-to-jump).
 		*/
-		function TurnNavRail({ useSession, useChat, sessionId, t, api, journal, sessionAccess }) {
+		function TurnNavRail({ useSession, useChat, useProjection, sessionId, t, api, journal, sessionAccess }) {
 			const legacySession = useSession?.((s) => s);
 			const chat = useChat?.((c) => c);
+			const outline = useProjection?.("turnOutline");
 			const chatRef = (0, react.useRef)(chat ?? legacySession);
 			chatRef.current = chat ?? legacySession;
 			const windowTurns = (0, react.useMemo)(() => extractTurns(chat ?? legacySession), [chat, legacySession]);
@@ -558,15 +631,11 @@ window.__ModuleLoader__.load({
 				sessionId
 			]);
 			const railMode = (0, react.useSyncExternalStore)(subscribeRailMode, getRailMode);
-			const turns = (0, react.useMemo)(() => {
-				if (historyTurns.length === 0) return windowTurns;
-				const historySet = new Set(historyTurns.map((entry) => entry.turn));
-				const extras = windowTurns.filter((entry) => !historySet.has(entry.turn));
-				return [...historyTurns, ...extras].sort((a, b) => a.turn - b.turn).map((entry, i) => ({
-					...entry,
-					index: i + 1
-				}));
-			}, [historyTurns, windowTurns]);
+			const turns = (0, react.useMemo)(() => mergeRailTurns(historyTurns, windowTurns, outline), [
+				historyTurns,
+				windowTurns,
+				outline
+			]);
 			const [activeTurn, setActiveTurn] = (0, react.useState)(null);
 			(0, react.useEffect)(() => {
 				const scroll = document.querySelector("[data-conversation-scroll]");
@@ -938,7 +1007,6 @@ window.__ModuleLoader__.load({
 			scrollUp: "Scroll rail up",
 			scrollDown: "Scroll rail down",
 			turnLabel: "Turn {n}",
-			noSummary: "(no user message)",
 			locatingTurn: "Locating turn {n}…",
 			locateFailed: "Could not locate turn {n}",
 			modeRowTitle: "Turn navigation",
@@ -953,7 +1021,6 @@ window.__ModuleLoader__.load({
 			scrollUp: "向上滚动胶囊条",
 			scrollDown: "向下滚动胶囊条",
 			turnLabel: "第 {n} 轮",
-			noSummary: "（无用户消息）",
 			locatingTurn: "正在定位第 {n} 轮…",
 			locateFailed: "无法定位第 {n} 轮",
 			modeRowTitle: "轮次导航",
