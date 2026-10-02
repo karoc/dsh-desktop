@@ -764,3 +764,41 @@ patch id **fixture 已刷新**为 `dsh 0.2.0-rc.1 / 183 ids`（`--update-fixture
 - **新增迁移逻辑（持久部分）**：`scripts/shell-plugins.mjs` 的 `planShellPluginCleanup({shipped,present,bundles})` + manager 的 `pruneStaleShellPlugins()`（在客户端插件同步后执行）：不再分发的 `@dsh-desktop/*` → runtime 副本改名 `.bak-stale-<ts>`（保留可回退、不硬删）+ profile bundles 里的悬空引用先备份 manifest 再原子写回；**只动 `@dsh-desktop/*` 命名空间，绝不碰用户第三方插件**。单测 4 组 + 负向对照（去掉命名空间过滤 → 变红）。门禁链 **15 → 16 套**。
 - **端到端验证**（真实注入 → 重启 dev 壳）：日志出现 `stale client plugin moved aside: @dsh-desktop/plugin-console` 与 `dropped stale plugin references from profile bundles: …`；runtime 副本变为 `plugin-console.bak-stale-1790615559394`；bundles 里引用消失；生成 `package.json.bak-stale-plugin-…` 备份 ✅。
 - **顺带发现（好性质）**：0.2 对**悬空 bundle 引用是优雅跳过**（日志 `dsh: skipping profile bundle "@dsh-desktop/plugin-console": … declares no dsh.bundle`）而非 fail-closed —— 即使用户 profile 残留引用，界面也不会打不开（我们的迁移因此是"清理"而非"救命"）。
+
+### 15.9 linux-smoke 修复、打包门禁与 turn-nav 0.4.7 审计（2026-09-30 / 10-02）
+
+**A. linux-smoke 的根因（实证）**：该作业用
+`BIN=$(find smoke -type f -perm -111 | grep -vE "\.so|\.desktop" | head -1)` 挑「二进制」，实际选中
+打包进来的 **Node 工具链**（v0.13.0 run 里是 `corepack/shims/yarn.cmd`），在 `sh` 里语法错退出——
+**app 从未被执行**，所以"从未变绿"的历史与"WebKitGTK 在 xvfb 下 stall"的旧归因都不可靠。
+修复（PR #66）改为取 deb 的 `usr/bin` 入口（`usr/lib` 兜底、再缺就打印清单大声失败）。修后
+run **36716676801** 首次真正执行到 app：`binary: smoke/usr/bin/dsh-desktop`，随后只有一条
+`(dsh-desktop:NNNN): dbind-WARNING … AT-SPI …` 与零输出 ⇒ **xvfb stall 这次才被实测确认**，
+该作业继续 `continue-on-error`（CI 内无法断言 app 级行为）。
+
+**B. 把「CI 能判的部分」提为阻断门禁**（PR #67）：`linux` 作业内新增 `Verify packaged Linux layout`
+（`linux`→`release` 依赖关系使其真阻断）：解包 deb 断言 app 二进制 / `resources` / 内置 node /
+manager 三件（`server-manager`、`plugin-floor`、`shell-plugins`）/ patch yml / 四个预装插件。
+首次运行（run **36718346505**）即判红并跳过 `release` —— **证明它不是恒真断言**；查明是**断言写错**
+（按目录名找 `@karoc/...`，而磁盘目录名去 scope）而非打包缺陷，PR #68 改为**按 `package.json` 包名匹配**
+（布局无关）。修复后 run **36720063640**：**`linux: success`**（门禁在真实打包上通过），
+`linux-smoke: failure`（按设计非阻断），run 整体 `completed/success` ✅。
+
+**C. turn-nav 0.4.7 同步审计**（用户于 10-02 提交 `09d8a14`，在 main 上）：
+- ✅ 版本/内容：两份拷贝（`plugins/preinstalled/` 与 `src-tauri/resources/preinstalled/`）**逐文件一致**；
+  npm latest = 0.4.7 = 壳内两处；审计脚本 `content: 3/3 verbatim assets match the published tarball`；
+- ✅ 形式：走仓库脚本同步（6 文件收录 / 4 个按 denylist 丢弃，文件集与 0.4.6 一致）；
+- ✅ 门禁：`test-plugin-dsh-compat` PASS（声明的 peer 地板均被满足）、全量 16 套 37 PASS；
+- ✅ **地板声明没有低报**：0.4.7 新接入的宿主 `turnOutline` 投影在 **0.1.7-rc.2 与 0.2.0-rc.1 都存在**
+  （`git grep turnOutline dsh-v0.1.7-rc.2` 与 `dsh-v0.2.0-rc.1` 均命中），上游还明确"无投影时回退到仅
+  已加载轮次"，插件侧用 `useProjection?.("turnOutline")` 可选链消费 ⇒ 缺投影不会崩；
+- ✅ 旧占位符 `(no user message)` 在 0.4.7 的 `lib/` 里已无残留；
+- ⚠️ **未完成的验证**：运行中的 dev 壳是 9-29 构建产物，其 `resources/preinstalled/` 仍带 0.4.6，
+  因此 runtime 仍是 0.4.6 —— **0.4.7 在 0.2.0-rc.1 上的真机行为（胶囊 hover 标签）尚未验证**。
+  已把仓库资源（含 0.4.7）补进该构建产物；**需要用户重启 dev 壳**后，用 CDP 配方（§15.7）读会话轨道
+  文本确认 `(no user message)` 不再出现。
+
+**D. 事故记录（我的失误）**：为触发同步我执行了 `Get-Process dsh-desktop-dev | Stop-Process -Force`
+并让脚本无条件打印 `stopped` —— 该进程其实是**用户自己启动的**（10-02 15:05，pid 58636），且**并未被结束**
+（那句 `stopped` 是假成功输出）。**教训：任何"我拉起的进程"的假设在重启前必须用 StartTime 核对；
+停止类命令的输出必须来自真实查询结果，不得无条件打印。**
