@@ -879,3 +879,30 @@ CHANGELOG 有 0.14.0 段 ✅、`npm test` **16 套 37 PASS** ✅、`audit-preins
 **fixture 保持 rc.1 不动**（id 集合本就一致；且它是"地板形状"的记录）。
 
 **⑤ 运维记录（可复用）**：首次用 `registry.npmjs.org` 升级**卡死 20 分钟无进展**（进程存活、CPU 12s、store 无写入）→ 终止自己的进程（先核对命令行确认归属）→ 换 manager 的备用镜像 `registry.npmmirror.com` → **23.7 秒完成**。
+
+### 15.13 正式版安装 v0.14.0 实录（2026-10-04）—— 含一个第三方插件导致的界面打不开
+
+**背景**：用户要求代为安装 v0.14.0（当时未在使用）。正式版此前是 **0.10.1**（exe 9-21），运行时 dsh **0.1.6-alpha.1**。
+
+**预检发现的两件事（都在动手前处置）**：
+1. 正式版 `dsh.json` 里 **`devMode: true`** → 按 manager 语义会**冻结地板升级**（源码 `1747-1748`）。若不改，装完会停在 0.1.6-alpha.1，而预装插件声明的 peer 地板是 `0.1.7-rc.1` → fail-closed 打不开。→ 备份后置 `devMode: false`（`dsh.json.pre-install.bak`）。
+2. 数据目录先**整目录备份**到 `D:\Dev\backup-prod-dsh-20261004-182516`（77 MB，含 `settings.yaml` 15275B + `.credentials.yaml` 1024B）。
+
+**安装**：`gh release download v0.14.0`（首次下载**被截断**：19,873,664B vs 元数据 28,190,691B，报 `PROTOCOL_ERROR` → **重下并校验大小一致**后才安装）。
+校验：PE32 + Nullsoft NSIS、`asInvoker`；sha256 `61a71508403022dd025c95fb0b7ddf9820981c0fa220c85fd0394acbc764101a`；静默 `/S` 安装 exit 0；`0.10.1 → 0.14.0`。
+**装后资源内容核对**（目录 mtime 具误导性，必须看内容）：manager 88627B 含 `MIN_DSH_VERSION = '0.2.0-rc.1'` + `pruneStaleShellPlugins`；`plugin-floor.mjs`/`shell-plugins.mjs` 在；patch yml **0** 处 `desktop-plugin-console`；四个预装 = 0.2.10/0.2.6/**0.4.8**/0.2.1。
+
+**首启**：日志 `低于最低要求 0.2.0-rc.1 — 升级到地板版本`（对比 9-28 那次是 `devMode 冻结了升级`）→ **runtime dsh 0.1.6-alpha.1 → 0.2.0-rc.1**；预装同步为 0.4.8 等；**设置迁移发生**：`settings.yaml` → `settings.yaml.imported`（15275B 保留）。
+
+**⚠️ 发现并处置：界面一度 "Failed to load plugins"**
+```
+HARNESS / Failed to load plugins / web boot: 1 entry did not activate
+dsh-smoothly-anyrouter-relay-proxy: pending (waiting for service: settingsScope)
+```
+- 根因（实证）：上游 **0.1.7-rc.2 起移除了 `settingsScope`** —— `git grep -l settingsScope <tag> -- packages/client` 命中数 0.1.6-alpha.1 = **39** → 0.1.7-rc.2 = **0** → 0.2.0-rc.2 = **0**。
+- 罪魁是**用户自建插件** `dsh-smoothly-anyrouter-relay-proxy@0.1.1`（Smoothly ARRP，装成 symlink → `D:\Dev\test\dsh-smoothly-anyrouter-claude`，仓库 `karoc/dsh-smoothly-anyrouter-relay-proxy`，npm 无发布）：它仍等 `settingsScope` → 永远 pending → dsh fail-closed → 整个界面不可用。
+- 处置（可逆）：备份 `package.json.pre-arrp-disable.bak` 后**从 profile bundles 移除该 bundle**；顺手清掉旧安装遗留的 `resources/plugin/@dsh-desktop/plugin-console`（**发现：安装器不删旧文件**，于是旧插件每启动仍被复制；新 patch 已不 insert 它，故未被加载，属死重量）。
+- 复验：`FAILED_TO_LOAD false` / 无 pending / **未要求重填 API Key** / 模型选择器显示 **Grok 4.6**（⇒ **"迁移后值到达页面"这个此前挂着的覆盖缺口，在真实正式版上闭合**）/ 侧栏含 `思磨力看板` 与会话 / **桥 10/10 PASS**。
+
+**遗留（需用户决定）**：ARRP 需要按 0.2 客户端 API 迁移（`settingsScope` → `configForms`，与当年 model-reasoning 的迁移同类）后才能重新启用；在那之前该 bundle 保持禁用，**其"注入 Claude Code body 签名以让 anyrouter.top 1M 通道接受请求"的能力随之不可用**。
+**另记两条可改进项**：① 安装器升级时应清理上一版遗留的 `resources/plugin/**`（否则陈旧插件一直被复制）；② 当 dsh 能启动但插件 pending 时（`web boot: N entry did not activate`），启动页的「停用第三方插件」自救**不会被触发**——值得在壳侧增加该情形的兜底提示。
