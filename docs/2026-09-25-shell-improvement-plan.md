@@ -906,3 +906,23 @@ dsh-smoothly-anyrouter-relay-proxy: pending (waiting for service: settingsScope)
 
 **遗留（需用户决定）**：ARRP 需要按 0.2 客户端 API 迁移（`settingsScope` → `configForms`，与当年 model-reasoning 的迁移同类）后才能重新启用；在那之前该 bundle 保持禁用，**其"注入 Claude Code body 签名以让 anyrouter.top 1M 通道接受请求"的能力随之不可用**。
 **另记两条可改进项**：① 安装器升级时应清理上一版遗留的 `resources/plugin/**`（否则陈旧插件一直被复制）；② 当 dsh 能启动但插件 pending 时（`web boot: N entry did not activate`），启动页的「停用第三方插件」自救**不会被触发**——值得在壳侧增加该情形的兜底提示。
+
+### 15.14 ARRP 插件迁移到 dsh 0.2 客户端 API（2026-10-05）—— 可复用配方
+
+**任务**：用户要求把自建插件 **Smoothly ARRP**（`dsh-smoothly-anyrouter-relay-proxy`，源码 `D:\Dev\test\dsh-smoothly-anyrouter-claude`，仓库 `karoc/dsh-smoothly-anyrouter-relay-proxy`）迁移到 dsh 0.2，解开"界面 Failed to load plugins"（见 §15.13）。
+
+**迁移配方（一句话）**：`inject` 里 `'settingsScope'` → `'configForms'`；`ctx.settingsScope.bind({ namespace: NS })` → **`ctx.configForms.get(NS)`**。
+- 上游权威口径：`packages/client/ui-settings/README.zh.md` —— "功能适配器使用 `ctx.configForms.get(entryId)` 获取该 Host 条目所有编辑器共享的已接受值和写入队列。快照包含解析后的 `value`、继承 `base`、原始 `user`、修订号、可写性和持久化模式"；`config-form-types.ts` 里 `status: 'loading'|'ready'|'unavailable'`、`revision: number|undefined`、`writable: boolean`。
+- **因此"只换读源"通常就够**：老 scope 快照里的字段（`value/revision/writable/status`）在 form 快照里**都还在**，Section 的读取逻辑可原样保留。
+- 写路径可继续走 `ctx.remote.settings.mutate(...)`（我们 model-reasoning 也是这么做的；form 另提供 `set/unset/mutate` 的共享写队列与修订号栅栏，供愿意改写的插件使用）。
+- 编辑**别人拥有的命名空间**时更地道的做法是 `ctx.configForms.whileServed(ns, register)`（对方未组合时不显示任何痕迹）；只读展示可用 `get()` 并按 `status` 降级。
+
+**本次实施与验证**：
+1. 源码改动两处（TypeScript）：`src/client/index.ts`（inject + 两处 `get()`）、`src/client/Section.tsx`（占位类型 `SarcSettingsScope` → `SarcConfigForm` + 注释对齐）。**建立在用户工作树里已存在的"0.1.2 对齐"未提交改动之上**（那批改动把 `connection.api` 换成了 `ctx.remote.settings`），未覆盖它。
+2. `npm run typecheck` 干净；**构建必须在 Windows 侧跑**（`tsdown` 依赖 rolldown 的平台原生绑定，WSL 里缺 `binding-linux-x64-gnu` 会失败）→ 产物 `lib/client.js` 35,100B，`configForms` 出现在 841/850/851 行。
+3. **真机验证（dev 实例，dsh 0.2.0-rc.2）**：把插件 junction 进 dev profile 的 `node_modules` 并加入 bundles → 重启 → 页面**无 "Failed to load plugins"**、**无 pending**、设置导航出现 **`思磨力 ARRP`**（与 `思磨力提供方参数` 并列）✅。
+   ⚠️ 两次我的失误都属同一类"未经验证的成功输出"：① 把 WSL 路径塞进 PowerShell 导致 junction 没建成却打印了成功；② 无条件 echo。**判据必须来自真实查询**（本次改用 `Test-Path <link>/lib/client.js` 判定）。
+4. **正式版恢复**：把该 bundle 加回正式版 bundles → 重启 → 同样 **无加载失败 / 无 pending / 设置导航含 `思磨力 ARRP`**、模型选择器仍为 `Grok 4.6`、桥 **10/10** ✅ → **ARRP 重新可用**。
+5. 用户仓库未提交改动保留原样；迁移差异导出为 `D:\Dev\arrp-configforms-migration.diff`（166 行，含用户既有 0.1.2 对齐改动）；其 `CHANGELOG.md` 的 `[Unreleased]` 已补条目（含上游证据与验证范围）。版本号未动（按其发布流程在发版时决定）。
+
+**沉淀去向**：这条"0.1.7 移除了 `settingsScope`，插件要迁到 `configForms`；症状 = `pending (waiting for service: settingsScope)` → dsh fail-closed → 整个 UI `Failed to load plugins`"应进**插件开发技能**（`dsh-plugin-development`）——它不在本仓（本仓 `.dsh/skills` 只有 shell-dev / plugin-sync / windows-debugging 三个），需要在它的真源里补。
