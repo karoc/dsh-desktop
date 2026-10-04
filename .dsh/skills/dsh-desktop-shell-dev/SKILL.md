@@ -314,6 +314,26 @@ CI 的 `check` 作业跑的是 **host（ubuntu）** 的 `cargo clippy -- -D warn
 - **`settings.yaml` 的一次性迁移**：0.2 会把 `<home>/settings.yaml` **先改名 `.imported` 再逐段搬进 profile**；
   被拒的段只留在 `.imported`（不丢）。dev 首启要求重填 API Key 是正常的（dev 旧设置只有 `ui-onboarding`/`welcomeNoticeVersion`，密钥在 `.credentials.yaml`）。
 
+### 4.10 本地验证的三个陷阱（2026-09-29/10-04 实录，踩过才写下来）
+
+**① 复用 `CARGO_TARGET_DIR` 会让新构建带上旧 resources。** tauri 把 `src-tauri/resources/**` 拷进
+`target/<triple>/release/resources/`，但**不会清理**目标目录里已有的旧文件。跨 checkout 共享一个 target
+目录时，新构建的产物会残留旧 patch / 旧预装插件。本次实录：用共享 target 构建后，产物的
+`patch/dsh-desktop.patch.yml` 还带着早已删除的 `desktop-plugin-console`、`plugin/` 下还留着
+`@dsh-desktop/plugin-console` —— 于是"0.2 回归"其实跑在旧 patch 上（结论仍成立，但**测的不是当时的仓库代码**）。
+对策：本地验证构建用**独立 target 目录**；或构建后核对
+`target/*/release/resources/{patch/dsh-desktop.patch.yml,preinstalled/*/package.json,manager/*.mjs}`。
+
+**② 先确认"启动的是哪个二进制"，再谈结论。** runtime 里预装插件的版本由**被启动的那个 app 的 resources**决定
+（manager 每次启动从自己的 resources 同步）。本次实录：启动 9-25 的**已安装旧版** → runtime 从 turn-nav 0.4.6
+**降到 0.4.4**；启动 `D:\Dev\...\target\release\dsh-desktop-dev.exe` → 升到 0.4.7。所以"插件版本不对"时先查
+`Get-Process <exe> | Select-Object Path,StartTime` 与 `runtime/dsh.json` 的 `preinstalledVersions`，别先怀疑插件。
+
+**③ 壳侧 manager 改动可以热更新，不必重建。** manager 是**运行时从 resources 读的 JS**
+（`resources/manager/*.mjs`），把仓库 `src-tauri/resources/manager/*.mjs` 拷进产物目录即可让下次启动生效；
+只有 `include_str!` 的 `resources/ui/shell-chrome.js` 与 Rust 代码才必须重新构建。**别把 rebuild 当验证手段**
+（10 分钟一次，还不一定测到你想测的那段）。
+
 ## 5. Tauri 2 踩坑速查（本轮新踩，先查再写）
 | 坑 | 真相 |
 |---|---|

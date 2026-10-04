@@ -110,6 +110,23 @@ diff -r plugins/preinstalled src-tauri/resources/preinstalled && echo IDENTICAL
 
 **流程已端到端预演过（2026-09-25）**：在 dsh-desktop@HEAD 的 scratch clone 里用当时已发布的四个版本走完整条链（`npm pack` → 按 §3 拷入 → `node scripts/sync-resources.mjs` → §4 的验证），结果 `git status` **完全干净**。判据就取这个：**同步「已发布且已是最新」的版本应当零 diff**；出现 diff 就是拷贝约定没对齐（README 裁剪格式的坑正是这样发现的）。
 
+## 4.5 CI 的阻断门禁会替你把关（2026-09-30 起）
+
+`linux` 作业里有一步 **`Verify packaged Linux layout`**（阻断式：`linux` 是 `release` 的依赖），解包 deb 后断言：
+`usr/bin` 下的 app 二进制、`resources/` 目录、内置 node（`node/linux-x64/node`）、manager 三件
+（`server-manager.mjs` / `plugin-floor.mjs` / `shell-plugins.mjs`）、`patch/dsh-desktop.patch.yml`、
+以及**四个预装插件**。注意它**按 `package.json` 里声明的包名匹配，不是按目录名**（磁盘目录名去 scope：
+`dsh-smoothly-opencode-session`，包名才是 `@karoc/...`；首版按目录名写造成了假红 run 36718346505）。
+同步预装插件后，顺手确认这条门禁在 main 的构建里是绿的——它是"用户装到的包里到底有没有这个插件"的唯一硬保证。
+
+**三处必须对齐**（同步后逐处核对，别只看一处）：
+
+| 位置 | 路径 | 核对 |
+|---|---|---|
+| 仓库源 | `plugins/preinstalled/<pkg>` | `package.json` version + 与 npm tarball 逐字节一致（`audit-preinstalled.mjs`） |
+| 随包副本 | `src-tauri/resources/preinstalled/<pkg>` | 与上面**逐文件一致**（`test-copy-consistency` / `npm test` 会抓） |
+| 运行时 | `<runtime>/node_modules/<pkg>` + `dsh.json` 的 `preinstalledVersions` | **由"被启动的那个 app 的 resources"决定**；启动旧安装版会把版本**降级**（实录：0.4.6 → 0.4.4） |
+
 ## 5. 提交推送
 
 按仓库约定（conventional commit）：
