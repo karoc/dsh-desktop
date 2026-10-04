@@ -37,6 +37,11 @@
 ## 门禁（提交前本地跑）
 
 ```bash
+> **机制：禁止在 `main` 上提交。** 本仓安装了一个版控的 pre-commit 钩子，在 `main` 上提交会被直接拒绝
+> （确需直推时用 `ALLOW_MAIN_COMMIT=1 git commit …`）。安装一次即可：
+> `cp scripts/git-hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit`
+> 为什么需要它：2026-09-27 与 2026-10-04 两次误直推 `main`（第二次发生在纪律写进技能之后）——靠自觉不够。
+
 npm test                          # 全量 16 套（行为 + 契约 + 副本一致性 + 清单/补丁目标门禁 + 升级标记）
 node scripts/test-copy-consistency.mjs  # 副本一致性（改了 scripts/ 或 plugins/ 后先 npm run sync:resources）
 node scripts/test-shell-chrome.mjs  # 壳契约（菜单 id ↔ ACTIONS ↔ lib.rs）
