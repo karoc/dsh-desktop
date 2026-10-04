@@ -60,11 +60,11 @@ schtasks /create /tn "dsh-hang-guard" /tr "powershell -ExecutionPolicy Bypass -F
 
 ### L3 —— 产品化补丁（进 dev 仓库，下次构建发版生效）
 
-`docs/2026-09-01-dsh-web-hang-instrumentation.patch` —— 针对 `src-tauri/resources/manager/server-manager.mjs`（dev/prod 基线一致，已验证可干净应用）：
+`docs/archive/2026-09-01-dsh-web-hang-instrumentation.patch` —— 针对 `src-tauri/resources/manager/server-manager.mjs`（dev/prod 基线一致，已验证可干净应用）：
 
 ```bash
 cd /mnt/d/Dev/dsh-desktop-dev
-git apply /home/karoc/dsh-desktop/docs/2026-09-01-dsh-web-hang-instrumentation.patch
+git apply /home/karoc/dsh-desktop/docs/archive/2026-09-01-dsh-web-hang-instrumentation.patch
 ```
 
 两处能力（全部写进 manager.log，持久可查）：
