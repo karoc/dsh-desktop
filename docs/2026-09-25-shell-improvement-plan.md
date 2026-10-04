@@ -852,3 +852,30 @@ CHANGELOG 有 0.14.0 段 ✅、`npm test` **16 套 37 PASS** ✅、`audit-preins
 **发布说明**由 `release-body.mjs` 生成，已正确列出发版时的 npm `latest`（dsh **0.2.0-rc.2**）与四个预装版本。
 
 **看板同步**：把"待用户安装 v0.11.0"卡更新为 **v0.14.0**（含理由与安装后行为），并把"release-please 不更新 Cargo.lock"卡结案（PR #64 已把锁同步写成必做步 + 门禁兜底）。
+
+### 15.12 跟版 dsh 0.2.0-rc.2（2026-10-04）—— **契约与真机均无破坏性变更**
+
+**为什么做**：npm `latest` 已是 `0.2.0-rc.2`（用户升级后跑的就是它），而我们的"已适配"此前只覆盖 rc.1。质量口径：静态差异（廉价、先做）+ 运行时契约（门禁）+ 真机行为（桥/UI/插件），任一步红就停。
+
+**① 静态差异（rc.1 → rc.2，187 个提交）**：
+| 面 | 结论 |
+|---|---|
+| 我们 overlay 的目标 | `ui-sidebar-browser` 在 rc.2 仍存在（16 个文件命中）✅；`desktop-notifications` 是**我们自己 insert 的 id**（上游 0 命中属预期） |
+| CLI 面 | `packages/bundle/web-app/src` 与 `packages/cli/src` **零 diff** ✅ ⇒ `dsh web` 启动参数不变 |
+| 客户端插件 API | 我们四个插件用到的槽位（`settings.section` 53 / `settings.general.item` 38 / `conversation.session.header.utilities` 11 / `sidebar.panellist` 13）与 `turnOutline`（17）、`configForms`（74）**全部仍在** ✅ |
+| 注册机制 | 风险最高的 `packages/client/ui-settings`、`packages/client/web` 在 rc.2 **只改了 `package.json` 版本号** ✅ |
+
+**② 运行时契约（真机 runtime，manager 同参升级）**：用随包 bundled node + runtime 内 pnpm +
+`install @deepseek-ai/dsh@0.2.0-rc.2 --registry … --store-dir <runtime>/.pnpm-store --node-linker=hoisted` 升级成功（`Done in 23.7s`）。
+- `test-patch-targets.mjs --runtime <dev runtime>` → **PASS**（含 `关键覆盖 ui-sidebar-browser 仍为 disabled: false`）；**负向对照**（塞 `bogus-rc2-probe`）→ **红**，恢复后绿 ✅
+- **id 集合与 fixture 完全一致：183 = 183，无增无减** ⇒ **fixture 无需刷新**（且 fixture 绑定"地板版本形状"，与是否跟 rc.2 无关）
+- `npm test` **16 套 37 PASS**；`test-plugin-dsh-compat` PASS（声明地板 `>=0.1.7-rc.1` 被满足）✅
+
+**③ 真机行为（我们的 dev 壳跑在 rc.2 上）**：manager 记录 `installed @deepseek-ai/dsh: 0.2.0-rc.2` + 四个预装 bundle 同步 + `dsh web: http://127.0.0.1:56986`；
+**未出现任何"有更新/降级"误报**（rc.2 = 已装版本）；**桥准入 10/10 PASS**（`titlebarContract=false`、`preinstalled present`、`allow-origin` 跟随新端口、危险动作未执行）；
+**三个客户端插件照常渲染**（CDP 实测：侧栏 `思磨力看板`、设置导航 `思磨力提供方参数`、设置项 `次胶囊条：DSH 官方、思磨力轮次胶囊条（Smoothly Turn…`）。
+
+**④ 决策**：**地板保持 `0.2.0-rc.1` 不动** —— rc.2 满足该地板（不会被强制升级），而把地板抬到 rc.2 只会强迫已装在 rc.1 的用户升级；rc.2 仍是 `next` 预发布，等它进 `latest` 再考虑抬。
+**fixture 保持 rc.1 不动**（id 集合本就一致；且它是"地板形状"的记录）。
+
+**⑤ 运维记录（可复用）**：首次用 `registry.npmjs.org` 升级**卡死 20 分钟无进展**（进程存活、CPU 12s、store 无写入）→ 终止自己的进程（先核对命令行确认归属）→ 换 manager 的备用镜像 `registry.npmmirror.com` → **23.7 秒完成**。
