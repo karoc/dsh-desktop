@@ -1,0 +1,20 @@
+#!/bin/sh
+# 拒绝在 main 上提交 —— 本仓约定「提交一律走 PR」（.dsh/skills/dsh-desktop-shell-dev/SKILL.md §4.7）。
+# 为什么要有这个文件：2026-09-27 与 2026-10-04 两次在 main 上提交并直推（后者发生在我刚写完 §4.7 之后），
+# 说明「记得先切分支」靠自觉不可靠，必须用机制挡。
+#
+# 安装（每个 clone 一次）：
+#   cp scripts/git-hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+# 确实需要在 main 上提交时（例如紧急热修）：
+#   ALLOW_MAIN_COMMIT=1 git commit ...
+branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)
+case "$branch" in
+  main|master)
+    [ "${ALLOW_MAIN_COMMIT:-0}" = "1" ] && exit 0
+    printf '\n❌ 拒绝在 %s 上提交：本仓约定「提交一律走 PR」。\n' "$branch" >&2
+    printf '   正确做法： git checkout -b <type>/<topic>  然后提交\n' >&2
+    printf '   若已误提交并推送：按技能 §4.7 的两支 PR 补救（revert 走 PR，撤回时排除 KANBAN.json；再用分支重提）\n' >&2
+    printf '   确实需要直推： ALLOW_MAIN_COMMIT=1 git commit ...\n\n' >&2
+    exit 1 ;;
+esac
+exit 0
