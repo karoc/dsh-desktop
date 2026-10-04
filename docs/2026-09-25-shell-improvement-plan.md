@@ -829,13 +829,26 @@ manager 三件（`server-manager`、`plugin-floor`、`shell-plugins`）/ patch y
 "does not match the KANBAN.json shape"（错误信息指向顶层结构，**有误导性**）。已把两张卡的 4 个字段归一化为整数
 （备份 `/tmp/KANBAN.pre-normalize.json`），读写恢复。**约定：看板时间字段一律 epoch 毫秒整数。**
 
-**机制修复（2026-10-04，PR #74）**：同一个错误（在 `main` 上提交并直推）发生了**两次**，第二次就在纪律写进技能之后 →
-结论是"靠自觉不可靠"。新增版控文件 `scripts/git-hooks/pre-commit`，在 `main`/`master` 上提交**直接拒绝**（附正确做法与
-§4.7 的两支 PR 补救指引，`ALLOW_MAIN_COMMIT=1` 可显式绕过）；自测：main 上被拒、分支上放行。每个 clone 需安装一次
-（`cp scripts/git-hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit`，已写入 CONTRIBUTING 与技能 §4.7）。
-本次补救本身按 §4.7 执行：revert PR #72（撤回时排除 `KANBAN.json`）→ 重提 PR #73。
-
 **仍未完成（登记）**：① turn-nav 胶囊 tooltip 的真机 UI 验证（dev 实例三个会话全空，需造轮次）；
 ② 标签逻辑抽取测试尚未入库（现为 `D:\Dev\_tn-label-test.mjs`，内容耦合插件 bundle，**故意不进门禁**）；
 ③ 建议给 dev 构建开 WebView2 远程调试（`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222`），
 以彻底绕开"headless 无会话 / UIA 点不动"两个验收障碍。
+
+### 15.11 发布 v0.14.0（2026-10-04，含新门禁首次把关）
+
+**发布内容**：v0.13.0 之后的 12 个提交 → release PR **#65**（release-please 自动判定 **minor**）→ admin 合并 `8158a00` → tag `v0.14.0` → 手动派发 `build.yml --ref v0.14.0`（run **37187717124**）。
+对用户有意义的一件：预装 **`dsh-turn-navigator` 0.4.8**（修"官方轮次有回复预览、我们只有轮次号" + a11y 与官方对齐）——v0.13.0 里还是 0.4.6，用户到这一版才拿到。
+
+**发布前按清单执行**（CONTRIBUTING「发布清单」）：四处版本一致 ✅、
+**Cargo.lock 手工同步 0.13.0 → 0.14.0**（`chore(release): Cargo.lock 同步 0.14.0`；这是 §15.9-A 之后确立的必做步，release-please 不会做）、
+CHANGELOG 有 0.14.0 段 ✅、`npm test` **16 套 37 PASS** ✅、`audit-preinstalled.mjs` 四个预装插件均为 npm 最新且内容逐字节一致 ✅。
+
+**构建结果**：`check` / `test` / `windows` / `linux` / `release` 全 green，3 平台资产已挂（setup.exe 28.19 MB、deb 54.51 MB、AppImage 124.39 MB）。
+**`linux-smoke` 仍 failure**——按设计非阻断（§15.9-A 已实测确认是 headless xvfb 下 WebKitGTK stall）。
+
+**新打包门禁首次给真实发布把关即通过**：
+`linux` 作业日志 `PASS: packaged Linux layout (app binary + node + manager + patch + 4 preinstalled)` —— 这条断言从今往后保证"用户装到的包里确实有 app 二进制、内置 node、manager 三件、patch 与四个预装插件"。
+
+**发布说明**由 `release-body.mjs` 生成，已正确列出发版时的 npm `latest`（dsh **0.2.0-rc.2**）与四个预装版本。
+
+**看板同步**：把"待用户安装 v0.11.0"卡更新为 **v0.14.0**（含理由与安装后行为），并把"release-please 不更新 Cargo.lock"卡结案（PR #64 已把锁同步写成必做步 + 门禁兜底）。
