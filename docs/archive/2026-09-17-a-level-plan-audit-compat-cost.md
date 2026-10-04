@@ -1,6 +1,6 @@
 # A 级方案审计 · 角度三：兼容/回归与成本
 
-> 对应 `docs/2026-09-17-a-level-plans.md`（299 行版）§审计记录「审计角度三」
+> 对应 `docs/archive/2026-09-17-a-level-plans.md`（299 行版）§审计记录「审计角度三」
 > 审计基线：工作区当前状态（壳 0.8.0，`scripts/server-manager.mjs` 含未提交的 48 行 fatal-forensics 改动）
 > 方法：全部结论均以 `文件:行号` 取证；不确定项显式标「未验证」
 

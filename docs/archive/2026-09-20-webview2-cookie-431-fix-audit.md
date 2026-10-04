@@ -1,7 +1,7 @@
 # 审计归档：WebView2 cookie-431 修复方案（四角度对抗式审计）
 
 - 日期：2026-09-20
-- 被审对象：`docs/2026-09-20-webview2-cookie-431-fix-plan.md`（v1 → 修订为 v2）
+- 被审对象：`docs/archive/2026-09-20-webview2-cookie-431-fix-plan.md`（v1 → 修订为 v2）
 - 审计方式：4 个独立审计员并行、**对抗式**（目标是证伪）、只读（不改仓库/宿主、不启停进程）；各自独立核验 Tauri/wry/webview2-com 源码、dsh 源码（`/srv/deepseek-harness`）、宿主现场（session.log / manager.log / WebView2 cookie 库 / live dsh HTTP）
 - 结论一句话：**方向与根因成立；v1 的调用点、线程模型、验收判据、量化模型 4 处有实质缺陷，均已修入 v2；修后方案能修好存量装机且无不可接受副作用。**
 
