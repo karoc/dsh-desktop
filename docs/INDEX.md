@@ -25,6 +25,7 @@
 |---|---|---|
 | [archive/PLUGIN-CONSOLE-PLAN.md](archive/PLUGIN-CONSOLE-PLAN.md) | 壳内插件管理控制台实施计划 | **已废弃**（0.1.6-alpha.2 起 dsh 自带插件管理，壳内控制台整体移除） |
 | [archive/2026-09-01-dsh-web-hang-instrumentation.md](archive/2026-09-01-dsh-web-hang-instrumentation.md) | dsh web 卡死取证 | 已实施 |
+| [archive/2026-09-01-dsh-web-hang-instrumentation.patch](archive/2026-09-01-dsh-web-hang-instrumentation.patch) | 同上（随附补丁文件） | 已实施 |
 | [archive/2026-09-03-legacy-takeover-design.md](archive/2026-09-03-legacy-takeover-design.md) | 旧版接管设计 | 已实施（v0.3.x 起） |
 | [archive/2026-09-09-pending-cards-solutions.md](archive/2026-09-09-pending-cards-solutions.md) | 待办卡解决方案汇总 | 已分派完成 |
 | [archive/2026-09-17-a-level-plans.md](archive/2026-09-17-a-level-plans.md) | A 级改进方案 v2 | 已全部实施 |
