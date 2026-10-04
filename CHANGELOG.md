@@ -21,6 +21,31 @@
 >
 > 详情见 `.agents/notes/implemented/bug-fix/2026-09-08-legacy-uninstaller-name-kill.md`。
 
+## [0.14.0](https://github.com/karoc/dsh-desktop/compare/v0.13.0...v0.14.0) (2026-10-04)
+
+
+### Features
+
+* **ci:** 把「打包布局完整性」提为阻断式门禁（linux 作业） ([#67](https://github.com/karoc/dsh-desktop/issues/67)) ([4b76826](https://github.com/karoc/dsh-desktop/commit/4b7682675625fc7df9c0706160cc26399228cb6f))
+
+
+### Bug Fixes
+
+* **ci:** linux-smoke 定位真实 app 二进制（此前一直在跑 node 工具链 shim） ([#66](https://github.com/karoc/dsh-desktop/issues/66)) ([3e3d81c](https://github.com/karoc/dsh-desktop/commit/3e3d81c082d21d2a8c7ce05e71594ff047801b8c))
+* **ci:** 打包布局门禁的预装插件断言改为按包名匹配（修假红） ([#68](https://github.com/karoc/dsh-desktop/issues/68)) ([b103764](https://github.com/karoc/dsh-desktop/commit/b1037646ca4f1101a70fff15850a05957289a0a9))
+* **release:** 移除失效的 Cargo.lock extra-files 条目，并把锁文件同步写成发布必做步骤 ([#64](https://github.com/karoc/dsh-desktop/issues/64)) ([2886e3b](https://github.com/karoc/dsh-desktop/commit/2886e3b24f259d2ca906a6cde9f9f72c679ddefb))
+
+
+### Reverts
+
+* 撤回误直推 main 的技能文档提交 fca88e9（改走 PR） ([#72](https://github.com/karoc/dsh-desktop/issues/72)) ([ab8af08](https://github.com/karoc/dsh-desktop/commit/ab8af089a5f969f3291766eb060b2506f7bb91bf))
+
+
+### Chores
+
+* **plugins:** 预装 dsh-turn-navigator 同步到 0.4.8（回复预览 + a11y 一致性） ([#70](https://github.com/karoc/dsh-desktop/issues/70)) ([edd1ce5](https://github.com/karoc/dsh-desktop/commit/edd1ce5b9ea04304965dd824897ade30d0bc805b))
+* **process:** 加 pre-commit 钩子禁止在 main 上提交（第二次误直推后的机制修复） ([#74](https://github.com/karoc/dsh-desktop/issues/74)) ([689099d](https://github.com/karoc/dsh-desktop/commit/689099da23b20b5e2d1c6a583d34d9dc234ae49c))
+
 ## [0.13.0](https://github.com/karoc/dsh-desktop/compare/v0.12.0...v0.13.0) (2026-09-28)
 
 
