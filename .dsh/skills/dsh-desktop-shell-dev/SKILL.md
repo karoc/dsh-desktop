@@ -282,6 +282,14 @@ CI 的 `check` 作业跑的是 **host（ubuntu）** 的 `cargo clippy -- -D warn
    `git checkout HEAD -- KANBAN.json` 把它从 revert 里剔掉，否则看板内容会跟着回退）；
 2. 再用分支 + PR 重新提交同一批改动（revert PR #57 + 重新提交 PR #58 就是这么做的）。
 
+- **已有机制挡这一脚（2026-10-04 补，PR #74）**：`scripts/git-hooks/pre-commit` 在 `main` 上提交时**直接拒绝**。
+
+  安装（每个 clone 一次）：`cp scripts/git-hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit`；
+
+  确需直推时 `ALLOW_MAIN_COMMIT=1 git commit …`。写进这里的原因：第二次误直推发生在本节落地**之后** ——
+
+  **纪律靠自觉会失效，机制不会**。
+
 - **动手前先看分支**：`git branch --show-current` —— 改完一堆文件、且刚做过 `git checkout main` 时最容易踩。
 - 普通 PR 的 `check`/`test` 会正常上报，走正常合并即可；`--admin` 只留给 release-please 的 bot PR。
 - 直推 main 会触发全量 CI 兜底（`check`+`test`+`windows`+`linux`），内容仍会被验证，但"**没走评审**"这点 CI 弥补不了。

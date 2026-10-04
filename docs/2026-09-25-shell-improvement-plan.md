@@ -829,6 +829,12 @@ manager 三件（`server-manager`、`plugin-floor`、`shell-plugins`）/ patch y
 "does not match the KANBAN.json shape"（错误信息指向顶层结构，**有误导性**）。已把两张卡的 4 个字段归一化为整数
 （备份 `/tmp/KANBAN.pre-normalize.json`），读写恢复。**约定：看板时间字段一律 epoch 毫秒整数。**
 
+**机制修复（2026-10-04，PR #74）**：同一个错误（在 `main` 上提交并直推）发生了**两次**，第二次就在纪律写进技能之后 →
+结论是"靠自觉不可靠"。新增版控文件 `scripts/git-hooks/pre-commit`，在 `main`/`master` 上提交**直接拒绝**（附正确做法与
+§4.7 的两支 PR 补救指引，`ALLOW_MAIN_COMMIT=1` 可显式绕过）；自测：main 上被拒、分支上放行。每个 clone 需安装一次
+（`cp scripts/git-hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit`，已写入 CONTRIBUTING 与技能 §4.7）。
+本次补救本身按 §4.7 执行：revert PR #72（撤回时排除 `KANBAN.json`）→ 重提 PR #73。
+
 **仍未完成（登记）**：① turn-nav 胶囊 tooltip 的真机 UI 验证（dev 实例三个会话全空，需造轮次）；
 ② 标签逻辑抽取测试尚未入库（现为 `D:\Dev\_tn-label-test.mjs`，内容耦合插件 bundle，**故意不进门禁**）；
 ③ 建议给 dev 构建开 WebView2 远程调试（`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222`），
