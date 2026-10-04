@@ -159,7 +159,7 @@ Windows 的 NSIS 安装行为、toast 渲染、AUMID、事件投递——Linux s
   全局（Vite 打包内部引用）。经典脚本插件（通知插件模式）无法注册进 Settings 页。
   → 控制台 UI 改用**悬浮面板**（document.body 注入，零构建），与通知插件同款、零上游依赖。
 - **`textContent` 不会解析 HTML**：控制台 actions 容器用 `el('div', htmlString)`（内部 textContent）
-  导致按钮渲染成字面文本——行为测试（test-plugin-console.mjs）当场抓出。要用 `innerHTML` 装按钮
+  导致按钮渲染成字面文本——行为测试（**当时**是 `test-plugin-console.mjs`；该文件随壳内插件控制台于 2026-09-21 整体移除，2026-09-29 连插件本体 `@dsh-desktop/plugin-console` 也从随包资源里清掉）当场抓出。要用 `innerHTML` 装按钮
   组合。测试桩的 `innerHTML`/`textContent` 必须模拟真实语义（parse children / 清空 children），
   否则这类 bug 测不出来。
 - **Rust 桥做插件开关（文件操作）比 manager stdin 往返更稳**：`/plugins/enable|disable` 直接读写
@@ -210,7 +210,7 @@ Windows 的 NSIS 安装行为、toast 渲染、AUMID、事件投递——Linux s
   devtools 按钮仅 devMode 时渲染（/plugins/list 带 devMode 字段）。
 - **预装卡片无描述**：/plugins/list 的 preinstalled 改为 `{name, description}` 对象，
   卡片显示描述子行，用户才知道这个插件是干嘛的。
-- 全部由 test-plugin-console.mjs（9 场景）与 test-control-plane.mjs（7 场景）守护；测试桩
+- 全部由 test-plugin-console.mjs（9 场景，**已随控制台移除**）与 test-control-plane.mjs（7 场景，仍在）守护；测试桩
   补了 `classList` 与 `.class` 选择器支持。
 
 ## 22. 预装插件更新机制（用户门控 / npm / 可恢复默认）
@@ -345,7 +345,7 @@ Windows 的 NSIS 安装行为、toast 渲染、AUMID、事件投递——Linux s
   `core:window:allow-close`（core:window:default 是否含 allow-close 在自动生成的权限里查不到静态定义，
   显式声明保证关闭按钮可用，冗余无害）。
 - **测试**：test-launcher-settings.mjs 加载独立的 src/settings.js（vm + 最小 DOM + mock Tauri 桥），
-  验证渲染（含同 host 归并标签）/保存/关闭按钮（5 场景）；test-plugin-console.mjs 断言控制台面板
+  验证渲染（含同 host 归并标签）/保存/关闭按钮（5 场景）；test-plugin-console.mjs（**已随控制台移除**）断言控制台面板
   「代理设置」按钮点击 POST `/settings/open-proxy`。
 
 ## 30. 预装卡片两行布局 + 测试桩 innerHTML 语义
@@ -469,7 +469,7 @@ Windows 桌面壳里系统通知 toast「每次都会弹两次」。三方独立
 
 - 坑：tauri 只打包 `src-tauri/resources/`，而源在 `scripts/`、`plugins/`。这组"源 → 随包副本"此前只靠"改完
   记得跑 `npm run sync:resources`"维持；漏跑时**所有源侧检查仍然全绿**，只有安装包里的资源是旧的——0.5.0/0.6.0
-  的 plugin-console 副本滞后即此类（见 §10）。
+  的 plugin-console 副本滞后即此类（见 §10；该插件本体已于 2026-09-29 清理，并新增 `scripts/shell-plugins.mjs` 的迁移逻辑：不再随包分发的 `@dsh-desktop/*` 会把 runtime 旧副本改名为 `.bak-stale-<ts>`、并从 profile bundles 里剔除悬空引用）。
 - 机制：`scripts/test-copy-consistency.mjs`，接入 `npm test`（CI 的 PR 快层本就跑 `npm test`），单跑
   `npm run test:copies`。检查四组：manager 两个真源文件逐字节；每个 `plugins/<dir>` 与
   `resources/plugin/@dsh-desktop/<rel>` 目录镜像（`<rel>` 取自 bundle 自身 `package.json` 的 `name`，**不是**

@@ -2,51 +2,6 @@
   "version": 1,
   "cards": [
     {
-      "id": "card-eca7e36d-047e-4a92-8bed-165edc270eda",
-      "title": "启动页 ⚙ 设置面板 + 托盘「代理设置…」入口",
-      "description": "启动页右上角 ⚙ 打开设置面板（代理 section）；托盘菜单加「代理设置…」导航回设置视图；首次安装 dsh 前提示先配代理。",
-      "sourceSessionId": "session-2eeecd95-3717-4181-84e3-8149c899b472",
-      "status": "done",
-      "tags": [
-        "proxy"
-      ],
-      "createdAt": 1786959259252,
-      "updatedAt": 1786959259252,
-      "summary": "见 git log --all（按标题关键词搜索对应 commit）。",
-      "rationale": "任务见标题。",
-      "rejected": "未记录（历史卡片）。"
-    },
-    {
-      "id": "card-19148b9d-4b88-4e5c-9d24-f4fa339ebc51",
-      "title": "提供方/主机枚举：读 settings.yaml + 代理观测主机，勾选走代理（默认全直连）",
-      "description": "静态读 <runtime>/dsh-home/settings.yaml 的 llm-deepseek/llm-pi-ai baseURL 提取主机；内置代理动态观测实际访问主机；分组勾选（模型提供方 + 其它：registry.npmjs.org 等安装流量）；保存即生效，无需重启 dsh。",
-      "sourceSessionId": "session-2eeecd95-3717-4181-84e3-8149c899b472",
-      "status": "done",
-      "tags": [
-        "proxy"
-      ],
-      "createdAt": 1786959259262,
-      "updatedAt": 1786959259262,
-      "summary": "见 git log --all（按标题关键词搜索对应 commit）。",
-      "rationale": "任务见标题。",
-      "rejected": "未记录（历史卡片）。"
-    },
-    {
-      "id": "card-0ec7630e-5be1-46c9-853d-71fd2573442f",
-      "title": "代理测试：转发/CONNECT/路由/认证/防自环（scripts/test-*.mjs）",
-      "description": "假上游代理 + 假目标验证：HTTP 转发、CONNECT 隧道、按主机路由（勾选/未勾选）、Basic 认证头、127.0.0.1 排除、manager 自身不经过自身代理。",
-      "sourceSessionId": "session-2eeecd95-3717-4181-84e3-8149c899b472",
-      "status": "done",
-      "tags": [
-        "proxy"
-      ],
-      "createdAt": 1786959259277,
-      "updatedAt": 1786959259277,
-      "summary": "见 git log --all（按标题关键词搜索对应 commit）。",
-      "rationale": "任务见标题。",
-      "rejected": "未记录（历史卡片）。"
-    },
-    {
       "id": "card-fce90c17-ded0-47e7-9d43-f73a0f8f044d",
       "title": "预装 dsh-kanban 插件（bundle + sync + PROTECTED + 测试）",
       "description": "Bundle dsh-kanban into plugins/preinstalled/dsh-kanban (lib, cordis.patch.yml, LICENSE, trimmed package.json + README); wire into sync-resources.mjs list, server-manager.mjs PROTECTED list; sync into src-tauri/resources/preinstalled/dsh-kanban.",
@@ -1973,8 +1928,8 @@
         "preinstalled",
         "sync"
       ],
-      "createdAt": "2026-10-02T06:38:12.317Z",
-      "updatedAt": "2026-10-02T06:38:12.317Z",
+      "createdAt": 1790923092317,
+      "updatedAt": 1790923092317,
       "summary": "已同步并验证：lib 语法 ✅；壳副本 `lib/client.js` sha256 = `11cc70e734d3a8f6…`，与已发布 tarball 及插件仓构建三方一致（含 4 处 `turnLabel`、0 处 `no user message`）；`diff -r plugins/preinstalled src-tauri/resources/preinstalled` IDENTICAL；`test-copy-consistency.mjs` PASS、`test-plugin-dsh-compat.mjs` PASS（4 包 0 警告，壳地板 `0.2.0-rc.1` ≥ 插件 peer `>=0.1.7-rc.1`）、全量 `npm test` exit 0；`audit-preinstalled.mjs` 报四个包 up-to-date 且 turn-nav 3/3 随包资产与已发布 tarball 逐字节一致。边界：只改源树捆绑内容，已装应用的 runtime 拷贝走控制台用户门控更新，随下次壳发版生效。"
     },
     {
@@ -1989,9 +1944,33 @@
         "preinstalled",
         "sync"
       ],
-      "createdAt": "2026-10-02T08:23:05.494Z",
-      "updatedAt": "2026-10-02T08:23:05.494Z",
+      "createdAt": 1790929385494,
+      "updatedAt": 1790929385494,
       "summary": "已同步并验证：lib 语法 ✅；壳副本 `lib/client.js` sha256 `cd6b3932f03b59d2…` = 已发布 0.4.8 tarball = 插件仓构建（三方一致）✅；`diff -r plugins/preinstalled src-tauri/resources/preinstalled` IDENTICAL ✅；`test-copy-consistency` / `test-plugin-dsh-compat` PASS（4 包 0 警告）✅；全量 `npm test` exit 0 ✅；`audit-preinstalled` 四包 up-to-date、turn-nav 3/3 资产逐字节一致 ✅。边界：只改源树捆绑内容，已装应用 runtime 拷贝走控制台用户门控更新，随下次壳发版生效。遗留：早先分支 `chore/preinstalled-turn-nav-0.4.7` 已被本分支取代（无 PR）。"
+    },
+    {
+      "id": "card-4e57382e-c137-40bd-bc40-ebc6751a7988",
+      "title": "修 linux-smoke 判据 + 打包布局阻断门禁 + turn-nav 0.4.7/0.4.8 同步审计",
+      "summary": "**A. linux-smoke 根因与修复（PR #66）**：旧判据 `find smoke -type f -perm -111 | head -1` 选中打包进来的 Node 工具链（v0.13.0 run 里是 corepack/shims/yarn.cmd），在 sh 里语法错退出 → **app 从未被执行**，\"从未变绿\"与\"xvfb stall\"旧归因都不可靠。改为取 deb 的 usr/bin 入口（usr/lib 兜底、再缺则打印清单大声失败）。修后 run **36716676801** 首次真跑 app：`binary: smoke/usr/bin/dsh-desktop`，随后仅一条 AT-SPI 警告与零输出 ⇒ **xvfb stall 这次才被实测确认**，作业继续 continue-on-error。\n**B. 阻断式打包门禁（PR #67/#68）**：linux 作业内新增 `Verify packaged Linux layout`（linux→release 依赖使其真阻断），断言 app 二进制 / resources / 内置 node / manager 三件 / patch yml / 四个预装插件。首跑 run **36718346505** 即判红并跳过 release（**证明非恒真断言**），查明是断言按目录名写错（假红）→ 改按包名匹配；run **36720063640 `linux: success`** ✅（linux-smoke 按设计红，run 整体 success）。\n**C. turn-nav 审计（0.4.7 与 0.4.8）**：仓库层面**未发现问题** —— 两份拷贝逐文件一致、与 npm tarball 3/3 逐字节一致、同步走脚本、compat + 全量 16 套 37 PASS、地板未低报、旧占位符 `(no user message)` 已彻底清除、注入守卫在位（`if (event.data.source?.kind !== \"user\") return false;`）。**新增行为验证**：从随包 lib/client.js **逐字抽取**标签逻辑跑 5 用例全绿（空 prompt 不留占位符 / 时间行 / 多行 prompt / 回复预览 / 可访问名只描述动作），**负向对照变红**（把 prompt 行改成无条件追加 → 抓到 `\"轮次 3\\n\"`）。并确认 0.4.7 已在 **dsh 0.2.0-rc.1** 上加载生效（`document.body.classList.contains('tn-hide-official') === true`）。\n**D. 未完成（登记）**：真机 UI 里的胶囊 tooltip 外观未验证 —— dev 实例三个会话全空（正文压缩后 386–397 B，无 user/message），turns.length===0 时插件按设计不渲染轨道；需① 用户在 dev 壳发一条消息（计费）② 或在其正式版里看（dsh 0.1.6）③ 或用 API 造会话。CDP 侧另受限：headless 会话列表为空、应用窗口的会话树条目无 InvokePattern 而 click 在 WebView2 上不可靠。\n**E. 失误与修复**：本轮曾对**用户启动的** dev 壳发 Stop-Process 且脚本无条件打印 stopped（假成功输出）——进程存活未中断，已把纪律写进方案 §15.9 D（停止/重启前用 StartTime 核对归属、停止类输出必须来自真实查询）。另：看板写入一度失败，根因是 10-02 那次会话写的 2 张卡把 createdAt/updatedAt 写成 **ISO 字符串**，与其余 110 张的 **epoch 毫秒整数**不一致，工具按严格 schema 判整个文件不合形；已归一化为整数（备份 /tmp/KANBAN.pre-normalize.json），读写均已恢复。",
+      "rationale": "用户要求\"修 linux-smoke\"，并要求审计\"这期间同步进壳内的 dsh-turn-nav 改动\"。linux-smoke 自引入起从未变绿，旧归因是\"WebKitGTK 在 CI 的 xvfb 下 stall\"并被当作非阻断金丝雀；但该归因建立在\"作业真的跑过 app\"这一未经检验的前提上。turn-nav 侧则是壳内版本（审计开始时 0.4.6，期间用户连续同步到 0.4.7、0.4.8）与我此前 0.2 适配验证所用版本不一致，需要判断\"已适配 0.2\"是否仍成立、以及同步本身有无问题。两件事都要求可证伪的判定，不许沿用旧结论。",
+      "rejected": "① **不把 linux-smoke 提升为阻断门禁**：已实测确认 headless xvfb 下 app 起不来（GTK 发出 AT-SPI 警告后零输出），提为阻断只会让每次发布都红；改为把\"CI 能真正判定的部分\"（包内容完整性）做成阻断门禁。② **不按目录名断言预装插件**：磁盘目录名去 scope（dsh-smoothly-opencode-session）而包名带 scope（@karoc/…），按目录名断言造成首跑假红（run 36718346505）；改为按 package.json 包名匹配。③ **不因 0.4.7 引入 turnOutline 就上调地板**：实测该投影在 0.1.7-rc.2 与 0.2.0-rc.1 都存在，且插件用 useProjection?.() 可选链降级 → 声明的 peer 地板未低报。④ **不把标签逻辑测试并进 npm test**：它逐字抽取插件 bundle 的内部区域（内容耦合），当门禁会在插件重构时误红；保留为独立验收脚本（D:\\Dev\\_tn-label-test.mjs）。⑤ **不为验证去花用户额度或杀用户进程**：dev 实例三个会话全空、造轮次需计费发消息，用户进程一律不碰。",
+      "sourceSessionId": "session-c852547f-89db-4736-8a28-f3dd6ec7be25",
+      "status": "done",
+      "tags": [
+        "ci",
+        "linux-smoke",
+        "packaging-gate",
+        "preinstalled",
+        "turn-navigator",
+        "audit",
+        "dsh-0.2.0",
+        "verified-ci",
+        "coverage-gap",
+        "process",
+        "done"
+      ],
+      "createdAt": 1791096451782,
+      "updatedAt": 1791096451782
     }
   ]
 }
