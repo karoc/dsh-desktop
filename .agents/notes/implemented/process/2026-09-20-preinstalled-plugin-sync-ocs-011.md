@@ -11,7 +11,7 @@ Status: implemented
 按技能 `dsh-preinstalled-plugin-sync` §3 的既有流程同步，不发明新路径：
 
 1. `.tmp-preinstalled` 内 `npm pack --cache ./.npm-cache @karoc/dsh-smoothly-opencode-session@0.1.1`（沙箱 `~/.npm` 只读，必须指定工作区内 cache）；
-2. 按壳内精简约定只拷 5 个文件：`package.json` / `cordis.patch.yml` / `lib/index.js` / `LICENSE` / `README.md`。**0.1.1 的 README.md 里没有「English | [简体中文](README.zh.md)」链接行，所以本次无需裁剪**（该规则只在存在该行时适用）；`README.zh.md` / `CHANGELOG.md` / `CONTRIBUTING.md` 按约定不随包；
+2. 按壳内精简约定只拷 5 个文件：`package.json` / `cordis.patch.yml` / `lib/index.js` / `LICENSE` / `README.md`。**0.1.1 的 README.md 里没有「English | `简体中文`（插件仓库的 README.zh.md，不随本仓分发）」链接行，所以本次无需裁剪**（该规则只在存在该行时适用）；`README.zh.md` / `CHANGELOG.md` / `CONTRIBUTING.md` 按约定不随包；
 3. `node scripts/sync-resources.mjs` 重建 `src-tauri/resources/preinstalled/`。
 
 验证（技能 §4 全部执行）：`node --check lib/index.js` 通过；`diff -r plugins/preinstalled src-tauri/resources/preinstalled` → IDENTICAL；manager 真源副本（server-manager.mjs / proxy.mjs）与两个桌面客户端插件副本 → IDENTICAL；`npm test` 八套全绿（含覆盖预装路径的 `test-control-plane.mjs`）。本次同步只动源树捆绑内容。

@@ -34,5 +34,5 @@ Status: implemented
 
 **后续义务（已落卡）**：P0-1 顶栏契约（card 已建）、P0-3 桌面标记族（s6 卡，已被 s7 更正 `data-platform` 前提）、「升级 0.1.7-rc.2 必办三项」（card 已建）；另需在 dev 版做一次**V-1 验证**：0.1.7-rc.2 下 hoisted 与 isolated 两种布局各冷启一次并用 `/alive` 断言页面 mounted——这是本轮唯一「可能改变既有设计」的未验证项。
 
-**覆盖缺口（不得当成通过）**：报告中 17 条不确定性未消除，尤其「Tauri/WebView2 能否保证注入脚本早于页面读取 `dshDesktopBoot`」「官方安装包实机行为（强更/加密材质/公证）」「我方 `verify-*.ps1` 当前是否仍全绿」；官方侧全程只读，未跑任何构建或实机验证。证据与逐点论证见 [报告](../../../../docs/2026-09-25-official-desktop-0.1.7-rc.2-vs-dsh-desktop.md)，深挖原文在 `.tmp-investigate/desktop-0.1.7/s1-s7`；相关的既有决策见 [插件管理移交 dsh](./2026-09-21-plugin-management-moves-to-dsh.md)。
+**覆盖缺口（不得当成通过）**：报告中 17 条不确定性未消除，尤其「Tauri/WebView2 能否保证注入脚本早于页面读取 `dshDesktopBoot`」「官方安装包实机行为（强更/加密材质/公证）」「我方 `verify-*.ps1` 当前是否仍全绿」；官方侧全程只读，未跑任何构建或实机验证。证据与逐点论证见 [报告](../../../../docs/archive/2026-09-25-official-desktop-0.1.7-rc.2-vs-dsh-desktop.md)，深挖原文在 `.tmp-investigate/desktop-0.1.7/s1-s7`；相关的既有决策见 [插件管理移交 dsh](./2026-09-21-plugin-management-moves-to-dsh.md)。
 

@@ -1,7 +1,7 @@
 # 上游 issue 草稿（deepseek-ai/deepseek-harness）：dsh web 鉴权 cookie 名绑端口 → 无界累积 → 431
 
 > 状态：**草稿，未提交**。用户确认后再发。可作为 issue 正文直接粘贴（英文正文 + 中文摘要）。
-> 相关：`docs/2026-09-20-webview2-cookie-431-fix-plan.md`（壳侧修复）、`docs/2026-09-20-webview2-cookie-431-fix-audit.md`（审计）
+> 相关：`docs/archive/2026-09-20-webview2-cookie-431-fix-plan.md`（壳侧修复）、`docs/archive/2026-09-20-webview2-cookie-431-fix-audit.md`（审计）
 
 ---
 

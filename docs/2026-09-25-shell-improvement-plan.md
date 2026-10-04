@@ -1,6 +1,16 @@
 # 壳改进实施方案 v2（P0/P1/0.1.7 必办/P2；已过三角度审计 + 代码级取证）
 
-- 依据：[对比报告](./2026-09-25-official-desktop-0.1.7-rc.2-vs-dsh-desktop.md) §5/§6/§7。
+> **当前状态摘要（唯一权威；细节见对应真源，不要从下面的历史章节里读现状）**
+>
+> - **dsh 版本地板**：`0.2.0-rc.1`（manager 的 `MIN_DSH_VERSION`）；预装插件声明的 peer 地板 `>=0.1.7-rc.1` 均被满足。行为说明见 [README](../README.md)「dsh 更新由你决定」。
+> - **预装插件**：`dsh-kanban` 0.2.10 / `dsh-model-reasoning` 0.2.6 / `dsh-turn-navigator` 0.4.8 / `@karoc/dsh-smoothly-opencode-session` 0.2.1，均与 npm 最新一致（`npm run audit:preinstalled`）。耦合口径见 [plugin-sync 技能 §4.5/§6.5](../.dsh/skills/dsh-preinstalled-plugin-sync/SKILL.md)。
+> - **门禁**：`npm test` = **17 套**（含本文档索引/链接门禁 `test-doc-links`）；发布清单见 [CONTRIBUTING](../CONTRIBUTING.md)。
+> - **当前契约面**（已在 0.2.0-rc.1/rc.2 实证）：overlay 两条目成立（`desktop-notifications` insert + `ui-sidebar-browser` `disabled:false`）；id 集合与 fixture 一致（183）；`dsh web` 不接受 `--profile`；桥准入 10/10。验收配方真源：shell-dev 技能 §4.8/§4.9。
+> - **已发布的壳版本**：v0.14.0（2026-10-04，三平台资产；正式版已安装并验证）。下一个版本由 release-please 按提交决定。
+> - **文档地图**：[docs/INDEX.md](INDEX.md)（活文档 / 归档 / 单一真源映射）。
+>
+> 下面 §1–§15 是**按时间累积的记录**：早期章节可能已被后续章节取代，凡标注「本节已过期」的以标注为准。
+- 依据：[对比报告](./archive/2026-09-25-official-desktop-0.1.7-rc.2-vs-dsh-desktop.md) §5/§6/§7。
 - 我方坐标：v0.11.0 工作副本（HEAD `4b05664` + 未提交的 0.1.7-rc.2 地板改动）。
 - 审计证据：`.tmp-investigate/plan-audit/{a-contracts,b-side-effects,c-verifiability,evidence-e1-e2}.md`。
 - 本文件 v2 取代 v1；v1 中被证伪的断言见 §1.2。
@@ -15,7 +25,7 @@
 |---|---|
 | **S2（peer 自检）移出实施** | 实测：4 个预装插件只声明 `react` peer、OCS 无 peer、通知插件声明 `@deepseek-ai/dsh-client-runtime`（满足）→ 上游闸门对现有包**永不触发**；且上游对非法范围 **fail-closed**，手写实现是 fail-open，会漏报（A §3） |
 | **S7（locale 注入）移出实施** | 注入形状必须是 `{languages, preference}` 否则 `parseLocaleBootstrap` 抛 TypeError（A §8）；即使写对，`languages:['zh-CN']` 会把"跟随系统语言"的默认钉成中文 = **行为变更**，不满足"无副作用" |
-| **S4 改为采用仓库既有分阶段设计** | 2026-09-09 的审计已定稿"槽位 + confirm 窗 + IPC `resolve_pending_action(nonce)`"的非阻塞方案（`docs/2026-09-09-pending-cards-solutions.md:167`）；v1 的"同步等待"是**回退**，且会与同步 IPC 命令一起造成主线程死锁（A §5.5/§14） |
+| **S4 改为采用仓库既有分阶段设计** | 2026-09-09 的审计已定稿"槽位 + confirm 窗 + IPC `resolve_pending_action(nonce)`"的非阻塞方案（`docs/archive/2026-09-09-pending-cards-solutions.md:167`）；v1 的"同步等待"是**回退**，且会与同步 IPC 命令一起造成主线程死锁（A §5.5/§14） |
 | **S9 落点改为 Rust 读 marker** | `manager-exit`/`server-down`/`/alive` 全在 Rust 手里，manager 塞不进字段（A §10.3/10.4） |
 | **S10 改为 manager 写 `dsh.json`** | `ensurePreinstalled` 本来就逐个读 `package.json`（`server-manager.mjs:1063-1066`），版本顺手可得，Rust 只需读 dsh.json（A §11、C §4） |
 | **S6 缩小为"按钮指向证据目录"** | 实测/核验：失败态**已有 3 个按钮**（`src/index.html:31-33`）且**已显示完整证据路径**（`src/app.js:180-185`）→ v1 的两条前提都错（A §13 #7/#8） |
@@ -818,7 +828,7 @@ manager 三件（`server-manager`、`plugin-floor`、`shell-plugins`）/ patch y
 | `dsh-desktop-shell-dev` 技能 | 缺本轮三个陷阱 | 新增 **§4.10**：CARGO_TARGET_DIR 复用导致产物带旧 resources / 先确认"启动的是哪个二进制" / manager 可热更新不必重建 |
 | `dsh-preinstalled-plugin-sync` 技能 | 缺 CI 门禁与"三处对齐" | 新增 **§4.5**：`Verify packaged Linux layout` 的断言清单（按包名而非目录名）+ 仓库/随包副本/运行时三处核对表 |
 
-**确认无需改动（避免"修正历史"）**：`docs/PLUGIN-CONSOLE-PLAN.md` 已正确标注"已被取代/已废弃（历史文档）"（**这是正确样板**）；方案 §13 与各 Agent Note 里
+**确认无需改动（避免"修正历史"）**：`docs/archive/PLUGIN-CONSOLE-PLAN.md` 已正确标注"已被取代/已废弃（历史文档）"（**这是正确样板**）；方案 §13 与各 Agent Note 里
 日期化的旧版本号（0.2.4 / 0.4.3 / 0.1.7-rc.2 等）属**历史记录**，应原样保留；`CONTRIBUTING.md` 的"16 套"与现状一致。
 
 **由此确立的口径**：**操作性陈述**（地版本、套数、路径、清单、断言）必须与出货现实一致，改行为时同一次提交改掉；

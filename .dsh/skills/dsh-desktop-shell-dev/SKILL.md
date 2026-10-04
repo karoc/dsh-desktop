@@ -497,6 +497,6 @@ git status --short                           # 确认无意外文件
 - `scripts/test-shell-chrome.mjs` —— 壳↔壳契约测试
 - `src-tauri/src/lib.rs` —— `inject_shell_chrome` / `window_control` / `get_shell_state` /
   `toggle_dev_mode_impl` / `disable_third_party_plugins`（插件安全网）/ `toast_clsid` / 桥端点
-- `docs/2026-09-21-dsh-0.1.6-alpha.2-upgrade-plan.md` —— 0.1.6-alpha.2 升级方案（含壳内
+- `docs/archive/2026-09-21-dsh-0.1.6-alpha.2-upgrade-plan.md` —— 0.1.6-alpha.2 升级方案（含壳内
   插件管理整体移除的决策、移除清单、能力对账与验证计划）
 - 验收清单：README「壳菜单栏」「开发版」小节（Windows 实机：拖动/三键/Aero 最大化图标/SPA 自愈）

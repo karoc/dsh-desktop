@@ -142,7 +142,7 @@ NODE_OPTIONS: [
 ```
 
 - 实测：`NODE_OPTIONS=--max-http-header-size=65536` → `require('http').maxHeaderSize === 65536`（默认 16384）；`process.allowedNodeEnvironmentFlags.has('--max-http-header-size') === true`。
-- **范围说明（v1 表述修正）**：只作用于 **dsh web 子进程**（与既有注释"Only the dsh web child gets NODE_OPTIONS; the manager itself stays clean"一致）；壳自身（Rust/manager）**不注入** `NODE_OPTIONS`——这与 `docs/2026-09-09-pending-cards-solutions.md` 的"壳不注入 NODE_OPTIONS"约定**不冲突**（该约定针对壳进程树；此处沿用 manager 既有注入点）。dsh 的子进程（MCP/stdio）会继承该无害 flag；PTC packaged 分支会自行覆盖 `NODE_OPTIONS`。
+- **范围说明（v1 表述修正）**：只作用于 **dsh web 子进程**（与既有注释"Only the dsh web child gets NODE_OPTIONS; the manager itself stays clean"一致）；壳自身（Rust/manager）**不注入** `NODE_OPTIONS`——这与 `docs/archive/2026-09-09-pending-cards-solutions.md` 的"壳不注入 NODE_OPTIONS"约定**不冲突**（该约定针对壳进程树；此处沿用 manager 既有注入点）。dsh 的子进程（MCP/stdio）会继承该无害 flag；PTC packaged 分支会自行覆盖 `NODE_OPTIONS`。
 - 顺序语义：追加在用户值之后（Node 取最后一个同名 flag）⇒ 用户若显式设了更小的值会被我们覆盖；在 `manager.log` 打印最终 `NODE_OPTIONS` 便于取证与回滚。
 - 只影响 Node `http` 解析上限（`fetch`/undici 不吃此 flag），服务仅监听 `--host 127.0.0.1` ⇒ 不构成安全退化。
 
@@ -153,7 +153,7 @@ NODE_OPTIONS: [
 
 ### 4.5 P3：上游 issue（草稿已存档）
 
-`docs/2026-09-20-dsh-upstream-issue-cookie-port-binding.md`：① cookie 名绑 authority → 无界累积；② 批 bundle URL 随插件数线性增长（68 插件 ≈2.85KB，≈22B/插件），是头上限的第一个受害者（建议改 POST/短 hash 清单）；③ bundle 加载失败被 `prefetchImmediateTier().catch(()=>{})` 吞掉，只报 `import failed`，掩盖真因。
+`docs/archive/2026-09-20-dsh-upstream-issue-cookie-port-binding.md`：① cookie 名绑 authority → 无界累积；② 批 bundle URL 随插件数线性增长（68 插件 ≈2.85KB，≈22B/插件），是头上限的第一个受害者（建议改 POST/短 hash 清单）；③ bundle 加载失败被 `prefetchImmediateTier().catch(()=>{})` 吞掉，只报 `import failed`，掩盖真因。
 
 ---
 

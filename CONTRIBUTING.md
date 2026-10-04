@@ -42,7 +42,7 @@
 > `cp scripts/git-hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit`
 > 为什么需要它：2026-09-27 与 2026-10-04 两次误直推 `main`（第二次发生在纪律写进技能之后）——靠自觉不够。
 
-npm test                          # 全量 16 套（行为 + 契约 + 副本一致性 + 清单/补丁目标门禁 + 升级标记）
+npm test                          # 全量 17 套（行为 + 契约 + 副本一致性 + 清单/补丁目标门禁 + 升级标记）
 node scripts/test-copy-consistency.mjs  # 副本一致性（改了 scripts/ 或 plugins/ 后先 npm run sync:resources）
 node scripts/test-shell-chrome.mjs  # 壳契约（菜单 id ↔ ACTIONS ↔ lib.rs）
 # Rust：cargo clippy -D warnings + cargo test --lib（CI 快层会跑；本地有工具链时先跑）
@@ -94,7 +94,7 @@ git fetch origin release-please--branches--main
 git checkout FETCH_HEAD
 node -e "…四处版本一致性…"        # package.json / .release-please-manifest.json / tauri.conf.json / Cargo.toml
 grep -n "^## \[<version>\]" CHANGELOG.md
-npm test                          # 16 套（另：npm run test:slow 跑安装卡死用例，约 3 分钟，不进 PR 门禁）
+npm test                          # 17 套（另：npm run test:slow 跑安装卡死用例，约 3 分钟，不进 PR 门禁）
 node scripts/audit-preinstalled.mjs
 ```
 
