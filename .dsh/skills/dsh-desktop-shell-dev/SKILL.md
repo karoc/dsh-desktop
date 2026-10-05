@@ -131,6 +131,12 @@ npm run bundle:dev   # = tauri build --config src-tauri/tauri.dev.conf.json --bu
 - chrome 应用菜单标签用注入的 `__DSH_PRODUCT_NAME__`；下拉/弹窗有明显的 `SHELL_MENUS`、
   `dialog-backdrop` 等标记。
 
+### 4a. 验收用进程的纪律（2026-10-05 用户实测 GPU 事故后新增）
+
+- **用完即关**：CDP 浏览器、dev/prod 桌面壳都是"验收工具"，验完立刻关；不要留在后台渲染 dsh 页面（WebView2 会持续吃 GPU，实测用户 GPU 被拉到 >90% 近十分钟）。
+- **按记录的 PID 关，不要按窗口标题过滤**：`Get-Process chrome | Where-Object { $_.MainWindowTitle -eq '' } | Stop-Process` **会误杀用户自己 Chrome 的渲染/GPU 子进程**（它们同样没有窗口标题）。正确做法：`Start-Process -PassThru` 记下 PID → 关闭时 `Stop-Process -Id <pid>`；或 `--user-data-dir` 唯一化后按命令行匹配。
+- **验收动作本身要顾及用户正在看的界面**：大截图、长输出、高频连续工具调用都会让用户的 PWA 长时间高负载 —— 只贴必要的一张图，其余用文字结论。
+
 ## 4. 开发版本地构建工作流（流程约定，用户指定）
 
 **开发版不上 GitHub Actions；GitHub 仓库/Release 只承载正式版。** 开发版固定本机构建：
