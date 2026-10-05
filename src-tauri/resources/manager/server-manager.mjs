@@ -57,7 +57,10 @@ const NATIVE_BUILD_PKGS = [
  * 因此低于该版本的 dsh 会让用户彻底失去插件管理入口。npm 的 latest tag 目前仍是
  * 0.1.5-rc.3（不含插件管理），所以安装/升级目标取 max(latest, 地板)。
  *
- * 2026-09-29 抬到 0.2.0-rc.1：在 0.2.0-rc.1 上完成回归（overlay 目标行/CLI/客户端 seam 与槽位
+ * 2026-10-05 抬到 0.2.0-rc.2：npm 的 latest 已从 rc.1 毕业到 rc.2（`next` 与 `latest` 都指向 rc.2），
+ * 且 rc.2 已实证通过（静态差异 / 运行时契约 / 真机 桥 10-10 + 三插件渲染，见方案 §15.12）；fixture 的
+ * dshVersion 标签随之刷新（id 集合与 rc.1 完全一致，183 个）。
+ * 2026-09-29 曾抬到 0.2.0-rc.1：在 0.2.0-rc.1 上完成回归（overlay 目标行/CLI/客户端 seam 与槽位
  * 全部成立，四个预装插件实机渲染正常，见 docs/2026-09-25-shell-improvement-plan.md §15）后抬升。
  * 2026-09-25 曾抬到 0.1.7-rc.2：随壳分发的预装插件把 dsh 下限声明为
  * `@deepseek-ai/dsh*` 的可选 peer（kanban / model-reasoning / turn-nav 均为
@@ -66,7 +69,7 @@ const NATIVE_BUILD_PKGS = [
  * `dsh plugin allow-version`。地板与预装 bundle 必须**同一批**落地：旧 bundle
  * （如 kanban 0.2.8）用的是 0.1.7 已删除的图标名，单独抬地板会让它们在新运行时上崩。
  */
-const MIN_DSH_VERSION = '0.2.0-rc.1'
+const MIN_DSH_VERSION = '0.2.0-rc.2'
 
 // ── args ───────────────────────────────────────────────────────────────────
 function parseArgs(argv) {

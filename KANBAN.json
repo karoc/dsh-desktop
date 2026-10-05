@@ -1610,9 +1610,9 @@
       "id": "card-f47019c7-aad3-4e02-8860-4b87b1003740",
       "title": "待用户：安装 v0.14.0（Release 官方包或本地安装包）",
       "rationale": "每次发布后，宿主正式版需要用户手动安装才会升级（安装器不会自动替换运行中的应用）。本卡登记\"当前待装的最新版\"。**2026-10-04 发布 v0.14.0**，相对上一版值得装的理由：① 预装 `dsh-turn-navigator` 升到 **0.4.8**（修掉\"官方轮次有回复预览、我们只有轮次号\"的用户可见问题 + a11y 与官方对齐）② 新增阻断式打包布局门禁，首次给真实发布把关通过（`PASS: packaged Linux layout (app binary + node + manager + patch + 4 preinstalled)`）。安装后 manager 会按地板把运行时 dsh 抬到 ≥0.2.0-rc.1（当前 npm latest 0.2.0-rc.2）。",
-      "rejected": "放弃\"agent 关掉应用再装\"：会让会话立刻断开，且装完无人确认首启结果。也放弃\"边跑边装\"：NSIS 会静默跳过被占用的 exe，装完仍是旧版（这条踩过）。",
+      "rejected": "**没有**在装完后立刻把 devMode 改回 true（那会让下次 dsh 更新被冻结）；**没有**跳过备份直接装；**没有**把\"界面打不开\"归因为壳或 dsh 本身 —— 实测定位到是自建插件停在 0.1.6 时代的 seam。",
       "sourceSessionId": "session-fd4c2d36-4a9d-4634-b4dd-56bf73fcc4b2",
-      "status": "todo",
+      "status": "done",
       "tags": [
         "release",
         "v0.14.0",
@@ -1620,7 +1620,8 @@
         "windows"
       ],
       "createdAt": 1790086590014,
-      "updatedAt": 1791101640950
+      "updatedAt": 1791190365297,
+      "summary": "已完成（2026-10-04，由我代为安装并验收）：正式版 0.10.1 → **0.14.0**（NSIS `/S` 静默，sha256 61a71508…c764101a；首次下载被截断 19.8MB vs 28.2MB，重下并校验后安装）。装前处置两件：① `dsh.json` 的 `devMode: true` 会冻结地板升级（否则装完停在 0.1.6-alpha.1，预装插件的 `>=0.1.7-rc.1` peer 地板 fail-closed）→ 置 false；② 数据目录整目录备份 `D:\\Dev\\backup-prod-dsh-20261004-182516`。首启：runtime dsh 0.1.6-alpha.1 → **0.2.0-rc.1**，设置迁移 `settings.yaml → .imported`（原文件保留）。验收：无加载失败、未要求重填 API Key、模型选择器 Grok 4.6、侧栏与会话正常、桥 10/10。过程中发现并处置一次真实阻断：自建插件 **ARRP 0.1.1 等 `settingsScope`**（0.1.7 起上游移除）→ fail-closed 打不开界面；已迁移该插件到 `configForms`（见方案 §15.14）并恢复启用。"
     },
     {
       "id": "card-6b4125f0-54e8-474f-909f-1cdb14a756a3",

@@ -2,7 +2,7 @@
 
 > **当前状态摘要（唯一权威；细节见对应真源，不要从下面的历史章节里读现状）**
 >
-> - **dsh 版本地板**：`0.2.0-rc.1`（manager 的 `MIN_DSH_VERSION`）；预装插件声明的 peer 地板 `>=0.1.7-rc.1` 均被满足。行为说明见 [README](../README.md)「dsh 更新由你决定」。
+> - **dsh 版本地板**：`0.2.0-rc.2`（manager 的 `MIN_DSH_VERSION`；npm 的 `latest` 与 `next` 均指向它）；预装插件声明的 peer 地板 `>=0.1.7-rc.1` 均被满足。行为说明见 [README](../README.md)「dsh 更新由你决定」。
 > - **预装插件**：`dsh-kanban` 0.2.10 / `dsh-model-reasoning` 0.2.6 / `dsh-turn-navigator` 0.4.8 / `@karoc/dsh-smoothly-opencode-session` 0.2.1，均与 npm 最新一致（`npm run audit:preinstalled`）。耦合口径见 [plugin-sync 技能 §4.5/§6.5](../.dsh/skills/dsh-preinstalled-plugin-sync/SKILL.md)。
 > - **门禁**：`npm test` = **17 套**（含本文档索引/链接门禁 `test-doc-links`）；发布清单见 [CONTRIBUTING](../CONTRIBUTING.md)。
 > - **当前契约面**（已在 0.2.0-rc.1/rc.2 实证）：overlay 两条目成立（`desktop-notifications` insert + `ui-sidebar-browser` `disabled:false`）；id 集合与 fixture 一致（183）；`dsh web` 不接受 `--profile`；桥准入 10/10。验收配方真源：shell-dev 技能 §4.8/§4.9。
@@ -936,3 +936,16 @@ dsh-smoothly-anyrouter-relay-proxy: pending (waiting for service: settingsScope)
 5. 用户仓库未提交改动保留原样；迁移差异导出为 `D:\Dev\arrp-configforms-migration.diff`（166 行，含用户既有 0.1.2 对齐改动）；其 `CHANGELOG.md` 的 `[Unreleased]` 已补条目（含上游证据与验证范围）。版本号未动（按其发布流程在发版时决定）。
 
 **沉淀去向**：这条"0.1.7 移除了 `settingsScope`，插件要迁到 `configForms`；症状 = `pending (waiting for service: settingsScope)` → dsh fail-closed → 整个 UI `Failed to load plugins`"应进**插件开发技能**（`dsh-plugin-development`）——它不在本仓（本仓 `.dsh/skills` 只有 shell-dev / plugin-sync / windows-debugging 三个），需要在它的真源里补。
+
+### 15.15 地板抬到 0.2.0-rc.2 + turn-nav 胶囊标签的真机收口（2026-10-05）
+
+**A. 地板 `0.2.0-rc.1` → `0.2.0-rc.2`**：触发条件是事实变了 —— npm `dist-tags` 现在是 `{ alpha: 0.2.1-alpha.1, next: 0.2.0-rc.2, latest: 0.2.0-rc.2 }`，**rc.2 已从 `next` 毕业到 `latest`**。此前"不抬"的理由（"rc.2 仍是预发布通道"）随之失效；而 rc.2 我们已经实证过（§15.12：静态差异零破坏 / overlay 与 id 集合一致 / 桥 10-10 / 三插件渲染）。
+- 改动：`MIN_DSH_VERSION = '0.2.0-rc.2'`（manager，含抬升理由注释）+ `sync:resources` + **fixture 标签刷新**（`--update-fixture` 用 rc.2 的 dev runtime → `0.2.0-rc.2 / 183 个 id`；id 集合与 rc.1 完全一致，故只是让"fixture 记的是地板版本形状"这条不变式继续成立）+ README 四处与方案摘要的地板口径。
+- 门禁：fixture 模式 PASS / **rc.2 runtime 模式 PASS** / `npm test` **17 套 38 PASS**。
+- 影响：已装 `0.2.0-rc.1` 的用户下次启动会被地板抬到 rc.2（一条小版本升级）；低于 `0.2.0-rc.1` 的仍走原先的强制升级路径。
+
+**B. turn-nav 胶囊标签：真机收口（此前唯一的验证缺口）**。前置条件是正式版有真实会话（`session_projcache` + 501–756 KB 的会话正文），且它跑在 **0.2.0-rc.1 + turn-nav 0.4.8** 上。
+- 方法：启动正式版 → CDP 驱动 headless Chrome 连它的 web → 按"天数特征"在侧栏精确定位一个真实会话（避免点成工作区名）→ 等 `.tn-cap-btn` 出现 → 逐个 `Input.dispatchMouseEvent(mouseMoved)` 悬停 → 读 `.tn-tip` / `[role=tooltip]`。
+- 结果：轨道渲染（`.tn-wrap` 在、`tn-hide-official` 为真 = 我们的轨道接管官方轨道）；胶囊 `aria-label = "跳转到第 1 轮"`（可访问名 = 动作，符合 0.4.8 的 a11y 设计）；tooltip = **`第 1 轮 ⏎ 07:15 ⏎ 熟悉当前项目以及当前项目的实际进度情况。`**（多行：轮次号 + 时间 + 人类提示词）。
+- 断言：**`(no user message)` 未复现**、**注入文本未泄漏**、所有胶囊均有非空标签、tooltip 多行 ✅。
+- **覆盖边界（诚实记录）**：该会话只有 1 轮，因此"多轮密度 / 未加载轮次的分页跳转 / 无人类提示词时由回复预览补内容"这三条**未被本次覆盖**（`response` 预览行在只有 1 轮且无响应预览时无从而来）。
