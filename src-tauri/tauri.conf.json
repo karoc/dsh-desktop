@@ -67,7 +67,7 @@
         "uninstallerIcon": "icons/icon.ico",
         "headerImage": "icons/header.bmp",
         "sidebarImage": "icons/sidebar.bmp",
-        "installerHooks": "resources/nsis/legacy-takeover.nsh"
+        "installerHooks": "nsis-hooks.nsh"
       }
     },
     "linux": {

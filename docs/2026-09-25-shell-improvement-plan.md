@@ -949,3 +949,15 @@ dsh-smoothly-anyrouter-relay-proxy: pending (waiting for service: settingsScope)
 - 结果：轨道渲染（`.tn-wrap` 在、`tn-hide-official` 为真 = 我们的轨道接管官方轨道）；胶囊 `aria-label = "跳转到第 1 轮"`（可访问名 = 动作，符合 0.4.8 的 a11y 设计）；tooltip = **`第 1 轮 ⏎ 07:15 ⏎ 熟悉当前项目以及当前项目的实际进度情况。`**（多行：轮次号 + 时间 + 人类提示词）。
 - 断言：**`(no user message)` 未复现**、**注入文本未泄漏**、所有胶囊均有非空标签、tooltip 多行 ✅。
 - **覆盖边界（诚实记录）**：该会话只有 1 轮，因此"多轮密度 / 未加载轮次的分页跳转 / 无人类提示词时由回复预览补内容"这三条**未被本次覆盖**（`response` 预览行在只有 1 轮且无响应预览时无从而来）。
+
+### 15.16 升级遗留的随包插件不清理（缺陷 a）与其正确修法（2026-10-05）
+
+**现场**：0.10.1 → 0.14.0 升级后，`<install>/resources/plugin/@dsh-desktop/` 里仍留着早已移除的 `plugin-console`（**Tauri 的 NSIS 安装器只覆盖不删除**），于是 manager 每次启动都把它当"随包插件"复制进 runtime，日志里反复出现 `updated client plugin @dsh-desktop/plugin-console`。
+
+**❌ 第一次尝试（错，并造成自伤，已回滚）**：把清理放进 **manager** —— 在拷贝循环前按"当前 patch roster 是否引用该包名"给资源侧目录改名。**控制面测试会拿仓库的 `src-tauri/resources` 当 `--resource-dir` 并传入自己的临时 patch**，于是我的判据认为仓库里受版本控制的 `client-notifications` "未被引用"并把它改名 → `git status` 出现 3 个文件被删。**教训：清理逻辑不得挂在会跑在仓库树上的管理器路径里；判据依赖"外部传入的文件"时，更要先问"这个文件在测试里是什么"。**
+
+**✅ 正确修法（本次落地）**：把清理放回**安装/升级这一层** —— 新增 `src-tauri/nsis-hooks.nsh`，用 `!macro NSIS_HOOK_PREINSTALL` 在解包前 `RMDir /r "$INSTDIR\resources\plugin"`，并在 `tauri.conf.json` 配 `bundle.windows.nsis.installerHooks`。该目录完全由安装包重建，删除安全；对全新安装是 no-op。
+同时保留（并修正）两个**纯逻辑**产物：`planStaleResourcePlugins()` 计划器 + 单测（含"未被 patch 引用的随包插件要移走"的正向用例与变异对照），以及**修掉 PR #63 的潜在隐患**：`planShellPluginCleanup` 此前会把上次清理留下的 `.bak-stale-<ts>` 目录当成"未分发"再改一次名（每次启动累加后缀），现已在两个计划器里排除。
+
+**验证状态（诚实）**：`npm test` **17 套 42 PASS**（含新增用例与变异对照）；**NSIS 钩子的语法/打包由 CI 的 `windows` 作业覆盖**（钩子无效即构建失败）；
+**"升级后旧插件目录确实被删"这一行为本机未验证**（需构建安装器并实际安装）——配方：构建 dev 安装器 → 在已装 dev 版里手工放一个假插件目录（如 `dsh-legacy-stale/package.json`）→ 运行新安装器 → 断言该目录消失。已登记为覆盖缺口。
