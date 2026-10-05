@@ -35,9 +35,16 @@ HTTP 403
 ## 影响
 
 - **误导**：瞬时上游故障被呈现为"密钥无效"，用户做无效的自救（重填密钥、换 provider）。
-- **可能不重试**：`AUTH` 在语义上是"重试无用"的类别；若重试策略按 code 排除它，则一次上游抖动会变成硬失败。
-  `[本机未验证]`：我未能在 checkout 里定位到按 code 决定重试的判定点（`git grep shouldRetry|retryable` 无命中），
-  因此**这一条按假设处理，不作决策依据**——请维护者确认；如成立，与第 1 条合起来就是"抖动 → 不重试 → 报密钥错"的复合缺陷。
+- **确认不重试（复合缺陷）** `[已验证: git grep llm-retry]`：重试由**可重试 code 白名单**决定 ——
+  `packages/llm/llm-retry/src/index.ts:215`：
+  ```ts
+  } else if (!policy.retryableCodes.includes(failure.code)) { /* 不重试 */ }
+  ```
+  默认策略的 `retryableCodes` 只见 `['RATE_LIMIT','SERVER']`
+  （`packages/llm/llm-retry/tests/loader-composition.spec.ts:27`）。**`AUTH` 不在其中** ⇒ 一次上游抖动被
+  判成 `AUTH` 之后**不会重试**。与第 1 条合起来即复合缺陷：
+  **「403 抖动 → 归类 AUTH → 不重试 → GUI 报『API 密钥无效』」**——用户看到的是配置错误，而不是瞬时故障，
+  于是去做无效自救（重填密钥/换 provider）。
 
 ## 建议（最小改动）
 
@@ -45,7 +52,7 @@ HTTP 403
    仅在 body 明确是 `authentication_error`/`permission_error`（或 401 且无 body 类型）时归 `AUTH`。
 2. **pi-ai 不要对消息文本正则**：改为读结构化字段（status/code/type），或至少只在**响应状态字段**上匹配，
    不要匹配上游提供方回传的自由文本。
-3. 若第 2 条成立，把"403 + `server_error`"纳入默认可重试类别。
+3. 把"403 + body `server_error`"映射为 `SERVER`（或直接加入默认 `retryableCodes`）—— 上游抖动应当可重试。
 
 ## 我们侧的影响与绕行
 
