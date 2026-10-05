@@ -1995,6 +1995,25 @@
       "description": "设计（已定）：在 `src-tauri/resources/ui/shell-chrome.js` 里加一个探测器 —— 页面加载后观察 `document.body.innerText` 是否出现 `Failed to load plugins` / `entry did not activate`（MutationObserver + 定时兜底，含首次立即检查）；命中则在壳 chrome 里显示一条横幅（复用既有 shadow-DOM UI 基元）：文案说明\"某些插件未能加载，界面因此不可用\"，按钮\"停用全部第三方插件并重载\" → 调 `POST /shell/disable-third-party-plugins`（既有端点，先备份 package.json）→ 成功后 `/refresh`。注意：chrome 是 `include_str!` 编进二进制的 → **必须重建壳**才能生效。\n复现（无需真坏插件）：在 dev 实例的 profile bundles 里加一个\"注入了不存在服务\"的假插件（与 ARRP 当时一样 pending），或直接把 ARRP 旧版本（settingsScope 版）链回 profile；重启 dev 壳 → 页面应出现该错误态。\n验证：① 重建前先复现错误态并截图留证；② 重建后用同一错误态确认横幅出现；③ 用 UIA/CDP 点按钮 → 断言 package.json 被备份、第三方插件被停用、页面恢复可用（无 Failed to load plugins）；④ 负向对照：正常状态下**不得**出现横幅。",
       "createdAt": 1791191046722,
       "updatedAt": 1791196248562
+    },
+    {
+      "id": "card-1a10bc88ad5-pwa-gpu",
+      "title": "产品缺陷待查：PWA 渲染长会话/大输出/大图时 GPU 长时间满载（用户实测 ~10 分钟 >90%）",
+      "status": "todo",
+      "tags": [
+        "pwa",
+        "web-gui",
+        "performance",
+        "gpu",
+        "long-session",
+        "verify",
+        "user-reported"
+      ],
+      "rationale": "用户实测（2026-10-05 约 18:5x–19:11，本会话进行中）：GPU 持续 >90% 近十分钟，**关闭并重开 dsh PWA 后立即恢复** ⇒ 消耗方是该 PWA 进程（合成/栅格），不是外部残留进程。我的实测排除了\"我留下的进程\"：无 headless Chrome 残留、WebView2 归属 Widgets/SearchHost/clash-verge、两个桌面壳当时已不在运行；当前 GPU 已normal（chrome 3.7% / dwm 2.9%）。相关性最强的因素是**该时间窗内这一屏的渲染重量**：5 张 1942×1537 截图 + 大量长表格/长输出 + 每轮数十个工具卡 + 高频连续调用。长会话本身也是嫌疑（该 PWA 显示的是会话列表页，本机 session 缓存 267 份）。**为什么要登记**：这不是\"某次操作事故\"，而是**产品级渲染成本**问题 —— 用户无法控制 agent 输出重量，PWA 必须能在长会话/大图下保持可用；不登记就会每次都以\"偶然卡顿\"被忘掉。",
+      "rejected": "① **归因为\"agent 输出太重\"了事**：那是使用方式问题，不是产品免责理由 —— 同一份内容在别的客户端（如桌面壳）不该把 GPU 拉满十分钟；② **只当一次性现象不记录**：重开 PWA 即可恢复说明有明确可复现面（合成器/栅格线程未收敛），值得抓 profile 定位；③ **先改 agent 行为当\"修复\"**：我确实要收敛输出重量（见下），但那只是缓解，不能替代定位 —— 两者并行。",
+      "description": "**现象**：GPU >90% 持续 ~10 分钟；关+重开 PWA 恢复。**已排除**：headless Chrome 残留（无）、WebView2 归属（Widgets/SearchHost/clash-verge）、桌面壳（未运行）。**当前**：chrome 3D 3.7% / dwm 2.9%（正常）。\n**待做（建议顺序）**：① 用 `chrome://gpu` + DevTools Performance/GPU 面板抓一次复现（长会话 + 一张大图 + 连续追加输出），看是 compositing、image raster/scale 还是 SSE 高频重排；② 检查会话列表/长会话是否可虚拟化（只渲染可视区）；③ 图片是否按显示尺寸下采样后再入 DOM（避免 1942×1537 原图参与合成）；④ 流式更新是否做了批处理/节流（rAF 合并）。\n**复现线索**：本机 session 缓存 267 份、本会话单屏含多张 1942×1537 截图；对照实验：同一屏只留文字时不涨。\n**我的并行缓解（已承诺）**：少贴大图/长表格、收敛中间过程、验证用的桌面壳与浏览器用完即关（且按记录的 PID 关，不用 `MainWindowTitle -eq ''` 过滤 —— 那会误杀用户 Chrome 的子进程）。",
+      "createdAt": 1791199054549,
+      "updatedAt": 1791199054549
     }
   ]
 }
