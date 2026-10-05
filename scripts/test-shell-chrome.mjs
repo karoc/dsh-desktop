@@ -27,7 +27,7 @@ const libRs = readFileSync(libRsPath, 'utf8')
 const sandbox = { console, __DSH_CHROME_TEST__: {} }
 vm.createContext(sandbox)
 vm.runInContext(chromeSrc, sandbox, { filename: 'shell-chrome.js' })
-const { SHELL_MENUS, ACTIONS, computeCaptionPlan, WINDOWS_TITLEBAR_H, SHELL_BAR_H } = sandbox.__DSH_CHROME_TEST__.config
+const { SHELL_MENUS, ACTIONS, computeCaptionPlan, WINDOWS_TITLEBAR_H, SHELL_BAR_H, misleadingAuthHint } = sandbox.__DSH_CHROME_TEST__.config
 assert.ok(Array.isArray(SHELL_MENUS) && SHELL_MENUS.length >= 1, 'SHELL_MENUS is a non-trivial array')
 assert.ok(ACTIONS && typeof ACTIONS === 'object', 'ACTIONS table present')
 
@@ -479,6 +479,17 @@ assert.ok(
   /spawn_auth_cookie_janitor\(/.test(libRs) && libRs.includes('request_auth_cookie_prune();'),
   'setup spawns the janitor and asks for the startup prune',
 )
+
+// ── 鉴权误报提示的纯匹配逻辑（含变异对照）────────────────────────────────────
+assert.equal(typeof misleadingAuthHint, 'function', 'misleadingAuthHint 经 TEST_HOOK 暴露')
+assert.ok(misleadingAuthHint('本轮运行失败\nAPI 密钥无效').length > 0, '命中中文鉴权文案（真机文案）')
+assert.ok(misleadingAuthHint('Turn failed\nInvalid API key').length > 0, '命中英文鉴权文案')
+assert.equal(misleadingAuthHint('本轮运行失败\n上游返回 502'), '', '非鉴权失败不触发（负向对照 1）')
+assert.equal(misleadingAuthHint('添加一个 API Key 开始使用'), '', '引导弹窗不触发（负向对照 2）')
+assert.equal(misleadingAuthHint(undefined), '', '非字符串输入安全')
+if (/不是密钥问题|密钥没有问题/.test(misleadingAuthHint('API 密钥无效'))) {
+  throw new Error('措辞不得断言"不是密钥问题"（壳分不清真实鉴权失败与上游抖动）')
+}
 
 console.log('PASS — shell chrome contract (menus, actions, bridge, IPC)')
 process.exit(0)
