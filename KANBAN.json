@@ -1535,8 +1535,8 @@
         "follow-up"
       ],
       "createdAt": 1789990599180,
-      "updatedAt": 1791197565444,
-      "description": "**已核实（2026-10-05）**：问题仍在上游最新 checkout `5badb15`（新于 0.2.0-rc.2）。三处同类假设：① `llm-pi-ai/src/stream.ts:43` 对**错误消息文本**正则 `\\b(?:401|403)\\b` → AUTH（上游提供方自由文本不可控）；② `llm-deepseek/src/transport.ts:29` `status===403 → AUTH`，**不看 body 的 `type: server_error`**；③ 同类：`files-api.ts:50`、`discovery.ts:340`。**交付物**：可直接粘贴的上游报告稿 `docs/reports/2026-10-05-upstream-403-misclassified-as-auth.md`（含实测报文、代码坐标、最小改动建议、以及标注 `[本机未验证]` 的\"是否重试\"一条）。**卡在哪**：项目 token 对 `deepseek-ai/deepseek-harness` 只有读权限（`POST issues` → `Resource not accessible by personal access token`）→ **需要你用自己的账号提交**（或给我们一个有 issues:write 的 token）。"
+      "updatedAt": 1791200452213,
+      "description": "**已核实（2026-10-05）**：问题仍在上游最新 checkout `5badb15`（新于 0.2.0-rc.2）。三处同类假设：① `llm-pi-ai/src/stream.ts:43` 对**错误消息文本**正则 `\\b(?:401|403)\\b` → AUTH（上游提供方自由文本不可控）；② `llm-deepseek/src/transport.ts:29` `status===403 → AUTH`，**不看 body 的 `type: server_error`**；③ 同类：`files-api.ts:50`、`discovery.ts:340`。**交付物**：可直接粘贴的上游报告稿 `docs/reports/2026-10-05-upstream-403-misclassified-as-auth.md`（含实测报文、代码坐标、最小改动建议、以及标注 `[本机未验证]` 的\"是否重试\"一条）。**卡在哪**：项目 token 对 `deepseek-ai/deepseek-harness` 只有读权限（`POST issues` → `Resource not accessible by personal access token`）→ **需要你用自己的账号提交**（或给我们一个有 issues:write 的 token）。\n\n**渠道更正（2026-10-05 实测）**：上游仓库 **Issues 已关闭**（`has_issues=false`、`has_discussions=true`）；`POST /issues` 即使带 token 也 403（请求被拒、未创建任何内容）。可用渠道：① GitHub Discussions；② GUI 内「意见反馈」飞书问卷（上游自己的反馈入口）。报告稿已按此更正。"
     },
     {
       "id": "card-2e1da17b-a9c1-47a4-847b-e1766a0f7ebe",
@@ -2011,9 +2011,9 @@
       ],
       "rationale": "用户实测（2026-10-05 约 18:5x–19:11，本会话进行中）：GPU 持续 >90% 近十分钟，**关闭并重开 dsh PWA 后立即恢复** ⇒ 消耗方是该 PWA 进程（合成/栅格），不是外部残留进程。我的实测排除了\"我留下的进程\"：无 headless Chrome 残留、WebView2 归属 Widgets/SearchHost/clash-verge、两个桌面壳当时已不在运行；当前 GPU 已normal（chrome 3.7% / dwm 2.9%）。相关性最强的因素是**该时间窗内这一屏的渲染重量**：5 张 1942×1537 截图 + 大量长表格/长输出 + 每轮数十个工具卡 + 高频连续调用。长会话本身也是嫌疑（该 PWA 显示的是会话列表页，本机 session 缓存 267 份）。**为什么要登记**：这不是\"某次操作事故\"，而是**产品级渲染成本**问题 —— 用户无法控制 agent 输出重量，PWA 必须能在长会话/大图下保持可用；不登记就会每次都以\"偶然卡顿\"被忘掉。",
       "rejected": "① **归因为\"agent 输出太重\"了事**：那是使用方式问题，不是产品免责理由 —— 同一份内容在别的客户端（如桌面壳）不该把 GPU 拉满十分钟；② **只当一次性现象不记录**：重开 PWA 即可恢复说明有明确可复现面（合成器/栅格线程未收敛），值得抓 profile 定位；③ **先改 agent 行为当\"修复\"**：我确实要收敛输出重量（见下），但那只是缓解，不能替代定位 —— 两者并行。",
-      "description": "**已做实测（2026-10-05，无头 Chromium + CDP Performance 指标）**：\n- 落地页空闲：layout 608/5s、style recalc 608/5s、主线程 task 512–597ms/5s、heap 27MB、DOM ~730–800 节点、0 图片、帧 p95 17ms\n- 打开会话（正文 6,180 字符）：layout 607/5s、recalc **617/5s**、**task 970ms/5s（≈19%）**、heap 53MB、**DOM 5,297 节点**、0 图片\n⇒ **页面空闲时仍以约 120 次/秒持续失效 style 与 layout**（渲染管线永不静默）——与\"GPU 满载、重开页面才复位\"的现象一致。\n**交付物**：上游报告稿 `docs/reports/2026-10-05-upstream-web-gui-never-idles.md`（含测量表、代码坐标、建议与诚实边界）。\n**仍缺（需有 GPU 的浏览器在场）**：① 直接测 GPU 占用（`chrome://gpu` + GPU trace）；② 量化图片贡献（本次两页 0 图片）；③ 超长会话（>10 万节点）。\n**卡点**：token 对上游仓库只有读权限 → 需用户提交报告。",
+      "description": "**已做实测（2026-10-05，无头 Chromium + CDP Performance 指标）**：\n- 落地页空闲：layout 608/5s、style recalc 608/5s、主线程 task 512–597ms/5s、heap 27MB、DOM ~730–800 节点、0 图片、帧 p95 17ms\n- 打开会话（正文 6,180 字符）：layout 607/5s、recalc **617/5s**、**task 970ms/5s（≈19%）**、heap 53MB、**DOM 5,297 节点**、0 图片\n⇒ **页面空闲时仍以约 120 次/秒持续失效 style 与 layout**（渲染管线永不静默）——与\"GPU 满载、重开页面才复位\"的现象一致。\n**交付物**：上游报告稿 `docs/reports/2026-10-05-upstream-web-gui-never-idles.md`（含测量表、代码坐标、建议与诚实边界）。\n**仍缺（需有 GPU 的浏览器在场）**：① 直接测 GPU 占用（`chrome://gpu` + GPU trace）；② 量化图片贡献（本次两页 0 图片）；③ 超长会话（>10 万节点）。\n**卡点**：token 对上游仓库只有读权限 → 需用户提交报告。\n\n**渠道更正（2026-10-05 实测）**：上游仓库 **Issues 已关闭**（`has_issues=false`、`has_discussions=true`）；`POST /issues` 即使带 token 也 403（请求被拒、未创建任何内容）。可用渠道：① GitHub Discussions；② GUI 内「意见反馈」飞书问卷（上游自己的反馈入口）。报告稿已按此更正。",
       "createdAt": 1791199054549,
-      "updatedAt": 1791199867606
+      "updatedAt": 1791200452213
     }
   ]
 }

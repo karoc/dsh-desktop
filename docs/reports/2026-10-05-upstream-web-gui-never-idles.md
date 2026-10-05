@@ -1,8 +1,14 @@
 # 上游 defects 报告稿：Web GUI 空闲时仍在持续重排（约 120 次/秒），长会话下 GPU 可被拉满
 
-> 状态：**待提交**（本仓对 `deepseek-ai/deepseek-harness` 只有读权限）。提交后把 issue 链接回填到这里与看板卡。
-> 核对版本：checkout `5badb15`（0.2.1-alpha.1 构建行；**新于 dsh 0.2.0-rc.2**）。
-
+> 状态：**待提交 —— 注意：上游仓库的 Issues 是关闭的**（实测 `deepseek-ai/deepseek-harness`：
+> `has_issues=false`、`has_discussions=true`；`POST /issues` 即使带我们的 token 也返回 403
+> `Resource not accessible by personal access token`，请求被拒、未创建任何内容）。
+> 因此**可用的提交渠道**只有两条：
+> ① **GitHub Discussions**（该仓 Discussions 已开启；能否发起取决于账号权限）；
+> ② **GUI 内的「意见反馈」飞书问卷** —— 上游自己给用户的反馈入口（见上游
+> `packages/client/ui-settings-account/README.md:45`）。
+> 提交后在本文与看板卡回填链接/工单号。
+> 核对版本：
 ## 一、用户侧现象（触发点）
 
 Windows 上以 PWA 使用 dsh web GUI，屏幕上是**一个内容较多的会话**（含 5 张大截图）。GPU 持续 **>90% 近十分钟**，
