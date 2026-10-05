@@ -1,6 +1,6 @@
 {
   "note": "由 scripts/test-patch-targets.mjs --update-fixture 生成；抬 dsh 地板时刷新",
-  "dshVersion": "0.2.0-rc.1",
+  "dshVersion": "0.2.0-rc.2",
   "capturedFrom": "@deepseek-ai/dsh-web-app/cordis.patch.yml",
   "ids": [
     "account-controller",
