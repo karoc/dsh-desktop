@@ -1535,7 +1535,8 @@
         "follow-up"
       ],
       "createdAt": 1789990599180,
-      "updatedAt": 1789990599180
+      "updatedAt": 1791197565444,
+      "description": "**已核实（2026-10-05）**：问题仍在上游最新 checkout `5badb15`（新于 0.2.0-rc.2）。三处同类假设：① `llm-pi-ai/src/stream.ts:43` 对**错误消息文本**正则 `\\b(?:401|403)\\b` → AUTH（上游提供方自由文本不可控）；② `llm-deepseek/src/transport.ts:29` `status===403 → AUTH`，**不看 body 的 `type: server_error`**；③ 同类：`files-api.ts:50`、`discovery.ts:340`。**交付物**：可直接粘贴的上游报告稿 `docs/reports/2026-10-05-upstream-403-misclassified-as-auth.md`（含实测报文、代码坐标、最小改动建议、以及标注 `[本机未验证]` 的\"是否重试\"一条）。**卡在哪**：项目 token 对 `deepseek-ai/deepseek-harness` 只有读权限（`POST issues` → `Resource not accessible by personal access token`）→ **需要你用自己的账号提交**（或给我们一个有 issues:write 的 token）。"
     },
     {
       "id": "card-2e1da17b-a9c1-47a4-847b-e1766a0f7ebe",
