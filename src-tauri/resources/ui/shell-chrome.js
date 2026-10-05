@@ -702,19 +702,23 @@
   const PLUGIN_PROBE_EVERY_MS = 2000;
   const PLUGIN_PROBE_MAX_TICKS = 30; // ≈60s
   const PLUGIN_FAIL_RE = /Failed to load plugins|entry did not activate|pending \(waiting for service/;
-  /** 命中失败页时取一段人类可读的说明（含被点名的插件与原因行）。 */
+  /** 命中失败页时取一段人类可读的说明（含被点名的插件与原因行）。
+   *  用 innerText 而不是 textContent：失败页是块级元素堆叠，textContent 会把
+   *  `Failed to load plugins` / 插件名 / `web boot: …` 连成一串没有分隔的文本。 */
   function pluginFailureText() {
     const t = (document.body && document.body.textContent) || '';
     if (!PLUGIN_FAIL_RE.test(t)) return '';
-    const m = t.match(/Failed to load plugins[\s\S]{0,300}/);
-    const detail = (m ? m[0] : t).replace(/\s+/g, ' ').trim();
-    return detail.slice(0, 220);
+    const it = ((document.body && document.body.innerText) || t).replace(/\r/g, '');
+    const lines = it.split('\n').map((l) => l.trim()).filter(Boolean);
+    const start = lines.findIndex((l) => /Failed to load plugins/.test(l));
+    const block = (start >= 0 ? lines.slice(start, start + 5) : lines.slice(0, 5)).join(' · ');
+    return block.replace(/\s{2,}/g, ' ').slice(0, 220);
   }
   function probePluginFailure() {
     if (pluginProbeStopped || pluginDismissed) return;
     const detail = pluginFailureText();
     if (detail) {
-      pluginText.textContent = '⚠ ' + detail;
+      pluginText.textContent = '⚠ 有插件未能加载，界面因此不可用：' + detail;
       pluginText.title =
         detail +
         '\n\n这是插件加载 fail-closed 的结果：通常是某个第三方插件还在等 dsh 已移除的服务。' +
