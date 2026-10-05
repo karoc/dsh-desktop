@@ -28,13 +28,21 @@ Windows 上以 PWA 使用 dsh web GUI，屏幕上是**一个内容较多的会�
 
 ## 三、代码坐标
 
-- 虚拟化：`packages/client/ui-chat`、`ui-conversation`、`ui-session` 的 `package.json` 中**未见** `react-window`/`virtuoso`/`react-virtual`
-  （`git grep` 无命中）`[已验证: git grep 上述三个 package.json]`——即消息列表很可能是全量挂载，长会话下 DOM 持续增长（实测 5,297 节点）。
-- 持续重排的来源**未定位**（本次只做了"存在性"测量）：`git grep setInterval -- packages/client` 未命中明显的周期任务，
-  因此来源可能是 SSE 订阅的细粒度更新、`requestAnimationFrame` 循环、相对时间刷新或 CSS 动画/`content-visibility` 缺失。
-  **请维护者从"谁在每秒 120 次失效样式"入手**（DevTools Performance 录制 5 秒空闲即可看到调用栈）。
-- 附件尺寸：`ui-conversation/src/client/service.ts:95` 读取 `naturalWidth`（说明有尺寸探测），但未在本次核对中确认
-  是否按**显示尺寸下采样**后再入 DOM `[未核实]`。
+- **消息列表已经是虚拟化的**（**更正本报告初稿的错误结论**）：`packages/client/ui-chat/package.json:90` 依赖
+  `@tanstack/react-virtual`。因此"长会话全量挂载"**不是**本案的缺失环节；需要核对的变成**虚拟窗口的 overscan /
+  每屏渲染条目数**（实测打开的会话仍有 5,297 个 DOM 节点）`[已验证: git grep @tanstack/react-virtual]`。
+- **空闲期每秒都在跑的表（持续 style/layout 失效最可能的来源）** `[已验证: git grep setInterval -- packages/client]`：
+  `ui-chat/src/client/chat/RunningStatus.tsx:25`（`LIVE_RUN_CLOCK_INTERVAL_MS`）、
+  `ui-chat/src/client/chat/MessageItem.tsx:91`、
+  `ui-schedule/src/client/relative-clock.ts:32`、
+  `ui-jobs/src/client/JobListAction.tsx:365`、
+  `ui-subagent/src/client/SubagentHeaderLineage.tsx:209`、
+  `ui-user-questions/src/client/contract/slots.ts:372` ——
+  均为 `setInterval(() => setNow(Date.now()), 1000)` 形态：**每秒多处 `setState` ⇒ 子重渲染 ⇒ 样式失效与 layout**，
+  实测 ~120 次/秒即这些子树失效的合计。
+  `[假设：这些定时器是空闲失效的主因；请用 DevTools Performance 录 5 秒空闲、看 invalidate 的调用栈确认]`
+- 附件尺寸：`ui-conversation/src/client/service.ts:95` 读取 `naturalWidth`（有尺寸探测），但**是否按显示尺寸下采样**再入
+  DOM 未核实 `[未核实]`。
 
 ## 四、为什么值得修（影响）
 
@@ -45,7 +53,9 @@ Windows 上以 PWA 使用 dsh web GUI，屏幕上是**一个内容较多的会�
 ## 五、建议（可分别评估）
 
 1. **让空闲真正空闲**：定位并消除每秒百次的 style/layout 失效（阈值：空闲 5 秒内 layout/recalc 增量应接近 0）；
-2. **长会话虚拟化**（只挂载可视区），或对历史消息使用 `content-visibility: auto` 降低重排成本；
+2. **长会话**：虚拟化已具备（`@tanstack/react-virtual`）——建议核对 **overscan/每屏条目数**（实测 5,297 节点）、
+   以及**每秒时钟 tick 是否必须驱动整棵子树重渲染**（可把相对时间改成订阅式/把 `setNow` 限制在真正显示时钟的叶子节点），
+   并考虑对历史消息使用 `content-visibility: auto`；
 3. **图片按显示尺寸下采样**（`devicePixelRatio` 上限 + `srcset`/`createImageBitmap`），并给附件固定尺寸避免布局抖动；
 4. 加一条**回归门槛**：空闲 5 秒的 layout+recalc 增量与主线程 task 时间上限（例如 <50 次 / <100ms），把"页面永不静默"变成可测指标。
 
