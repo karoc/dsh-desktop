@@ -988,3 +988,16 @@ dsh-smoothly-anyrouter-relay-proxy: pending (waiting for service: settingsScope)
 1. **当下**：`src-tauri/Cargo.lock` 的 `dsh-desktop` 版本 → `0.15.0`；
 2. **断根**：`release-please-config.json` 根包加 `extra-files`（`type: toml` + jsonpath `$.package[?(@.name=="dsh-desktop")].version`）→ 以后发版由 release-please 自动同步该文件。**此前 v0.14.0 是手工对齐的 —— 那正是复发点**。
 **收尾方式**：该 release 资产为空、无人消费，因此把 `v0.15.0` tag 移到修好的提交并**重新派发** tag 构建（`gh workflow run build.yml --ref v0.15.0`），而不是立刻发 0.15.1（避免为一个纯机械失误制造版本碎片）。派发 run：37298331574。
+
+### 15.19 壳侧缓解：上游把 403 误判成 AUTH 时的界面提示（2026-10-05）
+
+**为什么壳里做**：上游确认是复合缺陷（`llm-pi-ai/src/stream.ts:43` 对错误文本正则 → `AUTH`；`llm-retry/src/index.ts:215` 的 `retryableCodes` 里没有 `AUTH`）⇒「403 抖动 → 归类 AUTH → 不重试 → GUI 报『API 密钥无效』」。该仓 `has_issues=false`、用户决定内部留存（见 `docs/reports/2026-10-05-upstream-403-misclassified-as-auth.md`），**但这句话是在我们壳承载的界面里显示的** —— 壳能做提示层面的缓解。
+
+**做了什么（纯提示层）**：`shell-chrome.js` 新增纯函数 `misleadingAuthHint(text)`（命中「API 密钥无效 / Invalid API key」时返回一句**不武断**的补充）+ 条幅 + 「重试本轮」按钮（**只替用户点应用自己的重试控件**，找不到就提示；**不自动重试**）。低频长跑探测（5s；失败轮次随时可能出现），可关闭且关闭后不再弹。
+**边界（刻意）**：不改分类、不改 dsh 代码（README 承诺 dsh 永远来自官方 npm 包）；壳**分不清**真实鉴权失败与上游抖动（文案相同）⇒ 措辞**不得断言**"不是密钥问题"，测试里加了措辞禁令断言。
+
+**验证（真门禁，含变异对照）**：契约测试新增 6 条断言（中文/英文命中 + 非鉴权失败/引导弹窗/非字符串三个负向对照 + 措辞禁令）；变异对照①正则改成永不命中 → 红；②措辞改成"这不是密钥问题。" → 红；`npm test` 17 套 42 PASS。
+
+**踩坑（值得记住）**：纯函数用到的正则必须声明在**函数体内**。chrome 在开头对测试沙箱 `if (TEST_HOOK) { …config…; return; }`，位于其后的外层 `const` 永不初始化，而函数声明会被提升 ⇒ 测试调用时命中 TDZ（`Cannot access 'AUTH_MISREPORT_RE' before initialization`）。
+
+**尚未做的设备级验证（已单独立卡，配方如下）**：① 本地桩返回 `HTTP 403` + `{"type":"server_error",…}`；② 在 dev 实例的 `settings.yaml` 配 `llm-pi-ai.providers.<route>`（`api`/`baseURL`/`models` + `apiKeyEnv`），并**先弄清 harness 凭据存储的写入方式**（本机读不到 `.credentials.yaml`，缺凭据会以 `MISSING_CREDENTIAL` 失败而非走到 AUTH 分支）；③ 用 Playwright 打开 dev 的 `dsh web` 新会话发一条消息 → 断言页面出现「API 密钥无效」；④ 重建 dev 壳后看同一条会话 → 条幅应出现；⑤ 负向对照：桩返回 502 → 条幅不得出现；点「重试本轮」应命中应用自己的重试控件。

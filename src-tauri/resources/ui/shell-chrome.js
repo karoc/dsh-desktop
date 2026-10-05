@@ -130,7 +130,7 @@
   if (TEST_HOOK) {
     // computeCaptionPlan 一并暴露：契约测试**断言它的返回值**（而不是对源码做
     // 字符串匹配）—— S8 的关键行为是"caption 模式不推挤 + 给客户端契约变量"。
-    TEST_HOOK.config = { SHELL_MENUS, ACTIONS, computeCaptionPlan, WINDOWS_TITLEBAR_H, SHELL_BAR_H };
+    TEST_HOOK.config = { SHELL_MENUS, ACTIONS, computeCaptionPlan, WINDOWS_TITLEBAR_H, SHELL_BAR_H, misleadingAuthHint };
     return;
   }
 
@@ -751,6 +751,66 @@
   pluginDismissBtn.addEventListener('click', () => { pluginDismissed = true; pluginBanner.hidden = true; });
   setInterval(probePluginFailure, PLUGIN_PROBE_EVERY_MS);
   probePluginFailure();
+
+  // ── 鉴权类误报提示：上游把 403/5xx 归成 AUTH 时，GUI 只会说「API 密钥无效」（2026-10-05）──
+  // 内部记录：docs/reports/2026-10-05-upstream-403-misclassified-as-auth.md —— 上游对 401/403 一律归
+  // `AUTH`（`llm-pi-ai/src/stream.ts:43` 甚至是对错误文本正则），而 `AUTH` 不在可重试白名单里
+  // （`llm-retry/src/index.ts:215`，默认 `['RATE_LIMIT','SERVER']`）⇒ 一次上游抖动被呈现成"密钥无效"。
+  // 壳改不了分类（README 承诺 dsh 永远来自官方 npm 包、本地零改动），但能在**提示层面**补一句
+  // **不武断**的说明 + 提供手动重试入口。
+  // ⚠️ 边界（刻意）：壳**分不清**"真密钥错"与"上游抖动"（文案相同），所以措辞不得断言"不是密钥问题"，
+  // 只能给出可能性；也**不自动重试**（会掩盖真实鉴权错误、放大请求量）——只帮用户点一下。
+  /**
+   * 页面文本里出现"鉴权失败"文案时返回一句**不武断**的补充提示；否则返回 ''。
+   * 纯函数（无 DOM 依赖）——由 scripts/test-shell-chrome.mjs 用 vm 沙箱直接验证。
+   * ⚠️ 正则以**函数内局部常量**声明，不用外层 `const`：chrome 对测试沙箱在第 130 行提前
+   * `return`，外层 const 永远不会初始化，而函数声明会被提升 ⇒ 测试调用时命中 TDZ
+   * （2026-10-05 实测踩到，报错 `Cannot access 'AUTH_MISREPORT_RE' before initialization`）。
+   * @param {string} text 页面文本
+   * @returns {string} 提示文案或空串
+   */
+  function misleadingAuthHint(text) {
+    const AUTH_MISREPORT_RE = /API 密钥无效|Invalid API key/;
+    if (typeof text !== 'string' || !AUTH_MISREPORT_RE.test(text)) return '';
+    return '这也可能是上游瞬时故障（403/5xx 被误判为鉴权失败）；若密钥确实正确，可直接重试本轮。';
+  }
+  const authBanner = document.createElement('div');
+  authBanner.className = 'errbanner';
+  authBanner.hidden = true;
+  const authText = document.createElement('span');
+  authText.className = 'err-text';
+  const authRetryBtn = document.createElement('button');
+  authRetryBtn.textContent = '重试本轮';
+  const authDismissBtn = document.createElement('button');
+  authDismissBtn.textContent = '✕';
+  authBanner.append(authText, authRetryBtn, authDismissBtn);
+  root.appendChild(authBanner);
+  let authDismissed = false;
+  let authShown = false;
+  /** 找应用自己的重试控件（我们不实现重试，只替用户点它）。 */
+  function findRetryControl() {
+    const rx = /^(重试|重试本轮|重新生成|Retry|Retry turn)$/i;
+    return [...document.querySelectorAll('button,[role=button]')]
+      .find((el) => rx.test((el.textContent || '').trim()));
+  }
+  function probeAuthMisreport() {
+    if (authShown) return;
+    const hint = misleadingAuthHint((document.body && document.body.textContent) || '');
+    if (!hint) return;
+    authShown = true;
+    authText.textContent = 'ⓘ ' + hint;
+    authText.title = 'DSH 把 401/403 一律归类为 AUTH，因此这句提示无法区分"密钥错误"与"上游瞬时故障"。';
+    authBanner.hidden = authDismissed;
+  }
+  authRetryBtn.addEventListener('click', () => {
+    const target = findRetryControl();
+    if (target) { target.click(); miniToast('已替你点击「重试」'); return; }
+    miniToast('未找到重试入口：请在失败的那一轮上点「重试」');
+  });
+  authDismissBtn.addEventListener('click', () => { authDismissed = true; authBanner.hidden = true; });
+  // 失败轮次随时可能出现 ⇒ 用低频长跑探测（5s 一次；每次只做字符串包含判断，正常使用开销可忽略）。
+  setInterval(probeAuthMisreport, 5000);
+  probeAuthMisreport();
 
   // ── 菜单开关 ────────────────────────────────────────────────────
   function closeMenus() {
