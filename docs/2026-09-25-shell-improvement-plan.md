@@ -979,3 +979,12 @@ dsh-smoothly-anyrouter-relay-proxy: pending (waiting for service: settingsScope)
 - 门禁：`node --check` + `test-shell-chrome.mjs`（契约）+ `npm test` **17 套 42 PASS**
 
 **覆盖边界（诚实）**：确认窗的"确认"是**键盘**驱动的（UIA 看不到 WebView 内的按钮）；未覆盖：确认窗里选"取消"的路径、条幅在**正式版**上的表现（本次只在 dev 实例验过；正式版要等下一次发布）。
+
+### 15.18 v0.15.0 发布事故与断根：release-please 不更新 Cargo.lock（2026-10-05）
+
+**事故**：release-please 的 0.15.0 PR 把 `package.json` / `tauri.conf.json` / `Cargo.toml` 升到 0.15.0，**但 `Cargo.lock` 里的 `dsh-desktop` 版本仍停在 0.14.0** → `test-manifest-consistency` 的「四处版本一致」门禁红 → **tag 构建的 `test` 作业失败、`windows`/`linux`/`release` 全部 skipped** ⇒ `v0.15.0` 有 tag、**资产为空**。
+**我的违规**：改 `lib.rs`（停用后自动重启）之后**没有重跑全量门禁**就提交 —— 这正是"HEAD 一动，旧结论作废"要防的事；本地跑一次就能提前发现（`test-manifest-consistency` 直接点名 Cargo.lock）。
+**修（两处，缺一即复发）**：
+1. **当下**：`src-tauri/Cargo.lock` 的 `dsh-desktop` 版本 → `0.15.0`；
+2. **断根**：`release-please-config.json` 根包加 `extra-files`（`type: toml` + jsonpath `$.package[?(@.name=="dsh-desktop")].version`）→ 以后发版由 release-please 自动同步该文件。**此前 v0.14.0 是手工对齐的 —— 那正是复发点**。
+**收尾方式**：该 release 资产为空、无人消费，因此把 `v0.15.0` tag 移到修好的提交并**重新派发** tag 构建（`gh workflow run build.yml --ref v0.15.0`），而不是立刻发 0.15.1（避免为一个纯机械失误制造版本碎片）。派发 run：37298331574。
