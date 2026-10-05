@@ -137,6 +137,10 @@ npm run bundle:dev   # = tauri build --config src-tauri/tauri.dev.conf.json --bu
 
 - 目录：`D:\Dev\dsh-desktop-dev`（= WSL 的 `/mnt/d/Dev/dsh-desktop-dev`，同一目录）。
 - 步骤：`git pull` + 检出目标分支 → `npm install` → `npm run bundle:dev`。
+- **⚠️ 两个会让"验证"变假的陷阱（2026-10-05 实测，各踩一次）**：
+  1. **`git checkout -f <branch>` 不会更新已存在的本地分支** —— dev 树里那个分支还停在旧提交，`-f` 只是丢弃工作区改动。结果：**构建的是旧代码，而你以为是新代码**（我因此白跑一次构建，产物里没有刚推的修复）。要拉最新：`git fetch origin && git checkout -f -B <branch> origin/<branch>`，并在构建前断言 `git log --oneline -1` 与远端一致。
+  2. **构建必须在 Windows 侧跑**：dev 树的 `node_modules` 是 Windows 装的，从 WSL 跑 `npm run bundle:dev` 会 `MODULE_NOT_FOUND`（`@tauri-apps/cli` 缺 Linux 原生绑定）。用 PowerShell 执行（`npm run` 的输出会有乱码，属正常）。
+- **⚠️ 构建前先停掉 dev 壳**：`dsh-desktop-dev.exe` 正在运行会锁住产物，`cargo` 报 `另一个程序正在使用此文件 (os error 32)` → 先 `Stop-Process`（只停自己启动的那个）再构建。
 - 产物：`src-tauri\target\release\bundle\nsis\DSH Smoothly Desktop Dev_<version>_x64-setup.exe`（~28MB）。
 - **本机 WSL 的 `/mnt/c`、`/mnt/d` 是 9p 只读挂载**——D 盘任何写入（clone/install/build）必须
   经 Windows interop：`/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile
