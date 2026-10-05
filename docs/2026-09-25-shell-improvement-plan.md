@@ -961,3 +961,21 @@ dsh-smoothly-anyrouter-relay-proxy: pending (waiting for service: settingsScope)
 
 **验证状态（诚实）**：`npm test` **17 套 42 PASS**（含新增用例与变异对照）；**NSIS 钩子的语法/打包由 CI 的 `windows` 作业覆盖**（钩子无效即构建失败）；
 **"升级后旧插件目录确实被删"这一行为本机未验证**（需构建安装器并实际安装）——配方：构建 dev 安装器 → 在已装 dev 版里手工放一个假插件目录（如 `dsh-legacy-stale/package.json`）→ 运行新安装器 → 断言该目录消失。已登记为覆盖缺口。
+
+### 15.17 缺陷 b 落地：插件加载失败时的一键自救（2026-10-05）
+
+**复现（先有失败态，再谈修）**：在 dev profile 里放一个"注入不存在服务"的假插件（`dsh-fake-pending`，`inject=['thisServiceDoesNotExist']`）→ 页面精确复现当年的失败态：`Failed to load plugins / dsh-fake-pending / web boot: 1 entry did not activate / import failed`。**这一步同时证明"插件 pending"与"入口 import 失败"是同一类 fail-closed 表现**（后者是本次的形态，前者是 ARRP 当天的形态）。
+
+**实现（chrome 单层，不改协议）**：`shell-chrome.js` 加有界探测（2s × 30 ≈ 60s 窗口，命中即停，正常使用零开销）识别失败页 → 显示条幅（含被点名的插件与原因行）+ 按钮「停用第三方插件并重启」。文案用 **innerText** 分行取文：第一版用 `textContent` 把块级元素连成了一串（`Failed to load pluginsdsh-fake-pendingweb boot:…`），实测发现后修正。
+
+**实测抓出的两处实现缺陷（都会让自救失效，且都被验证拦下）**：
+1. **`pending` 语义**：危险动作从远端页面调用时桥**不直接执行** —— 返回 `HTTP 202 + {pending:true, nonce}` 并弹壳确认窗。第一版按钮把 `pending` 当失败 → 会显示「停用失败：未知原因」。已改为提示"请在壳确认窗中确认"。
+2. **停用后无人重启**：运行中的 dsh 进程已加载那些插件，只 reload 页面不够 → 已在 Rust 侧让 `disable-plugins` 动作成功后**自动重启服务**（菜单项与桥两条路径同时受益，动作标题与说明同步改为"停用全部第三方插件并重启服务"）。
+
+**端到端验证（dev 实例，含负向对照）**：
+- 失败页 → 条幅出现且点名插件 ✅（截图 `_shots/rescue-banner2.png`）
+- 触发救援 → 桥返回 `pending:true` ✅ → 壳确认窗 `dsh.smoothly.desktop.dev-siw` 出现 ✅ → 确认（UIA 聚焦 + Enter）→ **manifest 被备份**（`package.json.bak-disable-plugins-1791195988`）✅ + **bundles 回退到 dsh 自带两层** ✅ + **服务重启**（manager 日志两条新 `dsh web: http`）✅ + **界面恢复为可用 dsh UI**（截图 `_shots/after-confirm.png`）✅
+- **负向对照**：清掉假插件、恢复 bundles 后重启 → 健康态**不得**出现条幅（截图 `_shots/negative-control.png`）✅
+- 门禁：`node --check` + `test-shell-chrome.mjs`（契约）+ `npm test` **17 套 42 PASS**
+
+**覆盖边界（诚实）**：确认窗的"确认"是**键盘**驱动的（UIA 看不到 WebView 内的按钮）；未覆盖：确认窗里选"取消"的路径、条幅在**正式版**上的表现（本次只在 dev 实例验过；正式版要等下一次发布）。

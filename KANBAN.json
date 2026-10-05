@@ -1977,7 +1977,7 @@
     {
       "id": "card-1a10b4e5a42-arrp-rescue",
       "title": "缺陷 b：dsh 能启动但插件 pending 时，启动页自救不触发（需壳侧检测 + 一键停用）",
-      "status": "todo",
+      "status": "done",
       "tags": [
         "shell",
         "shell-chrome",
@@ -1989,11 +1989,11 @@
         "verify"
       ],
       "rationale": "2026-10-04 实测：ARRP 1.1 停在 dsh 0.1.6 的 settingsScope seam 上 → dsh 的插件加载 fail-closed → 整个界面显示 \"Failed to load plugins / web boot: 1 entry did not activate\"，用户看到的是打不开的界面。壳里**已有**对应自救（bridge 端点 POST /shell/disable-third-party-plugins，Rust impl 会先备份 package.json 再停用），但只有**启动失败**时启动页才会提供它 —— dsh 能起来、只是插件 pending 的这种情况没有任何提示，用户只能自己猜。本次靠手工改 profile bundles 才救回正式版，说明这条路必须自动化。",
-      "rejected": "① **不改 Rust 新增端点**：`/shell/disable-third-party-plugins` 已存在且 chrome 已会调桥，加检测即可，避免重复实现与多一条危险端点。② **不在 manager 侧做**：正是本日 (a) 的教训 —— 会跑在仓库树/测试路径上的清理逻辑很危险；检测属于页面/壳层。③ **不做成\"自动停用\"**：停用第三方插件会改变用户的插件集合（ARRP 那种插件可能是其模型通道所必需），必须由用户点一下，只做\"提示 + 一键\"。④ **不只看 body 文本一次**：要轮询/观察一段时间，因为插件 pending 是启动后才出现的。",
-      "summary": null,
+      "rejected": "① 不改 Rust 新增端点（复用既有 `/shell/disable-third-party-plugins`）；② 不放 manager 侧 —— 当日缺陷 a 的教训（manager 会跑在仓库树/测试路径上）；③ 不做\"自动停用\"（会改用户插件集合，必须用户确认一下）；④ 不只查一次文本（失败态在启动后才出现，用有界轮询）；⑤ 文案不用 `textContent`（实测会把块级元素连成一串，改 `innerText`）。",
+      "summary": "已修并端到端验证（dev 实例，先造失败态再修）：① dev profile 放\"注入不存在服务\"的假插件 `dsh-fake-pending` 精确复现 `Failed to load plugins / web boot: 1 entry did not activate`；② `shell-chrome.js` 加有界探测（2s×30≈60s，命中即停）+ 条幅（点名肇事插件）+「停用第三方插件并重启」；③ Rust 侧 `disable-plugins` 动作成功后自动重启服务（停用不重启不生效）；④ `pending` 语义修正（危险动作从远端页调用返回 HTTP 202 + pending，需壳确认窗，第一版误判为失败）。验证：条幅出现且点名插件 → 触发 → 确认窗 → 确认后 manifest 被备份（`package.json.bak-disable-plugins-1791195988`）+ bundles 回退到 dsh 自带两层 + 服务重启 + 界面恢复可用 dsh UI（截图 `_shots/after-confirm.png`）；负向对照：健康态无条幅（`_shots/negative-control.png`）；门禁 17 套 42 PASS。覆盖边界：确认窗走键盘驱动，未覆盖\"取消\"路径与正式版表现（等下次发布）。",
       "description": "设计（已定）：在 `src-tauri/resources/ui/shell-chrome.js` 里加一个探测器 —— 页面加载后观察 `document.body.innerText` 是否出现 `Failed to load plugins` / `entry did not activate`（MutationObserver + 定时兜底，含首次立即检查）；命中则在壳 chrome 里显示一条横幅（复用既有 shadow-DOM UI 基元）：文案说明\"某些插件未能加载，界面因此不可用\"，按钮\"停用全部第三方插件并重载\" → 调 `POST /shell/disable-third-party-plugins`（既有端点，先备份 package.json）→ 成功后 `/refresh`。注意：chrome 是 `include_str!` 编进二进制的 → **必须重建壳**才能生效。\n复现（无需真坏插件）：在 dev 实例的 profile bundles 里加一个\"注入了不存在服务\"的假插件（与 ARRP 当时一样 pending），或直接把 ARRP 旧版本（settingsScope 版）链回 profile；重启 dev 壳 → 页面应出现该错误态。\n验证：① 重建前先复现错误态并截图留证；② 重建后用同一错误态确认横幅出现；③ 用 UIA/CDP 点按钮 → 断言 package.json 被备份、第三方插件被停用、页面恢复可用（无 Failed to load plugins）；④ 负向对照：正常状态下**不得**出现横幅。",
       "createdAt": 1791191046722,
-      "updatedAt": 1791191046722
+      "updatedAt": 1791196248562
     }
   ]
 }
