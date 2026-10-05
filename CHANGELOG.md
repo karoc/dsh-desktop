@@ -21,6 +21,18 @@
 >
 > 详情见 `.agents/notes/implemented/bug-fix/2026-09-08-legacy-uninstaller-name-kill.md`。
 
+## [0.16.0](https://github.com/karoc/dsh-desktop/compare/v0.15.0...v0.16.0) (2026-10-05)
+
+
+### Features
+
+* **shell:** 上游 403 误判 AUTH 时的界面提示 + 手动重试入口 ([#102](https://github.com/karoc/dsh-desktop/issues/102)) ([c6c84a7](https://github.com/karoc/dsh-desktop/commit/c6c84a7fd079ac31a814752a4e58150ee94fd9d0))
+
+
+### Bug Fixes
+
+* **report:** 更正上游报告里的虚拟化结论，并补上"空闲每秒重排"的最可能来源坐标 ([#97](https://github.com/karoc/dsh-desktop/issues/97)) ([2585393](https://github.com/karoc/dsh-desktop/commit/258539353c0d64d8175ec35aee29af33c0909712))
+
 ## [0.15.0](https://github.com/karoc/dsh-desktop/compare/v0.14.0...v0.15.0) (2026-10-05)
 
 
