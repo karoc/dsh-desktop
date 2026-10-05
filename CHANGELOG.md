@@ -21,6 +21,24 @@
 >
 > 详情见 `.agents/notes/implemented/bug-fix/2026-09-08-legacy-uninstaller-name-kill.md`。
 
+## [0.15.0](https://github.com/karoc/dsh-desktop/compare/v0.14.0...v0.15.0) (2026-10-05)
+
+
+### Features
+
+* **manager:** 地板抬到 0.2.0-rc.2（npm latest 已从 rc.1 毕业）+ fixture 标签刷新 ([#83](https://github.com/karoc/dsh-desktop/issues/83)) ([3121bed](https://github.com/karoc/dsh-desktop/commit/3121bed5556ad1a1525de917a3d97901f8a372b3))
+* **shell:** 插件加载失败时的一键自救条幅（fail-closed 不再只能手改 profile） ([#87](https://github.com/karoc/dsh-desktop/issues/87)) ([923aac0](https://github.com/karoc/dsh-desktop/commit/923aac007955860aa3105b9b6178c5ba8dffd3aa))
+
+
+### Bug Fixes
+
+* **installer:** 升级时清理遗留的随包插件目录（NSIS PREINSTALL 钩子） ([#85](https://github.com/karoc/dsh-desktop/issues/85)) ([928dc2b](https://github.com/karoc/dsh-desktop/commit/928dc2b9de6764aff45f126f4ee337d2f8919368))
+
+
+### Chores
+
+* **board:** 结案「安装 v0.14.0」、登记「插件 pending 时自救不触发」（缺陷 b） ([#86](https://github.com/karoc/dsh-desktop/issues/86)) ([e36f3bc](https://github.com/karoc/dsh-desktop/commit/e36f3bc2327e57afebb986180990cc0db9b01cef))
+
 ## [0.14.0](https://github.com/karoc/dsh-desktop/compare/v0.13.0...v0.14.0) (2026-10-04)
 
 
