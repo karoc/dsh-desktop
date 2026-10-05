@@ -17,7 +17,7 @@
 | 壳 UI 设计 token | [`2026-09-02-ui-design-tokens.md`](2026-09-02-ui-design-tokens.md) | 设计参考（活文档） |
 | 方案与决策记录（含 dsh 升级回归的全过程与当前契约） | [`2026-09-25-shell-improvement-plan.md`](2026-09-25-shell-improvement-plan.md) | **先读文件顶部的「当前状态摘要」**；§13/§15 是历史记录，配方真源在技能里 |
 | 上游缺陷内部记录·渲染成本（**不提交**） | [`reports/2026-10-05-upstream-web-gui-never-idles.md`](reports/2026-10-05-upstream-web-gui-never-idles.md) | 实测空闲仍 ~120 次/秒 style+layout 失效；长会话 + 大图下 GPU 可被拉满 |
-| 上游缺陷内部记录（**不提交**，2026-10-05 决定） | [`reports/2026-10-05-upstream-403-misclassified-as-auth.md`](reports/2026-10-05-upstream-403-misclassified-as-auth.md) | 403+`server_error` 被归类 AUTH（GUI 报「API 密钥无效」）；本仓只有读权限，需你提交 |
+| 上游缺陷内部记录（**不提交**，2026-10-05 决定） | [`reports/2026-10-05-upstream-403-misclassified-as-auth.md`](reports/2026-10-05-upstream-403-misclassified-as-auth.md) | 403+`server_error` 被归类 AUTH 且不在可重试白名单（GUI 报「API 密钥无效」）；**决定不提交，作为内部记录** |
 | 决策理由（为什么这么做、放弃了什么） | [`../.agents/notes/implemented/**`](../.agents/notes/implemented) | 每次非平凡改动一篇；按 class 分目录 |
 | 版本变更 | [`../CHANGELOG.md`](../CHANGELOG.md) | release-please 维护 |
 
