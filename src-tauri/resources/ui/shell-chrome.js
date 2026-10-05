@@ -677,6 +677,73 @@
   setInterval(updateErrorBanner, 3000);
   updateErrorBanner();
 
+  // ── 插件加载失败条幅：fail-closed 自救（2026-10-04 生产事故）─────────────────
+  // 第三方插件若停在"已从 dsh 移除的服务"上（典型 `settingsScope`，0.1.7 起移除），dsh 的插件
+  // 加载是 **fail-closed**：整个界面只剩「Failed to load plugins / web boot: N entry did not
+  // activate」，而启动页的自救只在**服务起不来**时出现 —— 用户只能自己去改 profile 的 bundles
+  // 才救得回来（当天就是这么救的）。这里补上检测 + 一键自救：
+  //   停用全部第三方插件（桥端点会先备份 profile manifest）→ 重启服务（只 reload 页面不够，
+  //   运行中的 dsh 进程已经加载了那些插件）。
+  // 探测是**有界**的：失败页在启动后几秒内出现，窗口内没命中就停止，正常使用零开销。
+  const pluginBanner = document.createElement('div');
+  pluginBanner.className = 'errbanner';
+  pluginBanner.hidden = true;
+  const pluginText = document.createElement('span');
+  pluginText.className = 'err-text';
+  const pluginFixBtn = document.createElement('button');
+  pluginFixBtn.textContent = '停用第三方插件并重启';
+  const pluginDismissBtn = document.createElement('button');
+  pluginDismissBtn.textContent = '✕';
+  pluginBanner.append(pluginText, pluginFixBtn, pluginDismissBtn);
+  root.appendChild(pluginBanner);
+  let pluginDismissed = false;
+  let pluginProbeStopped = false;
+  let pluginProbeTicks = 0;
+  const PLUGIN_PROBE_EVERY_MS = 2000;
+  const PLUGIN_PROBE_MAX_TICKS = 30; // ≈60s
+  const PLUGIN_FAIL_RE = /Failed to load plugins|entry did not activate|pending \(waiting for service/;
+  /** 命中失败页时取一段人类可读的说明（含被点名的插件与原因行）。 */
+  function pluginFailureText() {
+    const t = (document.body && document.body.textContent) || '';
+    if (!PLUGIN_FAIL_RE.test(t)) return '';
+    const m = t.match(/Failed to load plugins[\s\S]{0,300}/);
+    const detail = (m ? m[0] : t).replace(/\s+/g, ' ').trim();
+    return detail.slice(0, 220);
+  }
+  function probePluginFailure() {
+    if (pluginProbeStopped || pluginDismissed) return;
+    const detail = pluginFailureText();
+    if (detail) {
+      pluginText.textContent = '⚠ ' + detail;
+      pluginText.title =
+        detail +
+        '\n\n这是插件加载 fail-closed 的结果：通常是某个第三方插件还在等 dsh 已移除的服务。' +
+        '「停用第三方插件并重启」会先备份 profile 的 package.json，再重启 dsh 服务。';
+      pluginBanner.hidden = false;
+      pluginProbeStopped = true; // 失败态不会自愈：命中即停，避免持续扫描
+      return;
+    }
+    if (++pluginProbeTicks >= PLUGIN_PROBE_MAX_TICKS) pluginProbeStopped = true;
+  }
+  pluginFixBtn.addEventListener('click', () => {
+    pluginFixBtn.disabled = true;
+    pluginFixBtn.textContent = '正在停用…';
+    bridge('/shell/disable-third-party-plugins', 'POST').then((r) => {
+      if (r && r.ok === true) {
+        miniToast('已停用第三方插件（manifest 已备份），正在重启服务…');
+        pluginFixBtn.textContent = '正在重启…';
+        return bridge('/restart', 'POST');
+      }
+      pluginFixBtn.disabled = false;
+      pluginFixBtn.textContent = '停用第三方插件并重启';
+      miniToast('停用失败：' + ((r && (r.error || r.message)) || '未知原因'));
+      return null;
+    });
+  });
+  pluginDismissBtn.addEventListener('click', () => { pluginDismissed = true; pluginBanner.hidden = true; });
+  setInterval(probePluginFailure, PLUGIN_PROBE_EVERY_MS);
+  probePluginFailure();
+
   // ── 菜单开关 ────────────────────────────────────────────────────
   function closeMenus() {
     openMenuId = null;
