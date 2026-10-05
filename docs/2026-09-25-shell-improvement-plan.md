@@ -1001,3 +1001,26 @@ dsh-smoothly-anyrouter-relay-proxy: pending (waiting for service: settingsScope)
 **踩坑（值得记住）**：纯函数用到的正则必须声明在**函数体内**。chrome 在开头对测试沙箱 `if (TEST_HOOK) { …config…; return; }`，位于其后的外层 `const` 永不初始化，而函数声明会被提升 ⇒ 测试调用时命中 TDZ（`Cannot access 'AUTH_MISREPORT_RE' before initialization`）。
 
 **尚未做的设备级验证（已单独立卡，配方如下）**：① 本地桩返回 `HTTP 403` + `{"type":"server_error",…}`；② 在 dev 实例的 `settings.yaml` 配 `llm-pi-ai.providers.<route>`（`api`/`baseURL`/`models` + `apiKeyEnv`），并**先弄清 harness 凭据存储的写入方式**（本机读不到 `.credentials.yaml`，缺凭据会以 `MISSING_CREDENTIAL` 失败而非走到 AUTH 分支）；③ 用 Playwright 打开 dev 的 `dsh web` 新会话发一条消息 → 断言页面出现「API 密钥无效」；④ 重建 dev 壳后看同一条会话 → 条幅应出现；⑤ 负向对照：桩返回 502 → 条幅不得出现；点「重试本轮」应命中应用自己的重试控件。
+
+### 15.20 Cargo.lock 版本漂移的真实根因 + 我两次流程失误（2026-10-06）
+
+**根因（本次查明）**：release-please 的 `extra-files` 对 `src-tauri/Cargo.lock` 用的是**过滤式 jsonpath**
+（`$.package[?(@.name=="dsh-desktop")].version`）—— 实测**静默不生效**：v0.16.0 的 release PR (#90) diff 里
+只有 `package.json` / `src-tauri/Cargo.toml` / `src-tauri/tauri.conf.json` / `.release-please-manifest.json` /
+`CHANGELOG.md`，**完全没有 Cargo.lock**。于是"四处版本一致"门禁再次红、tag 构建的 test 作业再次失败。
+⇒ §15.18 里那次"断根"其实**没有断根**（我只验证了配置写进去了，没验证它真的改了文件 —— 典型的"配置存在 ≠ 机制生效"）。
+
+**这次的修法（两层）**：
+1. **确定性同步脚本** `scripts/sync-cargo-lock-version.mjs`：以 `src-tauri/Cargo.toml` 为真源，**精确定位
+   `[[package]] name = "dsh-desktop"` 段**改写版本（不用 generic 的逐字替换，避免误伤同版本依赖）；
+   已接到 `bundle` / `bundle:dev` 之前 ⇒ 任何打包都先归一化派生文件。
+2. **CI 归一化**：`.github/workflows/build.yml` 的 test 作业加一步，**仅 tag 构建**（`startsWith(github.ref,'refs/tags/')`）
+   先跑同步 ⇒ tag 发布不会再因这个机械漂移失败；**PR/main 仍走严格门禁**（漂移会在 release PR 的 checks 里被抓到）。
+3. `extra-files` 里的 Cargo.lock 条目改为 `generic` 已无必要（脚本更精确），**保留配置但不再依赖它**。
+
+**我的两次流程失误（如实记录）**：
+- **① 把"配置已写"当成"机制已生效"**：§15.18 声称断根，实测没断 —— 教训：机制类修复必须验证**效果**（文件真的被改了），
+  而不是验证"配置存在"；这也正是"负向对照 / 可失败验证"要防的形态。
+- **② 用 `--admin` 盲合并 release PR**：`gh pr view 90` 已经显示 `checks:` 为空，我却没读就直接合并 ⇒ 把一个
+  必然失败的 release 合成 v0.16.0。**规则（即刻生效）**：**合并任何 release/tag PR 之前，必须看到 `test` 与 `check`
+  两项都是 pass**；checks 为空 = 尚未跑 = 不能合。

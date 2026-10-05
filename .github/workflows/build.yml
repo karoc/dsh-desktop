@@ -60,6 +60,10 @@ jobs:
       - run: npm ci
       - run: npm test
 
+      - name: Sync derived Cargo.lock version (tag builds only)
+        if: startsWith(github.ref, 'refs/tags/')
+        run: node scripts/sync-cargo-lock-version.mjs
+
   # Full gate — main push / tag only (not on PRs): NSIS bundle + layout
   # assertion + runtime smoke (release gate, see scripts/smoke-windows.mjs).
   windows:
