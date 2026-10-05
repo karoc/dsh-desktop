@@ -731,12 +731,16 @@
   }
   pluginFixBtn.addEventListener('click', () => {
     pluginFixBtn.disabled = true;
-    pluginFixBtn.textContent = '正在停用…';
+    pluginFixBtn.textContent = '等待确认…';
+    // 危险动作从远端页面调用时，桥**不直接执行**：登记一次性槽位并弹出壳确认窗
+    // （HTTP 202 + {pending:true, nonce}）。确认后由壳执行「停用 + 重启」——
+    // 所以这里既不能当成成功，也不能当成失败（2026-10-05 实测：第一版把 pending
+    // 误判为失败，会显示"停用失败：未知原因"）。
     bridge('/shell/disable-third-party-plugins', 'POST').then((r) => {
-      if (r && r.ok === true) {
-        miniToast('已停用第三方插件（manifest 已备份），正在重启服务…');
-        pluginFixBtn.textContent = '正在重启…';
-        return bridge('/restart', 'POST');
+      if (r && r.pending === true) {
+        miniToast('请在壳确认窗中确认；确认后会停用第三方插件并自动重启服务');
+        pluginFixBtn.textContent = '等待壳确认…';
+        return null;
       }
       pluginFixBtn.disabled = false;
       pluginFixBtn.textContent = '停用第三方插件并重启';

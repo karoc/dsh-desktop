@@ -2038,7 +2038,7 @@ fn dangerous_bridge_action(method: &str, path: &str) -> Option<DangerAction> {
         ),
         "/shell/disable-third-party-plugins" => action(
             "disable-plugins",
-            "停用全部第三方插件",
+            "停用全部第三方插件并重启服务",
             "把 profile 的启用列表回退到 dsh 自带两层；改动前会先备份 profile 配置。",
         ),
         "/shell/cleanup-caches" => action(
@@ -2232,7 +2232,13 @@ fn execute_danger_action(app: &AppHandle, id: &str, body: &str) -> Result<(), St
         }
         "disable-plugins" => {
             let r = disable_third_party_plugins(app.clone())?;
-            if r.get("ok").and_then(|v| v.as_bool()) == Some(true) { Ok(()) } else { Err(r.to_string()) }
+            if r.get("ok").and_then(|v| v.as_bool()) == Some(true) {
+                // 停用后**必须重启**才生效：运行中的 dsh 进程已经加载了那些插件，只 reload
+                // 页面不够（2026-10-05 实测：停用后不重启，界面仍是「Failed to load plugins」）。
+                // 菜单项与桥端点走的是同一个动作，两个入口同时受益。
+                let _ = restart_server(app.clone(), app.state::<ServerState>());
+                Ok(())
+            } else { Err(r.to_string()) }
         }
         "cleanup-caches" => {
             let _ = cleanup_caches(app.clone());
