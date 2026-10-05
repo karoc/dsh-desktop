@@ -677,6 +677,81 @@
   setInterval(updateErrorBanner, 3000);
   updateErrorBanner();
 
+  // ── 插件加载失败条幅：fail-closed 自救（2026-10-04 生产事故）─────────────────
+  // 第三方插件若停在"已从 dsh 移除的服务"上（典型 `settingsScope`，0.1.7 起移除），dsh 的插件
+  // 加载是 **fail-closed**：整个界面只剩「Failed to load plugins / web boot: N entry did not
+  // activate」，而启动页的自救只在**服务起不来**时出现 —— 用户只能自己去改 profile 的 bundles
+  // 才救得回来（当天就是这么救的）。这里补上检测 + 一键自救：
+  //   停用全部第三方插件（桥端点会先备份 profile manifest）→ 重启服务（只 reload 页面不够，
+  //   运行中的 dsh 进程已经加载了那些插件）。
+  // 探测是**有界**的：失败页在启动后几秒内出现，窗口内没命中就停止，正常使用零开销。
+  const pluginBanner = document.createElement('div');
+  pluginBanner.className = 'errbanner';
+  pluginBanner.hidden = true;
+  const pluginText = document.createElement('span');
+  pluginText.className = 'err-text';
+  const pluginFixBtn = document.createElement('button');
+  pluginFixBtn.textContent = '停用第三方插件并重启';
+  const pluginDismissBtn = document.createElement('button');
+  pluginDismissBtn.textContent = '✕';
+  pluginBanner.append(pluginText, pluginFixBtn, pluginDismissBtn);
+  root.appendChild(pluginBanner);
+  let pluginDismissed = false;
+  let pluginProbeStopped = false;
+  let pluginProbeTicks = 0;
+  const PLUGIN_PROBE_EVERY_MS = 2000;
+  const PLUGIN_PROBE_MAX_TICKS = 30; // ≈60s
+  const PLUGIN_FAIL_RE = /Failed to load plugins|entry did not activate|pending \(waiting for service/;
+  /** 命中失败页时取一段人类可读的说明（含被点名的插件与原因行）。
+   *  用 innerText 而不是 textContent：失败页是块级元素堆叠，textContent 会把
+   *  `Failed to load plugins` / 插件名 / `web boot: …` 连成一串没有分隔的文本。 */
+  function pluginFailureText() {
+    const t = (document.body && document.body.textContent) || '';
+    if (!PLUGIN_FAIL_RE.test(t)) return '';
+    const it = ((document.body && document.body.innerText) || t).replace(/\r/g, '');
+    const lines = it.split('\n').map((l) => l.trim()).filter(Boolean);
+    const start = lines.findIndex((l) => /Failed to load plugins/.test(l));
+    const block = (start >= 0 ? lines.slice(start, start + 5) : lines.slice(0, 5)).join(' · ');
+    return block.replace(/\s{2,}/g, ' ').slice(0, 220);
+  }
+  function probePluginFailure() {
+    if (pluginProbeStopped || pluginDismissed) return;
+    const detail = pluginFailureText();
+    if (detail) {
+      pluginText.textContent = '⚠ 有插件未能加载，界面因此不可用：' + detail;
+      pluginText.title =
+        detail +
+        '\n\n这是插件加载 fail-closed 的结果：通常是某个第三方插件还在等 dsh 已移除的服务。' +
+        '「停用第三方插件并重启」会先备份 profile 的 package.json，再重启 dsh 服务。';
+      pluginBanner.hidden = false;
+      pluginProbeStopped = true; // 失败态不会自愈：命中即停，避免持续扫描
+      return;
+    }
+    if (++pluginProbeTicks >= PLUGIN_PROBE_MAX_TICKS) pluginProbeStopped = true;
+  }
+  pluginFixBtn.addEventListener('click', () => {
+    pluginFixBtn.disabled = true;
+    pluginFixBtn.textContent = '等待确认…';
+    // 危险动作从远端页面调用时，桥**不直接执行**：登记一次性槽位并弹出壳确认窗
+    // （HTTP 202 + {pending:true, nonce}）。确认后由壳执行「停用 + 重启」——
+    // 所以这里既不能当成成功，也不能当成失败（2026-10-05 实测：第一版把 pending
+    // 误判为失败，会显示"停用失败：未知原因"）。
+    bridge('/shell/disable-third-party-plugins', 'POST').then((r) => {
+      if (r && r.pending === true) {
+        miniToast('请在壳确认窗中确认；确认后会停用第三方插件并自动重启服务');
+        pluginFixBtn.textContent = '等待壳确认…';
+        return null;
+      }
+      pluginFixBtn.disabled = false;
+      pluginFixBtn.textContent = '停用第三方插件并重启';
+      miniToast('停用失败：' + ((r && (r.error || r.message)) || '未知原因'));
+      return null;
+    });
+  });
+  pluginDismissBtn.addEventListener('click', () => { pluginDismissed = true; pluginBanner.hidden = true; });
+  setInterval(probePluginFailure, PLUGIN_PROBE_EVERY_MS);
+  probePluginFailure();
+
   // ── 菜单开关 ────────────────────────────────────────────────────
   function closeMenus() {
     openMenuId = null;
