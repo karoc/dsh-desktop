@@ -913,6 +913,25 @@ fn should_delete_shortcut(lnk: &std::path::Path, legacy_dir: &std::path::Path) -
         .unwrap_or(false)
 }
 
+/// 清理旧版安装前的**纯判定**：是否允许进入销毁流程。
+/// `None` = 允许；`Some(reason)` = 拒绝（并把 reason 回给调用方与用户）。
+///
+/// 这条判定原先是 `legacy-cleanup` 里的两段内联判断，且**只在 NSIS 钩子脚本里被验证过**
+/// （`scripts/verify-legacy-hook.nsi/.ps1`）。那对脚本验证的钩子文件已随旧版接管迁到 Rust 而删除，
+/// 脚本却留在仓库里**永远跑不起来**（2026-10-06 质量审计）。2026-10-06 把判定抽成纯函数 + 单测，
+/// 覆盖脚本原本守的三个分支（无残留 / 旧版主程序仍在 ⇒ 拒绝 / 允许），随后删除那两个脚本。
+fn legacy_cleanup_refusal(has_legacy_dir: bool, main_exe_present: bool) -> Option<&'static str> {
+    if !has_legacy_dir {
+        return Some("no-legacy");
+    }
+    if main_exe_present {
+        // 旧版主程序仍在：它的卸载器按 exe 名静默 kill（含壳自身 / 正在跑的正式版），绝不能执行；
+        // 且**不得删除它的快捷方式**（2026-09-17 修复的真实缺陷：拒绝接管却删入口 ⇒ 应用"凭空消失"）。
+        return Some("legacy-app-present");
+    }
+    None
+}
+
 /// 备份失败时的统一返回形状：**明确表示什么都没动**（`ok:false` + 三个 removed 计数全 0）。
 /// 单测 `backup_failure_json_blocks_destructive_path` 钉住这个契约。
 fn backup_failure_json(reason: &str) -> serde_json::Value {
@@ -1055,15 +1074,24 @@ fn legacy_cleanup_json(app: &AppHandle) -> serde_json::Value {
         eprintln!("[dsh-desktop] legacy-cleanup: {m}");
         log_line(&data, &format!("legacy-cleanup: {m}"));
     };
-    let Some(legacy) = legacy_install_dir(&local) else {
-        return serde_json::json!({ "ok": false, "reason": "no-legacy", "removedUninstaller": false, "removedDir": false, "removedShortcuts": 0 });
-    };
-    // 旧版主程序仍在：它的卸载器按 exe 名静默 kill（含壳自身 / 正在跑的正式版），
-    // 绝不能执行；改由用户手动卸载。
-    if legacy.join("dsh-desktop.exe").is_file() {
-        log("legacy main exe present — refusing to run its uninstaller (kills same-named exe)");
-        return serde_json::json!({ "ok": false, "reason": "legacy-app-present", "removedUninstaller": false, "removedDir": false, "removedShortcuts": 0 });
+    let legacy_opt = legacy_install_dir(&local);
+    let main_exe_present = legacy_opt
+        .as_ref()
+        .map(|d| d.join("dsh-desktop.exe").is_file())
+        .unwrap_or(false);
+    match legacy_cleanup_refusal(legacy_opt.is_some(), main_exe_present) {
+        Some("no-legacy") => {
+            return serde_json::json!({ "ok": false, "reason": "no-legacy", "removedUninstaller": false, "removedDir": false, "removedShortcuts": 0 });
+        }
+        Some(reason) => {
+            log("legacy main exe present — refusing to run its uninstaller (kills same-named exe)");
+            return backup_failure_json(reason);
+        }
+        None => {}
     }
+    let Some(legacy) = legacy_opt else {
+        return backup_failure_json("no-legacy");
+    };
     // 1) 旧数据目录若已被旧壳重建（空壳产物），先备份其关键数据（纯保险，大概率空）。
     let old_home = data.parent().map(|b| b.join("dev.dsh.desktop").join("runtime").join("dsh-home"));
     if let Some(old_home) = old_home {
@@ -1393,6 +1421,29 @@ mod migration_tests {
 
     fn tmp_base(tag: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("dsh-mig-{tag}-{}", std::process::id()))
+    }
+
+    #[test]
+    fn legacy_cleanup_refusal_covers_all_three_branches() {
+        // 迁移自 scripts/verify-legacy-hook.nsi/.ps1 的三个场景（那两个脚本验证的钩子已不存在）：
+        assert_eq!(legacy_cleanup_refusal(false, false), Some("no-legacy"));
+        // 旧版主程序仍在 ⇒ 拒绝（**且不得删它的快捷方式** —— 2026-09-17 修的真实缺陷）
+        assert_eq!(legacy_cleanup_refusal(true, true), Some("legacy-app-present"));
+        // 只有残留目录、主程序已不在（孤儿）⇒ 允许清理
+        assert_eq!(legacy_cleanup_refusal(true, false), None);
+        // 无目录但有主程序（异常组合）仍按"无残留"处理
+        assert_eq!(legacy_cleanup_refusal(false, true), Some("no-legacy"));
+    }
+
+    #[test]
+    fn refusal_json_reports_nothing_removed() {
+        // 拒绝路径回给调用方的形状必须是"什么都没动"（旧版在跑的按钮因此不会误报已清理）。
+        let v = backup_failure_json("legacy-app-present");
+        assert_eq!(v["ok"], serde_json::json!(false));
+        assert_eq!(v["reason"], serde_json::json!("legacy-app-present"));
+        assert_eq!(v["removedUninstaller"], serde_json::json!(false));
+        assert_eq!(v["removedDir"], serde_json::json!(false));
+        assert_eq!(v["removedShortcuts"], serde_json::json!(0));
     }
 
     #[test]
