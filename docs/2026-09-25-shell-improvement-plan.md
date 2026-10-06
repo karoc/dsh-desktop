@@ -1001,3 +1001,15 @@ dsh-smoothly-anyrouter-relay-proxy: pending (waiting for service: settingsScope)
 **踩坑（值得记住）**：纯函数用到的正则必须声明在**函数体内**。chrome 在开头对测试沙箱 `if (TEST_HOOK) { …config…; return; }`，位于其后的外层 `const` 永不初始化，而函数声明会被提升 ⇒ 测试调用时命中 TDZ（`Cannot access 'AUTH_MISREPORT_RE' before initialization`）。
 
 **尚未做的设备级验证（已单独立卡，配方如下）**：① 本地桩返回 `HTTP 403` + `{"type":"server_error",…}`；② 在 dev 实例的 `settings.yaml` 配 `llm-pi-ai.providers.<route>`（`api`/`baseURL`/`models` + `apiKeyEnv`），并**先弄清 harness 凭据存储的写入方式**（本机读不到 `.credentials.yaml`，缺凭据会以 `MISSING_CREDENTIAL` 失败而非走到 AUTH 分支）；③ 用 Playwright 打开 dev 的 `dsh web` 新会话发一条消息 → 断言页面出现「API 密钥无效」；④ 重建 dev 壳后看同一条会话 → 条幅应出现；⑤ 负向对照：桩返回 502 → 条幅不得出现；点「重试本轮」应命中应用自己的重试控件。
+
+### 15.21 P3「旧版接管加固」核实结论：三项**均已修复或不适用**（2026-10-06）
+
+需求原文在 `docs/archive/2026-09-09-pending-cards-solutions.md` §4。逐项核对当前代码：
+
+- **① NSIS 钩子删 lnk 未校验（原判为真实缺陷）→ 已消除**：`legacy-takeover.nsh` **已不存在**（当前 `src-tauri/nsis-hooks.nsh` 无任何 lnk 操作）；Rust 侧 `legacy_cleanup_json`（`lib.rs:1024`）在检测到旧版主程序存在时**提前返回** ——
+  `if legacy.join("dsh-desktop.exe").is_file() { … return {"reason":"legacy-app-present","removedShortcuts":0} }` ⇒ 「拒绝执行旧版卸载器，却删掉它的快捷方式」这条路径**不再存在**；删快捷方式只发生在孤儿分支，且必过 `should_delete_shortcut` 的 target 校验。
+- **② `should_delete_shortcut` 前缀匹配（无边界 + 大小写漏删）→ 已修**：`path_under`（`lib.rs:781`，`#[cfg(windows)]`）**逐段比较 + 段内 `to_ascii_lowercase`**；`should_delete_shortcut`（`:906`）与 `legacy_process_running`（`:823`）共用它；单测 `path_under_uses_component_boundaries_not_string_prefix`（`:1489`）同时断言"相似名不命中"与"大小写命中"，另有 `legacy-lnk` 场景测试。
+- **④ `legacy_ident_for` 口径 → 不适用**：全仓无该函数。`LEGACY_IDENT_MIGRATIONS`（`:604`）已是唯一映射表；`legacy_check_json`/`legacy_cleanup_json` 里硬编码的 `"dev.dsh.desktop"` **与该表映射值一致**（指旧目录名，不是身份串），无行为分歧 ⇒ 属"重构口味"，不列为缺陷。
+- **③** 此前已结论性关闭（发布版一律大写 + NTFS 大小写不敏感）。
+
+**放弃的方案**：按原文重写 NSIS 钩子（`IsShortcutTarget` 守卫等）——代码已迁移到 Rust 且正确性由早返回保证，重写只会引入新的安装器风险面；新增 `legacy_ident_for` 抽表——三处取值已一致，抽取无行为收益。
