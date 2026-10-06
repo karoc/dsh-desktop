@@ -1574,10 +1574,11 @@
         "dsh-0.1.6",
         "follow-up",
         "plugin-repo-side",
-        "p4"
+        "p5"
       ],
       "createdAt": 1790046653940,
-      "updatedAt": 1790046653940
+      "updatedAt": 1791288645447,
+      "description": "**侦察与决策（2026-10-06）** —— 这项的实质比标题小，已按证据收敛：\n\n**① 陈旧 inject 条目：真陈旧，但只在 turn-nav 侧**（证据：编译产物 `lib/client.js` 里这些符号的使用次数）\n· `dsh-turn-navigator`：`@deepseek-ai/dsh-client-connection`、`-ui-layout`、`-ui-conversation` 均 **0 次使用**（实际只用 `slots`/`locale`/`remote`）⇒ 这 3 个类型依赖可以删。\n· `dsh-model-reasoning`：列表干净（用到的 `slots`/`locale`/`remote`/`configForms` 与列出的 4 个包一致）⇒ 无需改动。\n**② `plugins.*` 槽位迁移：默认不做**（这是个 UX 取舍，不是缺陷）\n· 现状：我们的页面是**顶级设置分区**（`settings.section` =「思磨力提供方参数」）与 General 项（`settings.general.item` = turn-nav 开关）—— 用户一眼能找到。\n· 官方 `settings.plugins.tab` 是「插件」分区里的 tab（参照 `ui-settings-plugin-inventory`：`inject` 需含 `modules` + `remote.pluginInventory`，注册懒加载 tab）。\n· 迁移后页面会被收进「插件」分区 ⇒ **可见性下降**；收益只是\"更贴官方归类\"。因此**除非用户明确想要，不做**。\n\n**下一步（何时做①）**：删那 3 个类型依赖要动 turn-nav **源仓库** + 发新 npm 版本 + 壳内同步 + 发布 —— 为此单独发一次版不值得 ⇒ **并入下一次 turn-nav 的实质变更**（有真改动时顺手清掉，零额外发布成本）。\n**若哪天要做②**（含官方 tab 契约）：`inject` 加 `modules` 与对应 remote 命名空间，页面注册进 `settings.plugins.tab`，并同步更新 README 里的\"设置入口在哪\"描述。"
     },
     {
       "id": "card-9d667df2-327a-42db-bdb9-beaf815716cc",
