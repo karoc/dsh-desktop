@@ -855,16 +855,18 @@
       "description": "【决策（用户 2026-09-09，D5）】接受 ① 的取舍：旧版主程序仍在运行时，既不执行其卸载器、也**不删**它的快捷方式（保留其入口）。\n\n【四项结论（详见 docs/2026-09-09-pending-cards-solutions.md §4）】\n**① NSIS 钩子删 lnk 未校验（P2，含真实行为缺陷）**：共享尾标签无条件删两条 lnk，三分支（孤儿/旧版在跑→拒绝卸载/无残留）全走到 → 除误删用户自建同名 lnk 外，更实的问题是\"旧版在跑→拒绝卸载\"分支仍删其快捷方式（旧版程序与卸载器原封不动，但入口消失，症状同本次事故的\"应用凭空消失\"）。修法：**只在孤儿分支删** + 模板自带 `IsShortcutTarget`（utils.nsh:160-184，纯 NSIS COM 调用；模板自己的卸载器 installer.nsi:5723-5740 就这么做）+ `!ifmacrodef IsShortcutTarget` 守卫（独立编译 harness 无该宏 → 自动跳过，不编译失败也不盲删）。否掉：nsExec 调 PowerShell 读 target（引入外部进程 + 与 wmic fail-open 同类风险）、NSIS 自解析 .lnk（~30 行 + 代码页边界）。\n**② should_delete_shortcut 前缀匹配（P2，除边界外还有大小写敏感漏删）**：lib.rs:768-773 用 starts_with、want 来自常量小写 `dsh Desktop`；a) 无边界 → `dsh Desktop-dev`/`Desktop2`/`.bak` 均命中（对照 :713-722 的 `(?=[\\\\\"'\\s]|$)` 前瞻）；b) **target 存创建时真实大小写**（本机实测 `...\\DSH Smoothly Desktop\\...`），而 0.3.x 起所有 tag 的安装目录名是 `DSH Desktop` → starts_with 失败 → **漏删**（fail-safe 但留死链）。修法：抽 `win_path_key` + `path_under`（组件边界），与 `legacy_process_running` 共用（后者现在把 `dsh Desktop-dev\\...` 算作\"旧版在跑\" → `canCleanup=false` 误报）。\n**③ 快捷方式名不一致（P3，核实后无需改动，结论性关闭）**：小写 `dsh Desktop` 只存在于 a7f479e→da2e2ec，而 da2e2ec 是 v0.1.0 的祖先 → **发布版一律大写**；NTFS 大小写不敏感 → NSIS `Delete` 与 Rust `is_file()` 都命中同一文件，两种拼写都不漏（代码 lib.rs:335-347 早有注释）。→ 不加候选名；真实解在 ②。顺带（卡外，建议另开 P3 卡）：`legacy_shortcut_candidates`（lib.rs:649-661）用 `user_home()/Desktop` 硬拼、忽略**桌面重定向**（OneDrive 接管常见）→ 桌面 lnk 漏检。\n**④ dataRecreated 口径错误（P2，当前正在误报）**：lib.rs:855-860 用与身份无关的 `app_data_dir().parent().join(\"dev.dsh.desktop\")`；正确口径是 dev 版查 `%APPDATA%\\dev.dsh.desktop.dev`（复用 :520-523 的 `LEGACY_IDENT_MIGRATIONS`）。本机可复现：`dev.dsh.desktop` 存在、`dev.dsh.desktop.dev` 不存在 → dev 版 `dataRecreated=true` **假警报**（横幅/设置页/壳菜单弹窗全触发），反之漏报；`lib.rs:899` 同一硬编码 → dev 版清理会误备份**正式版旧目录**的 dsh-home（只复制不删）。修法：抽 `legacy_ident_for(ident)` 三处统一。\n\n【排序】② = ④（P2，纯 Rust、10 行级、可单测，先做）> ①（P2 分支修正 + P3 校验，需 makensis + 真机）> ③（P3 关闭）。②④ 合成一个 Rust 提交；① 单独一个 NSIS 提交（可独立 revert）。",
       "rationale": "四项性质不同：②④ 是纯 Rust 正确性缺陷（可单测、零安装器风险），① 含一个真实行为缺陷（拒绝卸载旧版却删其快捷方式）与一个一致性项，③ 经 git + 本机物证核实**无需代码**（发布版一律大写 + NTFS 大小写不敏感），其真实解归到 ② 的 target 归一化。用户 D5 确认接受 ① 的取舍。",
       "sourceSessionId": "session-9f06f767-640a-4cdc-9a05-afb32d45bcb4",
-      "status": "todo",
+      "status": "done",
       "tags": [
         "windows",
         "installer",
         "cleanup",
-        "follow-up"
+        "follow-up",
+        "p3"
       ],
       "createdAt": 1788893072677,
-      "updatedAt": 1788952318702,
-      "rejected": "1) ③ 增加 \"dsh Desktop.lnk\" 候选名：Windows 上是死代码（NSIS Delete 与 Rust is_file 都大小写不敏感）→ 不加；2) ① 在 NSIS 里用 nsExec 调 PowerShell 读 lnk 目标：引入外部进程 + 编码/执行策略/CLM 失败面，与本次 wmic fail-open 同类 → 否，改用模板自带 IsShortcutTarget；3) ① 在 NSIS 里自解析 .lnk 二进制：~30 行 + ANSI 代码页/相对链接边界，收益不如 → 否；4) ① 把删 lnk 完全交给 Rust：壳内清理不是自动的（启动只检测+横幅）→ 孤儿 lnk 会留到用户手动清理，体验回退 → 否；5) 把\"桌面重定向（OneDrive）漏检\"塞进本卡：性质不同（探测面而非加固）→ 建议另开 P3 卡。"
+      "updatedAt": 1791283500499,
+      "rejected": "**放弃了按原文重写 NSIS 钩子**（`IsShortcutTarget` 守卫等）：该钩子已不存在、逻辑迁到 Rust 且由提前返回保证安全，重写只会给安装器引入新的风险面；**放弃了新增 `legacy_ident_for` 抽表**：三处取值已一致，抽取没有行为收益（属重构口味）；**放弃了\"为了让这条卡有产出而改代码\"** —— 核实为已修就不该再动它。",
+      "summary": "**核实结论：三项均已修复或不适用（未改代码）**。① 原判\"拒绝卸载旧版却删其快捷方式\"的真实缺陷 —— `legacy-takeover.nsh` 已不存在，Rust `legacy_cleanup_json`（`lib.rs:1024`）在旧版主程序存在时**提前返回** （`reason: legacy-app-present`、`removedShortcuts: 0`），删快捷方式只发生在孤儿分支且必过 target 校验；② `path_under`（`lib.rs:781`）已实现组件级边界 + Windows 大小写不敏感，`should_delete_shortcut` 与 `legacy_process_running` 共用，单测（`:1489`）同时断言\"相似名不命中\"与\"大小写命中\"，另有 legacy-lnk 场景测试；④ 全仓无 `legacy_ident_for`，`LEGACY_IDENT_MIGRATIONS`（`:604`）是唯一映射表，两处硬编码的 `dev.dsh.desktop` 与该表映射值一致（无行为分歧）⇒ 不列为缺陷；③ 此前已结论性关闭。记录见方案 §15.21。"
     },
     {
       "id": "card-da7e7f44-7c7f-4bb7-bd59-902095910a70",
@@ -976,7 +978,8 @@
         "crash",
         "follow-up",
         "verify",
-        "waiting-user"
+        "waiting-user",
+        "blocked-user"
       ],
       "createdAt": 1789410458361,
       "updatedAt": 1789793674199
@@ -1366,7 +1369,8 @@
         "webview2",
         "watchdog",
         "P2b",
-        "windows"
+        "windows",
+        "p5"
       ],
       "createdAt": 1789878495146,
       "updatedAt": 1789878495146
@@ -1551,7 +1555,8 @@
         "prod",
         "sub2api",
         "upstream",
-        "follow-up"
+        "follow-up",
+        "blocked-user"
       ],
       "createdAt": 1789992165986,
       "updatedAt": 1789992893629,
@@ -1568,7 +1573,8 @@
         "plugins",
         "dsh-0.1.6",
         "follow-up",
-        "plugin-repo-side"
+        "plugin-repo-side",
+        "p4"
       ],
       "createdAt": 1790046653940,
       "updatedAt": 1790046653940
@@ -1680,7 +1686,8 @@
         "optional",
         "s6",
         "s7-corrected",
-        "follow-up"
+        "follow-up",
+        "p5"
       ],
       "createdAt": 1790272674208,
       "updatedAt": 1790272929832,
@@ -1827,7 +1834,8 @@
         "coverage-gap",
         "shutdown-path",
         "about-dialog",
-        "isolated-layout"
+        "isolated-layout",
+        "p5"
       ],
       "createdAt": 1790405310811,
       "updatedAt": 1790405310811
@@ -2039,7 +2047,7 @@
     {
       "id": "card-1a10c9c9ef5-auth-hint-device-verify",
       "title": "设备级验证：鉴权误报提示在真实失败轮次上的表现（403 桩 + dev 实例）",
-      "status": "todo",
+      "status": "in_progress",
       "tags": [
         "shell",
         "shell-chrome",
@@ -2047,13 +2055,14 @@
         "device-level",
         "stub",
         "dsh-llm",
-        "follow-up"
+        "follow-up",
+        "p2"
       ],
       "rationale": "缓解已实现并做过纯逻辑验证（含变异对照），但**从未在有真实失败轮次的界面上看过它** ——用户可见 UI 的说法在设备级验证前只能说\"逻辑已验证\"。方案 §15.19 末尾写了完整配方；卡点只有一个：需要先弄清 harness 凭据存储的写入方式（本机读不到 `.credentials.yaml`），否则请求会以 `MISSING_CREDENTIAL` 失败、走不到 AUTH 分支。",
       "rejected": "① 用真实 provider 硬造 403（要动真配置/真账号，风险高）；② 跳过设备验证直接宣称完成（用户可见 UI 不能只靠单测背书）；③ 在正式版上做（会动用户生产环境）。",
-      "description": "① 本地桩返回 `HTTP 403` + `{\"type\":\"server_error\",\"code\":\"server_error\",\"message\":\"…not valid JSON\"}`；② dev 实例 `settings.yaml` 配 `llm-pi-ai.providers.<route>`（`api`/`baseURL`/`models` + `apiKeyEnv`），并解决凭据写入（否则 MISSING_CREDENTIAL）；③ Playwright 打开 dev 的 `dsh web` 新会话发一条消息 → 断言页面文本出现「API 密钥无效」；④ `npm run bundle:dev` 重建壳 → 打开同一条会话 → 断言条幅出现；⑤ 负向对照：桩返回 502 → 条幅不得出现；点「重试本轮」应命中应用自己的重试控件（或如实提示找不到）。",
+      "description": "**根因已找到（2026-10-06，第二轮）**：dsh 0.2 里 **`$DSH_HOME/settings.yaml` 不是配置读取处** —— v0.14.0 的设置迁移把配置搬进了 dsh 自己的设置文档存储（按 profile）。证据：`dsh --profile web --dump-config` 里 `id: llm-pi-ai` 块**没有 `config:`**（手写 YAML 被静默忽略）；`dsh-home` 下也找不到含命名空间的 settings 文件。\n**正确路径（下一轮就这么做）**：用 **GUI 的\"自定义提供方\"编辑器**写配置 —— 上游 `packages/client/ui-settings-models` 的 `CustomProviderCard` 就是给这个用的（它会做 schema 校验，比手写文件可靠）。步骤：Playwright 打开 dev 的 `dsh web` → 设置 → 模型 → 添加自定义提供方（`api: openai-completions`、`baseURL: http://127.0.0.1:41803/v1`、一个 `stub-model`、密钥引用 `STUB_KEY`）→ 模型出现在选择器里 → 选它发一条 → 断言「API 密钥无效」→ 再看 dev 壳截图确认条幅 → 桩切 `502` 做负向对照。\n**已就绪（不用重做）**：403 桩在跑（WSL `41803`，任意请求 403 + `server_error`；Windows 侧可达 ✅）；dev 壳已含新提示 （exe grep = 1 ✅）；`STUB_KEY` 已写入三处 `.env`（`$DSH_HOME/.env`、`C:\\Users\\qqwto\\.env`、`D:\\Dev\\c-home\\.env`）；conf irm 过只有 `AUTH` 码渲染成「API 密钥无效」（`ui-chat/.../MessageItem.tsx:58`）。\n**注**：`dsh-home/settings.yaml`（我手写的）与 `.pre-p2.bak` 可留作记录，它们对运行无影响。",
       "createdAt": 1791212953333,
-      "updatedAt": 1791212953333
+      "updatedAt": 1791282919638
     }
   ]
 }
