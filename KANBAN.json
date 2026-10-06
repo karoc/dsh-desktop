@@ -2086,7 +2086,7 @@
     {
       "id": "card-1a11130cdcb-4578",
       "title": "陈旧工件：verify-legacy-hook.nsi/.ps1 引用的 hook 文件已不存在",
-      "status": "todo",
+      "status": "done",
       "tags": [
         "quality-audit",
         "stale-artifact",
@@ -2094,10 +2094,11 @@
         "p3"
       ],
       "rationale": "审计发现 `scripts/verify-legacy-hook.nsi` 与 `.ps1` 仍在仓库里，而它们验证的 `legacy-takeover.nsh` **已从仓库移除**（P3 核实结论，见 §15.21）⇒ 这两个脚本**无法再运行**（要么永久失败，要么被误当成\"还在保护什么\"）。\n**为什么现在提**：留下不可运行的验证脚本会污染\"门禁可信度\"—— 未来有人看到它会以为旧版接管仍有 NSIS 侧保护。",
-      "rejected": "**放弃了\"直接删掉两个脚本\"**：它们记录的测试场景（孤儿/旧版在跑/无残留三分支 + lnk 指向对照）是**有价值的回归资产**，而 Rust 侧现在是真源 ⇒ 更合适的去向是**把这几个场景迁到 Rust 单测**（`legacy_cleanup_json` 的早返回已有部分覆盖）；**放弃了\"保留但加注释\"**：不可运行的脚本加注释仍占位，不如迁走后删除。",
+      "rejected": "**放弃了直接删两个脚本**：它们覆盖的三个分支（孤儿 / 旧版在跑 ⇒ 拒绝 / 无残留）是有价值的回归资产，先迁进 Rust 单测再删；**放弃了\"保留但加注释\"**：不可运行的脚本占位仍会误导\"这里还有 NSIS 侧保护\"；**放弃了把判定留在内联分支里**：抽成纯函数才能被单测钉住（内联分支只能靠安装器端到端验证）。",
       "description": "**下一步**：核对 `legacy_cleanup_json` 的早返回与 lnk 校验在 Rust 单测里的覆盖（`:1417 legacy_dir_requires_exact_name_and_uninstaller`、`:1441 legacy-lnk` 等），补齐缺口后删除两个 .nsi/.ps1（或明确标注\"仅历史，不可运行\"）。",
       "createdAt": 1791289773515,
-      "updatedAt": 1791289773515
+      "updatedAt": 1791295846864,
+      "summary": "**已按\"先补覆盖再删\"处理（PR #114）**：① 把两个脚本守的核心判定抽成纯函数 `legacy_cleanup_refusal(has_legacy_dir, main_exe_present)`，并在 `legacy_cleanup_json` 里替换原先的两段内联判断（**行为不变**：`no-legacy` / `legacy-app-present` / 允许清理三分支；拒绝路径回 `ok:false` + 三个 removed 计数全 0）；② 补两条单测 —— `legacy_cleanup_refusal_covers_all_three_branches`（含\"旧版主程序仍在 ⇒ 拒绝且不得删其快捷方式\"这个 2026-09-17 修过的真实缺陷场景）与 `refusal_json_reports_nothing_removed`；③ 删除 `scripts/verify-legacy-hook.nsi/.ps1`（已确认未被 npm scripts / CI / 测试引用）。\n**验证**：CI `check` 作业的 `cargo test --lib` 通过（本地无 cargo，必须由 CI 背书）；`npm test` 42 PASS。"
     }
   ]
 }
