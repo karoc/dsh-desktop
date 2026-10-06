@@ -2047,7 +2047,7 @@
     {
       "id": "card-1a10c9c9ef5-auth-hint-device-verify",
       "title": "设备级验证：鉴权误报提示在真实失败轮次上的表现（403 桩 + dev 实例）",
-      "status": "in_progress",
+      "status": "todo",
       "tags": [
         "shell",
         "shell-chrome",
@@ -2060,9 +2060,9 @@
       ],
       "rationale": "缓解已实现并做过纯逻辑验证（含变异对照），但**从未在有真实失败轮次的界面上看过它** ——用户可见 UI 的说法在设备级验证前只能说\"逻辑已验证\"。方案 §15.19 末尾写了完整配方；卡点只有一个：需要先弄清 harness 凭据存储的写入方式（本机读不到 `.credentials.yaml`），否则请求会以 `MISSING_CREDENTIAL` 失败、走不到 AUTH 分支。",
       "rejected": "① 用真实 provider 硬造 403（要动真配置/真账号，风险高）；② 跳过设备验证直接宣称完成（用户可见 UI 不能只靠单测背书）；③ 在正式版上做（会动用户生产环境）。",
-      "description": "**根因已找到（2026-10-06，第二轮）**：dsh 0.2 里 **`$DSH_HOME/settings.yaml` 不是配置读取处** —— v0.14.0 的设置迁移把配置搬进了 dsh 自己的设置文档存储（按 profile）。证据：`dsh --profile web --dump-config` 里 `id: llm-pi-ai` 块**没有 `config:`**（手写 YAML 被静默忽略）；`dsh-home` 下也找不到含命名空间的 settings 文件。\n**正确路径（下一轮就这么做）**：用 **GUI 的\"自定义提供方\"编辑器**写配置 —— 上游 `packages/client/ui-settings-models` 的 `CustomProviderCard` 就是给这个用的（它会做 schema 校验，比手写文件可靠）。步骤：Playwright 打开 dev 的 `dsh web` → 设置 → 模型 → 添加自定义提供方（`api: openai-completions`、`baseURL: http://127.0.0.1:41803/v1`、一个 `stub-model`、密钥引用 `STUB_KEY`）→ 模型出现在选择器里 → 选它发一条 → 断言「API 密钥无效」→ 再看 dev 壳截图确认条幅 → 桩切 `502` 做负向对照。\n**已就绪（不用重做）**：403 桩在跑（WSL `41803`，任意请求 403 + `server_error`；Windows 侧可达 ✅）；dev 壳已含新提示 （exe grep = 1 ✅）；`STUB_KEY` 已写入三处 `.env`（`$DSH_HOME/.env`、`C:\\Users\\qqwto\\.env`、`D:\\Dev\\c-home\\.env`）；conf irm 过只有 `AUTH` 码渲染成「API 密钥无效」（`ui-chat/.../MessageItem.tsx:58`）。\n**注**：`dsh-home/settings.yaml`（我手写的）与 `.pre-p2.bak` 可留作记录，它们对运行无影响。",
+      "description": "**交接（2026-10-06）**：设备级验证没在本轮跑完，已按约定降级为**两条可执行路径**，任一条完成即可结案。\n\n**路径 A（推荐，零成本）：真实使用中顺手验证**\n正式版已是 0.16.0（含该提示）。下次界面出现「API 密钥无效」时，看顶部约 5 秒内是否出现：\n「ⓘ 这也可能是上游瞬时故障（403/5xx 被误判为鉴权失败）；若密钥确实正确，可直接重试本轮。」+「重试本轮」按钮。\n有/没有都算结论：有 ⇒ 条幅渲染正常，结案；没有 ⇒ 打开 DevTools 看控制台是否有 `[shell-chrome]` 报错，回来告诉我。\n\n**路径 B（本机 dev 复现，已完成到\"只差在 GUI 里加一个提供方\"）**\n已就绪：403 桩脚本 `/tmp/stub403.mjs`（重启命令：`nohup node /tmp/stub403.mjs 403 41803 > /tmp/stub.log 2>&1 &`；Windows 侧可达 ✅）；dev 壳已含新提示（exe grep = 1 ✅）；`STUB_KEY` 已写入三处 `.env`；确认只有 `AUTH` 码会渲染成「API 密钥无效」（`ui-chat/.../MessageItem.tsx:58`）。\n**根因**：dsh 0.2 **不读手写的 `$DSH_HOME/settings.yaml`**（设置存在它自己的文档存储里，按 profile）—— 证据：`dsh --profile web --dump-config` 里 `id: llm-pi-ai` 无 `config:` 块。\n剩余步骤：dev web → 设置（Settings）→ 左侧 **Models** → 添加**自定义提供方**：`api: openai-completions`、`baseURL: http://127.0.0.1:41803/v1`、模型 `stub-model`、密钥引用 `STUB_KEY` → 模型出现在选择器 → 发一条 → 断言页面出现「API 密钥无效」→ 打开 dev 壳（同一 dsh 服务）截图确认条幅 → 桩切 `502` 模式做负向对照（条幅不得出现）。",
       "createdAt": 1791212953333,
-      "updatedAt": 1791282919638
+      "updatedAt": 1791284417962
     }
   ]
 }
