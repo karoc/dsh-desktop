@@ -913,6 +913,18 @@ fn should_delete_shortcut(lnk: &std::path::Path, legacy_dir: &std::path::Path) -
         .unwrap_or(false)
 }
 
+/// 备份失败时的统一返回形状：**明确表示什么都没动**（`ok:false` + 三个 removed 计数全 0）。
+/// 单测 `backup_failure_json_blocks_destructive_path` 钉住这个契约。
+fn backup_failure_json(reason: &str) -> serde_json::Value {
+    serde_json::json!({
+        "ok": false,
+        "reason": reason,
+        "removedUninstaller": false,
+        "removedDir": false,
+        "removedShortcuts": 0,
+    })
+}
+
 /// dsh-home 中应备份的关键数据（跳过 node_modules 等可重建的大目录）。
 fn backup_entries(home: &std::path::Path) -> Vec<(String, std::path::PathBuf)> {
     let mut out = Vec::new();
@@ -962,10 +974,20 @@ fn copy_dir_all(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result
 
 /// 复制 dsh-home 关键数据到备份目录（复制不移动：原数据不动；单文件失败仅记日志）。
 fn backup_home_data(home: &std::path::Path, back_dir: &std::path::Path, log: &mut dyn FnMut(&str)) -> Result<(), String> {
+    // **失败必须被检出**（2026-10-06 质量审计）：原来这里对每个条目只 `log("backup skip …")` 然后
+    // **永远返回 Ok(())** —— 调用方（销毁旧安装前的那次备份）因此无法知道备份其实没成功，一个静默
+    // 丢数据的 fail-open 就此成立。现在：尽力尝试全部条目，但只要有任何一条失败就返回 Err（带计数与首例）。
+    let mut failed = 0usize;
+    let mut first: Option<String> = None;
     for (rel, src) in backup_entries(home) {
         let dst = back_dir.join(&rel);
         if let Some(parent) = dst.parent() {
-            let _ = std::fs::create_dir_all(parent);
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                log(&format!("backup mkdir failed {rel}: {e}"));
+                failed += 1;
+                if first.is_none() { first = Some(format!("{rel}: {e}")); }
+                continue;
+            }
         }
         let r = if src.is_dir() {
             copy_dir_all(&src, &dst)
@@ -974,7 +996,12 @@ fn backup_home_data(home: &std::path::Path, back_dir: &std::path::Path, log: &mu
         };
         if let Err(e) = r {
             log(&format!("backup skip {rel}: {e}"));
+            failed += 1;
+            if first.is_none() { first = Some(format!("{rel}: {e}")); }
         }
+    }
+    if failed > 0 {
+        return Err(format!("{failed} 项备份失败，首例：{}", first.unwrap_or_default()));
     }
     Ok(())
 }
@@ -1046,7 +1073,12 @@ fn legacy_cleanup_json(app: &AppHandle) -> serde_json::Value {
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
             let back = local.join(BACKUP_ROOT_DIR_NAME).join(format!("cleanup-{ts}"));
-            let _ = backup_home_data(&old_home, &back, &mut log);
+            if let Err(e) = backup_home_data(&old_home, &back, &mut log) {
+                // 备份失败绝不能继续销毁（2026-10-06 质量审计：原来是 `let _ =`，失败后照删
+                // 孤儿卸载器与旧目录 ⇒ 静默丢数据）。fail-closed：不备份成功就不动。
+                log(&format!("backup failed — refusing to clean legacy install: {e}"));
+                return backup_failure_json("backup-failed");
+            }
         }
     }
     // 2) 删除孤儿卸载器：旧版主程序已不在（上面已确认），它没有任何用途，留着
@@ -1364,6 +1396,34 @@ mod migration_tests {
     }
 
     #[test]
+    fn backup_home_data_reports_failure_when_target_unwritable() {
+        // 目标目录的父级是一个**文件** ⇒ create_dir_all 必然失败 ⇒ 必须返回 Err
+        // （2026-10-06 质量审计：调用方曾用 `let _ =` 吞掉它，导致"备份失败仍销毁"）。
+        let base = tmp_base("backup-fail");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let home = base.join("home");
+        std::fs::create_dir_all(home.join("storages")).unwrap();
+        std::fs::write(home.join("storages/x.json"), b"{}").unwrap();
+        let blocker = base.join("blocker");
+        std::fs::write(&blocker, b"not a directory").unwrap();
+        let back = blocker.join("cannot-create-here");
+        let r = backup_home_data(&home, &back, &mut |_m| {});
+        assert!(r.is_err(), "目标不可写时必须报错（不能静默成功）");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn backup_failure_json_reports_nothing_changed() {
+        let v = backup_failure_json("backup-failed");
+        assert_eq!(v["ok"], serde_json::json!(false));
+        assert_eq!(v["reason"], serde_json::json!("backup-failed"));
+        assert_eq!(v["removedUninstaller"], serde_json::json!(false));
+        assert_eq!(v["removedDir"], serde_json::json!(false));
+        assert_eq!(v["removedShortcuts"], serde_json::json!(0));
+    }
+
+    #[test]
     fn migrates_legacy_directory_and_is_idempotent() {
         let base = tmp_base("ok");
         let _ = std::fs::remove_dir_all(&base);
@@ -1647,7 +1707,14 @@ let raw = std::fs::read_to_string(&path).unwrap_or_else(|_| "{}".into());
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
             let backup = path.with_file_name(format!("package.json.bak-corrupt-{stamp}"));
-            let _ = std::fs::copy(&path, &backup);
+            // 备份失败 ⇒ **停止**，不改动原文件（2026-10-06 质量审计：原来是 `let _ =` + 无条件记录
+            // "已备份到 …"，拷贝失败时会向用户谎报备份存在，并继续用空对象覆盖损坏文件）。
+            if let Err(e) = std::fs::copy(&path, &backup) {
+                return Err(format!(
+                    "profile manifest 损坏（{err}）且备份失败（{e}）：{} 不可写。已停止且未改动原文件；请确认该目录可写后重试。",
+                    backup.display()
+                ));
+            }
             if let Some(dir) = runtime.parent() {
                 log_line(
                     dir,
