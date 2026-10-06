@@ -2068,7 +2068,7 @@
     {
       "id": "card-1a11130cdcb-5778",
       "title": "质量缺陷：两处备份失败被静默吞掉（其中一处还会向用户谎报\"已备份\"）",
-      "status": "todo",
+      "status": "done",
       "tags": [
         "quality-audit",
         "data-safety",
@@ -2077,10 +2077,11 @@
         "p2"
       ],
       "rationale": "深度质量审计（2026-10-06）在关键路径上发现两处\"备份失败被吞、但销毁动作照做\"的 fail-open —— 这正是本仓纪律反复强调要防的形态（\"没有判断 = 没有验证\"）。两处都是**用户数据安全**相关：\n① `lib.rs:1049`：`let _ = backup_home_data(&old_home, &back, &mut log);` —— 该函数返回 `Result<(), String>`（`:964`），失败被丢弃后，紧接着**删掉孤儿卸载器与旧目录**（`:1060+`）⇒ 备份失败时**静默丢数据**。\n② `lib.rs:1650`：`let _ = std::fs::copy(&path, &backup);` —— 之后**无条件**写日志\"profile manifest 解析失败…已备份到 {backup}\"` ⇒ 拷贝失败时**向用户谎报备份存在**（比①更糟：是误导性陈述）。\n**为什么现在提**：这是\"已发布产物里的实现质量\"问题，不是新需求；越晚发现成本越高（用户在真实数据上踩到时无法补救）。",
-      "rejected": "**放弃了\"加日志就算修\"**：①的失败必须改变控制流（不备份成功就不销毁），②的日志必须只在拷贝成功时出现 —— 打日志不改变行为，等于没修；**放弃了\"统一改成 unwrap\"**：会让失败 panic，在安装器路径上更糟；**放弃了把它并入别的改动**：数据安全项单独修、单独验。",
+      "rejected": "**放弃了只改调用点**：第一版没动 `backup_home_data` 的返回值语义 ⇒ 守卫是死代码、新单测在 CI 直接失败（这恰好证明了\"没有判断 = 没有验证\"）；**放弃了 `unwrap()`**：在安装器路径上 panic 比返回错误更糟；**放弃了把逐项失败仅当警告**：对\"销毁前备份\"这类路径，\"部分失败\"必须按失败处理。",
       "description": "**修法（下一步动手）**：\n① `backup_home_data` 的 `Err` 必须**阻断销毁**：`if let Err(e) = backup_home_data(...) { log(...); return json!({ok:false, reason:\"backup-failed\", …}) }`；② `fs::copy` 的结果必须参与日志与返回：`if fs::copy(...).is_err() { log(\"备份失败，未重建 bundles\"); return ... }`，把\"已备份到 X\"改成条件式文案。\n**验证（必须可失败）**：Windows 侧单测/桩 —— 人为让目标不可写（只读目录或占用文件）⇒ 断言 ①不销毁、②不谎报；再跑正常路径断言行为不变（负向对照 + 正向对照都要）。",
       "createdAt": 1791289773515,
-      "updatedAt": 1791289773515
+      "updatedAt": 1791292533498,
+      "summary": "**已修并验证（PR #112）**。修的过程中挖出**更深的根因**：`backup_home_data` 本身对每个条目只 `log(\"backup skip …\")` 然后**永远返回 `Ok(())`** ⇒ 调用方根本无法知道备份失败 —— 这正是\"静默丢数据\"得以成立的底层原因（我第一版只改了调用点，CI 里新单测立刻失败并把这个根因暴露出来，24 passed / 1 failed）。\n**最终改动**：① `backup_home_data` 尽力尝试全部条目，只要有一条失败就返回 `Err`（带计数 + 首例）；② `legacy_cleanup_json` 备份失败即 `backup_failure_json(\"backup-failed\")` 提前返回（**不备份成功就不销毁**）；③ 损坏 manifest 路径拷贝失败即返回 `Err`、**不改动原文件**，并在错误里说明目录不可写、原文件可直接恢复（此前是`let _ =` + 无条件记录\"已备份到 …\" = **谎报备份** + 毁掉唯一可恢复的文件）。\n**验证（可失败）**：新增两条单测 —— `backup_home_data_reports_failure_when_target_unwritable`（\"父级是文件\"构造必然失败的目标，断言 `Err`）、`backup_failure_json_reports_nothing_changed`（`ok:false` + 三个 removed 计数全 0）；由 CI 的 `check` 作业（`cargo test --lib`）真实执行并通过（本地无 cargo，故这条必须由 CI 背书 —— 本 PR 正是「两项 checks 全绿才合并」规则守住的）。"
     },
     {
       "id": "card-1a11130cdcb-4578",
