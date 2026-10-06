@@ -23,7 +23,7 @@ import { appendFileSync, chmodSync, copyFileSync, cpSync, existsSync, mkdirSync,
 import { tmpdir } from 'node:os'
 import { dirname, delimiter as pathDelimiter, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createForwardProxy, providerHostsFromSettings } from './proxy.mjs'
+import { createForwardProxy, providerHostsFromProfileDocument, providerHostsFromSettings } from './proxy.mjs'
 import { allowsVersionSwitch, nextUpgradeMarker, upgradeMarkerPath } from './upgrade-marker.mjs'
 import { planPluginGuard } from './plugin-floor.mjs'
 import { planShellPluginCleanup } from './shell-plugins.mjs'
@@ -880,7 +880,13 @@ function schedulePersistKnownHosts() {
 
 async function refreshProxyProviders() {
   const dshHome = args.home ?? join(args.runtimeDir, 'dsh-home')
-  const providers = providerHostsFromSettings(join(dshHome, 'settings.yaml'))
+  // dsh >= 0.2 keeps the live configuration in the active profile's document and
+  // renames settings.yaml away; prefer the document that exists, so the provider
+  // list follows the running configuration instead of an empty legacy file.
+  const profilePatch = join(dshHome, 'profiles', 'web', 'cordis.patch.yml')
+  const providers = existsSync(profilePatch)
+    ? providerHostsFromProfileDocument(profilePatch)
+    : providerHostsFromSettings(join(dshHome, 'settings.yaml'))
   if (JSON.stringify(providers) !== JSON.stringify(proxyProviders)) {
     proxyProviders = providers
     return true // changed — caller emits

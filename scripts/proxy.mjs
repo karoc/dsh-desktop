@@ -33,7 +33,66 @@ import { connect as tcpConnect } from 'node:net'
 import { connect as tlsConnect } from 'node:tls'
 import { readFileSync, writeFileSync } from 'node:fs'
 
-const LOOPBACK = /^(127\.0\.0\.1|localhost|::1|0\.0\.0\.0)$/i
+const LOOPBACK = /^(127\.\d{1,3}\.\d{1,3}\.\d{1,3}|localhost|::1|0\.0\.0\.0)$/i
+
+/**
+ * Normalize a host as it arrives from different places so ONE loopback test
+ * covers all of them: `new URL('http://[::1]:1/').hostname` is `[::1]` (brackets
+ * included), Node normalizes an IPv4-mapped literal to `::ffff:7f00:1`, and a
+ * CONNECT authority is `[::1]:443`. Matching only the bare `::1` let a bracketed
+ * or mapped loopback target be sent to the upstream proxy, against the rule that
+ * loopback is always direct.
+ * @param {string} host
+ * @returns {string}
+ */
+export function normalizeHostForMatch(host) {
+  const bare = String(host ?? '').trim().toLowerCase().replace(/^\[|\]$/g, '')
+  const dotted = bare.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/)
+  if (dotted !== null) return dotted[1]
+  const mapped = bare.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/)
+  if (mapped === null) return bare
+  const hi = Number.parseInt(mapped[1], 16)
+  const lo = Number.parseInt(mapped[2], 16)
+  return [hi >> 8, hi & 0xff, lo >> 8, lo & 0xff].join('.')
+}
+
+/**
+ * Whether `host` is a loopback/unspecified target in any of its spellings.
+ * @param {string} host
+ * @returns {boolean}
+ */
+export function isLoopbackHost(host) {
+  return LOOPBACK.test(normalizeHostForMatch(host))
+}
+
+/**
+ * Split a CONNECT authority into host and port. `[v6]:port` keeps its brackets
+ * around the ADDRESS only — splitting on ':' turned the whole thing into host
+ * `[`, which both defeated the loopback test and wrote a junk entry into the
+ * observed-host list a user could then tick.
+ * @param {string} authority
+ * @returns {{host: string, port: number}|null}
+ */
+export function parseConnectAuthority(authority) {
+  const value = String(authority ?? '')
+  const match = value.match(/^\[([^\]]+)\](?::(\d+))?$/) ?? value.match(/^([^:]+):(\d+)$/)
+  if (match === null) return null
+  const host = match[1].trim().toLowerCase()
+  if (host === '') return null
+  const port = Number(match[2])
+  return { host, port: Number.isInteger(port) && port > 0 && port <= 65535 ? port : 443 }
+}
+
+/**
+ * Format host:port for a request line / Host header (brackets for IPv6).
+ * @param {string} host
+ * @param {number} port
+ * @returns {string}
+ */
+export function formatAuthority(host, port) {
+  const bare = String(host ?? '').trim()
+  return bare.includes(':') ? `[${bare}]:${port}` : `${bare}:${port}`
+}
 
 /** Upstream proxy protocol, defaulting to http (legacy configs have no field). */
 function upstreamProtocol(cfg) {
@@ -157,7 +216,7 @@ function openUpstreamTunnel(cfg, targetHost, targetPort, authHeader) {
           await socks5Handshake(socket, u, targetHost, targetPort)
           resolvePromise({ socket, rest: Buffer.alloc(0) })
         } else {
-          const lines = [`CONNECT ${targetHost}:${targetPort} HTTP/1.1`, `Host: ${targetHost}:${targetPort}`]
+          const lines = [`CONNECT ${formatAuthority(targetHost, targetPort)} HTTP/1.1`, `Host: ${formatAuthority(targetHost, targetPort)}`]
           if (authHeader) lines.push(`Proxy-Authorization: ${authHeader}`)
           socket.write(lines.join('\r\n') + '\r\n\r\n')
           const { head, rest } = await readUntil(socket, '\r\n\r\n')
@@ -215,35 +274,14 @@ export function providerHostsFromSettings(settingsPath) {
   } catch {
     return out
   }
-  const push = (current) => {
-    // baseURL may carry a trailing comma or be a comma-separated fallback list
-    // (e.g. "https://api.xxx.com," or "a,b"). Node's URL parser would swallow
-    // the comma INTO the hostname ("api.xxx.com,"), which then never matches
-    // the real CONNECT target and silently breaks proxying — split and parse
-    // each candidate instead.
-    const name = current.provider ? `${current.ns}/${current.provider}` : current.ns
-    const displayName = current.displayName || (current.ns === 'llm-deepseek' ? 'DeepSeek' : null)
-    for (const baseUrl of current.baseUrls) {
-      for (const candidate of String(baseUrl).split(',').map((s) => s.trim()).filter(Boolean)) {
-        try {
-          const host = new URL(candidate).hostname
-          if (host) out.push({ name, ...(displayName ? { displayName } : {}), host })
-        } catch { /* malformed candidate — skip */ }
-      }
-    }
-  }
-  // Collect each provider block (baseURL list + displayName) and emit it as a
-  // whole — ORDER-INDEPENDENT, because a real settings.yaml may list baseURL
-  // BEFORE displayName and a naive sequential reader would miss the name.
-  // Structure: llm-pi-ai → `providers:` (2sp) → provider key (4sp) → fields
-  // (baseURL/displayName at any indent ≥2). Other llm-* namespaces (e.g.
-  // llm-deepseek) put baseURL directly under the namespace (2sp).
+  // Namespace bodies are read with the same state machine the profile document
+  // uses, so a settings.yaml and a cordis.patch.yml cannot drift apart.
   let ns = null
-  let inProviders = false
-  let current = null // { ns, provider, displayName, baseUrls: [] }
+  let body = []
   const flush = () => {
-    if (current && current.baseUrls.length) push(current)
-    current = null
+    if (ns?.startsWith('llm-')) out.push(...providerHostsFromNamespace(ns, body))
+    ns = null
+    body = []
   }
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.replace(/#.*$/, '').replace(/\s+$/, '')
@@ -251,10 +289,56 @@ export function providerHostsFromSettings(settingsPath) {
     if (top) {
       flush()
       ns = top[1]
-      inProviders = false
       continue
     }
-    if (!ns?.startsWith('llm-')) continue
+    if (ns !== null) body.push(raw)
+  }
+  flush()
+  return out
+}
+
+/**
+ * Provider hosts of ONE `llm-*` namespace body, in either document shape.
+ * Collects each provider block (baseURL list + displayName) and emits it as a
+ * whole — ORDER-INDEPENDENT, because a real document may list baseURL BEFORE
+ * displayName and a naive sequential reader would miss the name. Structure:
+ * `providers:` (2sp) → provider key (4sp) → fields (baseURL/displayName at any
+ * indent ≥2). Other llm-* namespaces (e.g. llm-deepseek) put baseURL directly
+ * under the namespace (2sp).
+ * @param {string} ns
+ * @param {string[]} lines
+ * @returns {Array<{name: string, host: string, displayName?: string}>}
+ */
+function providerHostsFromNamespace(ns, lines) {
+  const out = []
+  const push = (current) => {
+    const name = current.provider ? `${current.ns}/${current.provider}` : current.ns
+    const displayName = current.displayName || (current.ns === 'llm-deepseek' ? 'DeepSeek' : null)
+    for (const baseUrl of current.baseUrls) {
+      for (const candidate of String(baseUrl).split(',').map((s) => s.trim()).filter(Boolean)) {
+        try {
+          const host = new URL(candidate).hostname
+          // Loopback targets are always direct (see shouldProxy), so listing one
+          // would offer a checkbox that can never take effect. Bracketed / IPv4
+          // mapped IPv6 spellings are normalised in the dsh-proxy plugin; this
+          // copy keeps the same bare-form test the routing guard uses.
+          if (host && !isLoopbackHost(host)) out.push({ name, ...(displayName ? { displayName } : {}), host })
+        } catch { /* malformed candidate — skip */ }
+      }
+    }
+  }
+  // The endpoint the harness uses when `llm-deepseek` configures no baseURL:
+  // its schema has no default for that field, so the live document carries no
+  // host and the DeepSeek route — which carries real traffic — stayed invisible.
+  const DEEPSEEK_PUBLIC_HOST = 'api.deepseek.com'
+  let inProviders = false
+  let current = null // { ns, provider, displayName, baseUrls: [] }
+  const flush = () => {
+    if (current && current.baseUrls.length) push(current)
+    current = null
+  }
+  for (const raw of lines) {
+    const line = raw.replace(/#.*$/, '').replace(/\s+$/, '')
     const two = line.match(/^ {2}([A-Za-z0-9_.-]+):\s*$/)
     if (two) {
       flush()
@@ -289,6 +373,61 @@ export function providerHostsFromSettings(settingsPath) {
     }
   }
   flush()
+  if (ns === 'llm-deepseek' && out.length === 0) {
+    out.push({ name: 'llm-deepseek', displayName: 'DeepSeek', host: DEEPSEEK_PUBLIC_HOST })
+  }
+  return out
+}
+
+/**
+ * Model provider hosts from the ACTIVE PROFILE's config document
+ * (`<home>/profiles/<name>/cordis.patch.yml`). dsh >= 0.2 renames
+ * `<home>/settings.yaml` to `settings.yaml.imported` and imports every section
+ * into that document as a top-level array of `{ id, name, config }` entries, so a
+ * reader pinned to the old file answers an empty list — which is exactly how the
+ * provider list went to 0 on dsh 0.2.
+ * @param {string} patchPath
+ * @returns {Array<{name: string, host: string, displayName?: string}>}
+ */
+export function providerHostsFromProfileDocument(patchPath) {
+  let text
+  try {
+    text = readFileSync(patchPath, 'utf8')
+  } catch {
+    return []
+  }
+  const out = []
+  let ns = null
+  let inConfig = false
+  let body = []
+  const flush = () => {
+    // The entry's `config:` children sit one level deeper than a settings.yaml
+    // namespace body, so the shared reader gets them shifted back by two spaces.
+    if (ns?.startsWith('llm-')) out.push(...providerHostsFromNamespace(ns, body))
+    ns = null
+    body = []
+  }
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.replace(/#.*$/, '').replace(/\s+$/, '')
+    const id = line.match(/^- id:\s*(.+?)\s*$/)
+    if (id) {
+      flush()
+      ns = String(id[1]).trim().replace(/^['"]|['"]$/g, '')
+      inConfig = false
+      continue
+    }
+    if (ns === null) continue
+    if (/^ {2}config:\s*$/.test(line)) {
+      inConfig = true
+      continue
+    }
+    if (/^ {2}[A-Za-z0-9_.-]+:/.test(line)) {
+      inConfig = false // another entry key (name:, disabled:, …)
+      continue
+    }
+    if (inConfig && line.startsWith('    ')) body.push(line.slice(2))
+  }
+  flush()
   return out
 }
 
@@ -302,10 +441,14 @@ export function providerHostsFromSettings(settingsPath) {
  */
 export function shouldProxy(cfg, host, selfPort) {
   const h = String(host ?? '').toLowerCase()
-  if (LOOPBACK.test(h)) return false
+  if (isLoopbackHost(h)) return false
   const u = cfg?.upstream
-  const selfRef = u?.host && LOOPBACK.test(u.host.toLowerCase()) && Number(u.port) === selfPort
-  return Boolean(u?.enabled) && !selfRef && (cfg?.proxiedHosts ?? []).includes(h)
+  const selfRef = u?.host && isLoopbackHost(u.host) && Number(u.port) === selfPort
+  if (!Boolean(u?.enabled) || selfRef) return false
+  // Match on the NORMALIZED form: the same target reaches this list as `[::1]`
+  // from a provider baseURL and as `::1` from a CONNECT authority.
+  const wanted = normalizeHostForMatch(h)
+  return (cfg?.proxiedHosts ?? []).some((entry) => normalizeHostForMatch(entry) === wanted)
 }
 
 /**
@@ -326,7 +469,7 @@ export function createForwardProxy({ configFile, onHosts, log = () => {} }) {
 
   const markHost = (host) => {
     const h = String(host ?? '').trim().toLowerCase()
-    if (!h || LOOPBACK.test(h)) return
+    if (!h || isLoopbackHost(h)) return
     if (seenHosts.has(h)) return
     seenHosts.add(h)
     clearTimeout(notifyTimer)
@@ -425,10 +568,14 @@ export function createForwardProxy({ configFile, onHosts, log = () => {} }) {
   })
 
   server.on('connect', (req, clientSocket, head) => {
-    // CONNECT host:port — the HTTPS tunnel every model request rides.
-    const [hostRaw, portRaw] = String(req.url ?? '').split(':')
-    const host = (hostRaw ?? '').toLowerCase()
-    const port = Number(portRaw) || 443
+    // CONNECT host:port — the HTTPS tunnel every model request rides. IPv6
+    // literals arrive bracketed (`[::1]:443`), so the authority is parsed.
+    const target = parseConnectAuthority(String(req.url ?? ''))
+    if (target === null) {
+      clientSocket.destroy()
+      return
+    }
+    const { host, port } = target
     if (!host || !port) {
       clientSocket.destroy()
       return

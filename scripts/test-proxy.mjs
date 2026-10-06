@@ -13,7 +13,10 @@ import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import assert from 'node:assert/strict'
-import { createForwardProxy, readProxyConfig, shouldProxy, providerHostsFromSettings } from './proxy.mjs'
+import {
+  createForwardProxy, readProxyConfig, shouldProxy, providerHostsFromProfileDocument, providerHostsFromSettings,
+  isLoopbackHost, normalizeHostForMatch, parseConnectAuthority, formatAuthority,
+} from './proxy.mjs'
 
 const work = mkdtempSync(join(tmpdir(), 'dsh-proxy-'))
 
@@ -191,6 +194,61 @@ writeCfg({
   assert.equal(up.seen.length, before, 'upstream untouched for unlisted host')
 }
 
+// ── scenario 5b: every loopback spelling, and IPv6 CONNECT authorities ──────
+{
+  // Same rule the dsh-proxy plugin enforces: `new URL('http://[::1]:1/').hostname`
+  // is `[::1]`, Node normalizes IPv4-mapped literals, and a CONNECT authority is
+  // `[::1]:443`.
+  assert.equal(normalizeHostForMatch('[::1]'), '::1', 'a bracketed IPv6 literal unwraps')
+  assert.equal(normalizeHostForMatch('[::ffff:127.0.0.1]'), '127.0.0.1', 'an IPv4-mapped literal becomes its IPv4 form')
+  assert.equal(normalizeHostForMatch('::ffff:7f00:1'), '127.0.0.1', "Node's normalized mapped form is recognised too")
+  for (const spelling of ['127.0.0.1', '127.0.0.2', 'localhost', '::1', '[::1]', '::ffff:127.0.0.1', '[::ffff:127.0.0.1]', '0.0.0.0']) {
+    assert.equal(isLoopbackHost(spelling), true, `every loopback spelling is loopback: ${spelling}`)
+  }
+  for (const spelling of ['example.org', '[2001:db8::1]', '10.0.0.1', '127.0.0.1.evil.example']) {
+    assert.equal(isLoopbackHost(spelling), false, `not loopback: ${spelling}`)
+  }
+  assert.deepEqual(parseConnectAuthority('[::1]:443'), { host: '::1', port: 443 }, 'a bracketed CONNECT authority keeps its address intact')
+  assert.equal(parseConnectAuthority('[::1]').port, 443, 'a missing port defaults to 443')
+  assert.equal(parseConnectAuthority('nonsense'), null, 'an unparseable authority is rejected')
+  assert.equal(formatAuthority('2001:db8::1', 443), '[2001:db8::1]:443', 'IPv6 is bracketed on the wire')
+
+  const routing = {
+    upstream: { enabled: true, host: 'up.example', port: 8080 },
+    proxiedHosts: ['127.0.0.1', '127.0.0.2', 'localhost', '::1', '[::1]', '::ffff:127.0.0.1', '[2001:db8::1]'],
+  }
+  for (const spelling of ['127.0.0.1', '127.0.0.2', 'localhost', '::1', '[::1]', '::ffff:127.0.0.1']) {
+    assert.equal(shouldProxy(routing, spelling), false, `loopback stays direct even when listed: ${spelling}`)
+  }
+  assert.equal(shouldProxy(routing, '[2001:db8::1]'), true, 'a listed remote IPv6 target is proxied')
+  assert.equal(
+    shouldProxy({ ...routing, upstream: { ...routing.upstream, host: '[::1]', port: 9999 } }, 'example.org', 9999),
+    false,
+    'a bracketed loopback upstream is recognised as the self-loop',
+  )
+
+  // End to end: a bracketed loopback CONNECT must not reach the upstream, and must
+  // not write `[` into the observed-host list; a listed remote IPv6 target does go
+  // upstream, with its address still bracketed on the wire.
+  writeCfg({
+    upstream: { enabled: true, host: '127.0.0.1', port: up.port(), username: '', password: '' },
+    proxiedHosts: ['[::1]', '::1', '127.0.0.1', '[2001:db8::1]'],
+    knownHosts: [],
+  })
+  const beforeLoopback = up.seen.length
+  const loopbackAttempt = await rawConnect(proxyPort, '[::1]:9')
+  loopbackAttempt.sock.destroy()
+  assert.equal(up.seen.length, beforeLoopback, 'a bracketed loopback CONNECT never reaches the upstream')
+  assert.ok(!proxy.hosts().includes('['), 'a bracketed CONNECT authority does not land in the observed hosts')
+
+  const beforeRemote = up.seen.length
+  const remoteAttempt = await rawConnect(proxyPort, '[2001:db8::1]:443')
+  remoteAttempt.sock.destroy()
+  const remoteHit = up.seen.slice(beforeRemote).find((entry) => entry.kind === 'connect')
+  assert.ok(remoteHit !== undefined, 'a listed remote IPv6 target goes upstream')
+  assert.equal(remoteHit.target, '[2001:db8::1]:443', 'the upstream CONNECT line keeps the IPv6 address bracketed')
+}
+
 // ── scenario 6: loopback NEVER proxied (even if listed) ─────────────────────
 writeCfg({
   upstream: { enabled: true, host: '127.0.0.1', port: up.port(), username: '', password: '' },
@@ -303,6 +361,36 @@ writeCfg({
     { name: 'llm-pi-ai/acme', displayName: 'ACME 网关', host: 'gateway.acme.example' },
   ], 'settings.yaml provider hosts extracted with friendly displayNames (llm-* only)')
   assert.deepEqual(providerHostsFromSettings(join(work, 'missing.yaml')), [], 'missing settings.yaml -> empty list')
+  // dsh >= 0.2 shape: the active profile's document, a top-level array of
+  // {id, name, config} entries (config children sit two levels deeper).
+  const patchPath = join(work, 'cordis.patch.yml')
+  writeFileSync(patchPath, [
+    "# profile patch",
+    '- id: dsh-smoothly-opencode-session',
+    "  name: '@karoc/dsh-smoothly-opencode-session'",
+    '  config:',
+    '    mode: session-id',
+    '- id: llm-pi-ai',
+    "  name: '@deepseek-ai/dsh-llm-pi-ai'",
+    '  config:',
+    '    providers:',
+    '      ark:',
+    '        displayName: 方舟 Ark',
+    '        baseURL: https://ark.cn-beijing.volces.com/api/plan/v3',
+    '      local:',
+    '        baseURL: http://127.0.0.1:11434/v1',
+    '- id: llm-deepseek',
+    "  name: '@deepseek-ai/dsh-llm-deepseek'",
+    '  config:',
+    '    models:',
+    '      - id: deepseek-flash',
+    '',
+  ].join('\n'))
+  assert.deepEqual(providerHostsFromProfileDocument(patchPath), [
+    { name: 'llm-pi-ai/ark', displayName: '方舟 Ark', host: 'ark.cn-beijing.volces.com' },
+    { name: 'llm-deepseek', displayName: 'DeepSeek', host: 'api.deepseek.com' },
+  ], 'profile document: llm-* providers with baseURLs, loopback dropped, llm-deepseek keeps its public endpoint')
+  assert.deepEqual(providerHostsFromProfileDocument(join(work, 'missing-patch.yml')), [], 'missing profile document -> empty list')
   // provider without displayName falls back to its key; non-llm namespaces ignored
   writeFileSync(settingsPath, [
     'llm-pi-ai:',
