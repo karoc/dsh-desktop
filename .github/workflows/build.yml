@@ -29,6 +29,28 @@ jobs:
       - uses: actions/checkout@v4
       - id: changed
         name: 变更范围判定（板卡专属变更跳过重步骤；必过检查仍照常上报）
+        # 2026-10-07 两次修正，记在这里免得再踩：
+        # ① 首版 `git diff origin/<base>...HEAD`：PR 事件浅克隆拿不到对象 ⇒ 实测 `<none>` ⇒ 重步骤照跑（快只是缓存）。
+        # ② 第二版改用事件 base SHA + `git fetch --depth=1 origin "$sha"`：**依赖网络**，实测两次运行结果不一致
+        #    （PR #122 得 true、PR #123 得 `<none>`）—— 门禁的输入不能飘。
+        # 本版：**不联网**。PR 事件检出的就是合并提交，`HEAD^1` 即 base ⇒ 本地 diff（失败退 `HEAD^`）。
+        # 判定同时写 `$GITHUB_OUTPUT` 与 `$GITHUB_ENV`，守卫读 `env.board_only`（少一层传递）。
+        # fail-safe：diff 失败或为空 ⇒ 按"有变更"处理（宁可多跑，绝不误跳过门禁）。
+        run: |
+          set -u
+          files=""
+          if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
+            files=$(git diff --name-only HEAD^1 HEAD 2>/dev/null || echo "")
+            [ -z "$files" ] && files=$(git diff --name-only HEAD^ HEAD 2>/dev/null || echo "")
+          else
+            files=$(git diff --name-only HEAD^ HEAD 2>/dev/null || echo "")
+          fi
+          rest=$(printf '%s\n' "$files" | grep -v '^KANBAN.json$' | grep -v '^$' || true)
+          if [ -n "$files" ] && [ -z "$rest" ]; then board_only=true; else board_only=false; fi
+          echo "board_only=$board_only" >> "$GITHUB_OUTPUT"
+          echo "board_only=$board_only" >> "$GITHUB_ENV"
+          echo "event=${GITHUB_EVENT_NAME} files=(${files:-<none>}) ⇒ board_only=$board_only"
+        name: 变更范围判定（板卡专属变更跳过重步骤；必过检查仍照常上报）
         # ⚠️ 2026-10-07 首版在 PR 事件下失效：`git diff origin/<base>...HEAD` 在浅克隆里拿不到对象，
         # 实测输出 `changed files: <none>` ⇒ 判定 board_only=false ⇒ 重步骤照跑（只是缓存让它看着快）。
         # 现在改用**事件自带的 base SHA**做两点 diff；并且**拿不到变更列表时一律按"有变更"处理**
@@ -58,17 +80,17 @@ jobs:
       - run: node scripts/fetch-node.mjs
       - run: node scripts/sync-resources.mjs
       - run: cargo check --manifest-path src-tauri/Cargo.toml
-        if: steps.changed.outputs.board_only != 'true'
+        if: env.board_only != 'true'
       # Quality gate: the crate must be clippy-clean, not merely compile.
       # cargo fmt --check is DISABLED until the one-shot formatting PR lands
       # (60 legacy format diffs predate the gate; run `cargo fmt` on a machine
       # with the Rust toolchain, commit as style(chrome): cargo fmt, then
       # re-enable: `- run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`).
       - run: cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
-        if: steps.changed.outputs.board_only != 'true'
+        if: env.board_only != 'true'
       # Rust unit tests (lib): migration logic & any pure-path logic.
       - run: cargo test --manifest-path src-tauri/Cargo.toml --lib
-        if: steps.changed.outputs.board_only != 'true'
+        if: env.board_only != 'true'
 
   # Fast node gate (no Rust/system deps, ~1 min): all scripts/test-*.mjs
   # behavioral + contract suites (notifications / control plane / console /
@@ -78,6 +100,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - id: changed
+        name: 变更范围判定（板卡专属变更跳过重步骤；必过检查仍照常上报）
+        # 2026-10-07 两次修正，记在这里免得再踩：
+        # ① 首版 `git diff origin/<base>...HEAD`：PR 事件浅克隆拿不到对象 ⇒ 实测 `<none>` ⇒ 重步骤照跑（快只是缓存）。
+        # ② 第二版改用事件 base SHA + `git fetch --depth=1 origin "$sha"`：**依赖网络**，实测两次运行结果不一致
+        #    （PR #122 得 true、PR #123 得 `<none>`）—— 门禁的输入不能飘。
+        # 本版：**不联网**。PR 事件检出的就是合并提交，`HEAD^1` 即 base ⇒ 本地 diff（失败退 `HEAD^`）。
+        # 判定同时写 `$GITHUB_OUTPUT` 与 `$GITHUB_ENV`，守卫读 `env.board_only`（少一层传递）。
+        # fail-safe：diff 失败或为空 ⇒ 按"有变更"处理（宁可多跑，绝不误跳过门禁）。
+        run: |
+          set -u
+          files=""
+          if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
+            files=$(git diff --name-only HEAD^1 HEAD 2>/dev/null || echo "")
+            [ -z "$files" ] && files=$(git diff --name-only HEAD^ HEAD 2>/dev/null || echo "")
+          else
+            files=$(git diff --name-only HEAD^ HEAD 2>/dev/null || echo "")
+          fi
+          rest=$(printf '%s\n' "$files" | grep -v '^KANBAN.json$' | grep -v '^$' || true)
+          if [ -n "$files" ] && [ -z "$rest" ]; then board_only=true; else board_only=false; fi
+          echo "board_only=$board_only" >> "$GITHUB_OUTPUT"
+          echo "board_only=$board_only" >> "$GITHUB_ENV"
+          echo "event=${GITHUB_EVENT_NAME} files=(${files:-<none>}) ⇒ board_only=$board_only"
         name: 变更范围判定（板卡专属变更跳过重步骤；必过检查仍照常上报）
         run: |
           set -e
@@ -104,9 +148,9 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         run: node scripts/sync-cargo-lock-version.mjs
       - run: npm test
-        if: steps.changed.outputs.board_only != 'true'
+        if: env.board_only != 'true'
       - name: 文档同步（改了壳/manager 行为文件 ⇒ 同 PR 必须改 README，除非打 docs-not-needed 标签）
-        if: steps.changed.outputs.board_only != 'true'
+        if: env.board_only != 'true'
         run: |
           set -e
           if [ "${{ github.event_name }}" != "pull_request" ]; then
