@@ -2130,9 +2130,9 @@
       ],
       "rationale": "这是\"我还没看的\"清单，登记的目的是**不让\"没发现问题\"被误读成\"没有问题\"**（2026-10-07 用户提问的直接产物）。这些面都真实存在未验证风险：`scripts/server-manager.mjs` 的 4 处 `rmSync`（含 prune/rollback 路径，权限错误时行为未审）、`shell-chrome.js` 1556 行只审过我改动的部分、桥端点的输入校验只依赖既有 verify 脚本、并发（watchdog/timer/多窗口）与竞态未审、没有任何覆盖率度量。",
       "rejected": "**放弃了\"逐项现在全查\"**：成本远超收益，且其中多项需要专门手段（覆盖率工具、竞态复现）；**放弃了\"不登记，等有空再看\"**：那等于把\"未审阅\"伪装成\"没问题\"。",
-      "description": "**manager 的 rm 路径：已审（2026-10-07）** —— `scripts/server-manager.mjs` 5 处 `rmSync` 逐个判读：\n· **:486** `removeStaleNestedDshPackages`：目标=陈旧嵌套 dsh 包（可重装），异常不吞会传播 ⇒ 可接受；\n· **:705** 半装 `@deepseek-ai/dsh`（可重装）⇒ 可接受；\n· **:731/:801/:806-812** `.plugin-backup` 一族（备份/恢复/安全网）⇒ **:731 有真实数据丢失面，已修（PR #129）**：原来在安装开始时无条件 `rmSync(backupDir)`，若上次安装在恢复前被打断，这份备份可能是用户插件**唯一的一份拷贝** ⇒ 改为**只挪不删**（`.plugin-backup.prev` 保留一个周期）、**成功后才清理**、启动恢复**主备份优先**（避免用更旧的一份盖回用户更新过的版本）。\n· 验证：`npm test` 44 PASS；`test-copy-consistency` 当场抓到我只改了 `scripts/` 没同步资源副本（已修）。\n\n**① `shell-chrome.js` 全文：已审（2026-10-07，1713 行）** —— 判读：`innerHTML` 仅 3 处且内容均为静态可信（LOGO 常量 / SHELL_MENUS 的 icon / ICONS）；热路径整页文本读 3 处，其中 2 处正是刚做退避的探针、第 3 处只被有界探针调用；31 处 `addEventListener` / 0 处 remove，落在探针行区间的 4 处经缩进判据确认均为**顶层一次性注册**；吞错 2 处已标注并**纳入门禁**（此前审计只扫 manager，是门禁缺口，已修 PR #135）。\n**仍未审阅（诚实清单）**：② **并发与竞态**（watchdog / 就绪探测 / 多窗口 / 定时器）；③ **桥端点输入校验**（超长、畸形、编码绕过——目前只依赖既有 verify 脚本）；④ **没有任何覆盖率度量**；⑤ 17 个老套件的变异对照（杠杆②）。\n**建议顺序**：②（竞态最可能在真实使用中咬人）→ ③（对抗性用例）→ ①（全文走查）→ ④⑤（度量与门禁）。",
+      "description": "**manager 的 rm 路径：已审（2026-10-07）** —— `scripts/server-manager.mjs` 5 处 `rmSync` 逐个判读：\n· **:486** `removeStaleNestedDshPackages`：目标=陈旧嵌套 dsh 包（可重装），异常不吞会传播 ⇒ 可接受；\n· **:705** 半装 `@deepseek-ai/dsh`（可重装）⇒ 可接受；\n· **:731/:801/:806-812** `.plugin-backup` 一族（备份/恢复/安全网）⇒ **:731 有真实数据丢失面，已修（PR #129）**：原来在安装开始时无条件 `rmSync(backupDir)`，若上次安装在恢复前被打断，这份备份可能是用户插件**唯一的一份拷贝** ⇒ 改为**只挪不删**（`.plugin-backup.prev` 保留一个周期）、**成功后才清理**、启动恢复**主备份优先**（避免用更旧的一份盖回用户更新过的版本）。\n· 验证：`npm test` 44 PASS；`test-copy-consistency` 当场抓到我只改了 `scripts/` 没同步资源副本（已修）。\n\n**① `shell-chrome.js` 全文：已审（2026-10-07，1713 行）** —— 判读：`innerHTML` 仅 3 处且内容均为静态可信（LOGO 常量 / SHELL_MENUS 的 icon / ICONS）；热路径整页文本读 3 处，其中 2 处正是刚做退避的探针、第 3 处只被有界探针调用；31 处 `addEventListener` / 0 处 remove，落在探针行区间的 4 处经缩进判据确认均为**顶层一次性注册**；吞错 2 处已标注并**纳入门禁**（此前审计只扫 manager，是门禁缺口，已修 PR #135）。\n**仍未审阅（诚实清单）**：② **并发与竞态**（watchdog / 就绪探测 / 多窗口 / 定时器）；③ **桥端点输入校验**（超长、畸形、编码绕过——目前只依赖既有 verify 脚本）；④ **覆盖率基线：已建立（2026-10-07）** —— 零依赖工具 `scripts/coverage-baseline.mjs`（Node 内建 `NODE_V8_COVERAGE` + 自解析），自检 7/7 并作为**第 19 套**接入 `npm test`（`scripts/test-coverage-tool.mjs`）。`npm run coverage` 复现。**基线（行覆盖）**：合计 **76.0%**（4497/5916）；最低 `scripts/server-manager.mjs` **44.9%**（1773 行）、`scripts/proxy.mjs` **51.9%**、`scripts/upgrade-marker.mjs` **66.0%**；其余多在 90%+。**未覆盖 Rust**（需 `cargo llvm-cov`/tarpaulin，本机无 cargo、CI 未装）⇒ 单列后续项。；⑤ 17 个老套件的变异对照（杠杆②）。\n**建议顺序**：②（竞态最可能在真实使用中咬人）→ ③（对抗性用例）→ ①（全文走查）→ ④⑤（度量与门禁）。",
       "createdAt": 1791357317847,
-      "updatedAt": 1791376257810
+      "updatedAt": 1791390178371
     },
     {
       "id": "card-1a115714610-3677",
@@ -2203,6 +2203,23 @@
       "description": "**下一步**：多窗口桥状态共享做一次实测（开两个壳窗口 → 在一个窗口点\"停用第三方插件并重启\" → 看另一个窗口状态是否正确收敛）。",
       "createdAt": 1791373683368,
       "updatedAt": 1791373683368
+    },
+    {
+      "id": "card-1a1172cdc43-8873",
+      "title": "覆盖率：Rust 侧基线（需 cargo llvm-cov/tarpaulin，本机不可跑）",
+      "status": "todo",
+      "tags": [
+        "coverage",
+        "rust",
+        "ci",
+        "follow-up",
+        "p3"
+      ],
+      "rationale": "JS 侧基线已建立（2026-10-07，合计 76.0%），但 `src-tauri/src/lib.rs`（约 3700 行，含桥/安装器/legacy 接管等高风险面）**没有任何覆盖率数字**。本机 WSL 无 cargo ⇒ 只能在 CI 跑。",
+      "rejected": "**放弃了\"本地装 cargo 再说\"**：WSL 装 rust 工具链 + 编译本仓依赖耗时长，且与 CI 的 win/ubuntu 双跑不一致；**放弃了用 tarpaulin（需 nightly）**：llvm-cov 更通用。",
+      "description": "**做法**：在 `check` 作业（ubuntu）加一步 `cargo llvm-cov --lib --summary-only`（或生成 lcov 后打印汇总），**只报告不设阈值**（先有数字再谈门槛）；注意与 `cargo test --lib` 合并跑可省一次编译。**判据**：能在 CI 日志里看到 lib.rs 的行覆盖率数字，并且数字随改动变化（不是恒值）。",
+      "createdAt": 1791390178371,
+      "updatedAt": 1791390178371
     }
   ]
 }
