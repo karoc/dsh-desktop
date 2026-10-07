@@ -2137,7 +2137,7 @@
     {
       "id": "card-1a115714610-3677",
       "title": "追查：板卡快速路径里 npm test 未被跳过（cargo 三步已跳过）",
-      "status": "todo",
+      "status": "done",
       "tags": [
         "ci",
         "gate",
@@ -2147,7 +2147,9 @@
       "rationale": "PR #122 实测：纯板卡 PR 下 `board_only=true` ✅、`cargo check/clippy/test` 三项 skipped ✅，但 `npm test` 仍执行 ⚠️。守卫文本（`build.yml:106-107`）与检测步骤（同一作业内、位于其之前、输出 `board_only=true`）看起来都正确，实际却没跳过 ⇒ 说明我对 GitHub Actions 的步骤级 `if` + `steps.<id>.outputs` 语义还有没查清的地方，**不能靠猜**，必须用日志/最小复现定位。",
       "description": "**为什么值得追**：它的价值只有 1–2 分钟，但它暴露的是\"我对步骤级条件求值的理解可能有偏差\"——同一个偏差如果落在别处（例如某个\"必须跑\"的步骤被误跳过），方向就反了。**登记它主要是为了查清语义**，不是为省那 1 分钟。\n**下一步**：① 在检测步骤里同时 `echo` 到 `$GITHUB_ENV`（env 版判定，两套并存可对照）；② 若 env 版生效而 outputs 版不生效 ⇒ 说明是 id/output 传递问题（检查是否同名 id 重复、或步骤被插进了别的作业）；③ 定位后把结论写回 CONTRIBUTING 的板卡 PR 说明里（避免下次再踩）。",
       "createdAt": 1791361107472,
-      "updatedAt": 1791361107472
+      "updatedAt": 1791365987033,
+      "summary": "**四次尝试、四次实测，结论：当前形制不生效；建议放弃**（2026-10-07）。① `git diff origin/<base>...HEAD`：浅克隆无对象 ⇒ `<none>`；② 事件 base SHA + `git fetch`：依赖网络、结果飘（#122 true / #123 `<none>`）；③ 事件 base SHA 的本地 `HEAD^1` 版：**GitHub 直接拒收整个 workflow**（我逐行替换时旧块残留 ⇒ 同步骤重复 name/run ⇒ run **零作业**；本地 PyYAML 容忍重复键，查不出）；④ 修好 workflow 后实测仍然 `event=pull_request files=(<none>) ⇒ board_only=false` ⇒ **浅克隆下 `HEAD^1` 也不存在**（`fetch-depth: 1` 没有父提交）。\n**同批暴露并已修**：给\"文档同步\"门禁用了同一套 diff ⇒ 取不到就\"跳过\"= **静默放行（假阴性门禁）**，按规矩②比没有门禁更糟 ⇒ 已移除该步骤，CONTRIBUTING 相应改为\"约定，暂无 CI 强制\"并写明原因。\n**若要重做（下一步）**：把相关 checkout 改 `fetch-depth: 0`（本仓很小，代价几秒），然后**再用纯板卡 PR 实测**；在实测通过前不得声称生效。",
+      "rejected": "**放弃了\"再试第五版\"**：四次尝试已耗约 1.5 小时，而这个特性的收益只有\"每个纯板卡 PR 省 1–2 分钟\"，且它的复杂度落在**最关键的 CI workflow** 上（改错会拦住所有合并 —— 本次已真的发生过：workflow 被拒收、run 零作业）。**放弃了保留那个假阴性的文档门禁**：取不到变更就放行，会给人\"已强制\"的错觉。**保留**：`fetch-depth: 0` 的重做路径已写进卡（本仓小，代价可接受），但要求\"实测通过再声称生效\"。"
     }
   ]
 }
