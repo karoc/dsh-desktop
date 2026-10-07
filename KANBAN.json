@@ -2099,6 +2099,39 @@
       "createdAt": 1791289773515,
       "updatedAt": 1791295846864,
       "summary": "**已按\"先补覆盖再删\"处理（PR #114）**：① 把两个脚本守的核心判定抽成纯函数 `legacy_cleanup_refusal(has_legacy_dir, main_exe_present)`，并在 `legacy_cleanup_json` 里替换原先的两段内联判断（**行为不变**：`no-legacy` / `legacy-app-present` / 允许清理三分支；拒绝路径回 `ok:false` + 三个 removed 计数全 0）；② 补两条单测 —— `legacy_cleanup_refusal_covers_all_three_branches`（含\"旧版主程序仍在 ⇒ 拒绝且不得删其快捷方式\"这个 2026-09-17 修过的真实缺陷场景）与 `refusal_json_reports_nothing_removed`；③ 删除 `scripts/verify-legacy-hook.nsi/.ps1`（已确认未被 npm scripts / CI / 测试引用）。\n**验证**：CI `check` 作业的 `cargo test --lib` 通过（本地无 cargo，必须由 CI 背书）；`npm test` 42 PASS。"
+    },
+    {
+      "id": "card-1a1153772d7-9056",
+      "title": "质量防线机制化：把\"审计\"变成可重复的门禁（而非每次靠人想起）",
+      "status": "todo",
+      "tags": [
+        "quality-audit",
+        "process",
+        "mechanism",
+        "testing",
+        "p3"
+      ],
+      "rationale": "2026-10-07 用户问\"已经没有任何质量问题了吗\"时暴露的真问题：**我们的质量防线依赖\"有人想起来查\"**。具体缺口（本轮确认）：① 修完\"备份吞错\"后我**没有做同类模式全仓复查**（纪律明写要做）—— 补做后才确认其余 3 处候选属设计上可接受（各有兜底）；② 17 个 JS 套件里**只有最新的几个有变异对照**，老套件的可失败性没有被证明；③ 依赖面从没查过（本轮补跑 `npm audit --omit=dev` = 0 漏洞，但**没有机制保证以后**）；④ Rust 侧约 108 处 `let _ =` 只做了\"销毁类\"抽查，没有规则化的判读标准。",
+      "rejected": "**放弃了\"再写一份审计清单文档\"**：文档靠自觉执行，与本条要解决的问题同构；**放弃了\"每次靠人工复查\"**：这正是本次失职的原因；**放弃了把变异对照只加在新套件上**：老套件才是历史包袱所在。",
+      "description": "**要做成机制（三个杠杆）**：\n① **变异对照门禁**：为 `npm test` 里每个套件至少配一个\"注入缺陷 ⇒ 必须变红\"的对照（可分阶段：先覆盖无对照的套件），落成 `npm run test:controls`，并纳入 PR 门禁；\n② **同类缺陷 grep 纪律的机械化**：把\"修某类缺陷后必须全仓同类复查\"变成脚本 —— 例如 `scripts/audit-silent-failures.mjs`：列出所有\"销毁/写入类操作的结果被忽略\"的站点（Rust `let _ = std::fs::(remove|copy|write|rename)`、JS `rmSync/writeFileSync` 附近的吞错），要求每个站点带 `// fail-open-ok: <理由>` 标注才能通过 ⇒ 新引入的静默失效会被门禁挡住；\n③ **依赖安全进 CI**：`npm audit --omit=dev`（已有 0 漏洞基线）+ 若可行的 `cargo audit`，纳入 check 作业。",
+      "createdAt": 1791357317847,
+      "updatedAt": 1791357317847
+    },
+    {
+      "id": "card-1a1153772d7-4771",
+      "title": "未审阅面（诚实清单）：manager 的 rm 路径 / chrome 全文 / 并发与竞态 / 桥输入校验 / 覆盖率度量",
+      "status": "todo",
+      "tags": [
+        "quality-audit",
+        "coverage-gap",
+        "follow-up",
+        "p4"
+      ],
+      "rationale": "这是\"我还没看的\"清单，登记的目的是**不让\"没发现问题\"被误读成\"没有问题\"**（2026-10-07 用户提问的直接产物）。这些面都真实存在未验证风险：`scripts/server-manager.mjs` 的 4 处 `rmSync`（含 prune/rollback 路径，权限错误时行为未审）、`shell-chrome.js` 1556 行只审过我改动的部分、桥端点的输入校验只依赖既有 verify 脚本、并发（watchdog/timer/多窗口）与竞态未审、没有任何覆盖率度量。",
+      "rejected": "**放弃了\"逐项现在全查\"**：成本远超收益，且其中多项需要专门手段（覆盖率工具、竞态复现）；**放弃了\"不登记，等有空再看\"**：那等于把\"未审阅\"伪装成\"没问题\"。",
+      "description": "按价值排序的可执行子项：① manager 的 4 处 `rmSync` 逐个判读（含失败时是否留下半成品状态）；② 桥端点输入校验的对抗性用例（超长/畸形/编码绕过）；③ 覆盖率基线（先度量再谈目标）；④ 竞态清单（watchdog / 就绪探测 / 多窗口）。",
+      "createdAt": 1791357317847,
+      "updatedAt": 1791357317847
     }
   ]
 }
