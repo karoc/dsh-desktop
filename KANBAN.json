@@ -2167,6 +2167,42 @@
       "description": "**下一步（必须按这个顺序）**：① 用**精确字符串删除**（不用行号/边界启发式）摘掉 `test` 作业里的\"文档同步\"步骤；② 推送后用**两个判据**验证：该分支 run 的 `jobs.total_count > 0` **且** `check`/`test` 两项检查上报；③ 两项都满足再看结论（不得再用本地 YAML 判定）；④ 若确实要做该门禁，先给 checkout 加 `fetch-depth: 0` 并用一个\"改动 shell-chrome.js 但不改 README\"的**实验 PR** 证明它真的会红（负向对照），再谈启用。\n**另注**：快速路径（板卡免重步骤）已结案为\"不生效、建议放弃\"（四次实证见另一张卡），但其\"变更范围判定\"步骤仍留在 workflow 里（无害但空转）⇒ 一并随本项清理或整段删除。\n\n**2026-10-07 再次尝试与结论（重要）**：我不甘心，又做了一次\"精确字符串手术\"（删除该步骤 + 移除空转的「变更范围判定」），结果**又把 workflow 改坏**：删除逻辑把 `test` 作业的 `actions/checkout@v4` 步骤一起吞掉了，平台判据当场给出 **作业数 0**（`{\"total_count\":0}`）—— 说明 ① 该判据用得对（本地 YAML 依然\"通过\"），② **文本手术改 CI 文件这条路必须放弃**（两次尝试、两次把整个 workflow 变成零作业，每次都拦住所有合并）。\n**唯一剩下的安全路径（已按此收敛）**：只做**一行级**改动 —— 给 `check`/`test` 两个作业的 `actions/checkout@v4` 加 `with: fetch-depth: 0`，让 diff 能取到变更（本仓很小，代价几秒）；然后用一个\"改 shell-chrome.js 但不改 README\"的**负向对照实验 PR** 证明它真的会红，再谈保留。**禁止**再做整段删除式编辑；每次改 CI 都必须先看 `jobs.total_count > 0`。",
       "createdAt": 1791367173021,
       "updatedAt": 1791368441211
+    },
+    {
+      "id": "card-1a116312aa8-8865",
+      "title": "性能缺陷：壳内两个探针永不停歇（每 5s 整页 textContent + 每 3s 一次桥请求）",
+      "status": "todo",
+      "tags": [
+        "shell",
+        "perf",
+        "idle",
+        "audit",
+        "follow-up",
+        "p3"
+      ],
+      "rationale": "并发/竞态审计（2026-10-07）扫出的**我自己写的问题**，与既有内部记录《web-gui-never-idles》同源：\n· `probeAuthMisreport`（`shell-chrome.js:796`，我加的）：只在**命中**后置 `authShown` 停止（`:798`）⇒ **一直没命中就每 5 秒**执行一次 `misleadingAuthHint(document.body.textContent)`（`:800`）—— 整页文本序列化，长会话下代价随内容增长，且**永不停止**；对比同批的 `probePluginFailure`（`:717`）是有界的（命中即停 + `PLUGIN_PROBE_MAX_TICKS = 30` ≈60s，`:730`）。\n· `updateErrorBanner`（`:659`，非我引入）：每 3 秒 `call('shell-status')`（`:661`）⇒ **每 3 秒一次环回桥请求**，进程活着就一直打（含 Rust 侧处理与 JSON 序列化）。\n**代价量级**：一天 ≈ 2.9 万次桥请求 + 1.7 万次整页文本扫描；而两次\"用户可感知\"的场景（鉴权误报、错误横幅）其实都很低频。",
+      "rejected": "**放弃了\"只靠测量报告了事\"**：这份记录解决的是\"知道它不 idle\"，而这张卡要落到具体探针与具体改法；**放弃了\"直接删掉探针\"**：它们承载两个真实需求（403 误报提示、错误横幅/证据目录入口）；**放弃了引入 MutationObserver 立即做事件驱动**：改动面较大且需要真机验证，先做最省的\"有界 + 退避\"。",
+      "description": "**修法（按性价比排序）**：\n① `probeAuthMisreport`：加与插件探针同款的上限（例如 `AUTH_PROBE_MAX_TICKS = 12` ≈60s）**并**在 60s 后退避到 30s；命中/用户关闭即停（已有 ✅）。\n② `updateErrorBanner`：改为**按需轮询** —— 仅在\"最近一次状态表明异常/正在安装\"时保持 3s，其余时间退避到 15–30s；或改为由桥的既有事件/流驱动（若桥已推状态则直接复用）。\n**验证（可失败）**：用既有内部记录的测量方法对比改动前后 5 分钟空闲期的（a）桥请求数、（b）DOM 失效次数；并在 `test-shell-chrome.mjs` 加一条断言\"探针在 N 次后停止\"（当前 205 条断言里没有这条）。",
+      "createdAt": 1791373683368,
+      "updatedAt": 1791373683368
+    },
+    {
+      "id": "card-1a116312aa8-9772",
+      "title": "并发/竞态审计：其余结论（定时器配对 / 就绪探测 / 串行化）",
+      "status": "todo",
+      "tags": [
+        "shell",
+        "manager",
+        "audit",
+        "concurrency",
+        "follow-up",
+        "p4"
+      ],
+      "rationale": "同一轮审计的其余判读，记录下来免得重复劳动：\n· **定时器配对**：manager `setInterval` 4 处 / `clearInterval` 3 处 —— 差的那处是**进程级常驻**（watchdog / providers 刷新），属设计意图（manager 是长驻进程），不是泄漏；`stallTimer`（`:275`）与 `heartbeat`（`:718`）都有配对清理。\n· **就绪探测/超时**：`runChild` 有 `timeoutMs`（默认 600s）**且有停顿检测**（`stallTimer`）⇒ 不会把\"慢\"误判成\"死\"，这块已被 `test-install-stall.mjs` / `test-broken-install.mjs` 覆盖。\n· **串行化**：manager 侧没有安装锁，但单进程 + Rust 侧 `state.guard.lock()`（`lib.rs:166/191` 的 `MgrPhase`）构成单实例守卫 ⇒ 未发现\"两个安装并发跑\"的路径。\n· **未覆盖**：多窗口场景下的桥状态共享（未实测）；`shell-chrome.js` 的 `setFullscreenMode` 探针（`:1074`）是廉价的`matchMedia` 读，暂不处理。",
+      "rejected": "**放弃了把\"无锁\"直接判为缺陷**：先要能给出可复现的并发路径，否则就是猜测（纪律：外部论断要标验证方式）。",
+      "description": "**下一步**：多窗口桥状态共享做一次实测（开两个壳窗口 → 在一个窗口点\"停用第三方插件并重启\" → 看另一个窗口状态是否正确收敛）。",
+      "createdAt": 1791373683368,
+      "updatedAt": 1791373683368
     }
   ]
 }
