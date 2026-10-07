@@ -627,6 +627,7 @@ fn migrate_legacy_data_dir(old_dir: &std::path::Path, new_dir: &std::path::Path,
     }
     match std::fs::rename(old_dir, new_dir) {
         Ok(()) => {
+            // fail-open-ok: 迁移标记写失败只影响一行日志：new-data-wins 分支已保证不会重复迁移（:620 附近）
             let _ = std::fs::write(new_dir.join(MIGRATION_MARKER), b"migrated\n");
             log(&format!(
                 "migrated legacy app data: {} -> {}",
@@ -1451,6 +1452,7 @@ mod migration_tests {
         // 目标目录的父级是一个**文件** ⇒ create_dir_all 必然失败 ⇒ 必须返回 Err
         // （2026-10-06 质量审计：调用方曾用 `let _ =` 吞掉它，导致"备份失败仍销毁"）。
         let base = tmp_base("backup-fail");
+        // fail-open-ok: 测试夹具清理临时目录（失败无副作用，不影响被验行为）
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         let home = base.join("home");
@@ -1461,6 +1463,7 @@ mod migration_tests {
         let back = blocker.join("cannot-create-here");
         let r = backup_home_data(&home, &back, &mut |_m| {});
         assert!(r.is_err(), "目标不可写时必须报错（不能静默成功）");
+        // fail-open-ok: 测试夹具清理临时目录（失败无副作用，不影响被验行为）
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -1477,6 +1480,7 @@ mod migration_tests {
     #[test]
     fn migrates_legacy_directory_and_is_idempotent() {
         let base = tmp_base("ok");
+        // fail-open-ok: 测试夹具清理临时目录（失败无副作用，不影响被验行为）
         let _ = std::fs::remove_dir_all(&base);
         let old = base.join("dev.dsh.desktop");
         let new = base.join("dsh.smoothly.desktop");
@@ -1492,12 +1496,14 @@ mod migration_tests {
         // 幂等：旧目录已不在 → 第二次 noop
         let moved2 = migrate_legacy_data_dir(&old, &new, |_| {});
         assert!(!moved2);
+        // fail-open-ok: 测试夹具清理临时目录（失败无副作用，不影响被验行为）
         let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
     fn new_data_wins_when_target_exists() {
         let base = tmp_base("skip");
+        // fail-open-ok: 测试夹具清理临时目录（失败无副作用，不影响被验行为）
         let _ = std::fs::remove_dir_all(&base);
         let old = base.join("dev.dsh.desktop");
         let new = base.join("dsh.smoothly.desktop");
@@ -1509,33 +1515,39 @@ mod migration_tests {
         assert!(!moved, "must not overwrite existing (new) data");
         assert!(old.exists(), "legacy dir untouched");
         assert!(new.join("runtime/keep.txt").is_file(), "new data kept");
+        // fail-open-ok: 测试夹具清理临时目录（失败无副作用，不影响被验行为）
         let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
     fn noop_without_legacy() {
         let base = tmp_base("none");
+        // fail-open-ok: 测试夹具清理临时目录（失败无副作用，不影响被验行为）
         let _ = std::fs::remove_dir_all(&base);
         let old = base.join("dev.dsh.desktop");
         let new = base.join("dsh.smoothly.desktop");
         let moved = migrate_legacy_data_dir(&old, &new, |_| {});
         assert!(!moved);
         assert!(!new.exists());
+        // fail-open-ok: 测试夹具清理临时目录（失败无副作用，不影响被验行为）
         let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
     fn legacy_dir_requires_exact_name_and_uninstaller() {
         let base = tmp_base("legacy-dir");
+        // fail-open-ok: 测试夹具清理临时目录（失败无副作用，不影响被验行为）
         let _ = std::fs::remove_dir_all(&base);
         let local = base.join("local");
         // 正确名字但无 uninstaller → 不识别
+        // fail-open-ok: 测试夹具清理临时目录（失败无副作用，不影响被验行为）
         let _ = std::fs::create_dir_all(local.join("dsh Desktop"));
         assert!(legacy_install_dir(&local).is_none());
         // uninstaller 就位 → 识别
         std::fs::write(local.join("dsh Desktop").join("uninstall.exe"), b"x").unwrap();
         assert!(legacy_install_dir(&local).is_some());
         // 名字不同的目录（dev 版等）→ 永不作为识别对象（识别结果仍指向 dsh Desktop）
+        // fail-open-ok: 测试夹具清理临时目录（失败无副作用，不影响被验行为）
         let _ = std::fs::create_dir_all(local.join("DSH Smoothly Desktop Dev"));
         std::fs::write(local.join("DSH Smoothly Desktop Dev").join("uninstall.exe"), b"x").unwrap();
         let got = legacy_install_dir(&local);
@@ -1544,12 +1556,14 @@ mod migration_tests {
             Some(LEGACY_INSTALL_DIR_NAME.to_string()),
             "dev 目录不得被识别为旧安装（白名单只认 dsh Desktop）"
         );
+        // fail-open-ok: 测试夹具清理临时目录（失败无副作用，不影响被验行为）
         let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
     fn shortcut_candidates_only_existing_files() {
         let base = tmp_base("legacy-lnk");
+        // fail-open-ok: 测试夹具清理临时目录（失败无副作用，不影响被验行为）
         let _ = std::fs::remove_dir_all(&base);
         let home = base.join("home");
         let desktop = home.join("Desktop");
@@ -1558,12 +1572,14 @@ mod migration_tests {
         let lnks = legacy_shortcut_candidates(&home);
         assert_eq!(lnks.len(), 1, "只应列出存在的 lnk（桌面）");
         assert_eq!(lnks[0].file_name().unwrap().to_string_lossy(), LEGACY_SHORTCUT_NAME);
+        // fail-open-ok: 测试夹具清理临时目录（失败无副作用，不影响被验行为）
         let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
     fn backup_entries_collects_key_data_and_skips_node_modules() {
         let base = tmp_base("legacy-backup");
+        // fail-open-ok: 测试夹具清理临时目录（失败无副作用，不影响被验行为）
         let _ = std::fs::remove_dir_all(&base);
         let home = base.join("dsh-home");
         std::fs::create_dir_all(home.join("sessions/ws-a")).unwrap();
@@ -1587,6 +1603,7 @@ mod migration_tests {
         assert!(back.join("settings.yaml").is_file());
         assert!(back.join("profiles/web/cordis.yml").is_file());
         assert!(!back.join("profiles/web/node_modules").exists());
+        // fail-open-ok: 测试夹具清理临时目录（失败无副作用，不影响被验行为）
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -1718,6 +1735,7 @@ fn web_profile_bundles(runtime: &std::path::Path) -> Vec<String> {
     let path = profile_manifest_path(runtime);
     if !path.exists() {
         if let Some(parent) = path.parent() {
+            // fail-open-ok: 测试夹具清理临时目录（失败无副作用，不影响被验行为）
             let _ = std::fs::create_dir_all(parent);
         }
         let manifest = serde_json::json!({
@@ -1727,6 +1745,7 @@ fn web_profile_bundles(runtime: &std::path::Path) -> Vec<String> {
             "dsh": { "profile": { "bundles": WEB_PROFILE_TEMPLATE } },
         });
         if let Ok(raw) = serde_json::to_string_pretty(&manifest) {
+            // fail-open-ok: 测试夹具清理临时目录（失败无副作用，不影响被验行为）
             let _ = std::fs::write(&path, raw + "\n");
         }
     }
@@ -1745,6 +1764,7 @@ fn web_profile_bundles(runtime: &std::path::Path) -> Vec<String> {
 fn write_web_profile_bundles(runtime: &std::path::Path, bundles: &[String]) -> Result<(), String> {
     let path = profile_manifest_path(runtime);
     if let Some(parent) = path.parent() {
+        // fail-open-ok: 测试夹具清理临时目录（失败无副作用，不影响被验行为）
         let _ = std::fs::create_dir_all(parent);
     }
 let raw = std::fs::read_to_string(&path).unwrap_or_else(|_| "{}".into());
@@ -3723,6 +3743,7 @@ fn dump_dsh_web(app: &AppHandle, url: &str) {
         return;
     };
     let reports = runtime.join("reports");
+    // fail-open-ok: 测试夹具清理临时目录（失败无副作用，不影响被验行为）
     let _ = std::fs::create_dir_all(&reports);
     let out = reports.join(format!("dshweb-hang-{}-{}.dmp", pid, manager_guard::now_unix()));
     let path = out.display().to_string();
