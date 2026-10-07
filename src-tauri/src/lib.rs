@@ -1276,6 +1276,7 @@ mod cookie_tests {
 }
 
 #[cfg(test)]
+#[cfg(test)]
 mod bridge_body_limit_tests {
     use super::{clamp_bridge_body_len, MAX_BRIDGE_BODY_BYTES};
 
@@ -1297,6 +1298,9 @@ mod bridge_body_limit_tests {
     }
 }
 
+// 2026-10-07：插入新测试模块时，原来挂在它上面的 `#[cfg(test)]` 被新模块顶掉了 ⇒ clippy 报
+// `unused import: super::close_needs_confirmation`（非 test 构建下该模块被编译，而内部 #[test] 被 cfg 掉）。
+#[cfg(test)]
 mod close_confirm_tests {
     use super::close_needs_confirmation;
 
