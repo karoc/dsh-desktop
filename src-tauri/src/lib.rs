@@ -1276,6 +1276,31 @@ mod cookie_tests {
 }
 
 #[cfg(test)]
+#[cfg(test)]
+mod bridge_body_limit_tests {
+    use super::{clamp_bridge_body_len, MAX_BRIDGE_BODY_BYTES};
+
+    #[test]
+    fn accepts_missing_and_normal_lengths() {
+        assert_eq!(clamp_bridge_body_len(None), Ok(0));
+        assert_eq!(clamp_bridge_body_len(Some("0")), Ok(0));
+        assert_eq!(clamp_bridge_body_len(Some("128")), Ok(128));
+        assert_eq!(clamp_bridge_body_len(Some(&MAX_BRIDGE_BODY_BYTES.to_string())), Ok(MAX_BRIDGE_BODY_BYTES));
+    }
+
+    #[test]
+    fn rejects_oversized_and_invalid_lengths() {
+        // 关键回归：没有上限时，声明 4 GB 会让 `vec![0u8; n]` 直接申请 4 GB（本地 DoS）。
+        assert!(clamp_bridge_body_len(Some("4000000000")).is_err());
+        assert!(clamp_bridge_body_len(Some(&(MAX_BRIDGE_BODY_BYTES + 1).to_string())).is_err());
+        assert!(clamp_bridge_body_len(Some("abc")).is_err());
+        assert!(clamp_bridge_body_len(Some("-1")).is_err());
+    }
+}
+
+// 2026-10-07：插入新测试模块时，原来挂在它上面的 `#[cfg(test)]` 被新模块顶掉了 ⇒ clippy 报
+// `unused import: super::close_needs_confirmation`（非 test 构建下该模块被编译，而内部 #[test] 被 cfg 掉）。
+#[cfg(test)]
 mod close_confirm_tests {
     use super::close_needs_confirmation;
 
@@ -2400,6 +2425,25 @@ fn execute_danger_action(app: &AppHandle, id: &str, body: &str) -> Result<(), St
     }
 }
 
+/// 桥请求体的**体积上限**：所有桥动作的 body 都是小 JSON（键值/命令数组），256 KB 已极其宽松。
+const MAX_BRIDGE_BODY_BYTES: usize = 256 * 1024;
+
+/// 解析 `Content-Length` 并**夹紧到上限**（2026-10-07 输入校验审计）。
+///
+/// 原来直接 `content_length = val.parse().unwrap_or(0)`，随后用 `vec![0u8; content_length]` 分配 ——
+/// 声明多大就分配多大，**没有任何上限** ⇒ 环回上的任意页面（能带自定义头就必须先过预检，而预检是放行的）
+/// 发一个 `Content-Length: 4000000000` 就能让壳一次性申请 4 GB（本地 DoS）。返回 `Err` 时调用方回 413。
+fn clamp_bridge_body_len(raw: Option<&str>) -> Result<usize, &'static str> {
+    let declared: usize = match raw {
+        None => 0,
+        Some(v) => v.trim().parse().map_err(|_| "invalid content-length")?,
+    };
+    if declared > MAX_BRIDGE_BODY_BYTES {
+        return Err("content-length too large");
+    }
+    Ok(declared)
+}
+
 fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
     use std::io::{Read as _, Write as _};
     let Ok(peer) = stream.try_clone() else { return };
@@ -2425,7 +2469,21 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
             let key = k.trim();
             let val = v.trim();
             if key.eq_ignore_ascii_case("content-length") {
-                content_length = val.parse().unwrap_or(0);
+                // 超限/非法 ⇒ 直接 413，不进 body 读取（否则下面按声明长度分配内存）。
+                match clamp_bridge_body_len(Some(val)) {
+                    Ok(n) => content_length = n,
+                    Err(reason) => {
+                        let body = format!("{{\"error\":\"{reason}\"}}");
+                        let _ = stream.write_all(
+                            format!(
+                                "HTTP/1.1 413 Payload Too Large\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                                body.len()
+                            )
+                            .as_bytes(),
+                        );
+                        return;
+                    }
+                }
             } else if key.eq_ignore_ascii_case("host") {
                 host = Some(val.to_string());
             } else if key.eq_ignore_ascii_case("origin") {
