@@ -125,3 +125,11 @@ gh CLI 默认读全局 `~/.config/gh/hosts.yml`。本项目使用**项目专用 
 
 - 改壳功能/新踩坑 → 更新 `.dsh/skills/dsh-desktop-shell-dev/SKILL.md`（加菜单、桥端点同步契约测试）
 - 非平凡改动 → Agent Note（`.agents/notes/implemented/<class>/`）+ 看板卡片（三字段齐全）
+
+## 门禁自身的验证（2026-10-07 起，硬规则）
+
+**任何新增的门禁/断言，必须在同一个 PR 里带一个"注入对应缺陷 ⇒ 必须变红"的夹具**，否则视为未验证（恒真的门禁比没有门禁更糟：它给出虚假的安心）。本仓已有先例：`scripts/test-silent-failures.mjs` 的 4 个变异夹具、`test-shell-chrome.mjs` 的变异对照。反面教材（2026-10-07）：静默失效审计脚本的前两版试图"自动跳过 `#[cfg(test)]` 区域"，两次都判错 —— 一次**漏检生产代码**（假阴性），一次把 20 条测试区命中当生产报出；是夹具把这两次都钉了出来。
+
+**行为改动必须同步文档**：改了 `src-tauri/resources/ui/shell-chrome.js` 或 `scripts/server-manager.mjs` 时，PR 必须同时改 `README.md`（CI 有一条 `文档同步` 步骤强制，除非给 PR 打 `docs-not-needed` 标签）。结构校验只能保证"文档存在"，语义一致性仍由交付前逐句走查负责。
+
+**板卡专属 PR**：只改 `KANBAN.json` 的 PR 会跳过 `check`/`test` 的重步骤（`cargo`/`npm test`），但两个必过检查仍照常上报（分支保护要求 `check`+`test`，用 `paths-ignore` 会让它们永不上报、PR 卡死 —— 所以是"作业照跑、步骤条件化"）。
