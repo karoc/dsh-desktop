@@ -2171,7 +2171,7 @@
     {
       "id": "card-1a116312aa8-8865",
       "title": "性能缺陷：壳内两个探针永不停歇（每 5s 整页 textContent + 每 3s 一次桥请求）",
-      "status": "todo",
+      "status": "in_progress",
       "tags": [
         "shell",
         "perf",
@@ -2182,9 +2182,9 @@
       ],
       "rationale": "并发/竞态审计（2026-10-07）扫出的**我自己写的问题**，与既有内部记录《web-gui-never-idles》同源：\n· `probeAuthMisreport`（`shell-chrome.js:796`，我加的）：只在**命中**后置 `authShown` 停止（`:798`）⇒ **一直没命中就每 5 秒**执行一次 `misleadingAuthHint(document.body.textContent)`（`:800`）—— 整页文本序列化，长会话下代价随内容增长，且**永不停止**；对比同批的 `probePluginFailure`（`:717`）是有界的（命中即停 + `PLUGIN_PROBE_MAX_TICKS = 30` ≈60s，`:730`）。\n· `updateErrorBanner`（`:659`，非我引入）：每 3 秒 `call('shell-status')`（`:661`）⇒ **每 3 秒一次环回桥请求**，进程活着就一直打（含 Rust 侧处理与 JSON 序列化）。\n**代价量级**：一天 ≈ 2.9 万次桥请求 + 1.7 万次整页文本扫描；而两次\"用户可感知\"的场景（鉴权误报、错误横幅）其实都很低频。",
       "rejected": "**放弃了\"只靠测量报告了事\"**：这份记录解决的是\"知道它不 idle\"，而这张卡要落到具体探针与具体改法；**放弃了\"直接删掉探针\"**：它们承载两个真实需求（403 误报提示、错误横幅/证据目录入口）；**放弃了引入 MutationObserver 立即做事件驱动**：改动面较大且需要真机验证，先做最省的\"有界 + 退避\"。",
-      "description": "**修法（按性价比排序）**：\n① `probeAuthMisreport`：加与插件探针同款的上限（例如 `AUTH_PROBE_MAX_TICKS = 12` ≈60s）**并**在 60s 后退避到 30s；命中/用户关闭即停（已有 ✅）。\n② `updateErrorBanner`：改为**按需轮询** —— 仅在\"最近一次状态表明异常/正在安装\"时保持 3s，其余时间退避到 15–30s；或改为由桥的既有事件/流驱动（若桥已推状态则直接复用）。\n**验证（可失败）**：用既有内部记录的测量方法对比改动前后 5 分钟空闲期的（a）桥请求数、（b）DOM 失效次数；并在 `test-shell-chrome.mjs` 加一条断言\"探针在 N 次后停止\"（当前 205 条断言里没有这条）。",
+      "description": "**① 鉴权探针：已修（PR #132，2026-10-07）** —— 改为自调度 `setTimeout` 链 + 退避表 `authProbeDelayFor(ticks)`：前 12 次（≈60 秒）每 5 秒（覆盖\"启动后第一轮就失败\"这一最常见场景），之后每 30 秒；命中即清表停止。长时空闲成本**降 6 倍**（30s 档下 1.7 万次/天 → 约 2900 次/天）。`authProbeDelayFor` 经 TEST_HOOK 暴露，`test-shell-chrome.mjs` 增 5 条断言钉住契约（改回固定周期即红）。\n⚠️ 途中又踩一次老坑：该函数原来定义在 `TEST_HOOK` 导出**之后**，而 chrome 在 TEST_HOOK 处提前 return ⇒ 沙箱里 `ReferenceError: authProbeDelayFor is not defined`（CI 当场红）。已移到导出之前并把这条坑写进代码注释。\n⚠️ 生效条件：`shell-chrome.js` 由 `include_str!` 打进 exe ⇒ **需重建/发版才在真机生效**（当前已装的 0.16.0 不含此改动）。\n\n**② 错误横幅的 3 秒桥轮询：仍待评估**（`updateErrorBanner`，非我引入，`shell-chrome.js:659`）—— 每 3 秒一次 `call('shell-status')`（环回请求 + Rust 侧处理）。改法（退避到 15–30 秒，或改为由桥事件驱动）会**降低崩溃横幅的及时性**，属可感知行为变化 ⇒ 需要先定\"崩溃时最长可接受延迟\"再动（默认建议 15 秒档 + 首分钟维持 3 秒）。",
       "createdAt": 1791373683368,
-      "updatedAt": 1791373683368
+      "updatedAt": 1791374484729
     },
     {
       "id": "card-1a116312aa8-9772",
