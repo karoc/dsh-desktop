@@ -29,11 +29,19 @@ jobs:
       - uses: actions/checkout@v4
       - id: changed
         name: 变更范围判定（板卡专属变更跳过重步骤；必过检查仍照常上报）
+        # ⚠️ 2026-10-07 首版在 PR 事件下失效：`git diff origin/<base>...HEAD` 在浅克隆里拿不到对象，
+        # 实测输出 `changed files: <none>` ⇒ 判定 board_only=false ⇒ 重步骤照跑（只是缓存让它看着快）。
+        # 现在改用**事件自带的 base SHA**做两点 diff；并且**拿不到变更列表时一律按"有变更"处理**
+        # （fail-safe：宁可多跑，绝不能在真实改动上误跳过门禁）。
         run: |
           set -e
+          files=""
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            git fetch -q --depth=50 origin "${{ github.base_ref }}" || true
-            files=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD" || echo "")
+            base='${{ github.event.pull_request.base.sha }}'
+            if [ -n "$base" ]; then
+              git fetch -q --depth=1 origin "$base" || true
+              files=$(git diff --name-only "$base" HEAD || echo "")
+            fi
           else
             files=$(git diff --name-only HEAD^ HEAD 2>/dev/null || echo "")
           fi
@@ -43,12 +51,7 @@ jobs:
           else
             echo "board_only=false" >> "$GITHUB_OUTPUT"
           fi
-          echo "changed files: ${files:-<none>}"
-
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
+          echo "changed files: ${files:-<none>} ⇒ board_only=$([ -n "$files" ] && [ -z "$rest" ] && echo true || echo false)"
       - run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
       # tauri-build validates bundle.resources at compile time, so materialize
       # the gitignored resources before checking.
