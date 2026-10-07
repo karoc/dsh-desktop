@@ -110,6 +110,31 @@ jobs:
         run: node scripts/sync-cargo-lock-version.mjs
       - run: npm test
         if: steps.changed.outputs.board_only != 'true'
+      - name: 文档同步（改了壳/manager 行为文件 ⇒ 同 PR 必须改 README，除非打 docs-not-needed 标签）
+        if: steps.changed.outputs.board_only != 'true'
+        run: |
+          set -e
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "非 PR 事件，跳过"; exit 0
+          fi
+          files=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD" || echo "")
+          behavior=$(printf '%s\n' "$files" | grep -E '^(src-tauri/resources/ui/shell-chrome\.js|scripts/server-manager\.mjs)$' || true)
+          if [ -z "$behavior" ]; then echo "未触及行为文件，跳过"; exit 0; fi
+          labels='${{ join(github.event.pull_request.labels.*.name, ',') }}'
+          case ",$labels," in *,docs-not-needed,*) echo "已打 docs-not-needed 标签，放行"; exit 0;; esac
+          if ! printf '%s\n' "$files" | grep -q '^README\.md$'; then
+            echo "❌ 改了 $behavior 但本 PR 未改 README.md。"; 
+            echo "   行为变了文档就要同步（文档是交付物）；确实不需要时给 PR 打 docs-not-needed 标签。"; exit 1
+          fi
+          echo "✅ README 已同步"
+
+  # Full gate — main push / tag only (not on PRs): NSIS bundle + layout
+  # assertion + runtime smoke (release gate, see scripts/smoke-windows.mjs).
+  windows:
+    if: github.event_name != 'pull_request'
+    needs: [check, test]
+    runs-on: windows-latest
+    steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
