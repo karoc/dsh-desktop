@@ -130,7 +130,8 @@
   if (TEST_HOOK) {
     // computeCaptionPlan 一并暴露：契约测试**断言它的返回值**（而不是对源码做
     // 字符串匹配）—— S8 的关键行为是"caption 模式不推挤 + 给客户端契约变量"。
-    TEST_HOOK.config = { SHELL_MENUS, ACTIONS, computeCaptionPlan, WINDOWS_TITLEBAR_H, SHELL_BAR_H, misleadingAuthHint };
+    TEST_HOOK.config = {
+    authProbeDelayFor, SHELL_MENUS, ACTIONS, computeCaptionPlan, WINDOWS_TITLEBAR_H, SHELL_BAR_H, misleadingAuthHint };
     return;
   }
 
@@ -770,7 +771,24 @@
    * @returns {string} 提示文案或空串
    */
   function misleadingAuthHint(text) {
-    const AUTH_MISREPORT_RE = /API 密钥无效|Invalid API key/;
+    // 2026-10-07 性能审计：原来用 setInterval(…, 5000) 一直扫 —— 没命中就**永不停止**地做整页
+  // textContent 序列化（长会话下代价随内容增长）。改为**自调度 + 退避**：前 60 秒每 5 秒（覆盖最常见的
+  // "启动后第一轮就失败"），之后每 30 秒（低频场景最多延迟 30 秒出提示，成本降 6 倍）。
+  const AUTH_PROBE_FAST_MS = 5000;
+  const AUTH_PROBE_SLOW_MS = 30000;
+  const AUTH_PROBE_FAST_TICKS = 12; // 12 × 5s ≈ 60s
+  const authProbeDelayFor = (ticks) => (ticks < AUTH_PROBE_FAST_TICKS ? AUTH_PROBE_FAST_MS : AUTH_PROBE_SLOW_MS);
+  let authProbeTicks = 0;
+  let authProbeTimer = null;
+  function scheduleAuthProbe() {
+    if (authShown || authDismissed) return;
+    authProbeTimer = setTimeout(() => {
+      authProbeTicks += 1;
+      probeAuthMisreport();
+      scheduleAuthProbe();
+    }, authProbeDelayFor(authProbeTicks));
+  }
+  const AUTH_MISREPORT_RE = /API 密钥无效|Invalid API key/;
     if (typeof text !== 'string' || !AUTH_MISREPORT_RE.test(text)) return '';
     return '这也可能是上游瞬时故障（403/5xx 被误判为鉴权失败）；若密钥确实正确，可直接重试本轮。';
   }
@@ -798,6 +816,7 @@
     const hint = misleadingAuthHint((document.body && document.body.textContent) || '');
     if (!hint) return;
     authShown = true;
+    if (authProbeTimer !== null) { clearTimeout(authProbeTimer); authProbeTimer = null; }
     authText.textContent = 'ⓘ ' + hint;
     authText.title = 'DSH 把 401/403 一律归类为 AUTH，因此这句提示无法区分"密钥错误"与"上游瞬时故障"。';
     authBanner.hidden = authDismissed;
@@ -809,8 +828,8 @@
   });
   authDismissBtn.addEventListener('click', () => { authDismissed = true; authBanner.hidden = true; });
   // 失败轮次随时可能出现 ⇒ 用低频长跑探测（5s 一次；每次只做字符串包含判断，正常使用开销可忽略）。
-  setInterval(probeAuthMisreport, 5000);
-  probeAuthMisreport();
+  scheduleAuthProbe();
+  probeAuthMisreport(); // 首屏立即扫一次（启动即失败的最常见路径）
 
   // ── 菜单开关 ────────────────────────────────────────────────────
   function closeMenus() {
