@@ -728,7 +728,19 @@ async function installDshUpdate({ force = false, version } = {}) {
   const nodeModules = join(args.runtimeDir, 'node_modules')
   mkdirSync(nodeModules, { recursive: true }) // may not exist on fresh runtime
   const backupDir = join(args.runtimeDir, '.plugin-backup')
-  rmSync(backupDir, { recursive: true, force: true })
+  const prevBackupDir = join(args.runtimeDir, '.plugin-backup.prev')
+  // 2026-10-07 质量审计（manager 销毁路径）：原来这里**无条件 rmSync(backupDir)**。若上一次安装在
+  // "恢复插件"之前被打断，这份备份可能就是用户插件**唯一的一份拷贝** ⇒ 直接删会把"可恢复"变成
+  // "不可恢复"。改法：**只挪不删** —— 旧备份挪到 .prev 保留一个安装周期，安装成功后才清理。
+  if (existsSync(backupDir)) {
+    rmSync(prevBackupDir, { recursive: true, force: true })
+    try {
+      renameSync(backupDir, prevBackupDir)
+    } catch (err) {
+      cpSync(backupDir, prevBackupDir, { recursive: true, force: true })
+      rmSync(backupDir, { recursive: true, force: true })
+    }
+  }
   mkdirSync(backupDir, { recursive: true })
   // Top-level node_modules entries preserved across the install: the
   // copied-only @dsh-desktop/* client plugins, plus one entry per preinstalled
@@ -799,6 +811,7 @@ async function installDshUpdate({ force = false, version } = {}) {
       cpSync(join(backupDir, entry), to, { recursive: true, force: true })
     }
     rmSync(backupDir, { recursive: true, force: true })
+    rmSync(prevBackupDir, { recursive: true, force: true }) // 安装成功 ⇒ 上一周期的保留副本可清
     installError = lastErr
   } finally {
     // Safety net: if anything above threw before the restore loop, put the
@@ -1786,15 +1799,24 @@ async function main() {
   // or the app was closed): restore the protected plugins before they are
   // re-ensured, so user-updated versions are not lost.
   const leftoverBackup = join(args.runtimeDir, '.plugin-backup')
-  if (existsSync(leftoverBackup)) {
+  const prevLeftoverBackup = join(args.runtimeDir, '.plugin-backup.prev')
+  // 取舍（2026-10-07 审计）：主备份存在 ⇒ **只用它**（它是本次安装的现场、比 .prev 新，避免"把用户更新过的
+  // 插件版本回退"这一反向风险）；仅当主备份不存在而 .prev 存在（安装死在"挪走旧备份"与"建立新备份"之间）
+  // 才用 .prev 兜底 —— 那种情形下它是唯一的拷贝。
+  const recoverFrom = existsSync(leftoverBackup)
+    ? [leftoverBackup]
+    : (existsSync(prevLeftoverBackup) ? [prevLeftoverBackup] : [])
+  if (recoverFrom.length) {
     try {
       const nodeModules = join(args.runtimeDir, 'node_modules')
-      for (const entry of readdirSync(leftoverBackup)) {
-        const to = join(nodeModules, entry)
-        rmSync(to, { recursive: true, force: true })
-        cpSync(join(leftoverBackup, entry), to, { recursive: true, force: true })
+      for (const dir of recoverFrom) {
+        for (const entry of readdirSync(dir)) {
+          const to = join(nodeModules, entry)
+          rmSync(to, { recursive: true, force: true })
+          cpSync(join(dir, entry), to, { recursive: true, force: true })
+        }
+        rmSync(dir, { recursive: true, force: true })
       }
-      rmSync(leftoverBackup, { recursive: true, force: true })
       log('restored interrupted-install plugin backup')
     } catch (err) {
       log(`plugin backup recovery failed: ${err.message}`)
