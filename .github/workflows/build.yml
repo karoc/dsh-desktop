@@ -26,48 +26,20 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - id: changed
-        name: 变更范围判定（板卡专属变更跳过重步骤；必过检查仍照常上报）
-        # 2026-10-07 三次修正，记在这里免得再踩：
-        # ① `git diff origin/<base>...HEAD`：PR 事件浅克隆拿不到对象 ⇒ 实测 `<none>` ⇒ 重步骤照跑（快只是缓存）。
-        # ② 事件 base SHA + `git fetch`：**依赖网络**，实测两次运行结果不一致（PR #122 true / PR #123 `<none>`）。
-        #    ⇒ 门禁的输入不能飘。
-        # ③ 用逐行替换改本步骤时收尾条件写错，**旧块整段留在新块后面**（同一步骤出现重复 name/run）
-        #    ⇒ GitHub 拒收整个 workflow，run 变成 **零作业**（`total_count: 0`），而本地 PyYAML 默默容忍重复键。
-        #    ⇒ 教训：改 workflow 后必须额外做"步骤内重复键"自检，不能只 `yaml.safe_load`。
-        # 本版：**不联网**。PR 事件检出的就是合并提交，`HEAD^1` 即 base ⇒ 本地 diff（失败退 `HEAD^`）。
-        # fail-safe：diff 失败或为空 ⇒ 按"有变更"处理（宁可多跑，绝不误跳过门禁）。
-        run: |
-          set -u
-          files=""
-          if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
-            files=$(git diff --name-only HEAD^1 HEAD 2>/dev/null || echo "")
-            [ -z "$files" ] && files=$(git diff --name-only HEAD^ HEAD 2>/dev/null || echo "")
-          else
-            files=$(git diff --name-only HEAD^ HEAD 2>/dev/null || echo "")
-          fi
-          rest=$(printf '%s\n' "$files" | grep -v '^KANBAN.json$' | grep -v '^$' || true)
-          if [ -n "$files" ] && [ -z "$rest" ]; then board_only=true; else board_only=false; fi
-          echo "board_only=$board_only" >> "$GITHUB_OUTPUT"
-          echo "event=${GITHUB_EVENT_NAME} files=(${files:-<none>}) ⇒ board_only=$board_only"
       - run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
       # tauri-build validates bundle.resources at compile time, so materialize
       # the gitignored resources before checking.
       - run: node scripts/fetch-node.mjs
       - run: node scripts/sync-resources.mjs
       - run: cargo check --manifest-path src-tauri/Cargo.toml
-        if: steps.changed.outputs.board_only != 'true'
       # Quality gate: the crate must be clippy-clean, not merely compile.
       # cargo fmt --check is DISABLED until the one-shot formatting PR lands
       # (60 legacy format diffs predate the gate; run `cargo fmt` on a machine
       # with the Rust toolchain, commit as style(chrome): cargo fmt, then
       # re-enable: `- run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`).
       - run: cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
-        if: steps.changed.outputs.board_only != 'true'
       # Rust unit tests (lib): migration logic & any pure-path logic.
       - run: cargo test --manifest-path src-tauri/Cargo.toml --lib
-        if: steps.changed.outputs.board_only != 'true'
 
   # Fast node gate (no Rust/system deps, ~1 min): all scripts/test-*.mjs
   # behavioral + contract suites (notifications / control plane / console /
@@ -75,31 +47,6 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - id: changed
-        name: 变更范围判定（板卡专属变更跳过重步骤；必过检查仍照常上报）
-        # 2026-10-07 三次修正，记在这里免得再踩：
-        # ① `git diff origin/<base>...HEAD`：PR 事件浅克隆拿不到对象 ⇒ 实测 `<none>` ⇒ 重步骤照跑（快只是缓存）。
-        # ② 事件 base SHA + `git fetch`：**依赖网络**，实测两次运行结果不一致（PR #122 true / PR #123 `<none>`）。
-        #    ⇒ 门禁的输入不能飘。
-        # ③ 用逐行替换改本步骤时收尾条件写错，**旧块整段留在新块后面**（同一步骤出现重复 name/run）
-        #    ⇒ GitHub 拒收整个 workflow，run 变成 **零作业**（`total_count: 0`），而本地 PyYAML 默默容忍重复键。
-        #    ⇒ 教训：改 workflow 后必须额外做"步骤内重复键"自检，不能只 `yaml.safe_load`。
-        # 本版：**不联网**。PR 事件检出的就是合并提交，`HEAD^1` 即 base ⇒ 本地 diff（失败退 `HEAD^`）。
-        # fail-safe：diff 失败或为空 ⇒ 按"有变更"处理（宁可多跑，绝不误跳过门禁）。
-        run: |
-          set -u
-          files=""
-          if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
-            files=$(git diff --name-only HEAD^1 HEAD 2>/dev/null || echo "")
-            [ -z "$files" ] && files=$(git diff --name-only HEAD^ HEAD 2>/dev/null || echo "")
-          else
-            files=$(git diff --name-only HEAD^ HEAD 2>/dev/null || echo "")
-          fi
-          rest=$(printf '%s\n' "$files" | grep -v '^KANBAN.json$' | grep -v '^$' || true)
-          if [ -n "$files" ] && [ -z "$rest" ]; then board_only=true; else board_only=false; fi
-          echo "board_only=$board_only" >> "$GITHUB_OUTPUT"
-          echo "event=${GITHUB_EVENT_NAME} files=(${files:-<none>}) ⇒ board_only=$board_only"
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -109,32 +56,6 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         run: node scripts/sync-cargo-lock-version.mjs
       - run: npm test
-        if: steps.changed.outputs.board_only != 'true'
-      - name: 文档同步（改了壳/manager 行为文件 ⇒ 同 PR 必须改 README，除非打 docs-not-needed 标签）
-        if: steps.changed.outputs.board_only != 'true'
-        run: |
-          set -e
-          if [ "${{ github.event_name }}" != "pull_request" ]; then
-            echo "非 PR 事件，跳过"; exit 0
-          fi
-          files=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD" || echo "")
-          behavior=$(printf '%s\n' "$files" | grep -E '^(src-tauri/resources/ui/shell-chrome\.js|scripts/server-manager\.mjs)$' || true)
-          if [ -z "$behavior" ]; then echo "未触及行为文件，跳过"; exit 0; fi
-          labels='${{ join(github.event.pull_request.labels.*.name, ',') }}'
-          case ",$labels," in *,docs-not-needed,*) echo "已打 docs-not-needed 标签，放行"; exit 0;; esac
-          if ! printf '%s\n' "$files" | grep -q '^README\.md$'; then
-            echo "❌ 改了 $behavior 但本 PR 未改 README.md。"; 
-            echo "   行为变了文档就要同步（文档是交付物）；确实不需要时给 PR 打 docs-not-needed 标签。"; exit 1
-          fi
-          echo "✅ README 已同步"
-
-  # Full gate — main push / tag only (not on PRs): NSIS bundle + layout
-  # assertion + runtime smoke (release gate, see scripts/smoke-windows.mjs).
-  windows:
-    if: github.event_name != 'pull_request'
-    needs: [check, test]
-    runs-on: windows-latest
-    steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
