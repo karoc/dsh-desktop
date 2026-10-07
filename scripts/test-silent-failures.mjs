@@ -22,7 +22,11 @@ import { fileURLToPath } from 'node:url'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const RUST_FILES = ['src-tauri/src/lib.rs']
-const JS_FILES = ['scripts/server-manager.mjs']
+const JS_FILES = [
+  'scripts/server-manager.mjs',
+  // 2026-10-07 chrome 全文走查发现：本门禁原来**只扫 manager**，而壳注入脚本里也有吞错站点 ⇒ 补上。
+  'src-tauri/resources/ui/shell-chrome.js',
+]
 
 const ANNOTATION = /fail-open-ok:\s*\S/
 const RUST_SITE = /let\s+_\s*=\s*std::fs::(?:remove_file|remove_dir_all|copy|write|rename|create_dir|create_dir_all)\s*\(|std::fs::(?:remove_file|remove_dir_all|copy|write|rename|create_dir_all)\([^;]*\)\s*\.ok\(\)\s*;/

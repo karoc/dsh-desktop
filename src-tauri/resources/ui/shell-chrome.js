@@ -1129,6 +1129,7 @@
           if (!r || !r.preinstalled || typeof r.preinstalled !== 'object') return;
           preinstalledVersions = r.preinstalled;
           appendPreinstalledRows(body);
+        // fail-open-ok: 桥调用 fire-and-forget，失败无后续依赖（下一轮探测会重试）
         }).catch(() => {});
       }
       body.appendChild(el('div', 'DeepSeek Harness 桌面壳 —— 自带 Node 运行时，自动更新 dsh 官方 npm 包。', 'dlg-note'));
@@ -1372,6 +1373,7 @@
     // 升级前先备份的入口：dsh ≥0.1.7 起会话格式 v4 单向（回退旧版读不到升级后的
     // 内容），所以「先打开数据目录备份」是升级动作的一部分，而不是附加说明。
     const btnData = mkDlgBtn('打开数据目录');
+    // fail-open-ok: 打开数据目录失败由系统层面反馈，壳侧无需二次提示
     btnData.addEventListener('click', () => { call('open-data').catch(() => {}); });
     actions.append(btnClose, btnData, btnUpdate);
     card.append(title, body, actions);
