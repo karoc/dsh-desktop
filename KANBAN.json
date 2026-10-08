@@ -2220,6 +2220,23 @@
       "description": "**做法**：在 `check` 作业（ubuntu）加一步 `cargo llvm-cov --lib --summary-only`（或生成 lcov 后打印汇总），**只报告不设阈值**（先有数字再谈门槛）；注意与 `cargo test --lib` 合并跑可省一次编译。**判据**：能在 CI 日志里看到 lib.rs 的行覆盖率数字，并且数字随改动变化（不是恒值）。",
       "createdAt": 1791390178371,
       "updatedAt": 1791390178371
+    },
+    {
+      "id": "card-1a119cbe25c-pb",
+      "title": "补测试：manager 的备份保留路径（套件已写但场景未走到目标代码）",
+      "status": "todo",
+      "tags": [
+        "manager",
+        "testing",
+        "coverage",
+        "follow-up",
+        "p2"
+      ],
+      "rationale": "覆盖率基线显示 `server-manager.mjs` 只有 **44.9%**（全仓最低），而本周唯一一处真实数据丢失面（安装开始时无条件删除 `.plugin-backup`）就在它里面 ⇒ 该路径**没有测试**。已写出端到端套件草稿，但**场景没走到目标代码**，因此**尚未接进门禁**。",
+      "description": "**已写**：`scripts/test-plugin-backup-preserve.mjs` —— 假 pnpm 桩（故意失败）+ 假 registry + 在 `.plugin-backup` 放一个**只存在于那里**的标记文件，断言安装尝试后标记仍在（可作真正的负向对照：把 `只挪不删` 改回 `rmSync` ⇒ 标记必丢 ⇒ 套件必红）。\n**实测现状（2026-10-07）**：manager `exit=2`，标记**仍在**（被恢复进 `node_modules` ✅），但 `.plugin-backup.prev` **不存在** ⇒ 说明流程**没走到被修的代码路径**（在更早处失败），因此这条断言目前是\"假绿\"，**不能当门禁**。\n**下一步（按序）**：① 让场景真正进入安装路径 —— 参考 `test-broken-install.mjs`：预置**合法的假 dsh**（`DSH_TEST_FAKE_DSH_PKG` + 假 `lib/bin.js`）或加 `--force`，确认能观察到 `.plugin-backup.prev` 出现；② 断言两条：标记不丢 + `.prev` 存在；③ **做一次负向对照**（临时把 `只挪不删` 改回 `rmSync`，确认套件变红）并把这个实验记进卡；④ 接进 `npm test`（届时套数 19→20，同步 README/CONTRIBUTING）。",
+      "rejected": "**放弃了\"先接进门禁再修场景\"**：那会引入一条**假绿**的门禁（比没有门禁更糟，见规矩②）；**放弃了删掉草稿**：负向对照的设计是有效的，只是场景要调。",
+      "createdAt": 1791434154588,
+      "updatedAt": 1791434154588
     }
   ]
 }
