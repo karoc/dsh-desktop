@@ -36,6 +36,19 @@ mkdirSync(join(BACKUP, '@dsh-desktop', 'client-notifications'), { recursive: tru
 writeFileSync(join(BACKUP, '@dsh-desktop', 'client-notifications', MARK), 'must-not-be-lost\n')
 
 // 假 pnpm：**故意失败**（触发 finally 里的安全网路径，且安装不会真的联网）；配合 --force 让安装路径真的被执行
+
+// ★ 触发安装路径的关键：预置一个**版本偏旧的合法假 dsh**。没有它时 manager 判定"dsh 版本未知 ⇒ 跳过地板守卫"
+// 而直接尝试启动（实测日志：plugin-floor: dsh 版本未知 → 跳过地板守卫 → launching → launch failed），
+// 根本不会进入安装路径；有了旧版本，地板守卫才会决定升级 ⇒ 安装开始 ⇒ 才会执行"只挪不删"。
+const OLD_DSH = join(runtime, 'node_modules', '@deepseek-ai', 'dsh')
+mkdirSync(join(OLD_DSH, 'lib'), { recursive: true })
+writeFileSync(join(OLD_DSH, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.0.1-old' }))
+writeFileSync(join(OLD_DSH, 'lib', 'bin.js'), "console.log('dsh web: http://127.0.0.1:1')\nsetInterval(() => {}, 1000)\n")
+const fakeDshPkg = join(tmp, 'fake-dsh-pkg')
+mkdirSync(join(fakeDshPkg, 'lib'), { recursive: true })
+writeFileSync(join(fakeDshPkg, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '9.9.9' }))
+writeFileSync(join(fakeDshPkg, 'lib', 'bin.js'), "console.log('dsh web: http://127.0.0.1:1')\n")
+
 const FAKE_PNPM = `process.stderr.write('stub pnpm: failing on purpose\\n')\nprocess.exit(3)\n`
 mkdirSync(join(runtime, 'node_modules', 'pnpm', 'bin'), { recursive: true })
 writeFileSync(join(runtime, 'node_modules', 'pnpm', 'bin', 'pnpm.cjs'), FAKE_PNPM)
@@ -50,8 +63,8 @@ await new Promise((r) => registry.listen(0, '127.0.0.1', r))
 const child = spawn(NODE, [MANAGER,
   '--runtime-dir', runtime, '--resource-dir', join(ROOT, 'src-tauri', 'resources'),
   '--patch', join(tmp, 'patch.json'), '--cwd', tmp, '--home', fakeHome,
-  '--registry', `http://127.0.0.1:${registry.address().port}`, '--bridge-port', '0', '--force',
-], { env: { ...process.env, HOME: fakeHome }, stdio: ['ignore', 'pipe', 'pipe'] })
+  '--registry', `http://127.0.0.1:${registry.address().port}`, '--bridge-port', '0',
+], { env: { ...process.env, HOME: fakeHome, DSH_TEST_FAKE_DSH_PKG: fakeDshPkg }, stdio: ['ignore', 'pipe', 'pipe'] })
 
 let out = ''
 child.stdout.on('data', (d) => { out += d })
@@ -83,7 +96,8 @@ console.log(`  标记文件仍在: ${found ? `是（${found.replace(tmp, '<tmp>'
 console.log(`  .plugin-backup.prev 存在: ${prevExists}`)
 let failures = 0
 const check = (name, cond) => { if (cond) console.log(`  ok   ${name}`); else { console.error(`  FAIL ${name}`); failures++ } }
-check('安装失败后，"只存在于备份里"的标记**没有丢失**', found !== null) // 覆盖：启动恢复（recoverFrom）+ 只挪不删
+check('【场景前置】安装路径被执行过（.plugin-backup.prev 出现）', prevExists)
+check('安装失败后，"只存在于备份里"的标记**没有丢失**', found !== null)
 check('旧备份被保留为 .plugin-backup.prev（而不是被删）', prevExists)
 console.log('  --- manager 输出（尾部 12 行）---')
 for (const l of out.split('\n').filter(Boolean).slice(-12)) console.log('    ' + l.slice(0, 220))
