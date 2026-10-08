@@ -35,7 +35,7 @@ const BACKUP = join(runtime, '.plugin-backup')
 mkdirSync(join(BACKUP, '@dsh-desktop', 'client-notifications'), { recursive: true })
 writeFileSync(join(BACKUP, '@dsh-desktop', 'client-notifications', MARK), 'must-not-be-lost\n')
 
-// 假 pnpm：**故意失败**（触发 finally 里的安全网路径，且安装不会真的联网）
+// 假 pnpm：**故意失败**（触发 finally 里的安全网路径，且安装不会真的联网）；配合 --force 让安装路径真的被执行
 const FAKE_PNPM = `process.stderr.write('stub pnpm: failing on purpose\\n')\nprocess.exit(3)\n`
 mkdirSync(join(runtime, 'node_modules', 'pnpm', 'bin'), { recursive: true })
 writeFileSync(join(runtime, 'node_modules', 'pnpm', 'bin', 'pnpm.cjs'), FAKE_PNPM)
@@ -50,8 +50,8 @@ await new Promise((r) => registry.listen(0, '127.0.0.1', r))
 const child = spawn(NODE, [MANAGER,
   '--runtime-dir', runtime, '--resource-dir', join(ROOT, 'src-tauri', 'resources'),
   '--patch', join(tmp, 'patch.json'), '--cwd', tmp, '--home', fakeHome,
-  '--registry', `http://127.0.0.1:${registry.address().port}`, '--bridge-port', '0',
-], { env: { ...process.env, HOME: fakeHome, DSH_DESKTOP_NO_UPDATE: '1' }, stdio: ['ignore', 'pipe', 'pipe'] })
+  '--registry', `http://127.0.0.1:${registry.address().port}`, '--bridge-port', '0', '--force',
+], { env: { ...process.env, HOME: fakeHome }, stdio: ['ignore', 'pipe', 'pipe'] })
 
 let out = ''
 child.stdout.on('data', (d) => { out += d })
@@ -83,9 +83,10 @@ console.log(`  标记文件仍在: ${found ? `是（${found.replace(tmp, '<tmp>'
 console.log(`  .plugin-backup.prev 存在: ${prevExists}`)
 let failures = 0
 const check = (name, cond) => { if (cond) console.log(`  ok   ${name}`); else { console.error(`  FAIL ${name}`); failures++ } }
-check('安装失败后，"只存在于备份里"的标记**没有丢失**（只挪不删）', found !== null)
+check('安装失败后，"只存在于备份里"的标记**没有丢失**', found !== null) // 覆盖：启动恢复（recoverFrom）+ 只挪不删
 check('旧备份被保留为 .plugin-backup.prev（而不是被删）', prevExists)
-console.log(`  manager 输出尾部: ${out.split('\n').filter(Boolean).slice(-3).join(' | ').slice(0, 200)}`)
+console.log('  --- manager 输出（尾部 12 行）---')
+for (const l of out.split('\n').filter(Boolean).slice(-12)) console.log('    ' + l.slice(0, 220))
 rmSync(tmp, { recursive: true, force: true })
 if (failures) { console.error(`FAILED: ${failures} 项`); process.exit(1) }
 console.log('PASS: 插件备份保留（安装失败路径）')
