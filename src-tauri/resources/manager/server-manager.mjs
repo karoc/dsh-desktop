@@ -57,6 +57,12 @@ const NATIVE_BUILD_PKGS = [
  * 因此低于该版本的 dsh 会让用户彻底失去插件管理入口。npm 的 latest tag 目前仍是
  * 0.1.5-rc.3（不含插件管理），所以安装/升级目标取 max(latest, 地板)。
  *
+ * 2026-10-09 抬到 0.2.1-alpha.2（**先 dev 验证，未发布**）：用户要求跟进上游新版。静态核对已完成 ——
+ * overlay 唯一的兜底目标 `ui-sidebar-browser` 在新版仍存在且门控表达式未变（`profileContext?.name !== 'desktop'`）；
+ * web-app 的 patch id 集合 121 → 122（+schedule / time-context / tool-schedule / ui-schedule；
+ * −tool-ralph / tool-subagent-claude-code / tool-subagent-codex），**无我们依赖的 id 消失**。
+ * 本版是 **alpha**（此前跟随 next/rc）⇒ 正式地板待 dev 实例逐项验收后再定（验收项见看板 p1 卡：
+ * patch 注入 / 四插件渲染 / #5922 插件设置重组后的入口 / model-reasoning 推理槽 / ARRP 的 pi-ai 页）。
  * 2026-10-05 抬到 0.2.0-rc.2：npm 的 latest 已从 rc.1 毕业到 rc.2（`next` 与 `latest` 都指向 rc.2），
  * 且 rc.2 已实证通过（静态差异 / 运行时契约 / 真机 桥 10-10 + 三插件渲染，见方案 §15.12）；fixture 的
  * dshVersion 标签随之刷新（id 集合与 rc.1 完全一致，183 个）。
@@ -69,7 +75,7 @@ const NATIVE_BUILD_PKGS = [
  * `dsh plugin allow-version`。地板与预装 bundle 必须**同一批**落地：旧 bundle
  * （如 kanban 0.2.8）用的是 0.1.7 已删除的图标名，单独抬地板会让它们在新运行时上崩。
  */
-const MIN_DSH_VERSION = '0.2.0-rc.2'
+const MIN_DSH_VERSION = '0.2.1-alpha.2'
 
 // ── args ───────────────────────────────────────────────────────────────────
 function parseArgs(argv) {
