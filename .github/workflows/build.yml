@@ -105,8 +105,13 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Sync derived Cargo.lock version (tag builds only)
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Sync derived Cargo.lock version (tag builds + release PRs)
+        # 2026-10-10：条件原来是"仅 tag"，于是 **release-please 的发布 PR 自己跑 npm test 时**
+        # Cargo.lock 仍是旧版本 ⇒ 四版本一致门禁必然红 ⇒ 本仓的发布 PR 在结构上永远过不了"两项检查全绿"
+        # （历史遗留：这也是 v0.15.0 那次发布事故的同一根因，而当时的修复只覆盖了 tag 构建那一侧）。
+        # 现在：tag 构建**或** release-please 分支都先同步（只影响检出副本；分支本身不带该改动也没关系，
+        # tag 构建那一步照样同步，所以产出的安装包不会带漂移）。
+        if: startsWith(github.ref, 'refs/tags/') || startsWith(github.head_ref, 'release-please--')
         run: node scripts/sync-cargo-lock-version.mjs
       - run: npm test
         if: steps.changed.outputs.board_only != 'true'
