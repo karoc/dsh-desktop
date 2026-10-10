@@ -21,6 +21,45 @@
 >
 > 详情见 `.agents/notes/implemented/bug-fix/2026-09-08-legacy-uninstaller-name-kill.md`。
 
+## [0.17.0](https://github.com/karoc/dsh-desktop/compare/v0.16.0...v0.17.0) (2026-10-10)
+
+
+### Features
+
+* **coverage:** 零依赖覆盖率基线 76.0% + 自检作为第 19 套进门禁 ([#137](https://github.com/karoc/dsh-desktop/issues/137)) ([886d71f](https://github.com/karoc/dsh-desktop/commit/886d71f5d872aa1277486989a43d07afcc94e5dd))
+* **dsh:** 地板抬到 0.2.1-alpha.2（先 dev 验证，未发布） ([#142](https://github.com/karoc/dsh-desktop/issues/142)) ([9548e0c](https://github.com/karoc/dsh-desktop/commit/9548e0c56829630f5df49148e2608b37fe51e3b7))
+* **gate:** 新增"静默失效审计"门禁（npm test 第 18 套）——把审计变成可重复的规则 ([#117](https://github.com/karoc/dsh-desktop/issues/117)) ([48dc7fd](https://github.com/karoc/dsh-desktop/commit/48dc7fdb698fd238214c6417b1e439921f4e0632))
+
+
+### Bug Fixes
+
+* **bridge:** 请求体加上限（Content-Length 声明直分内存 ⇒ 本地 DoS） ([#134](https://github.com/karoc/dsh-desktop/issues/134)) ([7aa9d8f](https://github.com/karoc/dsh-desktop/commit/7aa9d8fe1c0bdce940643c694355b18c5e3f7723))
+* **ci:** Cargo.lock 同步步骤也覆盖 release-please 分支（发布 PR 从此能过"两项检查全绿"） ([#144](https://github.com/karoc/dsh-desktop/issues/144)) ([92d6517](https://github.com/karoc/dsh-desktop/commit/92d65172e9c2fe8d2a7393d31f671e2f503a73a1))
+* **ci:** 板卡专属快速路径首版失效（PR 浅克隆拿不到 base 对象）⇒ 改用事件 base SHA ([#121](https://github.com/karoc/dsh-desktop/issues/121)) ([afe83b5](https://github.com/karoc/dsh-desktop/commit/afe83b57df6c754953a80f2f29495598a46562fe))
+* **ci:** 板卡判定改为不联网的 HEAD^1 diff ([#124](https://github.com/karoc/dsh-desktop/issues/124)) ([43d1e06](https://github.com/karoc/dsh-desktop/commit/43d1e068d89df36365adff858d1ab2bcc035db0b))
+* **ci:** 移除文档同步假阴性门禁 + 快速路径四次实测结案 ([#126](https://github.com/karoc/dsh-desktop/issues/126)) ([86f3632](https://github.com/karoc/dsh-desktop/commit/86f3632014391b3cd8eda6aec99a29cf713903ae))
+* **data-safety:** 两处"备份失败被吞、销毁照做"改为 fail-closed ([#112](https://github.com/karoc/dsh-desktop/issues/112)) ([05ac75c](https://github.com/karoc/dsh-desktop/commit/05ac75c33daa58fa158742f0fe8266be847993ea))
+* **gate:** 静默失效审计补上壳注入脚本（原来只扫 manager） ([#135](https://github.com/karoc/dsh-desktop/issues/135)) ([4aa0ca6](https://github.com/karoc/dsh-desktop/commit/4aa0ca6944b8987ea1d37665ebc4f214589407a7))
+* **manager:** 插件备份只挪不删（审计发现的数据丢失面） ([#129](https://github.com/karoc/dsh-desktop/issues/129)) ([190feb2](https://github.com/karoc/dsh-desktop/commit/190feb277dcaa93a238afb5578184e93d7451eec))
+* **release:** 让 Cargo.lock 漂移真正断根（同步脚本 + tag-only CI 归一化） ([#106](https://github.com/karoc/dsh-desktop/issues/106)) ([39b0401](https://github.com/karoc/dsh-desktop/commit/39b04010258c7bd0f79760925afdd12fc9823684))
+* **test:** 门禁可信度对照在脏树上改为**显式跳过**（原来判失败 ⇒ 开发时 npm test 必然红） ([#140](https://github.com/karoc/dsh-desktop/issues/140)) ([e76b9ae](https://github.com/karoc/dsh-desktop/commit/e76b9ae9ae3b7c9bd1af69785401dde4fc003714))
+
+
+### Performance Improvements
+
+* **shell:** 鉴权探针改为自调度 + 退避（永不停止的整页扫描） ([#132](https://github.com/karoc/dsh-desktop/issues/132)) ([9055621](https://github.com/karoc/dsh-desktop/commit/90556212bba9b67cf3a55ce0a0f722495f0713cd))
+
+
+### Reverts
+
+* **ci:** 撤回对 CI 文件的两次文本手术（本地 YAML 判不出被拒的 workflow） ([#128](https://github.com/karoc/dsh-desktop/issues/128)) ([5f3cdd7](https://github.com/karoc/dsh-desktop/commit/5f3cdd7a2e4d9e71f1418ef15e9c98001f2a0f03))
+
+
+### Chores
+
+* **dsh:** patch 契约夹具按 0.2.1-alpha.2 实测重新采集（185 个 id）+ dev 验证结论入卡 ([#143](https://github.com/karoc/dsh-desktop/issues/143)) ([8241367](https://github.com/karoc/dsh-desktop/commit/8241367d3b5dcfdad824f7f8743c226498777bf0))
+* 退役两个不可运行的旧版钩子验证脚本（场景已迁进 Rust 单测） ([#114](https://github.com/karoc/dsh-desktop/issues/114)) ([9385f63](https://github.com/karoc/dsh-desktop/commit/9385f63d256ecb3c5573e5475a2f0d7d7e92cf39))
+
 ## [0.16.0](https://github.com/karoc/dsh-desktop/compare/v0.15.0...v0.16.0) (2026-10-05)
 
 
