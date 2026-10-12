@@ -27,7 +27,7 @@ const libRs = readFileSync(libRsPath, 'utf8')
 const sandbox = { console, __DSH_CHROME_TEST__: {} }
 vm.createContext(sandbox)
 vm.runInContext(chromeSrc, sandbox, { filename: 'shell-chrome.js' })
-const { SHELL_MENUS, ACTIONS, computeCaptionPlan, WINDOWS_TITLEBAR_H, SHELL_BAR_H, misleadingAuthHint, authProbeDelayFor } = sandbox.__DSH_CHROME_TEST__.config
+const { SHELL_MENUS, ACTIONS, computeCaptionPlan, WINDOWS_TITLEBAR_H, SHELL_BAR_H, misleadingAuthHint, authProbeDelayFor, errorBannerDelayFor } = sandbox.__DSH_CHROME_TEST__.config
 assert.ok(Array.isArray(SHELL_MENUS) && SHELL_MENUS.length >= 1, 'SHELL_MENUS is a non-trivial array')
 assert.ok(ACTIONS && typeof ACTIONS === 'object', 'ACTIONS table present')
 
@@ -490,6 +490,12 @@ assert.equal(authProbeDelayFor(0), 5000, '首屏之后仍走 5 秒档')
 assert.equal(authProbeDelayFor(11), 5000, '第 12 次之前保持 5 秒档（≈前 60 秒）')
 assert.equal(authProbeDelayFor(12), 30000, '超过 60 秒后退避到 30 秒档')
 assert.ok(authProbeDelayFor(99) === authProbeDelayFor(12), '退避后不再变快（不会反复回到快档）')
+// 错误横幅轮询的退避表（2026-10-12 性能审计第二半）：原来固定 3 秒一直打桥请求（≈2.9 万次/天）。
+// 口径：首分钟维持 3 秒（崩溃横幅要及时），之后退避到 15 秒。
+assert.equal(typeof errorBannerDelayFor, 'function', 'errorBannerDelayFor 经 TEST_HOOK 暴露')
+assert.equal(errorBannerDelayFor(0), 3000, '首屏之后仍走 3 秒档')
+assert.equal(errorBannerDelayFor(19), 3000, '第 20 次之前保持 3 秒档（≈前 60 秒）')
+assert.equal(errorBannerDelayFor(20), 15000, '超过 60 秒后退避到 15 秒档')
 assert.ok(misleadingAuthHint('本轮运行失败\nAPI 密钥无效').length > 0, '命中中文鉴权文案（真机文案）')
 assert.ok(misleadingAuthHint('Turn failed\nInvalid API key').length > 0, '命中英文鉴权文案')
 assert.equal(misleadingAuthHint('本轮运行失败\n上游返回 502'), '', '非鉴权失败不触发（负向对照 1）')

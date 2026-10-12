@@ -28,6 +28,14 @@
 
   // ⚠️ 必须定义在 TEST_HOOK 导出**之前**：chrome 在 TEST_HOOK 处提前 return，之后的 const 在测试沙箱里
   //    不会被初始化（2026-10-07 又把这条老坑踩了一次：ReferenceError: authProbeDelayFor is not defined）。
+  // 错误横幅的轮询退避（2026-10-12，性能审计第二半）：`updateErrorBanner` 原来每 3 秒打一次环回桥请求
+  // （`call('shell-status')`），进程活着就一直打（≈2.9 万次/天）。崩溃横幅的**及时性**是它存在的意义，
+  // 所以口径取"首分钟维持 3 秒、之后退避到 15 秒"（最坏延迟 15 秒，成本降到 1/5）。
+  const ERROR_BANNER_FAST_MS = 3000;
+  const ERROR_BANNER_SLOW_MS = 15000;
+  const ERROR_BANNER_FAST_TICKS = 20; // 20 × 3s ≈ 60s
+  const errorBannerDelayFor = (ticks) => (ticks < ERROR_BANNER_FAST_TICKS ? ERROR_BANNER_FAST_MS : ERROR_BANNER_SLOW_MS);
+
   const AUTH_PROBE_FAST_MS = 5000;
   const AUTH_PROBE_SLOW_MS = 30000;
   const AUTH_PROBE_FAST_TICKS = 12; // 12 × 5s ≈ 60s
@@ -138,7 +146,7 @@
     // computeCaptionPlan 一并暴露：契约测试**断言它的返回值**（而不是对源码做
     // 字符串匹配）—— S8 的关键行为是"caption 模式不推挤 + 给客户端契约变量"。
     TEST_HOOK.config = {
-    authProbeDelayFor, SHELL_MENUS, ACTIONS, computeCaptionPlan, WINDOWS_TITLEBAR_H, SHELL_BAR_H, misleadingAuthHint };
+    authProbeDelayFor, errorBannerDelayFor, SHELL_MENUS, ACTIONS, computeCaptionPlan, WINDOWS_TITLEBAR_H, SHELL_BAR_H, misleadingAuthHint };
     return;
   }
 
@@ -682,8 +690,17 @@
   errEvidenceBtn.addEventListener('click', () => call('open-evidence'));
   errDataBtn.addEventListener('click', () => call('open-data'));
   errDismissBtn.addEventListener('click', () => { errDismissed = true; errBanner.hidden = true; });
-  setInterval(updateErrorBanner, 3000);
-  updateErrorBanner();
+  let errorBannerTicks = 0;
+  let errorBannerTimer = null;
+  function scheduleErrorBanner() {
+    errorBannerTimer = setTimeout(() => {
+      errorBannerTicks += 1;
+      updateErrorBanner();
+      scheduleErrorBanner();
+    }, errorBannerDelayFor(errorBannerTicks));
+  }
+  scheduleErrorBanner();
+  updateErrorBanner(); // 首屏立即查一次（启动即异常的最常见路径）
 
   // ── 插件加载失败条幅：fail-closed 自救（2026-10-04 生产事故）─────────────────
   // 第三方插件若停在"已从 dsh 移除的服务"上（典型 `settingsScope`，0.1.7 起移除），dsh 的插件
