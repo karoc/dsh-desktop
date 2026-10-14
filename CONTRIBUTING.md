@@ -126,6 +126,11 @@ gh CLI 默认读全局 `~/.config/gh/hosts.yml`。本项目使用**项目专用 
 - 改壳功能/新踩坑 → 更新 `.dsh/skills/dsh-desktop-shell-dev/SKILL.md`（加菜单、桥端点同步契约测试）
 - 非平凡改动 → Agent Note（`.agents/notes/implemented/<class>/`）+ 看板卡片（三字段齐全）
 
+
+## CI 里的度量作业（非必过）
+
+`rust-coverage`（2026-10-15 起）：在 push 到 main / tag 时跑 `cargo llvm-cov --lib --summary-only`，**只报告不设阈值**（先有数字再谈门槛）。它**不在 PR 的必过检查里** —— 度量不该拖慢每个 PR。基线（2026-10-15，main run 38605299315）：`lib.rs` 行覆盖 **15.72%**、`manager_guard.rs` 86.88%、`web_dump.rs` 72.38%，**TOTAL 行 23.68%**。含义：Rust 侧被测到的主要是纯函数，**桥 / 安装器 / 进程与窗口生命周期基本没有测试**。
+
 ## 门禁自身的验证（2026-10-07 起，硬规则）
 
 **任何新增的门禁/断言，必须在同一个 PR 里带一个"注入对应缺陷 ⇒ 必须变红"的夹具**，否则视为未验证（恒真的门禁比没有门禁更糟：它给出虚假的安心）。本仓已有先例：`scripts/test-silent-failures.mjs` 的 4 个变异夹具、`test-shell-chrome.mjs` 的变异对照。反面教材（2026-10-07）：静默失效审计脚本的前两版试图"自动跳过 `#[cfg(test)]` 区域"，两次都判错 —— 一次**漏检生产代码**（假阴性），一次把 20 条测试区命中当生产报出；是夹具把这两次都钉了出来。

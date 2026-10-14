@@ -2208,7 +2208,7 @@
     {
       "id": "card-1a1172cdc43-8873",
       "title": "覆盖率：Rust 侧基线（需 cargo llvm-cov/tarpaulin，本机不可跑）",
-      "status": "todo",
+      "status": "done",
       "tags": [
         "coverage",
         "rust",
@@ -2217,10 +2217,11 @@
         "p3"
       ],
       "rationale": "JS 侧基线已建立（2026-10-07，合计 76.0%），但 `src-tauri/src/lib.rs`（约 3700 行，含桥/安装器/legacy 接管等高风险面）**没有任何覆盖率数字**。本机 WSL 无 cargo ⇒ 只能在 CI 跑。",
-      "rejected": "**放弃了\"本地装 cargo 再说\"**：WSL 装 rust 工具链 + 编译本仓依赖耗时长，且与 CI 的 win/ubuntu 双跑不一致；**放弃了用 tarpaulin（需 nightly）**：llvm-cov 更通用。",
+      "rejected": "**放弃了把覆盖率设成门禁/阈值**：先有数字再谈门槛，拍脑袋的阈值只会制造噪音与绕过动机；**放弃了塞进 check 作业**：它是必过检查，覆盖率会拖慢每一个 PR；**放弃了 `cargo install cargo-llvm-cov`**：CI 里现编译太慢，用 `taiki-e/install-action` 的预构建包（本仓已用其它第三方 action，风格一致）。",
       "description": "**做法**：在 `check` 作业（ubuntu）加一步 `cargo llvm-cov --lib --summary-only`（或生成 lcov 后打印汇总），**只报告不设阈值**（先有数字再谈门槛）；注意与 `cargo test --lib` 合并跑可省一次编译。**判据**：能在 CI 日志里看到 lib.rs 的行覆盖率数字，并且数字随改动变化（不是恒值）。",
       "createdAt": 1791390178371,
-      "updatedAt": 1791390178371
+      "updatedAt": 1791998506641,
+      "summary": "**已建立（2026-10-15，PR #151）**：CI 新增独立作业 `rust-coverage`（`cargo llvm-cov --lib --summary-only`，**只报告不设阈值**；只在 push(main/tag) 跑、非必过 ⇒ 不拖慢 PR）。**实测基线（main run 38605299315）**：\n· `lib.rs`：行 **15.72%**（3181 行中 2681 未覆盖）、函数 11.81%、区域 15.32%；\n· `manager_guard.rs`：行 **86.88%**；`web_dump.rs`：行 **72.38%**；\n· **TOTAL：行 23.68%**。\n**这个数字的含义（与我这几周的发现一致）**：Rust 侧被测到的主要是纯函数（legacy 判定、路径归一、地板比较、备份长度夹紧等 —— 正是这些天补的那些单测），而 **桥端点 / 安装器 / 进程与窗口生命周期基本没有测试** ⇒ 与 JS 侧\"最低覆盖率文件恰好出过数据丢失面\"的经验同构：**高风险面普遍未被测度**。"
     },
     {
       "id": "card-1a119cbe25c-pb",
