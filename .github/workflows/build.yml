@@ -27,6 +27,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        # 2026-10-15：**一行级**修复（本仓 CI 文件只允许最小改动 —— 之前两次块级编辑把整个 workflow 弄成"零作业"）。
+        # 原「文档同步」门禁用 `git diff origin/<base>...HEAD` 取变更列表，而默认浅克隆（fetch-depth: 1）拿不到
+        # base 对象 ⇒ 取不到就"未触及行为文件，跳过"= **静默放行（假阴性门禁）**。给它完整历史即可。
+        with:
+          fetch-depth: 0
       - id: changed
         name: 变更范围判定（板卡专属变更跳过重步骤；必过检查仍照常上报）
         # 2026-10-07 三次修正，记在这里免得再踩：
@@ -76,6 +81,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        # 2026-10-15：**一行级**修复（本仓 CI 文件只允许最小改动 —— 之前两次块级编辑把整个 workflow 弄成"零作业"）。
+        # 原「文档同步」门禁用 `git diff origin/<base>...HEAD` 取变更列表，而默认浅克隆（fetch-depth: 1）拿不到
+        # base 对象 ⇒ 取不到就"未触及行为文件，跳过"= **静默放行（假阴性门禁）**。给它完整历史即可。
+        with:
+          fetch-depth: 0
       - id: changed
         name: 变更范围判定（板卡专属变更跳过重步骤；必过检查仍照常上报）
         # 2026-10-07 三次修正，记在这里免得再踩：
