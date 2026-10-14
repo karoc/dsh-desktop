@@ -145,6 +145,26 @@ jobs:
 
   # Full gate — main push / tag only (not on PRs): NSIS bundle + layout
   # assertion + runtime smoke (release gate, see scripts/smoke-windows.mjs).
+  rust-coverage:
+    # 2026-10-15：Rust 侧覆盖率基线（**只报告，不设阈值** —— 先有数字，再谈门槛）。
+    # 设计取舍：① 独立作业、非必过（不拖慢 PR 的 check/test）；② 只在 push 到 main / tag 时跑
+    # （度量是给"改哪里最值得"用的，不需要每个 PR 都算一遍）。
+    # 前置步骤与 check 作业保持一致（Tauri 的系统依赖 + 生成的资源文件）。
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - run: node scripts/fetch-node.mjs
+      - run: node scripts/sync-resources.mjs
+      # 报告 lib.rs 等的行覆盖率汇总（--summary-only 直接打在日志里，便于抓取与对比）
+      - name: Rust 覆盖率（lib，只报告）
+        run: cargo llvm-cov --manifest-path src-tauri/Cargo.toml --lib --summary-only
   windows:
     if: github.event_name != 'pull_request'
     needs: [check, test]
