@@ -1,4 +1,5 @@
 // DSH Smoothly Desktop — 壳顶栏（注入式覆盖标题栏 + 菜单栏）。
+// negative-control 2026-10-15: 本行只为验证「文档同步」门禁会红（该 PR 故意不改 README）
 //
 // 由 Rust 壳在每次页面加载时注入主窗口（include_str! 编译期内嵌 +
 // on_page_load 里 w.eval()）：启动页（tauri://localhost，有 __TAURI__）
