@@ -77,6 +77,12 @@ const stub = createServer((req, res) => {
 await new Promise((r) => stub.listen(0, '127.0.0.1', r))
 const stubPort = stub.address().port
 const prefix = `window.__DSH_BRIDGE_PORT__=${JSON.stringify(String(stubPort))};`
+// 「顶栏契约」开关（S8）：壳在运行时按标志文件注入 `__DSH_TITLEBAR_CONTRACT__=true`（lib.rs
+// inject_shell_chrome）。它决定 `computeCaptionPlan` 的 dataset 是否**非空** —— 2026-10-16 审计
+// 发现这正是"契约写入漏了一个 null 守卫"能否被看见的开关：不置它，chrome 永远走 dataset={} 空转
+// 分支，门禁**结构上看不见**那个缺陷。据此在"最早期注入"时序（documentElement 可能尚为 null）
+// 把它打开，作为该缺陷的负向对照入口。
+const contractOn = 'window.__DSH_TITLEBAR_CONTRACT__=true;'
 const stagesOf = () => reports.map((d) => d.split(' ')[0])
 
 const browser = await chromium.launch()
@@ -85,7 +91,7 @@ const browser = await chromium.launch()
 // 因此这里额外用 addInitScript 复现"最早期注入"——原先 chrome 在这里抛
 // `Cannot read properties of null (reading 'appendChild')` 而整段死亡；加挂载守卫后必须存活。
 const ctxEarly = await browser.newContext({ viewport: { width: 1344, height: 1025 } })
-await ctxEarly.addInitScript({ content: prefix + code })   // 最早期注入（body 尚不存在）
+await ctxEarly.addInitScript({ content: prefix + contractOn + code })   // 最早期注入（body 尚不存在）+ 顶栏契约开
 const pageEarly = await ctxEarly.newPage()
 const earlyErrors = []
 pageEarly.on('pageerror', (e) => earlyErrors.push(mask(String(e.message).split('\n')[0])))
@@ -93,7 +99,17 @@ await pageEarly.goto(url, { waitUntil: 'domcontentloaded' })
 await pageEarly.waitForTimeout(9000)
 const earlyInfo = await pageEarly.evaluate(() => {
   const host = document.getElementById('dsh-shell-chrome')
-  return { host: !!host, buttons: host && host.shadowRoot ? host.shadowRoot.querySelectorAll('button').length : -1 }
+  return {
+    host: !!host,
+    buttons: host && host.shadowRoot ? host.shadowRoot.querySelectorAll('button').length : -1,
+    // 契约四项必须真的落到页面根上（漏守卫时会静默全空 —— 见下面 ④ 的判据）
+    contract: {
+      paddingTop: document.documentElement.style.paddingTop,
+      windowsTitlebar: document.documentElement.dataset.windowsTitlebar,
+      menubarVar: getComputedStyle(document.documentElement).getPropertyValue('--dsh-shell-menubar-h').trim(),
+      hostClass: host ? host.className : '',
+    },
+  }
 })
 const earlyStages = stagesOf()
 console.log(`  早期注入（无 body 时序）: host=${earlyInfo.host} buttons=${earlyInfo.buttons} errors=${earlyErrors.length} reports=[${earlyStages.join(',')}]`)
@@ -101,7 +117,9 @@ await pageEarly.close(); await ctxEarly.close()
 
 reports.length = 0
 const ctx = await browser.newContext({ viewport: { width: 1344, height: 1025 } })
-await ctx.addInitScript({ content: prefix })
+// 这个上下文**开契约**：documentElement 必然存在 ⇒ 契约写入必须真的落到页面根
+// （S8 的正向保证：data-windows-titlebar + --dsh-shell-menubar-h 给 Web 客户端算列宽）。
+await ctx.addInitScript({ content: prefix + contractOn })
 const page = await ctx.newPage()
 const errors = []
 page.on('pageerror', (e) => errors.push(mask(String(e.message).split('\n')[0])))
@@ -117,12 +135,34 @@ const info = await page.evaluate(() => {
   const sr = host && host.shadowRoot
   const bar = sr && sr.querySelector('.bar')
   const r = bar ? bar.getBoundingClientRect() : null
-  return {
+  const out = {
     host: !!host,
     buttons: sr ? sr.querySelectorAll('button').length : -1,
     barTop: r ? Math.round(r.top) : null,
     barH: r ? Math.round(r.height) : null,
+    menuOpened: false,
+    menuItems: 0,
+    contract: {
+      paddingTop: document.documentElement.style.paddingTop,
+      windowsTitlebar: document.documentElement.dataset.windowsTitlebar,
+      menubarVar: getComputedStyle(document.documentElement).getPropertyValue('--dsh-shell-menubar-h').trim(),
+      titlebarVar: getComputedStyle(document.documentElement).getPropertyValue('--dsh-windows-titlebar-height').trim(),
+      hostClass: host ? host.className : '',
+    },
   }
+  // 交互判据：点唯一的菜单触发器（左上 logo）→ 下拉必须打开。
+  // 0.18.0 事故里"点击分发器"注册在致命行（:851）之后 ⇒ 从不注册 ⇒ 顶栏按钮点了没反应
+  // —— 这正是用户报的"壳自定义菜单点不开"。所以这条断言直接对着用户症状。
+  const btn = sr && sr.querySelector('.menu-btn')
+  if (btn) {
+    btn.click()
+    const dds = [...sr.querySelectorAll('.dropdown')]
+    const open = dds.filter((d) => !d.hidden)
+    out.menuOpened = open.length > 0
+    out.menuItems = open.length ? open[0].querySelectorAll('[data-item],[data-action],.dd-brand').length : 0
+    btn.click() // 收起，保持现场干净
+  }
+  return out
 })
 const bootStages = stagesOf()
 const mountedLine = reports.find((d) => d.startsWith('mounted')) || ''
@@ -147,11 +187,29 @@ check(`mounted 上报带位置/可见性摘要（${mask(mountedLine)}）`,
   /bar=-?\d+px h\d+/.test(mountedLine) && /hidden=(true|false)/.test(mountedLine) && /btns=\d+/.test(mountedLine))
 check('宿主被移除后自愈重挂（SPA 重渲染不再永久丢顶栏）', healed)
 check('自愈会上报 remount（"曾经消失"可回溯）', healStages.includes('remount'))
+check(`唯一菜单点得开：点 logo → 下拉出现且有条目（opened=${info.menuOpened} items=${info.menuItems}）`,
+  info.menuOpened && info.menuItems >= 5)
+console.log(`  契约开（加载后注入）: paddingTop='${info.contract.paddingTop}'` +
+  ` windowsTitlebar=${JSON.stringify(info.contract.windowsTitlebar)}` +
+  ` menubarVar='${info.contract.menubarVar}' titlebarVar='${info.contract.titlebarVar}'` +
+  ` hostClass='${info.contract.hostClass}'`)
+// S8 契约的**正向**保证：客户端要读 data-windows-titlebar 算列宽、读 --dsh-shell-menubar-h 避让。
+check('契约写入落到页面根（data-windows-titlebar + --dsh-shell-menubar-h + host.caption）',
+  info.contract.windowsTitlebar !== undefined && info.contract.menubarVar !== '' &&
+  info.contract.titlebarVar !== '' && info.contract.hostClass.includes('caption'))
 if (errors.length) for (const e of errors.slice(0, 4)) console.log(`    pageerror: ${e}`)
 check('最早期注入（无 body 时序）也不崩、且最终挂上顶栏',
   earlyInfo.host && earlyInfo.buttons >= 4 && earlyErrors.length === 0)
 check(`最早期注入也跑完引导（实测 [${earlyStages.join(',')}]）`,
   earlyStages.includes('mounted') && earlyStages.includes('ready') && !earlyStages.includes('fatal'))
+// ④ 顶栏契约（S8）：契约开 + 最早期注入时 `document.documentElement` **真的可能是 null**，
+// 此时守卫的正确行为是"跳过写入且不抛"。所以这里只打印诊断值，判据交给上面的
+// 「无 pageerror + 跑完引导」——2026-10-16 审计发现的漏守卫缺陷正是这样被钉住的
+// （漏守卫 ⇒ 早期注入 + 契约开 ⇒ TypeError ⇒ 无 ready）。契约**写入真的落地**由下面的
+// "契约开"上下文断言（那时 documentElement 必然存在）。
+console.log(`  早期注入 + 契约开: paddingTop='${earlyInfo.contract.paddingTop}'` +
+  ` windowsTitlebar=${JSON.stringify(earlyInfo.contract.windowsTitlebar)}` +
+  ` menubarVar='${earlyInfo.contract.menubarVar}' hostClass='${earlyInfo.contract.hostClass}'`)
 if (earlyErrors.length) for (const e of earlyErrors.slice(0, 3)) console.log(`    early pageerror: ${e}`)
 if (failed) { console.error(`FAILED: chrome 真实初始化自检 ${failed} 项`); process.exit(1) }
 console.log('PASS: chrome 真实初始化自检（顶栏在、引导上报完整、自愈有效）')

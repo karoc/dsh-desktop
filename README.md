@@ -200,8 +200,12 @@ node scripts/server-manager.mjs \
 | `… chrome fatal stage=<阶段> <错误名>: <消息> @<文件:行:列>` | 抛在哪一步 | 直接回答"停在哪一步" |
 | `… chrome remount …` | SPA 重渲染清掉顶栏后自愈重挂 | 出现它 = 顶栏**曾经消失又被自动恢复** |
 
-- 引导的四个阶段（mount / auth-probe / observe / 首屏扫描）各自隔离：单个阶段抛异常不再让它**后面全部**静默死亡。
-- 回归门禁：`npm run test:chrome-real`（见上）；它断言的自愈与上报两条都实测过**会失败**。
+- 阶段隔离（`boot(stage, fn)`）包住了四个调用点（mount / auth-probe / auth-probe-now / observe）。
+  **注意它的口径是"可见"而不是"不致命"**：未包住的顶层语句抛异常**仍会**吃掉其后全部（这正是
+  0.18.0 的形态），区别只在于现在会被兜底上报成 `chrome fatal stage=…`，不再无声无息。新增顶层
+  动作时请一并包进 `boot()`，否则至少要知道它是"可见的致命"。
+- 回归门禁：`npm run test:chrome-real`（见上）；它断言的自愈、上报与菜单可打开三条都实测过**会失败**
+  （负向对照：0.18.0 的 chrome ⇒ 7 项红；缺 `rootEl` 守卫的变体 ⇒ 早期注入 `TypeError` 2 项红）。
 
 ### 误报提示（0.16.0 起）
 

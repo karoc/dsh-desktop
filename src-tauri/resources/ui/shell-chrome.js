@@ -682,7 +682,12 @@
       pushActive = true;
     }
     if (rootEl) for (const [k, v] of Object.entries(captionPlan.cssVars)) rootEl.style.setProperty(k, v);
-    for (const [k, v] of Object.entries(captionPlan.dataset)) rootEl.dataset[k] = v;
+    // 2026-10-16：这一行是 2026-10-15 那次"全部空安全"修复**漏掉的一行**（同级三行都加了
+    // `if (rootEl)`，只有它没有）。`computeCaptionPlan(true)` 的 dataset 是**非空**的
+    // （`{windowsTitlebar:''}`）⇒ 循环体必然执行 ⇒ 顶层契约开启 + `<html>` 尚未创建时抛
+    // `TypeError: Cannot read properties of null (reading 'dataset')`，后果与 0.18.0 事故同签名：
+    // 顶栏挂上（host=true）但只有 4 个按钮、自愈失效、契约四项全部静默降级。
+    if (rootEl) for (const [k, v] of Object.entries(captionPlan.dataset)) rootEl.dataset[k] = v;
     if (captionPlan.hostClass) host.classList.add(captionPlan.hostClass);
     if (TITLEBAR_CONTRACT) {
       // 客户端在 render 时读 data-windows-titlebar 算列宽（AppFrame.tsx），而本
