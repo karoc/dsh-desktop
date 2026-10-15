@@ -2298,6 +2298,58 @@
       "createdAt": 1792068839534,
       "updatedAt": 1792072273952,
       "summary": "**已完成：dev 实机验证通过（不需要改代码）+ 夹具重采 + 发版 v0.18.0。**\n· dev 实例（runtime 升到 alpha.3）：地板升级**一次成功**（本次无需重启）；patch 注入照旧（`updated client plugin @dsh-desktop/client-notifications`）；页面无失败条幅、0 pending；**四个插件设置入口全在**（`4Smoothly Kanban` / `Smoothly MR` / `Smoothly ARRP` / `Smoothly TN`）；\n· patch 契约夹具按 alpha.3 实机重采：`dshVersion 0.2.1-alpha.3`、**188 个 id**（原 185），门禁通过；\n· 抬地板 → **发布 v0.18.0**（发布 PR 首次在\"检查全绿\"下合并，tag 构建已派发 run 38740320087）；\n· 顺带修掉 README 三处过时地板表述（由 CI 的文档同步门禁引出）。\n**装机与最终验收：已完成 ✅**（2026-10-15）。v0.18.0 资产核验：setup.exe 28,181,802 B / sha256 `35f5076a…` / PE `MZ` ✅；静默安装 exit 0、exe FileVersion **0.18.0** ✅；启动后正式版 runtime **alpha.2 → alpha.3 升级成功**（150 秒内完成，**本次无需重启** ✅）。终检（按时间戳只取本次运行的行，避免上次误用旧端口的错误）：桥 `/shell/state` **HTTP 200**、`devMode=false`、预装四项齐全；页面**无**「Failed to load plugins」、无插件失败条幅、**0 pending**；**四个插件的设置入口全在**（`4思磨力看板` / `思磨力提供方参数` / `思磨力 ARRP` / `思磨力轮次胶囊条`）。"
+    },
+    {
+      "id": "card-1a1405afb6e-ho",
+      "title": "【交接】壳顶栏消失事故：修完待验收（下一会话从这里开始）",
+      "status": "todo",
+      "tags": [
+        "handoff",
+        "chrome",
+        "regression",
+        "verify",
+        "p0"
+      ],
+      "rationale": "用户报告\"壳自定义菜单点不开 + 预装插件看不见\"（生产 0.18.0 + dsh alpha.3）。根因链已剥出并修复四个真实缺陷，但 **dev 壳里顶栏仍未出现** ⇒ 判据未达成、未发版。会话上下文耗尽，交接到新会话。",
+      "description": "**已修并合入 main（c6b5a9b / PR #159,#161）**：\n① 我自己的补丁（PR #132）把鉴权探针调度块插进了 `misleadingAuthHint` **函数作用域** ⇒ 顶层 `scheduleAuthProbe()` 抛 ReferenceError ⇒ chrome 加载即中断；\n② `document.body.appendChild` 无守卫；③ `document.documentElement.style` 空指针（实测 :613）；④ `observer.observe(null)`；⑤ 壳侧改为**等 DOM 就绪再 eval**；⑥ eval 报错写进 `dsh-desktop-session.log`（原为 `let _ =` 静默丢弃）。\n**已建的探针**：`npm run test:chrome-real` 测两种注入时序（加载后 + 最早期无 body），当前 **全绿**（errors=0 / host=true / buttons=12）。\n**未达成**：dev 壳（HEAD c6b5a9b，守卫 9 处均在包里）PrintWindow 截图**仍看不到顶栏**，且日志**没有**\"chrome 注入失败\"记录。\n**下一步（判据明确）**：① 在 chrome 挂载成功/失败处各加一条**一次性上报**（走桥或壳日志）⇒ 用日志区分\"未执行到挂载 / 挂上了但不可见 / 根本没注入\"；② 把 dev 窗口从最大化恢复后再截图对比（排除布局因素）；③ **判据**：截图里真的出现顶栏 **或** 日志写明停在哪一步；通过后才发 v0.18.1 并给用户装机（用户当前界面仍是坏的）。",
+      "createdAt": 1792081066862,
+      "updatedAt": 1792081066862,
+      "rejected": "放弃了\"直接发 v0.18.1 让用户先恢复\"：修复未经\"看得见顶栏\"的验证就发布，等于重演这次事故；放弃了\"只靠 Playwright 探针判定\"：真 Chrome 里能挂上（12 按钮）而壳里看不到，说明壳环境有额外变量。"
+    },
+    {
+      "id": "card-1a1405afb6e-bak",
+      "title": "缺陷：插件目录 `.bak-stale-…` 链式重复改名（陈旧清理路径每次运行都再改一次）",
+      "status": "todo",
+      "tags": [
+        "manager",
+        "plugins",
+        "bug",
+        "windows",
+        "follow-up",
+        "p2"
+      ],
+      "rationale": "排查顶栏事故时在生产 runtime 目录看到 `plugin-console.bak-stale-<ts>.bak-stale-<ts>.bak-stale-<ts>`（三个时间戳）⇒ 说明\"陈旧插件清理\"路径**每次启动都在对已改名的目录再改名一次**，此前以为修过的同类问题（PR #63）在这条路径上仍活着。",
+      "description": "**现象**：`runtime/node_modules/@dsh-desktop/plugin-console.bak-stale-A.bak-stale-B.bak-stale-C` 不断加长。\n**影响**：目录名无限增长 + 陈旧插件永远不被真正清理；不影响功能但会持续污染用户目录。\n**下一步**：定位 manager 里陈旧清理的改名判断（应跳过任何已含 `.bak-stale-` 的目录），加一条单测锁住\"同一个陈旧目录只改一次名\"。",
+      "createdAt": 1792081066862,
+      "updatedAt": 1792081066862,
+      "rejected": "放弃了\"先手动删掉那串目录\"：治标不治本，下一次启动又会重新长出链来。"
+    },
+    {
+      "id": "card-1a1405afb6e-lock",
+      "title": "流程缺陷：每次发布合并后 main 的 Cargo.lock 必然漂移（需自动化）",
+      "status": "todo",
+      "tags": [
+        "ci",
+        "release",
+        "process",
+        "follow-up",
+        "p2"
+      ],
+      "rationale": "release-please 只改 package.json / Cargo.toml / tauri.conf.json，**不动 Cargo.lock**；我此前的修复只覆盖\"发布 PR 跑检查\"那条路 ⇒ **发布合并后 main 自己又漂**（已实测两次：0.17.0 与 0.18.0），导致该分支上任何新 PR 的 `npm test` 直接红。",
+      "description": "**已做**：每次手动 `node scripts/sync-cargo-lock-version.mjs` 再提交（这次也做了）。\n**要做的**：让它自动化 —— 在发布 PR 合并后（或 `release` 作业成功时）由 CI 自动同步 Cargo.lock 并提交，或在 release-please 配置里把 Cargo.lock 纳入版本文件（`extra-files`）。\n**判据**：下一次发布合并后，main 上 `npm test` 的\"四处版本一致\"门禁在没有人工干预的情况下为绿。",
+      "createdAt": 1792081066862,
+      "updatedAt": 1792081066862,
+      "rejected": "放弃了\"继续每次手动同步\"：这是可预见的重复劳动，且下一次发布必然再次让 main 变红。"
     }
   ]
 }
