@@ -57,6 +57,14 @@ const NATIVE_BUILD_PKGS = [
  * 因此低于该版本的 dsh 会让用户彻底失去插件管理入口。npm 的 latest tag 目前仍是
  * 0.1.5-rc.3（不含插件管理），所以安装/升级目标取 max(latest, 地板)。
  *
+ * 2026-10-15 抬到 0.2.1-alpha.3（**先 dev 验证，未发布**）：alpha.2 → alpha.3 共 852 个提交。静态契约核对完成 ——
+ * overlay 唯一的兜底目标 `ui-sidebar-browser` **仍在**；新版 web-app tarball 新增了一批 id（compaction / delegation /
+ * harness-dev-context / persona / planning / present / time-context / tool-ask-user / tool-cordis / tool-schedule /
+ * ui-secret-mask 等），**无我们依赖的 id 消失**；上游本次还有 `feat(plugin-manager)` 的预览改动、
+ * `feat(ui-conversation): add the New Session options slot`（新槽位，与我们无关）、
+ * `Harden profile replacement against case aliases and Windows rename errors`（与我们 manager 的"插件备份只挪不删"
+ * 直接相关 —— 我们用 rename + cp 兜底，方向一致）。seam 抽检：`configForms` / `settings.section` /
+ * `settings.plugins.tab` / `conversation.chat.reasoning.body` 全在。**dev 实机验证与夹具重采待做**。
  * 2026-10-09 抬到 0.2.1-alpha.2（**先 dev 验证，未发布**）：用户要求跟进上游新版。静态核对已完成 ——
  * overlay 唯一的兜底目标 `ui-sidebar-browser` 在新版仍存在且门控表达式未变（`profileContext?.name !== 'desktop'`）；
  * web-app 的 patch id 集合 121 → 122（+schedule / time-context / tool-schedule / ui-schedule；
@@ -75,7 +83,7 @@ const NATIVE_BUILD_PKGS = [
  * `dsh plugin allow-version`。地板与预装 bundle 必须**同一批**落地：旧 bundle
  * （如 kanban 0.2.8）用的是 0.1.7 已删除的图标名，单独抬地板会让它们在新运行时上崩。
  */
-const MIN_DSH_VERSION = '0.2.1-alpha.2'
+const MIN_DSH_VERSION = '0.2.1-alpha.3'
 
 // ── args ───────────────────────────────────────────────────────────────────
 function parseArgs(argv) {
