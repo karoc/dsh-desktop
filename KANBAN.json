@@ -2,39 +2,6 @@
   "version": 1,
   "cards": [
     {
-      "id": "card-1a03dd6a-bfb4-4cc8-9b05-caeb93000b6b",
-      "title": "发布 v0.3.10（通知双弹修复，CI 自动出包）",
-      "description": "版本 0.3.9→0.3.10：承载通知双弹修复（2673179，turn/end reason 分类：error→「任务出错」、completed→「任务完成」、其余中性；仅 error 3 分钟冷却压重试双弹；测试 19→23 场景全绿）。bump 5 处版本 + 看板更新，提交 8b28ce1，push main，打 tag v0.3.10 推送，CI 按 v* tag 自动构建 Windows NSIS + Linux AppImage/deb 并建 GitHub Release。",
-      "rationale": "通知双弹根因已确凿定位并修复（错误转边误报「已完成」+ 自动重试二次弹窗），需随壳发版交付给用户；仓库发布机制 = git tag v* 触发 CI 自动出包。",
-      "rejected": "等 v0.3.9 真机复核后再发——用户明确要求直接发下一版；v0.3.9 已出包（含预装插件升级），v0.3.10 独立承载通知修复。",
-      "sourceSessionId": "session-20b0d857-9ac9-489e-9ad6-bd3b7bcbfbae",
-      "status": "done",
-      "tags": [
-        "release",
-        "bug-fix",
-        "notification"
-      ],
-      "createdAt": 1787738781292,
-      "updatedAt": 1787738781292,
-      "summary": "v0.3.10 已于 2026-08-26 发布（GitHub Release v0.3.10，含通知双弹修复）。"
-    },
-    {
-      "id": "card-d9185f47-f039-4854-84fc-7b321a73b2bd",
-      "title": "自定义壳顶栏：无边框主窗口 + 壳菜单栏（DSH Desktop 图标左侧起，菜单依次向右）",
-      "rationale": "用户要求自定义壳顶栏（最小化/最大化/关闭）并把代理设置等壳级功能收进顶栏左侧「DSH Desktop」图标后的可见菜单栏，作为后续壳独有菜单定义点。Windows 上 Tauri 2 Menu 不渲染窗口菜单栏，远程 dsh 页无 __TAURI__，故采用注入式自绘顶栏 + 环回桥双通道。",
-      "rejected": "放弃 Tauri 原生窗口菜单（Windows 不渲染）；放弃子 webview 标题栏（多 webview 布局/命中测试跨平台复杂）；放弃全部收进图标下拉（用户确认可见性不足，改通用范式：应用菜单+可见顶级条目向右排）；放弃 CSS app-region 拖动（与 mousedown 桥拖动互斥、平台支持不一，统一走 /window/drag→start_dragging）；放弃 chrome 运行时读 resource 文件（改 include_str! 编译期内嵌）。",
-      "sourceSessionId": "session-2022bc96-7d1e-49fd-8ada-307acaff05a9",
-      "status": "done",
-      "tags": [
-        "shell",
-        "ui",
-        "feature"
-      ],
-      "createdAt": 1787833765826,
-      "updatedAt": 1787835034225,
-      "summary": "主窗口无边框（decorations:false+shadow:true），新增 src-tauri/resources/ui/shell-chrome.js（SHELL_MENUS 定义点：DSH Desktop 应用菜单 + 代理设置…直开 + 视图/帮助下拉 + 窗口三键），lib.rs include_str! 内嵌并在 on_page_load 注入 main webview；新增 window_control/get_shell_state/toggle_dev_mode/open_settings/show_about 命令与 10 个桥端点（/window/*、/shell/*）；scripts/test-shell-chrome.mjs 契约测试接入 npm test（全量 7 套通过）；README 更新架构图与「壳菜单栏」小节；Agent Note 已写（.agents/notes/implemented/feature/2026-08-27-shell-menu-bar.md）。"
-    },
-    {
       "id": "card-c57d06fb-b9c6-408a-9d3e-a3ce04c7d6a6",
       "title": "独立开发版：tauri.dev.conf.json 覆盖 identity，与正式版同机并存",
       "summary": "新增 src-tauri/tauri.dev.conf.json（深合并覆盖 productName=\"DSH Desktop Dev\"、identifier=\"dev.dsh.desktop.dev\"）+ `npm run bundle:dev`；lib.rs toast 激活参数化（AUMID=config().identifier、CLSID=toast_clsid() FNV-1a 派生、快捷方式按 productName 查找）；窗口标题/托盘 tooltip/设置窗口标题/关于 toast 用 package_info().name 并加「（开发版）」标识；chrome 注入 __DSH_PRODUCT_NAME__；契约测试新增 dev identity 断言；README「开发版」小节。CI 全绿（check/windows/linux；linux-smoke 为 main 既有失败不阻塞）。",
@@ -1968,20 +1935,24 @@
     {
       "id": "card-1a1405afb6e-ho",
       "title": "【交接】壳顶栏消失事故：修完待验收（下一会话从这里开始）",
-      "status": "in_progress",
+      "status": "done",
       "tags": [
         "handoff",
         "chrome",
         "regression",
         "verify",
-        "p0"
+        "p0",
+        "done",
+        "v0.18.1",
+        "verified-machine",
+        "verified-ci"
       ],
-      "rationale": "用户报告生产版顶栏/插件 UI 消失，根因链已修但未在 dev 看到顶栏，判据未达成（交接卡）。本轮从「先确认跑的是哪个二进制」入手（技能 §4.10 明确警告过），逐层取实证。",
+      "rationale": "用户生产版 0.18.0 顶栏/菜单坏着，交接卡的判据就是\"发版前必须能在截图或日志里证明顶栏回来了\"；本轮把判据做成可复现的证据链（日志 + 页面内测量 + 修复前后可失败的对照），而不是再拿一张可能陈旧的截图下结论。",
       "description": "**已修并合入 main（c6b5a9b / PR #159,#161）**：\n① 我自己的补丁（PR #132）把鉴权探针调度块插进了 `misleadingAuthHint` **函数作用域** ⇒ 顶层 `scheduleAuthProbe()` 抛 ReferenceError ⇒ chrome 加载即中断；\n② `document.body.appendChild` 无守卫；③ `document.documentElement.style` 空指针（实测 :613）；④ `observer.observe(null)`；⑤ 壳侧改为**等 DOM 就绪再 eval**；⑥ eval 报错写进 `dsh-desktop-session.log`（原为 `let _ =` 静默丢弃）。\n**已建的探针**：`npm run test:chrome-real` 测两种注入时序（加载后 + 最早期无 body），当前 **全绿**（errors=0 / host=true / buttons=12）。\n**未达成**：dev 壳（HEAD c6b5a9b，守卫 9 处均在包里）PrintWindow 截图**仍看不到顶栏**，且日志**没有**\"chrome 注入失败\"记录。\n**下一步（判据明确）**：① 在 chrome 挂载成功/失败处各加一条**一次性上报**（走桥或壳日志）⇒ 用日志区分\"未执行到挂载 / 挂上了但不可见 / 根本没注入\"；② 把 dev 窗口从最大化恢复后再截图对比（排除布局因素）；③ **判据**：截图里真的出现顶栏 **或** 日志写明停在哪一步；通过后才发 v0.18.1 并给用户装机（用户当前界面仍是坏的）。",
       "createdAt": 1792081066862,
-      "updatedAt": 1792082096088,
-      "rejected": "放弃了\"直接发 v0.18.1 让用户先恢复\"：修复未经\"看得见顶栏\"的验证就发布，等于重演这次事故；放弃了\"只靠 Playwright 探针判定\"：真 Chrome 里能挂上（12 按钮）而壳里看不到，说明壳环境有额外变量。",
-      "summary": "新一轮（2026-10-16 00:29 起）：已确认 dev 装的是修复版二进制（4 个修复标记全在），prod 装的是未修复 0.18.0（标记全无）⇒ 顶栏在 dev 可见、故障机制定位到 startObserve（第 1738 行）在 prod 里永不执行。"
+      "updatedAt": 1792088540989,
+      "rejected": "① 「dev 壳看不到顶栏」当成产品缺陷继续改壳 —— 放弃：页面内测量（naturalWidth=128/complete/20x20 占位）与强制重绘后的截图都证明是**验证方法的假阴性**，改产品只会掩盖真问题；② 只修 `scheduleAuthProbe` 那一处 —— 放弃：审计证明同类还有一处（dataset 漏守卫）且与事故同签名，只修实例等于留着下一次事故；③ 先发版再修 Cargo.lock 的 CI 阻断 —— 放弃：没有安装包就没有交付，阻断必须先解；④ 为过 CI 给 PR 打 docs-not-needed 或强推 main —— 放弃：README/技能同步改掉才是文档纪律；⑤ 直接把本地构建塞进用户生产版 —— 放弃：会让用户机器上的版本号与内容不一致（About 显示 0.18.0 却含修复），改走正式发版。",
+      "summary": "判据达成并已发版。① **判据②（日志写明）**：给 chrome 加了五类一次性引导上报（inject/mounted/ready/fatal/remount，走桥 /log 落进 dsh-desktop-session.log），真机日志实测 `chrome mounted … bar=0px h37 hidden=false btns=4 logoVar=set logoSrc=png` → `chrome ready … btns=12`，无 fatal；另用\"注入一个顶层 throw 的变体\"证明 fatal 行会写出 `stage=mount:ok Error: probe-fatal-after-mount @<anonymous>:664:9`。② **判据①（截图出现顶栏）**：dev 壳截图确认顶栏与左上 logo（唯一菜单触发器）都在；顺带查清上一轮\"截图看不到顶栏\"是**遮挡窗口的 PrintWindow 陈旧帧**（同窗口强制重绘后 766 个 logo 蓝色像素，与旧构建/生产一致），已给 verify-dev-ui.ps1 加 `-Action shot -Bring` 并写进技能。③ **根因链补全**：0.18.0 的顶栏\"先可见后永久消失\"= 顶层 `scheduleAuthProbe()` 抛 ReferenceError（其后的 MutationObserver 自愈永不执行），Playwright 实测 0.18.0 不自愈、HEAD 自愈。④ **独立审计又抓出同类第二处致命语句**（`captionPlan.dataset` 写入漏 `if (rootEl)`，与 0.18.0 同签名），已修并让门禁覆盖契约分支。⑤ **发布阻断**：Cargo.lock 同步脚本硬编码 `\\n`、Windows 检出为 CRLF ⇒ 打不出 NSIS 安装包（main 连续多日 CI 红），已修 + 5 条回归测试。⑥ **v0.18.1 已发布**：tag v0.18.1，Release 三资产齐全（Windows x64-setup.exe 26.9MB / AppImage / deb），tag 内代码已逐字校验含三处修复。"
     },
     {
       "id": "card-1a1405afb6e-bak",
@@ -2004,19 +1975,23 @@
     {
       "id": "card-1a1405afb6e-lock",
       "title": "流程缺陷：每次发布合并后 main 的 Cargo.lock 必然漂移（需自动化）",
-      "status": "todo",
+      "status": "done",
       "tags": [
         "ci",
         "release",
         "process",
+        "cargo-lock",
         "follow-up",
-        "p2"
+        "p2",
+        "done",
+        "verified-ci"
       ],
-      "rationale": "release-please 只改 package.json / Cargo.toml / tauri.conf.json，**不动 Cargo.lock**；我此前的修复只覆盖\"发布 PR 跑检查\"那条路 ⇒ **发布合并后 main 自己又漂**（已实测两次：0.17.0 与 0.18.0），导致该分支上任何新 PR 的 `npm test` 直接红。",
+      "rationale": "v0.18.1 发版过程中实测到：这不是\"将来会漂移\"，而是**每次发版收尾都必然红** —— release-please 只改 package.json/tauri.conf.json/Cargo.toml、不动 Cargo.lock，而同步步骤的条件只覆盖 tag 与 release-please 分支 ⇒ main push 与普通 PR 全漏在外面。常红的 CI 会掩盖真失败，这次差点让 v0.18.1 的 tag 构建被误判。",
       "description": "**已做**：每次手动 `node scripts/sync-cargo-lock-version.mjs` 再提交（这次也做了）。\n**要做的**：让它自动化 —— 在发布 PR 合并后（或 `release` 作业成功时）由 CI 自动同步 Cargo.lock 并提交，或在 release-please 配置里把 Cargo.lock 纳入版本文件（`extra-files`）。\n**判据**：下一次发布合并后，main 上 `npm test` 的\"四处版本一致\"门禁在没有人工干预的情况下为绿。",
       "createdAt": 1792081066862,
-      "updatedAt": 1792081066862,
-      "rejected": "放弃了\"继续每次手动同步\"：这是可预见的重复劳动，且下一次发布必然再次让 main 变红。"
+      "updatedAt": 1792088551872,
+      "rejected": "① 让 release-please 直接更新 Cargo.lock（extra-files）—— 放弃：仓内记录显示过滤式 jsonpath 实测未被应用，改配置要等一次真实发版才能验证，代价大于收益；② 只把 main push 加进条件、保留 PR 严格 —— 放弃：实测证明这会让**每一个**基于漂移 main 的 PR 都红（PR #164 自己就是），成死循环；③ 给 PR 打 docs-not-needed 或强推 main —— 放弃：前者掩盖问题，后者违反分支保护纪律。",
+      "summary": "已自动化并实证：`Sync derived Cargo.lock version` 的 if 条件整个去掉（提交 316a06a / PR #164，已合并进 main eba4f59），任何跑 `npm test` 的场合（含 main push 与普通 PR）都先把派生文件对齐；同一 PR 把仓库里那份 Cargo.lock 追平到 0.18.1。实证：合并 #160 后 main 的 test job 曾 6 秒红在「四处版本一致」、PR #164 自己的 test 也 7 秒红；修复后 main push run 38783792068 的 test job 1m13s 绿。"
     },
     {
       "id": "card-87046f10-21c5-4ccf-b730-ffe9a30443f6",
