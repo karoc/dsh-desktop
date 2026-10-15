@@ -1,6 +1,6 @@
 {
   "note": "由 scripts/test-patch-targets.mjs --update-fixture 生成；抬 dsh 地板时刷新",
-  "dshVersion": "0.2.1-alpha.2",
+  "dshVersion": "0.2.1-alpha.3",
   "capturedFrom": "@deepseek-ai/dsh-web-app/cordis.patch.yml",
   "ids": [
     "account-controller",
@@ -36,6 +36,7 @@
     "fs-sandbox",
     "goal",
     "goal-round-driver",
+    "harness-dev-context",
     "hmr",
     "image-offload",
     "job-controller",
@@ -64,6 +65,7 @@
     "product-analytics",
     "ptc-runtime",
     "pwsh-sandbox",
+    "remote-access",
     "repeat-tool-reminder",
     "resources",
     "sandbox",
@@ -148,6 +150,7 @@
     "ui-reference",
     "ui-renderer",
     "ui-schedule",
+    "ui-secret-mask",
     "ui-session",
     "ui-settings",
     "ui-settings-account",

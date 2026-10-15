@@ -2279,6 +2279,24 @@
       "createdAt": 1791998877112,
       "updatedAt": 1791999439061,
       "summary": "**已实测（2026-10-15，dev 实例，两个独立客户端打同一服务）——结论：桥的状态机正确，未发现缺陷。**\n方法：用 dev 实例的桥（端口取自 manager.log），两个 client 分别 GET/POST；危险动作选 **`/restart-dsh`**（在危险集内、无破坏性、可恢复），避免动到会破坏 dev 配置的成员（`disable-third-party-plugins` / `cleanup-caches` / `update-dsh`）与会终止测试的 `/shell/quit`。\n结果（逐条对应验收点）：\n① **确认流只触发一次** —— 两次调用前后\"有标题的窗口数\"都是 1（无重复确认窗口）；\n② **同一动作的第二次调用被正确拒绝** —— `202 {\"duplicate\":true,\"pending\":true,\"reason\":\"pending\"}`，不是静默成功；\n③ **nonce 只发一次** —— 首次 `nonce=18de75f7d0de0f28-0-a704`，重复调用**不再下发** nonce ⇒ 两个客户端不会各持一个、也不会拿到过期值；\n④ **状态一致** —— `/shell/status` 与 `/shell/state` 在两个客户端**逐字节一致**（含存在挂起确认时）。\n**诚实的边界**：①是从\"窗口数未增加\"推断的（确认 UI 是壳内对话框，不是独立窗口），我没有逐像素看到对话框本身；本项测的是**桥的状态机与并发语义**，不是 WebView2 多窗口渲染。"
+    },
+    {
+      "id": "card-1a13fa0686e-a3",
+      "title": "适配 dsh 0.2.1-alpha.3（dev 验证通过 + 夹具重采 + 发版）",
+      "status": "done",
+      "tags": [
+        "dsh",
+        "upgrade",
+        "plugins",
+        "patch",
+        "shell",
+        "done-round"
+      ],
+      "rationale": "用户 2026-10-15 提出\"dsh 又更新了，继续做适配\"。新版为 `0.2.1-alpha.3`（距 alpha.2 共 852 个提交），按 alpha.2 时验证过的流水线执行：静态契约核对 → 抬地板 → dev 实机验证 → 夹具重采 → 发版 → 装机。",
+      "description": "**静态契约核对**：overlay 唯一兜底目标 `ui-sidebar-browser` 仍在；新版 web-app 新增一批 id（compaction / delegation / harness-dev-context / persona / planning / present / time-context / tool-ask-user / tool-cordis / tool-schedule / ui-secret-mask），**无我们依赖的 id 消失**；seam 抽检全在（configForms / settings.section / settings.plugins.tab / conversation.chat.reasoning.body）。\n**dev 实机验证（结论：不需要改代码）**：地板升级成功（`installed @deepseek-ai/dsh: 0.2.1-alpha.3`，本次**一次成功**、无需重启）；patch 注入照旧（`updated client plugin @dsh-desktop/client-notifications`）；页面无失败条幅、0 pending；**四个插件的设置入口全在**（`4Smoothly Kanban` / `Smoothly MR` / `Smoothly ARRP` / `Smoothly TN`）。\n**夹具重采**：`--update-fixture --runtime <dev runtime>` ⇒ `dshVersion 0.2.1-alpha.3`、**188 个 id**（原 185）；门禁通过且来源标注自动更新。\n**上游变化记录**：`Settings` 入口移进账户菜单（`More`）且**丢了 aria-label** ⇒ 脚本化验收要用文本选择器（这是上游 UI 变化，与我们代码无关）；另有 `feat(plugin-manager)` 预览改动、`feat(ui-conversation): New Session options slot`（新槽位，无关）、`Harden profile replacement against case aliases and Windows rename errors`（与我方 manager 的\"只挪不删\"方向一致）。\n**顺带**：CI 的「文档同步」门禁抓到\"抬地板改了 server-manager.mjs 却没改 README\" ⇒ 顺着它发现 README 的地板表述自更早几次抬升起就没同步（三处，还写着 0.2.0-rc.2 / 0.2.0-rc.1）⇒ 一并修正并补上完整迁移史。",
+      "rejected": "**放弃了\"直接改版本号就发\"**：patch 按 id 运行时命中上游，id 改名会静默失效 ⇒ 必须先实测目标；**放弃了跳过 dev 直接发**：alpha 渠道每次都有回归（本次就发现 Settings 入口搬迁）；**放弃了忽略 README 报警**：那条门禁指出的正是\"文档没跟上行为\"的真实欠账。",
+      "createdAt": 1792068839534,
+      "updatedAt": 1792068839534
     }
   ]
 }
