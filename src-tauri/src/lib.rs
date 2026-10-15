@@ -4022,7 +4022,18 @@ fn inject_shell_chrome(app: &AppHandle) {
             serde_json::to_string(&port.to_string()).unwrap_or_else(|_| "\"0\"".into())
         ));
     }
-    let _ = w.eval(format!("(()=>{{{prefix};{SHELL_CHROME}}})()"));
+    // 2026-10-15 修复（生产事故"顶栏/菜单消失"的真根因）：原先直接 eval —— 若注入发生在**导航早期**
+    // （`document.body`/`head` 还不存在），chrome 里任何早期的 DOM 访问（`.style`、`appendChild`）都会抛异常，
+    // 而这里 `let _ =` 会把错误**静默丢弃** ⇒ 顶栏与菜单永远不出现，日志里毫无痕迹。
+    // 现在：等 DOM 就绪再注入（`readyState==='loading'` ⇒ 挂一次性 DOMContentLoaded），并把 eval 的报错**写进日志**，
+    // 让"注入失败"从此可见（静默失败改为响亮失败）。
+    let js = format!(
+        "(()=>{{const run=()=>{{{prefix};{SHELL_CHROME}}};\
+         if(document.readyState==='loading'){{document.addEventListener('DOMContentLoaded',run,{{once:true}})}}else{{run()}}}})()"
+    );
+    if let Err(err) = w.eval(js) {
+        log_line(&app_data_dir(app), &format!("chrome 注入失败（eval 报错；顶栏/菜单会缺失）：{err}"));
+    }
 }
 
 // ── proxy connection test (settings window "测试连接") ────────────────────────
