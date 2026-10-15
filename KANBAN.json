@@ -2,340 +2,6 @@
   "version": 1,
   "cards": [
     {
-      "id": "card-fce90c17-ded0-47e7-9d43-f73a0f8f044d",
-      "title": "预装 dsh-kanban 插件（bundle + sync + PROTECTED + 测试）",
-      "description": "Bundle dsh-kanban into plugins/preinstalled/dsh-kanban (lib, cordis.patch.yml, LICENSE, trimmed package.json + README); wire into sync-resources.mjs list, server-manager.mjs PROTECTED list; sync into src-tauri/resources/preinstalled/dsh-kanban.",
-      "sourceSessionId": "session-ed595292-f0ad-4592-8d37-b13ebce29e69",
-      "status": "done",
-      "tags": [
-        "preinstalled",
-        "plugins"
-      ],
-      "createdAt": 1787025321032,
-      "updatedAt": 1787025321032,
-      "summary": "见 commit 96214de：chore(skill): distill preinstalled-plugin-sync workflow into a reusable skill + audit script",
-      "rationale": "任务见标题；实现见 commit 96214de。",
-      "rejected": "未记录（历史卡片；决策依据见 commit 信息）。"
-    },
-    {
-      "id": "card-7e44771a-6fb6-4a28-b6fb-2ef1135ab3bc",
-      "title": "预装插件同步：dsh-model-reasoning 0.1.1→0.1.4（kanban 已最新）",
-      "summary": "dsh-model-reasoning bundle 由 0.1.1 升级到仓库 HEAD 0.1.4（empty states/apply-to-all/tooltips/模型搜索）；dsh-kanban 与仓库 HEAD 一致无改动；sync:resources 已刷新；test-control-plane 改为从 bundle 动态读版本。",
-      "rationale": "bundle 随壳锁定作者仓库最新开发态（kanban 先例），非仅 npm 已发布版；npm latest 对 kanban 反而更旧。",
-      "sourceSessionId": "session-b07fc740-c633-402a-ad13-adca9d76e0b5",
-      "status": "done",
-      "tags": [
-        "preinstalled",
-        "plugins"
-      ],
-      "createdAt": 1787032101064,
-      "updatedAt": 1787032101064,
-      "rejected": "未记录（历史卡片；决策依据见 commit 信息）。"
-    },
-    {
-      "id": "card-b823cd1d-64c5-43d5-8f2e-d4f8e26bc02c",
-      "title": "预装 dsh-turn-navigator 插件（bundle + sync + PROTECTED + 测试）",
-      "description": "把 dsh-turn-nav 仓库（包名 dsh-turn-navigator v0.1.1，纯 client 会话轮次导航胶囊条）按 dsh-kanban 模式预装：plugins/preinstalled/dsh-turn-navigator bundle、sync-resources 列表、server-manager PROTECTED、test-control-plane / test-plugin-console 扩展。",
-      "sourceSessionId": "session-55bbd601-04e2-4288-a1c9-0696fdab1f4a",
-      "status": "done",
-      "tags": [
-        "preinstalled",
-        "plugins"
-      ],
-      "createdAt": 1787137916096,
-      "updatedAt": 1787137935693,
-      "summary": "dsh-turn-navigator@0.1.1（dsh-turn-nav 仓库 HEAD 构建，已在 workspace 重建并逐字节验证）按 dsh-kanban 模式预装：plugins/preinstalled/dsh-turn-navigator/（lib + cordis.patch.yml + 裁剪 package.json/README + LICENSE）；sync-resources 列表与 server-manager PROTECTED 均加 dsh-turn-navigator；sync:resources 已刷新 src-tauri/resources；test-control-plane 增加落盘/preinstalled-updates 断言、test-plugin-console fixture 扩为三行；六个测试脚本全部通过。",
-      "rationale": "任务见标题；实现见 commit 96214de。",
-      "rejected": "未记录（历史卡片；决策依据见 commit 信息）。"
-    },
-    {
-      "id": "card-cfb9fb70-baa9-4ee6-8093-c5cf1515f111",
-      "title": "预装插件全量检查+同步，发布 v0.3.0",
-      "summary": "dsh-kanban bundle 同步到仓库 HEAD 0.1.2（含 0.1.2 发布功能 + 未发布的卡片操作行重设计）；model-reasoning 0.1.4 与 turn-navigator 0.1.1 已是最新无需改动；随后 bump 0.3.0、提交、推送 main + tag v0.3.0（CI 自动出包发布）。注：v0.3.0 的 GitHub Release 实际因 upload-artifact LCA 嵌套的 glob 问题发布失败，后续在 0.3.2 修复。",
-      "rationale": "预装 bundle 跟踪源仓库提交态（非 npm 已发布版）；kanban 仓库有未提交的 0.1.3 WIP，明确不打包进壳。",
-      "sourceSessionId": "session-b07fc740-c633-402a-ad13-adca9d76e0b5",
-      "status": "done",
-      "tags": [
-        "preinstalled",
-        "plugins",
-        "release"
-      ],
-      "createdAt": 1787198596012,
-      "updatedAt": 1787208103638,
-      "rejected": "未记录（历史卡片；该轮为预装插件全量检查+版本对齐后的常规发布）。"
-    },
-    {
-      "id": "card-9b586fc1-345b-4a1a-95b1-8a61ecd877ba",
-      "title": "修复：半截安装（package.json 在但 lib/bin.js 缺）自动重装",
-      "description": "Windows 0.2.0→0.3.0 升级时在 NSIS 卸载器勾选删除应用数据 → 清空 runtime → 冷安装 dsh(~500 包) 时 npm 请求悬挂，manager 只有 600s 硬超时×2 registry，用户看到“已进行 511 秒”卡住。修复：npm fetch idle 超时 + 无输出 stall 检测 + 失败切换提示。",
-      "sourceSessionId": "session-cbc11ff3-8490-410a-9642-003db8693f13",
-      "status": "done",
-      "tags": [
-        "bug-fix",
-        "windows",
-        "installer"
-      ],
-      "createdAt": 1787203257064,
-      "updatedAt": 1787208079626,
-      "summary": "二次修复（0.3.2）：broken-install 自动修复。根因：0.3.0 冷安装被强关留下半截安装（package.json 在、lib/bin.js 缺），installedVersion() 只看 package.json → 自动安装闸门被跳过 → launch failed: not installed。修复：dshInstalled()=manifest+入口双检，main() 闸门与 installDshUpdate 的“已最新”跳过都改用它；破损时 rmSync 整个 dsh 目录强制重装。新增 test-broken-install.mjs 端到端验证（自动修复→重装→正常启动）。0.3.1→0.3.2 已提交推送。",
-      "rationale": "把“20 分钟静默悬挂”变成 ~30s 快失败 + 自动切换镜像 + 清晰报错。",
-      "rejected": "未记录（历史卡片；决策依据见 commit 信息）。"
-    },
-    {
-      "id": "card-ec992325-540f-46bf-8344-b9301e941237",
-      "title": "发布 v0.3.3（pnpm 安装根因修复，CI 已发布）",
-      "description": "v0.3.1 已提交推送（8bfd58f）+ tag v0.3.1 已推送；CI 的 release job 正在构建 Windows 安装包并发布到 GitHub Releases（用户也可本地 git pull && npm run bundle）。CI run 完成后把本卡标 done。",
-      "sourceSessionId": "session-cbc11ff3-8490-410a-9642-003db8693f13",
-      "status": "done",
-      "tags": [
-        "release",
-        "bug-fix"
-      ],
-      "createdAt": 1787205100823,
-      "updatedAt": 1787230789426,
-      "summary": "v0.3.3 CI 全绿并已发布：GitHub Release v0.3.3 含 DSH.Desktop_0.3.3_x64-setup.exe（pnpm 安装根因修复）。用户可下载或本地 git pull && npm run bundle。",
-      "rationale": "任务见标题；实现见 commit 72a9ad4。",
-      "rejected": "未记录（历史卡片；决策依据见 commit 信息）。"
-    },
-    {
-      "id": "card-6f642993-d0fe-4abd-af28-c041fe5a4135",
-      "title": "决策：NSIS「删除应用程序数据」勾选框 — 接受现状（方案 C）",
-      "description": "用户选定方案 C：不改安装器（不 fork Tauri NSIS 模板），接受「删除应用程序数据」勾选框为 Tauri 上游固定行为。已在 README 加「Windows 安装/升级须知」说明，决策记录在 .agents/notes/implemented/process/2026-08-20-nsis-delete-data-checkbox-accepted.md。",
-      "sourceSessionId": "session-cbc11ff3-8490-410a-9642-003db8693f13",
-      "status": "done",
-      "tags": [
-        "nsis",
-        "decision"
-      ],
-      "createdAt": 1787209789302,
-      "updatedAt": 1787209789302,
-      "summary": "见 git log --all（按标题关键词搜索对应 commit）。",
-      "rationale": "任务见标题。",
-      "rejected": "未记录（历史卡片）。"
-    },
-    {
-      "id": "card-975f74b7-6bb6-4cf0-b705-67bc9f56857f",
-      "title": "旧版接管实施完成：备份+静默卸载+三入口提示（M1/M2，待 CI 验证与发版）",
-      "description": "根因：npm 解析器对 @deepseek-ai/dsh 的 monorepo 型依赖树（55-61 个互依包）在 buildIdealTree/placeDep 阶段无限挂起（npm 10/11、Node 22/24、npmjs/npmmirror、代理/直连全复现；npm 无任何网络请求）。修复：dsh 安装改用 pnpm（5.9s 装完真实 dsh，端到端验证启动+插件+URL）。manager 重构 runChild() 供 npm/pnpm 共用。测试全绿。0.3.3 已提交推送+tag。",
-      "sourceSessionId": "session-cbc11ff3-8490-410a-9642-003db8693f13",
-      "status": "done",
-      "tags": [
-        "windows",
-        "migration",
-        "upgrade",
-        "shell",
-        "feature",
-        "done"
-      ],
-      "createdAt": 1787220483541,
-      "updatedAt": 1788350131454,
-      "summary": "迁移前备份（dsh-home 关键数据 → %LOCALAPPDATA%\\dsh-backup\\migration-<ts>）已并入 migrate_legacy_data；NSIS installerHooks 静默卸载（/S _?=）+ 运行中弹窗中止；Rust check/cleanup command + 桥端点（白名单/uninstall.exe 校验、进程路径前缀运行中检测、lnk target 校验删除、清理前二次备份）；UI 三入口（启动页横幅一次性、壳菜单「旧版清理…」模态、设置页区块）；契约测试/4 单测/README 升级与数据安全章节全部落地，本地 JS 验证全绿，已提交推送（58611bf），Rust 编译验证走 CI 中，M3（版本策略固化+CI 断言）待 0.5.0。",
-      "rationale": "0.4.0 迁移实测暴露\"迁移只搬数据、不接管旧安装\"缺口（旧壳可启动 → 空 runtime 分叉 → 数据全丢假象）。用户定案：自动静默卸载 + 全程明确提示 + 数据备份优先 + 数据故障预案，节奏 M1/M2→0.4.1、M3→0.5.0。",
-      "rejected": "放弃\"只提示不自动卸载\"（用户否决）；放弃自动卸载整个 dev 版（白名单仅精确到旧正式目录）；放弃在迁移代码里递归删非空旧目录（保留现场优先）。"
-    },
-    {
-      "id": "card-d9fb1b2b-748d-4e99-ad30-f6f4d7007f79",
-      "title": "发布 v0.3.3（pnpm 安装根因修复）",
-      "description": "v0.3.3 已提交推送（8d0de7d）+ tag v0.3.3；CI 正在构建并发布 Windows 安装包到 GitHub Releases。用户可本地 git pull && npm run bundle 或等 CI 出包。CI 完成标 done。",
-      "sourceSessionId": "session-cbc11ff3-8490-410a-9642-003db8693f13",
-      "status": "done",
-      "tags": [
-        "release",
-        "bug-fix"
-      ],
-      "createdAt": 1787220491292,
-      "updatedAt": 1787230824755,
-      "summary": "v0.3.3 已发布（重复卡，归档）。",
-      "rationale": "任务见标题；实现见 commit 72a9ad4。",
-      "rejected": "未记录（历史卡片；决策依据见 commit 信息）。"
-    },
-    {
-      "id": "card-e520f114-4dbc-4bd6-890e-fb6d3eec1f5b",
-      "title": "沉淀：Windows 安装排障技能 + 发版运行时冒烟门禁",
-      "description": "沉淀：技能 `.dsh/skills/windows-desktop-shell-debugging/SKILL.md`（项目级已提交 + 全局安装到 ~/.dsh/skills）；发版门禁 `scripts/smoke-windows.mjs` + build.yml windows job 的 Runtime smoke step（空 runtime 冷安装 dsh→报 URL，本地验证 9s PASS）；ENGINEERING-NOTES §28 记录根因/修复/发版检查清单/环境坑。",
-      "sourceSessionId": "session-cbc11ff3-8490-410a-9642-003db8693f13",
-      "status": "done",
-      "tags": [
-        "process",
-        "skill",
-        "release-gate"
-      ],
-      "createdAt": 1787230841135,
-      "updatedAt": 1787230841135,
-      "summary": "见 commit bd349c8：fix(dev-build): notify-rust app_id 接收 &str（Windows 专属路径 E0308）",
-      "rationale": "任务见标题；实现见 commit bd349c8。",
-      "rejected": "未记录（历史卡片；决策依据见 commit 信息）。"
-    },
-    {
-      "id": "card-0eb19fb4-44e1-4743-9eb3-937a343b9c5e",
-      "title": "修复：启用预装插件后重启黑屏（pnpm 布局回归 → hoisted）",
-      "description": "黑屏根因：0.3.3 pnpm isolated 布局把 dsh 内部包收进 .pnpm，预装插件与 host bundle 解析不到（ERR_MODULE_NOT_FOUND）→ dsh web 崩溃。修复 0.3.4：pnpm 安装加 --node-linker=hoisted（布局回到 npm 平铺兼容）+ isIsolatedPnpmLayout 检测存量 isolated runtime → 删 node_modules 全新 hoisted 安装（~6s 自动迁移）。端到端验证：新装 hoisted + 启用 dsh-kanban → URL 正常；isolated 迁移 → URL 正常；smoke PASS。",
-      "sourceSessionId": "session-cbc11ff3-8490-410a-9642-003db8693f13",
-      "status": "done",
-      "tags": [
-        "bug-fix",
-        "windows",
-        "plugins",
-        "install"
-      ],
-      "createdAt": 1787236016581,
-      "updatedAt": 1787236016581,
-      "summary": "见 commit 46c0912：chore(board): record black-screen/hoisted-layout fix",
-      "rationale": "任务见标题；实现见 commit 46c0912。",
-      "rejected": "未记录（历史卡片；决策依据见 commit 信息）。"
-    },
-    {
-      "id": "card-bde6de49-9bb9-4551-b2d8-29443e3a2db1",
-      "title": "预发布通道：控制台提示可升 next 版（rc.8），想升才升",
-      "description": "npm 有 rc.8 但标在 next tag（latest 仍 rc.7），从 GitHub 安装不可行（monorepo 结构）。实现预发布通道：manager 解析 latest+next，update-status 带 nextAvailable；插件控制台显示\"当前→rc.8（预发布）\"升级按钮，点击才装指定版本，默认稳定 latest。0.3.5 已推送+tag，CI 出包中。",
-      "sourceSessionId": "session-cbc11ff3-8490-410a-9642-003db8693f13",
-      "status": "done",
-      "tags": [
-        "feature",
-        "console",
-        "update"
-      ],
-      "createdAt": 1787239670280,
-      "updatedAt": 1787239670280,
-      "summary": "见 commit 93a51f0：feat(console): pre-release (next tag) update option in the plugin console — 0.3.5",
-      "rationale": "任务见标题；实现见 commit 93a51f0。",
-      "rejected": "未记录（历史卡片；决策依据见 commit 信息）。"
-    },
-    {
-      "id": "card-d6fcc0d4-5898-471d-877c-e8a6121eb5ac",
-      "title": "修复：dsh web 不再多开默认浏览器（--no-open）",
-      "description": "dsh web 每次启动会打开系统默认浏览器（桌面壳自己 webview 已导航到 URL）。launchDsh 加 --no-open。注意 dsh 启动器 flag 顺序坑：启动器在第一个不认识的 flag 处停止解析并把剩余透传给应用，--no-open 是应用 flag，必须放在 --patch 之后（否则报 unknown option '--patch'）。0.3.6 已推送+tag。坑已记入技能 §8。",
-      "sourceSessionId": "session-cbc11ff3-8490-410a-9642-003db8693f13",
-      "status": "done",
-      "tags": [
-        "bug-fix",
-        "launch",
-        "windows"
-      ],
-      "createdAt": 1787246827606,
-      "updatedAt": 1787246827606,
-      "summary": "见 commit 310c121：chore(board): record --no-open fix",
-      "rationale": "任务见标题；实现见 commit 310c121。",
-      "rejected": "未记录（历史卡片；决策依据见 commit 信息）。"
-    },
-    {
-      "id": "card-269b53f2-51d5-4996-9f78-99f3754f6e41",
-      "title": "修复：next 预发布用户被误报降级更新（rc.8→rc.7）",
-      "description": "0.3.5 的 updateAvailable 判断只用 current!==latest（不比新旧），导致在 rc.8（next）用户误报\"当前 rc.8 → rc.7\"降级提示。改为 versionGt(latest,current)。已推送 0.3.7。另：浏览器多开问题在 0.3.6 已修（--no-open），用户当时在 0.3.5。",
-      "sourceSessionId": "session-cbc11ff3-8490-410a-9642-003db8693f13",
-      "status": "done",
-      "tags": [
-        "bug-fix",
-        "update",
-        "console"
-      ],
-      "createdAt": 1787247420110,
-      "updatedAt": 1787247420110,
-      "summary": "见 commit 93a51f0：feat(console): pre-release (next tag) update option in the plugin console — 0.3.5",
-      "rationale": "任务见标题；实现见 commit 93a51f0。",
-      "rejected": "未记录（历史卡片；决策依据见 commit 信息）。"
-    },
-    {
-      "id": "card-6fc58082-7b7c-4acb-8487-5d749dbdf28b",
-      "title": "排查：通知消息弹两次（根因 + 多方认证方案）",
-      "description": "用户在 Web GUI 反馈通知消息会弹两次。需要：1) 定位通知的生产/消费链路（DSH web 内部 + 桌面壳桥接）；2) 找出重复弹出的根因（重复订阅/HMR/双通道等）；3) 给出无副作用、经多方独立验证的修复方案。",
-      "sourceSessionId": "session-236329ea-90c9-4e4c-b4fd-0782af341326",
-      "status": "done",
-      "tags": [
-        "bug-fix",
-        "notification",
-        "investigate"
-      ],
-      "createdAt": 1787463403592,
-      "updatedAt": 1787465473700,
-      "summary": "根因定位并已修复（修订版）：双弹来自 client.js scan()——①完成边沿与 pending 边沿同快照不互斥（一次 scan 发「任务完成」+「需要你」）；②父+子代理会话各占一行各发一条相同 toast。3 个独立分析子代理 + 实测复现交叉验证；排除 Rust 双弹/插件双加载/Web 内部双弹。修复（经 2 轮独立审查修订）：规则A 完成通知仅限非 subagent 行（origin:'subagent' 判根，fork 完成照常弹）；规则B 完成与同快照 pending 互斥；规则C pending 全行通知（子代理需要你不丢失）。测试 12→19 场景 + 前后对照 harness 验证全绿；文档 ENGINEERING-NOTES §33 + Agent Note 已记；残余（分离交付与双页面实例）与日志区分法已记录。",
-      "rationale": "用户要求\"多方认证可行的无副作用方案\"，故用 3 个独立子代理定位根因 + 2 个独立子代理审查修复，并以可运行测试/复现脚本实证。修复落地在插件源并同步 resources，含 ENGINEERING-NOTES §33 与 Agent Note。",
-      "rejected": "拒绝引入时序副作用方案：notify-rust/tauri 双弹与插件双加载假设被证伪；settle 窗口（~1s 延迟完成 toast）作为可选加固记录但未默认实施。"
-    },
-    {
-      "id": "card-b362564c-9797-4e66-af97-294d560d2e83",
-      "title": "复现核查：v0.3.8 发布后通知仍双弹（需日志定位）",
-      "description": "用户在 v0.3.8 发布后报告\"刚才又复现了，推送了两次\"。需要区分：①是否已升级到 v0.3.8（修复是否生效）；②双弹形态：两条文案相同（双页面实例）vs 不同（分离交付残余/旧机制）；③查 %APPDATA%\\dev.dsh.desktop\\dsh-desktop-session.log 的 notify-* 决策行与 notification: 行。",
-      "rationale": "用户报告 v0.3.8 后仍双弹，需日志定位是否修复生效。用 windows-desktop-shell-debugging 技能 WSL 直读现场（dsh-desktop-session.log + manager.log + 会话 zstd 事件），确认修复版已生效、根因是「错误转边被误报完成 + 自动重试二次弹窗」，推翻了此前 M1b 快照竞态假设。",
-      "rejected": "M1b「分离交付快照竞态 + settle 窗口」假设——日志证实无紧邻双 toast（全日志最近 51s），且客户端决策自洽，双弹是同一会话 51-134s 内的两次 running→false（错误+重试），非快照竞态；settle 窗口无法覆盖 134s 间隔且修不了误导文案。仅加冷却期去重——能压双弹但误伤合法快速重跑且不修「错误报完成」文案，弃。",
-      "sourceSessionId": "session-236329ea-90c9-4e4c-b4fd-0782af341326",
-      "status": "done",
-      "tags": [
-        "bug-fix",
-        "notification",
-        "verify"
-      ],
-      "createdAt": 1787544335476,
-      "updatedAt": 1787736865001,
-      "summary": "WSL 直读 Windows 宿主机完成核查，根因确凿：dsh 的 session running 标志在 turn/end（含 error）时翻 false，通知插件把每个 running→false 都当「任务完成」弹 toast。会话事件证实：11:43:39 turn4 因 network_error 终止→弹「完成」（误报）→11:44:15 自动重试 turn5→11:44:30 再次 network_error→再弹。12:05/12:07 同模式（turn6 错误→弹、turn7 重试真正完成→再弹）。全会话 11 次 turn/end 中 3 次 error 都被误报「已完成」。已排除：客户端双弹（120 决策=45 抑制+75 toast 自洽）、desktop-notification 事件（无 producer，死代码）、Rust 双路径（/notify 单请求单 toast，其余 show_toast 为更新/开发模式标题）、双进程实例。运行时 client.js 与 v0.3.8 修复版逐字节一致（仅 CRLF+桥端口 54822）——修复已生效但未覆盖「错误转边」。SessionSummary 无 error/结束原因字段，修复需走 sessions.history RPC 读 turn/end reason。"
-    },
-    {
-      "id": "card-5752c3b5-e075-4765-b430-0556db9ef2fe",
-      "title": "预装插件同步至最新：model-reasoning→0.2.1、kanban→0.2.1（turn-navigator 已最新）",
-      "description": "核查 plugins/preinstalled/ 三个插件的 bundled 版本 vs npm latest：dsh-model-reasoning 0.1.4→0.2.1、dsh-kanban 0.1.2→0.2.1（另加 skills/kanban-use/SKILL.md 与 scripts/install-skill.mjs 资产）、dsh-turn-navigator 0.1.1 已最新。用 npm pack 拉取官方 tarball 为准，按壳内既有精简约定（README 去 zh 链接行）写入，再跑 sync-resources.mjs 同步到 src-tauri/resources/preinstalled/。",
-      "rationale": "预装插件随壳版本锁定，需定期核查并同步到 npm 最新版，否则桌面端内置插件落后于仓库/registry 的功能与修复；本次 0.2.x 升级还带来 kanban 的卡片完整性契约与技能自愈，需随包带上技能资产才能完整生效。",
-      "sourceSessionId": "session-20b0d857-9ac9-489e-9ad6-bd3b7bcbfbae",
-      "status": "done",
-      "tags": [
-        "preinstalled",
-        "plugins"
-      ],
-      "createdAt": 1787643823100,
-      "updatedAt": 1787643922075,
-      "summary": "以 npm latest tarball 为基准核查并同步三个预装插件：dsh-model-reasoning 0.1.4→0.2.1、dsh-kanban 0.1.2→0.2.1（并追加随包技能资产 skills/kanban-use/SKILL.md + scripts/install-skill.mjs）、dsh-turn-navigator 0.1.1 已最新未动。写入 plugins/preinstalled/ 并经 sync-resources.mjs 同步 src-tauri/resources/preinstalled/；验证 node --check、bundle 内含 skill-sync 字符串、两处目录 diff -r 完全一致。",
-      "rejected": "按源仓库 HEAD 同步（历史惯例）——本次改用 npm 已发布 tarball，因仓库现干净停在发布 tag 且与 tarball 逐字节一致，两者收敛；保持最小精简不带 kanban 技能资产——被拒绝，0.2.x host 半区功能上随包分发技能，精简会致桌面端每次启动告警且兜底命令失效。"
-    },
-    {
-      "id": "card-7ed38a64-d60d-487a-84ec-1649c47d466d",
-      "title": "沉淀预装插件同步 Skill + audit 脚本（.dsh/skills 真源 + 全局 symlink）",
-      "description": "将「预装插件版本核查与同步」流程沉淀为可复用技能：真源在 .dsh/skills/dsh-preinstalled-plugin-sync/SKILL.md（随仓库版本控制，与 windows-desktop-shell-debugging 同款），全局 symlink ~/.agents/skills/dsh-preinstalled-plugin-sync 双通道接入；配套 scripts/audit-preinstalled.mjs 只读核查脚本（bundled vs npm latest，fetch 直查 registry）。技能含核查/更新/验证/提交/维护全流程与常见坑。",
-      "rationale": "预装插件同步是周期性维护任务且每次都有可复现的坑（沙箱 EROFS、npm view E404、精简约定、kanban 技能资产），沉淀成技能+脚本让下次一行命令核查、照手册更新，避免重复踩坑并保证流程一致。",
-      "rejected": "只放 ~/.agents/skills/ 全局目录——放弃：技能是 dsh-desktop 专属，仓库 .dsh/skills/ 是既有工作区约定，放仓库才能随 clone/版本控制走；只放 .dsh/skills/——放弃：本会话技能目录未含 windows-desktop-shell-debugging，无法保证新会话可见，故加全局 symlink 双通道。",
-      "sourceSessionId": "session-20b0d857-9ac9-489e-9ad6-bd3b7bcbfbae",
-      "status": "done",
-      "tags": [
-        "process",
-        "skill",
-        "preinstalled"
-      ],
-      "createdAt": 1787644611950,
-      "updatedAt": 1787644634599,
-      "summary": "已沉淀技能：真源 .dsh/skills/dsh-preinstalled-plugin-sync/SKILL.md（随仓库版本控制）+ 全局 symlink ~/.agents/skills/dsh-preinstalled-plugin-sync 双通道接入；配套只读核查脚本 scripts/audit-preinstalled.mjs（bundled vs npm latest，fetch 直查，语义化输出）；技能含架构/核查/更新/验证/提交/维护全流程与常见坑速查；验证 audit 脚本可运行、symlink 可读、resources 幂等。"
-    },
-    {
-      "id": "card-c3f6f049-7eed-42c3-b460-ea32a3fd1878",
-      "title": "发布 v0.3.9（预装插件同步至最新，CI 自动出包）",
-      "description": "版本 0.3.8→0.3.9：预装插件同步至最新（model-reasoning 0.2.1、kanban 0.2.1 + 技能资产、turn-navigator 0.1.1 不变），附带修复 Cargo.lock 根包版本陈旧（0.3.7）。已 bump package.json/tauri.conf.json/Cargo.toml/Cargo.lock/README，提交 e13d9f0，push main，打 tag v0.3.9 推送，CI（build.yml）按 v* tag 自动构建 Windows NSIS + Linux AppImage/deb 并建 GitHub Release。",
-      "rationale": "预装插件内容升级（model-reasoning 0.2.1 / kanban 0.2.1 + 技能资产）需要随壳发版交付用户；CI 已完成出包。",
-      "rejected": "未并入通知修复（当时修复未实施）——由 v0.3.10 单独承载。",
-      "sourceSessionId": "session-20b0d857-9ac9-489e-9ad6-bd3b7bcbfbae",
-      "status": "done",
-      "tags": [
-        "release",
-        "preinstalled"
-      ],
-      "createdAt": 1787732177669,
-      "updatedAt": 1787738773115,
-      "summary": "v0.3.9（e13d9f0）bump 5 处版本 + 打 tag v0.3.9 推送，CI 按 v* tag 自动构建并建 GitHub Release，已 completed success 出包。"
-    },
-    {
-      "id": "card-554332f3-3b70-4985-a84f-176a4f14f80f",
-      "title": "修复通知双弹：turn/end 分类 + 3 分钟错误冷却（client.js + 测试）",
-      "description": "按核查确认的根因实施修复：通知插件 client.js 在 running→false 时经 ctx.get('connection').api.sessions.history 读最近 turn/end 的 reason.kind 分类——completed→「任务完成」、error→「任务出错：<provider message>」、aborted/blocked/max-tokens/interrupted→「任务已停止/被阻止/达上限/中断」（不再误报已完成）；仅对 error toast 做每会话 3 分钟冷却（压掉自动重试的二次弹窗），completed 不设冷却（不误伤合法快速重跑）；RPC 不可用/失败回退旧行为。扩展 test-client-notifications.mjs 至 23 场景（新增错误分类、重试冷却、完成不被冷却、冷却过期恢复），全部通过；重跑 sync-resources 同步 resources 拷贝。",
-      "rationale": "根因已由 Windows 宿主日志确凿定位（error 转边误报完成 + 重试二次弹窗），方案经审计确认可行（RPC 契约、reason 取值、connection 注入、测试异步化），实施并测试后随下次发版修复用户报告的「推送了两次」。",
-      "rejected": "仅改文案（不压重试次数）；仅冷却（不修误导文案）；对所有转边冷却（误伤合法快速重跑）；settle 窗口（覆盖不了 51-134s 重试间隔）。定稿：分类 + 仅 error 冷却，RPC 失败回退旧行为保证通知必达。",
-      "sourceSessionId": "session-20b0d857-9ac9-489e-9ad6-bd3b7bcbfbae",
-      "status": "done",
-      "tags": [
-        "bug-fix",
-        "notification",
-        "verify"
-      ],
-      "createdAt": 1787738446480,
-      "updatedAt": 1787738520441,
-      "summary": "按审计确认的方案实施：plugins/dsh-client-notifications/client.js 在 running→false 时经 api.sessions.history（inject 加 'connection'）读最近 turn/end reason.kind 分类——completed→「任务完成」、error→「任务出错：<msg>」、aborted/blocked/max-tokens/interrupted→对应中性文案、RPC 失败回退旧行为；仅 error toast 做每会话 3 分钟冷却（压掉自动重试二次弹窗），completed 不设冷却。测试扩至 23 场景全绿（错误分类、重试冷却、错误后完成不被吞、Date.now mock 验冷却过期恢复；完成边断言前 await flush 修异步竞态）；sync-resources 重跑并 diff 验证 resources 拷贝一致；提交 2673179 已推送。"
-    },
-    {
       "id": "card-1a03dd6a-bfb4-4cc8-9b05-caeb93000b6b",
       "title": "发布 v0.3.10（通知双弹修复，CI 自动出包）",
       "description": "版本 0.3.9→0.3.10：承载通知双弹修复（2673179，turn/end reason 分类：error→「任务出错」、completed→「任务完成」、其余中性；仅 error 3 分钟冷却压重试双弹；测试 19→23 场景全绿）。bump 5 处版本 + 看板更新，提交 8b28ce1，push main，打 tag v0.3.10 推送，CI 按 v* tag 自动构建 Windows NSIS + Linux AppImage/deb 并建 GitHub Release。",
@@ -2302,7 +1968,7 @@
     {
       "id": "card-1a1405afb6e-ho",
       "title": "【交接】壳顶栏消失事故：修完待验收（下一会话从这里开始）",
-      "status": "todo",
+      "status": "in_progress",
       "tags": [
         "handoff",
         "chrome",
@@ -2310,11 +1976,12 @@
         "verify",
         "p0"
       ],
-      "rationale": "用户报告\"壳自定义菜单点不开 + 预装插件看不见\"（生产 0.18.0 + dsh alpha.3）。根因链已剥出并修复四个真实缺陷，但 **dev 壳里顶栏仍未出现** ⇒ 判据未达成、未发版。会话上下文耗尽，交接到新会话。",
+      "rationale": "用户报告生产版顶栏/插件 UI 消失，根因链已修但未在 dev 看到顶栏，判据未达成（交接卡）。本轮从「先确认跑的是哪个二进制」入手（技能 §4.10 明确警告过），逐层取实证。",
       "description": "**已修并合入 main（c6b5a9b / PR #159,#161）**：\n① 我自己的补丁（PR #132）把鉴权探针调度块插进了 `misleadingAuthHint` **函数作用域** ⇒ 顶层 `scheduleAuthProbe()` 抛 ReferenceError ⇒ chrome 加载即中断；\n② `document.body.appendChild` 无守卫；③ `document.documentElement.style` 空指针（实测 :613）；④ `observer.observe(null)`；⑤ 壳侧改为**等 DOM 就绪再 eval**；⑥ eval 报错写进 `dsh-desktop-session.log`（原为 `let _ =` 静默丢弃）。\n**已建的探针**：`npm run test:chrome-real` 测两种注入时序（加载后 + 最早期无 body），当前 **全绿**（errors=0 / host=true / buttons=12）。\n**未达成**：dev 壳（HEAD c6b5a9b，守卫 9 处均在包里）PrintWindow 截图**仍看不到顶栏**，且日志**没有**\"chrome 注入失败\"记录。\n**下一步（判据明确）**：① 在 chrome 挂载成功/失败处各加一条**一次性上报**（走桥或壳日志）⇒ 用日志区分\"未执行到挂载 / 挂上了但不可见 / 根本没注入\"；② 把 dev 窗口从最大化恢复后再截图对比（排除布局因素）；③ **判据**：截图里真的出现顶栏 **或** 日志写明停在哪一步；通过后才发 v0.18.1 并给用户装机（用户当前界面仍是坏的）。",
       "createdAt": 1792081066862,
-      "updatedAt": 1792081066862,
-      "rejected": "放弃了\"直接发 v0.18.1 让用户先恢复\"：修复未经\"看得见顶栏\"的验证就发布，等于重演这次事故；放弃了\"只靠 Playwright 探针判定\"：真 Chrome 里能挂上（12 按钮）而壳里看不到，说明壳环境有额外变量。"
+      "updatedAt": 1792082096088,
+      "rejected": "放弃了\"直接发 v0.18.1 让用户先恢复\"：修复未经\"看得见顶栏\"的验证就发布，等于重演这次事故；放弃了\"只靠 Playwright 探针判定\"：真 Chrome 里能挂上（12 按钮）而壳里看不到，说明壳环境有额外变量。",
+      "summary": "新一轮（2026-10-16 00:29 起）：已确认 dev 装的是修复版二进制（4 个修复标记全在），prod 装的是未修复 0.18.0（标记全无）⇒ 顶栏在 dev 可见、故障机制定位到 startObserve（第 1738 行）在 prod 里永不执行。"
     },
     {
       "id": "card-1a1405afb6e-bak",
@@ -2350,6 +2017,74 @@
       "createdAt": 1792081066862,
       "updatedAt": 1792081066862,
       "rejected": "放弃了\"继续每次手动同步\"：这是可预见的重复劳动，且下一次发布必然再次让 main 变红。"
+    },
+    {
+      "id": "card-87046f10-21c5-4ccf-b730-ffe9a30443f6",
+      "title": "缺陷（已复现）：壳 chrome 顶层契约写入缺 null 守卫 —— HEAD:620 / 工作区:685 的 rootEl.dataset（与 0.18.0 同类的\"不完整修复\"）",
+      "description": "修复建议：:685 补 `if (rootEl)`（1 字符级别），或把该行并入 :684 已有的 `if (rootEl)` 循环。同时给 scripts/test-chrome-real-init.mjs:79 的 prefix 加 `window.__DSH_TITLEBAR_CONTRACT__=true;`（负向对照：改完必须变绿，未修时必须变红）。证据与复现命令见 .tmp-investigate/audit/（exp-dataset-null.mjs 的 raw 模式；扫描器 toplevel.mjs 给出 219 条顶层语句全清单）。",
+      "rationale": "chrome-audit 独立审计发现：2026-10-15 那次\"全部空安全\"修复漏了一行守卫，与 0.18.0 事故**同签名**（host 挂上但只有 4 个按钮、自愈失效、契约静默降级、菜单点不开），且现有门禁结构上无法覆盖（从不置契约开关）。属同类第二处致命顶层语句，必须在 v0.18.1 里一并修掉，否则等于带着已知同类缺陷发版。",
+      "rejected": "① 只修代码不加门禁覆盖 —— 放弃：契约分支不置开关就永远空转，缺陷会再次隐形；② 把断言写成\"早期注入 + 契约开时契约必须落地\" —— 放弃：实测最早期注入时 document.documentElement 真的是 null，此时守卫的**正确行为就是跳过写入**，那条断言测的是错的东西（会误报）；改为在\"加载后注入\"上下文断言契约落地；③ 顺手重写 fa59ae6 的历史 —— 放弃：改用新提交显式更正口径（见下一张卡）。",
+      "sourceSessionId": "1f76d6c5-8df6-40ae-9859-cb484e5e6940",
+      "status": "done",
+      "tags": [
+        "shell",
+        "shell-chrome",
+        "bug",
+        "top-level-throw",
+        "contract",
+        "s8",
+        "coverage-gap",
+        "p0",
+        "audited",
+        "done"
+      ],
+      "createdAt": 1792083234941,
+      "updatedAt": 1792083753635,
+      "summary": "已修并入门禁（提交 6080256，分支 fix/chrome-boot-reporting / PR #163）：① shell-chrome.js 的契约写入循环补 `if (rootEl)`（同级三行原本都有，只漏这一行）；② test-chrome-real-init.mjs 的\"最早期注入\"上下文开启 __DSH_TITLEBAR_CONTRACT__（不置它 chrome 永远走 dataset={} 空转分支，门禁结构上看不见该缺陷），并新增\"点 logo → 下拉打开（items≥5）\"与\"契约真的落到页面根\"两条判据；③ README + 技能 §2.2/§5 同步（含\"补守卫类修复会漏行\"坑表一行）。验证：HEAD 13/13 ok；DSH_CHROME_FILE=<缺守卫变体> ⇒ 早期注入 TypeError(reading 'dataset') 2 项红、无 ready；DSH_CHROME_FILE=<0.18.0> ⇒ 7 项红。"
+    },
+    {
+      "id": "card-d9060cc5-4b25-4ddc-94b8-c199b8d9a7f0",
+      "title": "发布阻断已修：Cargo.lock 同步脚本在 Windows 检出（CRLF）下必红 ⇒ 打不出 NSIS 安装包",
+      "summary": "已修并实证：① 脚本按文件实际行尾解析 + 按原行尾写回（提交 86821ce，分支 fix/chrome-boot-reporting / PR #163）；② 找不到包段时打印 size/CRLF 行数/是否出现包名/采用的 EOL 四项判据；③ 新增 DSH_LOCK_ROOT 钩子 + scripts/test-cargo-lock-sync.mjs（5 条判据，接入 npm test 第 21 套）；④ **端到端实证**：workflow_dispatch 全量构建 run 38776333991 的 windows job 12m9s 通过（此前同日三次全红），日志出现 `PASS: Cargo.lock 的 dsh-desktop 已是 0.18.0` 与 `Finished 1 bundle`（NSIS 安装包产出）⇒ 发布通道恢复。",
+      "rationale": "v0.18.1 的 Windows 安装包只能由 CI 出，而 main 上 windows job 连续多次红在同一个第一步；不修这条，用户拿不到安装包——这是交付路径本身。",
+      "rejected": "① .gitattributes 强制 Cargo.lock 为 LF —— 放弃：能让 CI 绿，但已把该文件检出为 CRLF 的开发机下次 pull 会显示成「已修改」，给用户制造新困惑，脚本自身对行尾免疫更彻底；② 让 windows job 跳过 sync:cargo-lock —— 放弃：本仓 CI 文件曾两次被块级编辑弄成「零作业」，且那是绕过不是修复；③ 只把错误信息写清楚 —— 放弃：仍打不出包。",
+      "sourceSessionId": "session-06ed390e-74f1-406c-b584-e652c3c4e560",
+      "status": "done",
+      "tags": [
+        "ci",
+        "release",
+        "cargo-lock",
+        "windows",
+        "crlf",
+        "blocker",
+        "p0",
+        "done",
+        "verified-ci"
+      ],
+      "createdAt": 1792085477779,
+      "updatedAt": 1792085833962
+    },
+    {
+      "id": "card-5bb04202-2e8b-46cb-98e2-d4d49b5e36f4",
+      "title": "待查：dev 壳顶栏左上 logo（唯一菜单触发器）不渲染 —— logoVar=set/logoSrc=png 但 naturalWidth=0",
+      "summary": "结论：**不是缺陷，是我的截图方法给出假阴性**。页面内实测（新增的 digest-late 上报，+3.5s）：`logoVar=set logoSrc=png logoPx=128 logoDone=1 logoBox=20x20` —— 注入前缀在、src 是正确的 PNG data URI、图已解码、占位 20x20，一切正常。真相：dev 窗口被遮挡时 PrintWindow 拿到的合成帧**缺少顶栏的 GPU 图片层**（所以只见底栏背景与右侧三键、不见左上 logo）；先最小化再还原强制重绘后，同一窗口同一方法截出 766 个 logo 蓝色像素（与旧构建、与生产 0.18.0 完全一致）。已把这条写进技能并给 verify-dev-ui.ps1 加 `-Action shot -Bring`（默认不变，不抢焦点）。**顺带解释了上一轮交接卡\"截图仍看不到顶栏\"**：那是一张陈旧帧的假阴性，不是产品现象。",
+      "rationale": "用户原话「菜单点不开」的触发器就是这个 logo 按钮，所以必须先排除它；但结论反过来了——要修的不是产品而是验证方法（把陈旧截图当缺陷证据会误导整轮排查）。",
+      "rejected": "① 认为按钮在 DOM（btns=12）就等于看得见 —— 放弃：两者是不同命题；② 靠 UIA —— 放弃：本机 WebView2 的 UIA 树只暴露 2 个 Pane；③ 靠 CDP 直连真实 WebView2 —— 放弃：WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS 指定调试端口后 9223 无监听（复用已有浏览器进程时忽略新参数）；④ 靠再加一轮构建猜 —— 放弃：先用 +3.5s 的页面内测量把「图坏了」与「还没解码」分开，省下一轮盲改。",
+      "sourceSessionId": "session-06ed390e-74f1-406c-b584-e652c3c4e560",
+      "status": "done",
+      "tags": [
+        "shell",
+        "shell-chrome",
+        "logo",
+        "menu",
+        "verify",
+        "false-negative",
+        "capture-artifact",
+        "p0",
+        "done"
+      ],
+      "createdAt": 1792085477811,
+      "updatedAt": 1792085833988
     }
   ]
 }
