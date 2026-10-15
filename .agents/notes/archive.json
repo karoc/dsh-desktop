@@ -409,6 +409,39 @@
       "createdAt": 1787738446480,
       "updatedAt": 1787738520441,
       "summary": "按审计确认的方案实施：plugins/dsh-client-notifications/client.js 在 running→false 时经 api.sessions.history（inject 加 'connection'）读最近 turn/end reason.kind 分类——completed→「任务完成」、error→「任务出错：<msg>」、aborted/blocked/max-tokens/interrupted→对应中性文案、RPC 失败回退旧行为；仅 error toast 做每会话 3 分钟冷却（压掉自动重试二次弹窗），completed 不设冷却。测试扩至 23 场景全绿（错误分类、重试冷却、错误后完成不被吞、Date.now mock 验冷却过期恢复；完成边断言前 await flush 修异步竞态）；sync-resources 重跑并 diff 验证 resources 拷贝一致；提交 2673179 已推送。"
+    },
+    {
+      "id": "card-1a03dd6a-bfb4-4cc8-9b05-caeb93000b6b",
+      "title": "发布 v0.3.10（通知双弹修复，CI 自动出包）",
+      "description": "版本 0.3.9→0.3.10：承载通知双弹修复（2673179，turn/end reason 分类：error→「任务出错」、completed→「任务完成」、其余中性；仅 error 3 分钟冷却压重试双弹；测试 19→23 场景全绿）。bump 5 处版本 + 看板更新，提交 8b28ce1，push main，打 tag v0.3.10 推送，CI 按 v* tag 自动构建 Windows NSIS + Linux AppImage/deb 并建 GitHub Release。",
+      "rationale": "通知双弹根因已确凿定位并修复（错误转边误报「已完成」+ 自动重试二次弹窗），需随壳发版交付给用户；仓库发布机制 = git tag v* 触发 CI 自动出包。",
+      "rejected": "等 v0.3.9 真机复核后再发——用户明确要求直接发下一版；v0.3.9 已出包（含预装插件升级），v0.3.10 独立承载通知修复。",
+      "sourceSessionId": "session-20b0d857-9ac9-489e-9ad6-bd3b7bcbfbae",
+      "status": "done",
+      "tags": [
+        "release",
+        "bug-fix",
+        "notification"
+      ],
+      "createdAt": 1787738781292,
+      "updatedAt": 1787738781292,
+      "summary": "v0.3.10 已于 2026-08-26 发布（GitHub Release v0.3.10，含通知双弹修复）。"
+    },
+    {
+      "id": "card-d9185f47-f039-4854-84fc-7b321a73b2bd",
+      "title": "自定义壳顶栏：无边框主窗口 + 壳菜单栏（DSH Desktop 图标左侧起，菜单依次向右）",
+      "rationale": "用户要求自定义壳顶栏（最小化/最大化/关闭）并把代理设置等壳级功能收进顶栏左侧「DSH Desktop」图标后的可见菜单栏，作为后续壳独有菜单定义点。Windows 上 Tauri 2 Menu 不渲染窗口菜单栏，远程 dsh 页无 __TAURI__，故采用注入式自绘顶栏 + 环回桥双通道。",
+      "rejected": "放弃 Tauri 原生窗口菜单（Windows 不渲染）；放弃子 webview 标题栏（多 webview 布局/命中测试跨平台复杂）；放弃全部收进图标下拉（用户确认可见性不足，改通用范式：应用菜单+可见顶级条目向右排）；放弃 CSS app-region 拖动（与 mousedown 桥拖动互斥、平台支持不一，统一走 /window/drag→start_dragging）；放弃 chrome 运行时读 resource 文件（改 include_str! 编译期内嵌）。",
+      "sourceSessionId": "session-2022bc96-7d1e-49fd-8ada-307acaff05a9",
+      "status": "done",
+      "tags": [
+        "shell",
+        "ui",
+        "feature"
+      ],
+      "createdAt": 1787833765826,
+      "updatedAt": 1787835034225,
+      "summary": "主窗口无边框（decorations:false+shadow:true），新增 src-tauri/resources/ui/shell-chrome.js（SHELL_MENUS 定义点：DSH Desktop 应用菜单 + 代理设置…直开 + 视图/帮助下拉 + 窗口三键），lib.rs include_str! 内嵌并在 on_page_load 注入 main webview；新增 window_control/get_shell_state/toggle_dev_mode/open_settings/show_about 命令与 10 个桥端点（/window/*、/shell/*）；scripts/test-shell-chrome.mjs 契约测试接入 npm test（全量 7 套通过）；README 更新架构图与「壳菜单栏」小节；Agent Note 已写（.agents/notes/implemented/feature/2026-08-27-shell-menu-bar.md）。"
     }
   ]
 }
