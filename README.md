@@ -130,7 +130,7 @@ node_modules 符号链接树、写迁移标记、绝不上移覆盖已有新数�
 ## 本地验证（Linux 可跑的部分）
 
 ```bash
-npm test                 # 全量 20 套：清单一致性 / overlay 目标行 / 升级标记 / 通知插件 / 控制面 / 代理 / 代理e2e /
+npm test                 # 全量 21 套：清单一致性 / overlay 目标行 / 升级标记 / 通知插件 / 控制面 / 代理 / 代理e2e /
                          #   启动页设置 / 壳顶栏契约 / 启动器扫动 / 请求头预算 / 半截安装自愈 / 副本一致性
 npm run test:slow        # 安装卡死快速失败（~3 分钟，不进 PR 门禁；CI 的 linux job 会跑）
 npm run test:plugin      # 通知插件行为测试（纯 Node，无浏览器）
@@ -145,6 +145,8 @@ npm run test:control     # manager 控制面（11 场景，含版本地板闸门
 npm run test:proxy       # 内置正向代理（12 场景）
 npm run test:launcher-settings  # 代理设置窗口（6 场景）
 npm run test:shell-chrome       # 壳顶栏契约（菜单 id ↔ ACTIONS ↔ lib.rs 桥/命令）
+npm run test:cargo-lock-sync   # Cargo.lock 版本同步（LF/CRLF 双行尾 / 精确匹配 / 失败诊断；
+                               # 它红了 = 打不出安装包，2026-10-16 的发布阻断事故就在这)
 npm run test:copies      # 副本一致性（manager / 客户端插件 / 预装 ship list / SKILL.md frontmatter）
 npm run fetch:node       # 下载并校验内置 Node 24（win/linux/darwin）
 npm run sync:resources   # 同步 manager/plugin/patch 进 src-tauri/resources

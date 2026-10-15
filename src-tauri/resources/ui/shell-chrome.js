@@ -217,6 +217,7 @@
     const err = (ev && ev.error) || null;
     chromeReport('fatal', `stage=${bootStage} uncaught ${chromeErrText(err || (ev && ev.message) || 'unknown')}`);
   };
+  // fail-open-ok: 兜底监听装不上只损失"页内异常可见性"，绝不能反过来让 chrome 起不来
   try { window.addEventListener('error', chromeBootOnError); } catch (_) {}
   chromeReport('inject', `readyState=${document.readyState} body=${!!document.body}`);
 
@@ -1828,6 +1829,7 @@
 
   // 引导跑完：摘掉兜底捕获 + 上报终态摘要。日志里出现 `chrome ready`（且无 `chrome fatal`）
   // 就等于"整段 chrome 活着"；只出现 inject/mounted 而没有 ready ⇒ 中途死在某一步（见 fatal 行）。
+  // fail-open-ok: 摘不掉监听最多多报几条**有界**日志（chromeReports 上限 12），不影响功能
   try { window.removeEventListener('error', chromeBootOnError); } catch (_) {}
   chromeReport('ready', mountDigest());
 })();
