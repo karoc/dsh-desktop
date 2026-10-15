@@ -134,6 +134,7 @@ npm test                 # 全量 20 套：清单一致性 / overlay 目标行 /
                          #   启动页设置 / 壳顶栏契约 / 启动器扫动 / 请求头预算 / 半截安装自愈 / 副本一致性
 npm run test:slow        # 安装卡死快速失败（~3 分钟，不进 PR 门禁；CI 的 linux job 会跑）
 npm run test:plugin      # 通知插件行为测试（纯 Node，无浏览器）
+- **壳注入时机与失败可见性**（2026-10-15 起）：壳在注入 `shell-chrome.js` 前会**等 DOM 就绪**（导航早期注入会让 chrome 里任何早期 DOM 访问抛异常、整段脚本静默死亡 —— 顶栏与菜单消失）；注入报错会写进壳日志（`dsh-desktop-session.log`），不再静默丢弃。
 npm run test:chrome-real    # 壳注入脚本的**真实初始化**自检（不带 TEST_HOOK、真实 Chromium 注入；
                             # 断言无 pageerror + 顶栏宿主与菜单在。2026-10-15 那次"顶栏消失"事故
                             # 正落在单测的缝里：test-shell-chrome.mjs 设了 __DSH_CHROME_TEST__ ⇒ chrome
