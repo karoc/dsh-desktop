@@ -34,7 +34,14 @@ param(
   # other top-level window whose name CONTAINS $Title -- that is the confirm
   # window ("<product> - confirm action") and the About/settings dialogs. Keeps
   # the command line pure ASCII (non-ASCII titles never have to be typed).
-  [ValidateSet("main", "other")][string]$Window = "main"
+  [ValidateSet("main", "other")][string]$Window = "main",
+  # -Bring (with -Action shot): minimize+restore the window before capturing.
+  # Needed because an OCCLUDED window can yield a STALE/PARTIAL composited frame:
+  # 2026-10-16 measured exactly that -- the top bar's GPU-composited logo layer was
+  # missing from PrintWindow output, which reads as "top bar disappeared" (a false
+  # negative that cost a whole investigation round). Forcing a repaint fixes it;
+  # it does steal focus, so it is opt-in.
+  [switch]$Bring
 )
 
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -46,6 +53,8 @@ Add-Type -MemberDefinition @'
 [DllImport("user32.dll")] public static extern bool GetCursorPos(out POINT p);
 [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
 [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, System.UIntPtr dwExtraInfo);
+[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n);
+[DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr h);
 public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
 public struct POINT { public int X; public int Y; }
 '@ -Name Ui -Namespace Native
@@ -119,6 +128,16 @@ switch ($Action) {
   "shot" {
     $h = Get-Hwnd
     if ($h -eq 0) { Write-Output "NO-WINDOW-HANDLE"; exit 1 }
+    if ($Bring) {
+      # Force a repaint: an occluded window may not composite a complete frame
+      # (the top bar's GPU image layer goes missing) -- see the -Bring doc above.
+      [Native.Ui]::ShowWindow($h, 6) | Out-Null
+      Start-Sleep -Milliseconds 400
+      [Native.Ui]::ShowWindow($h, 9) | Out-Null
+      [Native.Ui]::BringWindowToTop($h) | Out-Null
+      Start-Sleep -Milliseconds 1500
+      Write-Output "BROUGHT-TO-FRONT (repaint forced)"
+    }
     $r = New-Object Native.Ui+RECT
     [Native.Ui]::GetWindowRect($h, [ref]$r) | Out-Null
     $w = $r.Right - $r.Left; $ht = $r.Bottom - $r.Top
