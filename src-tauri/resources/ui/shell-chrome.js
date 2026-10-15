@@ -643,6 +643,17 @@
   // 当场死亡**（顶栏与菜单全无）；而壳对 eval 的结果是 `let _ =` ⇒ 日志里一点痕迹都没有（静默失败）。
   // 改为"等 body 可用再挂载"（50ms 轮询、幂等），与文件底部已有的重连守卫配套：任何时序都不会再让它整段崩掉。
   // 挂载摘要：把"顶栏到底在不在 / 在哪 / 可不可见"变成日志里的一行（诊断用）。
+  // logo 两项是 2026-10-16 加的：菜单触发器就是左上那个 logo 按钮，`src` 一旦退化成内置
+  // SVG 兜底（ICONS.logo 是给 innerHTML 用的字符串，当 img src 无效）按钮就**看不见但仍在**
+  // —— 用户报的"菜单点不开"最可能就长这样，所以把"注入变量在不在 + 图真解码了没"一起报出来。
+  function logoDigest() {
+    try {
+      const raw = globalThis.__DSH_LOGO__;
+      const im = root.querySelector('.menu-btn .logo img');
+      const kind = !im ? 'noimg' : String(im.getAttribute('src') || '').startsWith('data:image/png') ? 'png' : 'fallback';
+      return `logoVar=${raw ? 'set' : 'UNSET'} logoSrc=${kind} logoPx=${im ? im.naturalWidth : -1}`;
+    } catch (err) { return `logoDigest-failed ${chromeErrText(err)}`; }
+  }
   function mountDigest() {
     try {
       const bar = root.querySelector('.bar');
@@ -652,7 +663,8 @@
         + ` bar=${r ? Math.round(r.top) + 'px h' + Math.round(r.height) : 'none'}`
         + ` hidden=${host.classList.contains('fullscreen-hidden')}`
         + ` hostH=${Math.round(host.getBoundingClientRect().height)}`
-        + ` btns=${root.querySelectorAll('button').length}`;
+        + ` btns=${root.querySelectorAll('button').length}`
+        + ` ${logoDigest()}`;
     } catch (err) { return `digest-failed ${chromeErrText(err)}`; }
   }
   let mountReported = false;
