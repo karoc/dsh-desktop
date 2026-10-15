@@ -21,6 +21,15 @@
 >
 > 详情见 `.agents/notes/implemented/bug-fix/2026-09-08-legacy-uninstaller-name-kill.md`。
 
+## [0.18.1](https://github.com/karoc/dsh-desktop/compare/v0.18.0...v0.18.1) (2026-10-15)
+
+
+### Bug Fixes
+
+* **chrome:** 修复加载即中断的根因 + 补真实初始化自检（+ 再修 Cargo.lock 漂移） ([#159](https://github.com/karoc/dsh-desktop/issues/159)) ([3e96e2d](https://github.com/karoc/dsh-desktop/commit/3e96e2d44e062edbeac180f9f4aa6f88aa2b2f1c))
+* **chrome:** 修掉注入即死的四个缺陷 + 壳侧等 DOM 就绪 + 注入失败入日志 ([#161](https://github.com/karoc/dsh-desktop/issues/161)) ([c6b5a9b](https://github.com/karoc/dsh-desktop/commit/c6b5a9ba30b3098485371d0e89ccc04e4c4943b9))
+* **chrome:** 注入自证 + 同类第二处致命语句 + 发布阻断修复（顶栏消失事故收尾） ([#163](https://github.com/karoc/dsh-desktop/issues/163)) ([e8f2071](https://github.com/karoc/dsh-desktop/commit/e8f207167758c65b387f9224fe8a1601955ab70c))
+
 ## [0.18.0](https://github.com/karoc/dsh-desktop/compare/v0.17.0...v0.18.0) (2026-10-15)
 
 
