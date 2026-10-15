@@ -170,6 +170,56 @@
   // 防重复注入（同一文档内 on_page_load 可能多次触发）。
   if (document.getElementById('dsh-shell-chrome')) return;
 
+  // ── 注入口一次性上报（2026-10-16，事故后新增；纯诊断，永不抛）──────────
+  // 为什么需要：0.18.0 里 chrome 顶层在**挂载之后**抛了 ReferenceError（鉴权探针的调度块
+  // 被误插进 `misleadingAuthHint` 函数作用域），于是它**后面整段**（MutationObserver 自愈、
+  // resize/focus 图标同步、菜单 Esc/外点关闭、启动状态查询）全部静默死亡 —— 壳侧 w.eval()
+  // 只看到"派发成功"，日志里一个字都没有，所以"顶栏消失"既没有现场也无法归因（2026-10-15 事故）。
+  // 现在把注入过程拆成可分辨的五个上报点（走环回桥 /log，落进 dsh-desktop-session.log）：
+  //   inject  = eval 真的执行到了（含 readyState/body 时序）
+  //   mounted = 宿主与顶栏在 DOM 里，带位置/可见性摘要 ⇒ 可区分"挂上了但不可见"
+  //   ready   = 整段引导跑完（出现 ready = chrome 全须全尾活着）
+  //   fatal   = 抛在哪一阶段（带错误名/消息/首行栈）⇒ 直接回答"停在哪一步"
+  //   remount = SPA 重渲染清掉顶栏后自愈重挂（"曾经消失"的直接证据）
+  // 有界（≤12 条/次注入）、端口缺失时静默放弃（e2e 桩页/单测无桥）。
+  const CHROME_BOOT = 'b' + Math.random().toString(36).slice(2, 7);
+  let chromeReports = 0;
+  let bootStage = 'top';
+  function chromeReport(stage, detail) {
+    if (chromeReports++ >= 12) return;
+    try {
+      const port = globalThis.__DSH_BRIDGE_PORT__;
+      if (!port) return;
+      const p = fetch(`http://127.0.0.1:${port}/log`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-DSH-Shell': '1' },
+        body: JSON.stringify({ tag: 'chrome', detail: `${stage} boot=${CHROME_BOOT}${detail ? ' ' + detail : ''}` }),
+      });
+      if (p && typeof p.catch === 'function') p.catch(() => {});
+    } catch (_) { /* 上报是诊断，绝不能成为新的死因 */ }
+  }
+  function chromeErrText(err) {
+    try {
+      const name = (err && err.name) || 'Error';
+      const msg = (err && err.message) || String(err);
+      const frame = err && err.stack ? String(err.stack).split('\n')[1] : '';
+      return `${name}: ${msg}${frame ? ' @' + String(frame).trim() : ''}`;
+    } catch (_) { return 'unprintable-error'; }
+  }
+  // 阶段包装：单个阶段抛异常不再让**其后全部**静默死亡（至少日志写明停在哪一步）。
+  function boot(stage, fn) {
+    bootStage = stage;
+    try { fn(); bootStage = stage + ':ok'; return true }
+    catch (err) { chromeReport('fatal', `stage=${stage} ${chromeErrText(err)}`); return false }
+  }
+  // 引导窗口内的兜底（顶层任意位置抛异常都会经过这里），ready 后摘掉。
+  const chromeBootOnError = (ev) => {
+    const err = (ev && ev.error) || null;
+    chromeReport('fatal', `stage=${bootStage} uncaught ${chromeErrText(err || (ev && ev.message) || 'unknown')}`);
+  };
+  try { window.addEventListener('error', chromeBootOnError); } catch (_) {}
+  chromeReport('inject', `readyState=${document.readyState} body=${!!document.body}`);
+
   // ── 传输层：双通道 ────────────────────────────────────────────────
   // 仅本地启动页（tauri://）走 IPC；dsh 远程页（http://127.0.0.1:port）即使
   // 存在 __TAURI__（Tauri 对允许的远程 origin 也做全局注入）也强制走环回桥——
@@ -591,11 +641,26 @@
   // body（WebView2 在导航早期 eval / 空白文档上注入），这行就抛 `Cannot read properties of null` ⇒ **整个 chrome
   // 当场死亡**（顶栏与菜单全无）；而壳对 eval 的结果是 `let _ =` ⇒ 日志里一点痕迹都没有（静默失败）。
   // 改为"等 body 可用再挂载"（50ms 轮询、幂等），与文件底部已有的重连守卫配套：任何时序都不会再让它整段崩掉。
+  // 挂载摘要：把"顶栏到底在不在 / 在哪 / 可不可见"变成日志里的一行（诊断用）。
+  function mountDigest() {
+    try {
+      const bar = root.querySelector('.bar');
+      const r = bar ? bar.getBoundingClientRect() : null;
+      return `readyState=${document.readyState} body=${!!document.body}`
+        + ` host=${!!document.getElementById('dsh-shell-chrome')}`
+        + ` bar=${r ? Math.round(r.top) + 'px h' + Math.round(r.height) : 'none'}`
+        + ` hidden=${host.classList.contains('fullscreen-hidden')}`
+        + ` hostH=${Math.round(host.getBoundingClientRect().height)}`
+        + ` btns=${root.querySelectorAll('button').length}`;
+    } catch (err) { return `digest-failed ${chromeErrText(err)}`; }
+  }
+  let mountReported = false;
   const mountChromeHost = () => {
     if (!document.body) { setTimeout(mountChromeHost, 50); return; }
     if (!document.body.contains(host)) document.body.appendChild(host);
+    if (!mountReported) { mountReported = true; chromeReport('mounted', mountDigest()); }
   };
-  mountChromeHost();
+  boot('mount', mountChromeHost);
 
   // ── 自适应推挤（不产生滚动条）：dsh 远程页 html 顶部补 SHELL_BAR_H px
   // padding，border-box 下内容区减少同高、总高不变 → 内容下移不被顶栏遮挡、
@@ -863,8 +928,10 @@
   });
   authDismissBtn.addEventListener('click', () => { authDismissed = true; authBanner.hidden = true; });
   // 失败轮次随时可能出现 ⇒ 用低频长跑探测（5s 一次；每次只做字符串包含判断，正常使用开销可忽略）。
-  scheduleAuthProbe();
-  probeAuthMisreport(); // 首屏立即扫一次（启动即失败的最常见路径）
+  // 2026-10-16：这两行**就是 0.18.0 的死亡点**（顶层 scheduleAuthProbe 未定义 ⇒ 其后整段静默死亡）。
+  // 现在各自走 boot()：抛了也只丢这一个阶段，且日志写明 stage。
+  boot('auth-probe', scheduleAuthProbe);
+  boot('auth-probe-now', probeAuthMisreport); // 首屏立即扫一次（启动即失败的最常见路径）
 
   // ── 菜单开关 ────────────────────────────────────────────────────
   function closeMenus() {
@@ -1727,6 +1794,8 @@
     if (!document.body.contains(host)) {
       closeMenus();
       document.body.appendChild(host);
+      // 自愈真的发生了 ⇒ 上报（"顶栏曾经消失又回来"的唯一直接证据；有界，不会刷屏）。
+      chromeReport('remount', 'host re-attached after body mutation ' + mountDigest());
     }
   });
   // 2026-10-15：早期注入时 body 可能还不存在 ⇒ observe(null) 会抛异常并让整段
@@ -1735,7 +1804,7 @@
     if (!document.body) { setTimeout(startObserve, 50); return; }
     observer.observe(document.body, { childList: true });
   };
-  startObserve();
+  boot('observe', startObserve);
 
   // ── 启动状态 ────────────────────────────────────────────────────
   getShellState().then((r) => {
@@ -1751,4 +1820,9 @@
   call('window-state').then((r) => {
     if (r && typeof r.maximized === 'boolean') setMaximized(r.maximized);
   });
+
+  // 引导跑完：摘掉兜底捕获 + 上报终态摘要。日志里出现 `chrome ready`（且无 `chrome fatal`）
+  // 就等于"整段 chrome 活着"；只出现 inject/mounted 而没有 ready ⇒ 中途死在某一步（见 fatal 行）。
+  try { window.removeEventListener('error', chromeBootOnError); } catch (_) {}
+  chromeReport('ready', mountDigest());
 })();
