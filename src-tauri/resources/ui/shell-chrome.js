@@ -40,6 +40,23 @@
   const AUTH_PROBE_SLOW_MS = 30000;
   const AUTH_PROBE_FAST_TICKS = 12; // 12 × 5s ≈ 60s
   const authProbeDelayFor = (ticks) => (ticks < AUTH_PROBE_FAST_TICKS ? AUTH_PROBE_FAST_MS : AUTH_PROBE_SLOW_MS);
+  // ⚠️ 2026-10-15 修复：这段原被误插进 `misleadingAuthHint` 的函数体（打补丁时锚点命中函数内的同名常量），
+  //    导致顶层调用 `scheduleAuthProbe()` 抛 `ReferenceError` ⇒ **整个 chrome 加载即中断**（顶栏/菜单全无、
+  //    chrome 补挂的插件 UI 面也不出现）。教训与对策：新增 `scripts/test-chrome-real-init.mjs`（**不带 TEST_HOOK**、
+  //    走真实初始化路径）—— 单测里 chrome 在 TEST_HOOK 处提前 return，真实路径从不执行，正是它漏掉这次回归的原因。
+    // 2026-10-07 性能审计：原来用 setInterval(…, 5000) 一直扫 —— 没命中就**永不停止**地做整页
+  // textContent 序列化（长会话下代价随内容增长）。改为**自调度 + 退避**：前 60 秒每 5 秒（覆盖最常见的
+  // "启动后第一轮就失败"），之后每 30 秒（低频场景最多延迟 30 秒出提示，成本降 6 倍）。
+  let authProbeTicks = 0;
+  let authProbeTimer = null;
+  function scheduleAuthProbe() {
+    if (authShown || authDismissed) return;
+    authProbeTimer = setTimeout(() => {
+      authProbeTicks += 1;
+      probeAuthMisreport();
+      scheduleAuthProbe();
+    }, authProbeDelayFor(authProbeTicks));
+  }
 
   const TEST_HOOK = globalThis.__DSH_CHROME_TEST__;
 
@@ -795,19 +812,6 @@
    * @returns {string} 提示文案或空串
    */
   function misleadingAuthHint(text) {
-    // 2026-10-07 性能审计：原来用 setInterval(…, 5000) 一直扫 —— 没命中就**永不停止**地做整页
-  // textContent 序列化（长会话下代价随内容增长）。改为**自调度 + 退避**：前 60 秒每 5 秒（覆盖最常见的
-  // "启动后第一轮就失败"），之后每 30 秒（低频场景最多延迟 30 秒出提示，成本降 6 倍）。
-  let authProbeTicks = 0;
-  let authProbeTimer = null;
-  function scheduleAuthProbe() {
-    if (authShown || authDismissed) return;
-    authProbeTimer = setTimeout(() => {
-      authProbeTicks += 1;
-      probeAuthMisreport();
-      scheduleAuthProbe();
-    }, authProbeDelayFor(authProbeTicks));
-  }
   const AUTH_MISREPORT_RE = /API 密钥无效|Invalid API key/;
     if (typeof text !== 'string' || !AUTH_MISREPORT_RE.test(text)) return '';
     return '这也可能是上游瞬时故障（403/5xx 被误判为鉴权失败）；若密钥确实正确，可直接重试本轮。';

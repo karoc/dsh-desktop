@@ -34,7 +34,8 @@
     "audit:self-test": "node scripts/test-silent-failures.mjs --self-test",
     "coverage": "node scripts/coverage-baseline.mjs --run",
     "coverage:self-test": "node scripts/coverage-baseline.mjs --self-test",
-    "test:controls": "node scripts/test-controls.mjs"
+    "test:controls": "node scripts/test-controls.mjs",
+    "test:chrome-real": "node scripts/test-chrome-real-init.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4"
