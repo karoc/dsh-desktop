@@ -650,8 +650,13 @@
     try {
       const raw = globalThis.__DSH_LOGO__;
       const im = root.querySelector('.menu-btn .logo img');
-      const kind = !im ? 'noimg' : String(im.getAttribute('src') || '').startsWith('data:image/png') ? 'png' : 'fallback';
-      return `logoVar=${raw ? 'set' : 'UNSET'} logoSrc=${kind} logoPx=${im ? im.naturalWidth : -1}`;
+      if (!im) return `logoVar=${raw ? 'set' : 'UNSET'} logoSrc=noimg`;
+      const s = String(im.getAttribute('src') || '');
+      const r = im.getBoundingClientRect();
+      return `logoVar=${raw ? 'set' : 'UNSET'}`
+        + ` logoSrc=${s.startsWith('data:image/png') ? 'png' : s ? 'fallback' : 'empty'}`
+        + ` logoPx=${im.naturalWidth} logoDone=${im.complete ? 1 : 0}`
+        + ` logoBox=${Math.round(r.width)}x${Math.round(r.height)}`;
     } catch (err) { return `logoDigest-failed ${chromeErrText(err)}`; }
   }
   function mountDigest() {
@@ -1844,4 +1849,8 @@
   // fail-open-ok: 摘不掉监听最多多报几条**有界**日志（chromeReports 上限 12），不影响功能
   try { window.removeEventListener('error', chromeBootOnError); } catch (_) {}
   chromeReport('ready', mountDigest());
+  // 迟到的同一条摘要（+3.5s）：`naturalWidth` 在 data URI 解码前恒为 0，只在 ready 时刻量
+  // 分不清"图坏了"与"还没解码"。3.5 秒足够解码，届时 logoPx 仍为 0 才是真异常。
+  // fail-open-ok: 纯诊断定时器，建不起来不影响任何功能
+  try { setTimeout(() => chromeReport('digest-late', mountDigest()), 3500); } catch (_) { void 0; }
 })();
