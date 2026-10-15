@@ -2060,6 +2060,46 @@
       ],
       "createdAt": 1792085477811,
       "updatedAt": 1792085833988
+    },
+    {
+      "id": "card-a48e31bb-5387-45ed-8543-c4b6c2f536bb",
+      "title": "审计遗留（未修）：manager 改写 client.js 后不校验语法 + 启动页 id→DOM 耦合无门禁",
+      "description": "chrome-audit（只读审计）§3 的两条同类发现，本轮**未修**：\n\n① `scripts/server-manager.mjs:1295-1307` 的 `bakeBridgePort()` 就地改写 client.js 的桥端口，**写后不校验语法**。脚本自己的注释记录过一次事故：改写成 `globalThis.12345` → SyntaxError → 整个插件加载死（`<script src>` 里的语法错误同样是整文件失效）。修法建议：写前 `new Function(next)` 试解析，失败即中止并保留原文件（与\"结果被忽略\"审计门禁同族）。\n\n② 启动页三处 id→DOM 耦合无门禁：`src/app.js`（457 行/55 条顶层）、`src/confirm.js`、`src/settings.js` 都在顶层按 id 取元素并 `addEventListener`（如 app.js:307 起）。当前**逐 id 核对三对 HTML/JS（12/5/17 个 getElementById）全部存在**，所以不是现行缺陷；但 `scripts/test-launcher-settings.mjs:78-90` 把 getElementById 桩成\"按需自动创建元素\"，于是从 HTML 删掉一个 id ⇒ 测试静默通过 ⇒ 生产里 `null.addEventListener` 打死该页后续脚本。修法建议：加\"HTML 里必须存在这些 id\"的存在性断言。\n\n两条都是\"整段静默死亡\"同族（与 0.18.0 顶栏事故同一机理），但均未复现为现行故障。",
+      "rationale": "独立审计给出了带 file:line 的同类风险清单；本轮聚焦顶栏事故与发布阻断，这两条未修。若不落到看板，下次只能从聊天记录里找（会话一切换就没了）——按\"记录要有落点\"必须登记。",
+      "rejected": "① 本轮顺手一起修 —— 放弃：bakeBridgePort 的写前校验要动 manager 真源 + 副本契约 + 门禁，属独立改动面，混进发版 PR 会扩大回归面；id 存在性断言同理（要改测试夹具的桩语义）。② 只写进 Agent Note —— 放弃：Note 记的是已落地的决策，未修项放在看板才是可跟踪的待办。",
+      "sourceSessionId": "session-06ed390e-74f1-406c-b584-e652c3c4e560",
+      "status": "todo",
+      "tags": [
+        "audit",
+        "follow-up",
+        "manager",
+        "launcher",
+        "silent-failure",
+        "p2",
+        "unfixed"
+      ],
+      "createdAt": 1792088947398,
+      "updatedAt": 1792088947398
+    },
+    {
+      "id": "card-b126fb84-9d3a-4a12-a601-2227ecce028e",
+      "title": "覆盖缺口：chrome「真实初始化」门禁在 CI 恒 SKIP（需要纯 Node 的完整引导桩）",
+      "description": "`npm run test:chrome-real` 是这次事故唯一能抓住\"注入即死\"的门禁（断言顶栏真的在视口顶部、引导上报链完整、宿主被移除后自愈、菜单点得开、契约落到页面根），但它**需要本机有 dsh 在跑 + playwright**：仓库没有 playwright 依赖、CI 也不装浏览器 ⇒ 在 CI 里它永远打印 SKIP 退出 0 ⇒ **等于门禁在 CI 不存在**。CI 现在装的是 `scripts/test-shell-chrome.mjs`（契约测试），而它设了 `__DSH_CHROME_TEST__` ⇒ chrome 在 TEST_HOOK 处提前 return ⇒ 第 145 行之后的真实初始化路径**从不执行** —— 0.18.0 的回归正是从这条缝里溜过去的。\n\n建议修法：写一个**纯 Node（无浏览器）的完整引导桩** —— 手写最小 DOM（createElement/attachShadow/querySelector/getBoundingClientRect/MutationObserver/fetch/setInterval/matchMedia…）+ vm 沙箱，**不设 TEST_HOOK** 地加载 chrome，断言它跑到 `ready`、宿主被移除后会重挂、缺 rootEl 守卫时会红。参考 `scripts/test-shell-chrome.mjs` 已有的桩（它的桩只覆盖到 TEST_HOOK 之前）。接入 `npm test` 后这条缝才算真的堵上。",
+      "rationale": "本轮把\"注入即死\"从不可见变成可见（上报）并在本机有了可失败门禁，但门禁在 CI 恒 SKIP —— 也就是说**下一次同类回归仍然只能靠 agent 手动跑才发现**。这是本轮明确留下的覆盖缺口，必须登记而不是默认它不存在。",
+      "rejected": "① 把 playwright 加进 CI —— 放弃：要装浏览器（体积/时长），且这不是\"用真浏览器\"才能验证的东西：真实初始化路径的判据（跑到 ready、自愈重挂）用桩 DOM 就能测；② 把 test:chrome-real 直接塞进 npm test —— 放弃：没有 dsh 页面时它 SKIP，会变成\"看起来跑了其实没跑\"的假绿灯（这正是本仓历史上被记录过的假门禁形态）；③ 直接用 test-shell-chrome.mjs 不加 TEST_HOOK 加载 —— 放弃：现有桩 DOM 覆盖不到真实引导所需的 API，会变成一堆桩缺失报错而不是被测缺陷。",
+      "sourceSessionId": "session-06ed390e-74f1-406c-b584-e652c3c4e560",
+      "status": "todo",
+      "tags": [
+        "coverage-gap",
+        "testing",
+        "shell-chrome",
+        "ci",
+        "p3",
+        "unfixed",
+        "follow-up"
+      ],
+      "createdAt": 1792088959097,
+      "updatedAt": 1792088959097
     }
   ]
 }
