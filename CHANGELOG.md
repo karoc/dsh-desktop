@@ -21,6 +21,25 @@
 >
 > 详情见 `.agents/notes/implemented/bug-fix/2026-09-08-legacy-uninstaller-name-kill.md`。
 
+## [0.18.0](https://github.com/karoc/dsh-desktop/compare/v0.17.0...v0.18.0) (2026-10-15)
+
+
+### Features
+
+* **ci:** 新增 Rust 覆盖率基线作业（只报告，不设阈值） ([#151](https://github.com/karoc/dsh-desktop/issues/151)) ([b0238c8](https://github.com/karoc/dsh-desktop/commit/b0238c88eadfc468963c265f7550b33420deea28))
+* **dsh:** 地板抬到 0.2.1-alpha.3（先 dev 验证） ([#155](https://github.com/karoc/dsh-desktop/issues/155)) ([e5d797c](https://github.com/karoc/dsh-desktop/commit/e5d797c4542e8f795335c30482610f82f58a26d9))
+
+
+### Bug Fixes
+
+* **ci:** 文档同步门禁给 checkout 加 fetch-depth: 0（修掉"取不到变更即静默放行"的假阴性） ([#149](https://github.com/karoc/dsh-desktop/issues/149)) ([726b45b](https://github.com/karoc/dsh-desktop/commit/726b45b8511b97ed250f096d4762fc5713fa0672))
+* main 的 Cargo.lock 漂移 + 错误横幅轮询退避（性能卡第二半） ([#146](https://github.com/karoc/dsh-desktop/issues/146)) ([e30cec0](https://github.com/karoc/dsh-desktop/commit/e30cec0151914d399325d76a6abe95a686f623b9))
+
+
+### Chores
+
+* **dsh:** patch 契约夹具按 0.2.1-alpha.3 实机重采（188 个 id）+ 适配记录落卡 ([#156](https://github.com/karoc/dsh-desktop/issues/156)) ([b6333f9](https://github.com/karoc/dsh-desktop/commit/b6333f9b83e807132a7761f7a21d4b5c73cb03e8))
+
 ## [0.17.0](https://github.com/karoc/dsh-desktop/compare/v0.16.0...v0.17.0) (2026-10-10)
 
 
