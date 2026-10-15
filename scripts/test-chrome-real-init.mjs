@@ -42,7 +42,24 @@ let chromium
 try { ({ chromium } = require('/home/karoc/node_modules/playwright')) } catch { try { ({ chromium } = require('playwright')) } catch { console.log('SKIP: 本机没有 playwright'); process.exit(0) } }
 
 const code = readFileSync(CHROME, 'utf8')
+// 2026-10-15 扩充：壳用 `w.eval` 注入，可能发生在**页面还没有 body** 的早期（WebView2 导航时序）。
+// 因此这里额外用 addInitScript 复现"最早期注入"——原先 chrome 在这里抛
+// `Cannot read properties of null (reading 'appendChild')` 而整段死亡；加挂载守卫后必须存活。
 const browser = await chromium.launch()
+const ctxEarly = await browser.newContext({ viewport: { width: 1344, height: 1025 } })
+await ctxEarly.addInitScript({ content: code })   // 最早期注入（body 尚不存在）
+const pageEarly = await ctxEarly.newPage()
+const earlyErrors = []
+pageEarly.on('pageerror', (e) => earlyErrors.push(mask(String(e.message).split('\n')[0])))
+await pageEarly.goto(url, { waitUntil: 'domcontentloaded' })
+await pageEarly.waitForTimeout(9000)
+const earlyInfo = await pageEarly.evaluate(() => {
+  const host = document.getElementById('dsh-shell-chrome')
+  return { host: !!host, buttons: host && host.shadowRoot ? host.shadowRoot.querySelectorAll('button').length : -1 }
+})
+console.log(`  早期注入（无 body 时序）: host=${earlyInfo.host} buttons=${earlyInfo.buttons} errors=${earlyErrors.length}`)
+await pageEarly.close(); await ctxEarly.close()
+
 const page = await (await browser.newContext({ viewport: { width: 1344, height: 1025 } })).newPage()
 const errors = []
 page.on('pageerror', (e) => errors.push(mask(String(e.message).split('\n')[0])))
@@ -65,5 +82,8 @@ check('真实初始化无异常（无 pageerror）', errors.length === 0)
 check('创建了 #dsh-shell-chrome 宿主', info.host)
 check(`shadow root 内按钮数 ≥ 4（实测 ${info.buttons}）`, info.buttons >= 4)
 if (errors.length) for (const e of errors.slice(0, 4)) console.log(`    pageerror: ${e}`)
+check('最早期注入（无 body 时序）也不崩、且最终挂上顶栏',
+  earlyInfo.host && earlyInfo.buttons >= 4 && earlyErrors.length === 0)
+if (earlyErrors.length) for (const e of earlyErrors.slice(0, 3)) console.log(`    early pageerror: ${e}`)
 if (failed) { console.error(`FAILED: chrome 真实初始化自检 ${failed} 项`); process.exit(1) }
 console.log('PASS: chrome 真实初始化自检（顶栏宿主与菜单都在）')

@@ -587,7 +587,15 @@
   edgeStrip.className = 'edge-strip';
   edgeStrip.setAttribute('aria-label', '显示菜单栏');
   root.appendChild(edgeStrip);
-  document.body.appendChild(host);
+  // ⚠️ 2026-10-15：这里原来是**无守卫**的 `document.body.appendChild(host)` —— 只要 chrome 被 eval 时页面还没有
+  // body（WebView2 在导航早期 eval / 空白文档上注入），这行就抛 `Cannot read properties of null` ⇒ **整个 chrome
+  // 当场死亡**（顶栏与菜单全无）；而壳对 eval 的结果是 `let _ =` ⇒ 日志里一点痕迹都没有（静默失败）。
+  // 改为"等 body 可用再挂载"（50ms 轮询、幂等），与文件底部已有的重连守卫配套：任何时序都不会再让它整段崩掉。
+  const mountChromeHost = () => {
+    if (!document.body) { setTimeout(mountChromeHost, 50); return; }
+    if (!document.body.contains(host)) document.body.appendChild(host);
+  };
+  mountChromeHost();
 
   // ── 自适应推挤（不产生滚动条）：dsh 远程页 html 顶部补 SHELL_BAR_H px
   // padding，border-box 下内容区减少同高、总高不变 → 内容下移不被顶栏遮挡、
@@ -599,13 +607,16 @@
   let pushActive = false;
   const captionPlan = computeCaptionPlan(TITLEBAR_CONTRACT);
   if (typeof location !== 'undefined' && location.protocol !== 'tauri:') {
+    // 2026-10-15：`documentElement` 在**最早期注入**时可能是 null（<html> 尚未创建）—— 原来直接写 `.style`
+    // 会抛 `Cannot read properties of null`（实测 :613），整段 chrome 死亡（生产事故：顶栏与菜单消失）。
+    // 第一道防线在壳侧（等 DOM 就绪再 eval），这里是第二道：全部空安全。
     const rootEl = document.documentElement;
     if (captionPlan.paddingTop !== null) {
-      rootEl.style.paddingTop = captionPlan.paddingTop + 'px';
-      rootEl.style.boxSizing = 'border-box';
+      if (rootEl) rootEl.style.paddingTop = captionPlan.paddingTop + 'px';
+      if (rootEl) rootEl.style.boxSizing = 'border-box';
       pushActive = true;
     }
-    for (const [k, v] of Object.entries(captionPlan.cssVars)) rootEl.style.setProperty(k, v);
+    if (rootEl) for (const [k, v] of Object.entries(captionPlan.cssVars)) rootEl.style.setProperty(k, v);
     for (const [k, v] of Object.entries(captionPlan.dataset)) rootEl.dataset[k] = v;
     if (captionPlan.hostClass) host.classList.add(captionPlan.hostClass);
     if (TITLEBAR_CONTRACT) {
@@ -1718,7 +1729,13 @@
       document.body.appendChild(host);
     }
   });
-  observer.observe(document.body, { childList: true });
+  // 2026-10-15：早期注入时 body 可能还不存在 ⇒ observe(null) 会抛异常并让整段
+  // chrome 死亡（与挂载守卫同一类问题）。等它可用再观察。
+  const startObserve = () => {
+    if (!document.body) { setTimeout(startObserve, 50); return; }
+    observer.observe(document.body, { childList: true });
+  };
+  startObserve();
 
   // ── 启动状态 ────────────────────────────────────────────────────
   getShellState().then((r) => {
