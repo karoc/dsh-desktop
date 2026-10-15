@@ -134,6 +134,10 @@ npm test                 # 全量 20 套：清单一致性 / overlay 目标行 /
                          #   启动页设置 / 壳顶栏契约 / 启动器扫动 / 请求头预算 / 半截安装自愈 / 副本一致性
 npm run test:slow        # 安装卡死快速失败（~3 分钟，不进 PR 门禁；CI 的 linux job 会跑）
 npm run test:plugin      # 通知插件行为测试（纯 Node，无浏览器）
+npm run test:chrome-real    # 壳注入脚本的**真实初始化**自检（不带 TEST_HOOK、真实 Chromium 注入；
+                            # 断言无 pageerror + 顶栏宿主与菜单在。2026-10-15 那次"顶栏消失"事故
+                            # 正落在单测的缝里：test-shell-chrome.mjs 设了 __DSH_CHROME_TEST__ ⇒ chrome
+                            # 提前 return ⇒ 真实初始化路径从不执行。需要本机 dsh 正在运行，否则显式 SKIP）
 npm run test:control     # manager 控制面（11 场景，含版本地板闸门）
 npm run test:proxy       # 内置正向代理（12 场景）
 npm run test:launcher-settings  # 代理设置窗口（6 场景）
