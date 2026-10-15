@@ -53,7 +53,17 @@ feat/shell-menu-bar 分支）。本技能是"改壳自身功能"的操作手册�
 - **Shadow DOM**（`attachShadow({mode:'open'})`）：隔离第三方页面 CSS 双向污染，顶栏样式全在
   shadow root 内。
 - **MutationObserver 自愈**：dsh SPA 重渲染 body 会清掉注入 DOM → 观察 body childList，宿主被移除
-  就重挂（shadow root 跟随宿主元素，重挂不丢）。
+  就重挂（shadow root 跟随宿主元素，重挂不丢）。**自愈是在 0.18.0 出事后才显出价值的**：那一版
+  顶层在挂载之后抛 `ReferenceError`，自愈（在致命行之后）永不执行 ⇒ 顶栏一旦被 SPA 清掉就永久消失。
+- **引导上报（2026-10-16 起，查"顶栏消失"先看这个）**：chrome 把引导拆成五个上报点，走环回桥
+  `/log` 落进 `dsh-desktop-session.log`（有界 ≤12 条/次、永不抛、无桥端口时静默放弃）：
+  `inject`（eval 到了）/ `mounted`（宿主在 DOM，带 `bar=<top>px h<h> hidden=<bool> btns=<n>` 摘要）/
+  `ready`（整段跑完）/ `fatal`（`stage=<阶段> <错误名>: <消息> @<文件:行:列>`）/ `remount`（自愈重挂）。
+  判读：**没有 inject ⇒ 根本没注入；有 mounted 无 ready ⇒ 中途死了（看 fatal）；bar 为负或 hidden=true
+  ⇒ 挂上了但不可见**。四个阶段（mount / auth-probe / auth-probe-now / observe）各自走 `boot()` 隔离，
+  单个阶段抛异常不再让其后全部静默死亡；引导窗口内另有 `window` error 兜底（ready 后摘掉）。
+  改 chrome 时**不要**把新动作放到 `boot()`/上报之外裸跑，也不要删掉文件末尾的 `ready` 上报 ——
+  它是"chrome 全须全尾活着"的唯一判据（门禁 `npm run test:chrome-real` 断言它）。
 - **防重复**：`if (document.getElementById('dsh-shell-chrome')) return;`。
 - 顶栏是**浮层**（fixed 36px + 半透明 + backdrop-filter），盖住页面顶部 36px，不推挤第三方布局。
 - **全屏浮层自适应（插件无需感知壳）**：第三方插件全屏页（`position: fixed; inset: 0`，
@@ -355,6 +365,7 @@ CI 的 `check` 作业跑的是 **host（ubuntu）** 的 `cargo clippy -- -D warn
 ## 5. Tauri 2 踩坑速查（本轮新踩，先查再写）
 | 坑 | 真相 |
 |---|---|
+| 注入脚本顶层抛异常 = **其后整段静默死亡** | `w.eval()` 即使脚本抛异常也只报"派发成功"（JS 异常不回传），日志里一字没有。0.18.0 实测：`scheduleAuthProbe()` 抛 ReferenceError（定义被误插进函数作用域），其后的自愈/图标同步/菜单关闭全没装上 ⇒ 顶栏先可见、被 SPA 清掉后永久消失。对策：顶层动作走 `boot(stage, fn)` 隔离 + 引导上报（见 §2.2），并用 `npm run test:chrome-real` 的真实注入自检兜住（`test-shell-chrome.mjs` 因 TEST_HOOK 提前 return **测不到**这条路径） |
 | Windows 菜单栏 | `Menu` 只在 macOS 渲染窗口菜单栏；Windows 仅托盘/上下文 → 自绘注入 |
 | 远程页无 `__TAURI__` | tauri#11934；一切走环回桥，桥端口靠注入前缀传递 |
 | `set_title` / notify-rust `app_id` | 接收 **`&str`** 不是 `Into<String>`；Windows 专属路径的错误只在 Windows 侧编译暴露（Linux cargo check 发现不了）→ 改了通用代码后必须等 CI windows job |

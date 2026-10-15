@@ -134,11 +134,13 @@ npm test                 # 全量 20 套：清单一致性 / overlay 目标行 /
                          #   启动页设置 / 壳顶栏契约 / 启动器扫动 / 请求头预算 / 半截安装自愈 / 副本一致性
 npm run test:slow        # 安装卡死快速失败（~3 分钟，不进 PR 门禁；CI 的 linux job 会跑）
 npm run test:plugin      # 通知插件行为测试（纯 Node，无浏览器）
-- **壳注入时机与失败可见性**（2026-10-15 起）：壳在注入 `shell-chrome.js` 前会**等 DOM 就绪**（导航早期注入会让 chrome 里任何早期 DOM 访问抛异常、整段脚本静默死亡 —— 顶栏与菜单消失）；注入报错会写进壳日志（`dsh-desktop-session.log`），不再静默丢弃。
-npm run test:chrome-real    # 壳注入脚本的**真实初始化**自检（不带 TEST_HOOK、真实 Chromium 注入；
-                            # 断言无 pageerror + 顶栏宿主与菜单在。2026-10-15 那次"顶栏消失"事故
-                            # 正落在单测的缝里：test-shell-chrome.mjs 设了 __DSH_CHROME_TEST__ ⇒ chrome
-                            # 提前 return ⇒ 真实初始化路径从不执行。需要本机 dsh 正在运行，否则显式 SKIP）
+npm run test:chrome-real    # 壳注入脚本的**真实初始化**自检（不带 TEST_HOOK、真实 Chromium 注入，需本机
+                            # dsh 在跑，否则显式 SKIP）：断言无 pageerror + 顶栏宿主与菜单在 + 顶栏真的在
+                            # 视口顶部 + 引导上报链完整（inject→mounted→ready，无 fatal）+ **宿主被移除后
+                            # 自愈重挂**。2026-10-15 那次"顶栏消失"事故正落在单测的缝里：
+                            # test-shell-chrome.mjs 设了 __DSH_CHROME_TEST__ ⇒ chrome 提前 return ⇒ 真实
+                            # 初始化路径从不执行。负向对照：`DSH_CHROME_FILE=<别的 chrome> npm run
+                            # test:chrome-real` 必须变红（已用 0.18.0 的事故版验过，7 项失败）
 npm run test:control     # manager 控制面（11 场景，含版本地板闸门）
 npm run test:proxy       # 内置正向代理（12 场景）
 npm run test:launcher-settings  # 代理设置窗口（6 场景）
@@ -179,6 +181,27 @@ node scripts/server-manager.mjs \
 - 服务异常退出：加载页显示日志，"重试"按钮 → `restart_server`。
 - 关窗（含顶栏关闭键、Alt+F4、任务栏关闭）→ 隐藏到托盘：**Windows 上首次隐藏前会弹一次确认**（说明任务不会中断、可从托盘找回；确认一次后不再询问，标记在数据目录的 `background-close-confirmed`）；Linux 退化为最小化（GNOME 可能没有托盘）。顶栏/托盘"退出" → 杀掉整棵服务进程树并退出。
 - 点系统通知 → 窗口回到前台并打开对应会话（不重复启动第二个实例）。
+
+### 壳注入的自证与失败可见性（0.16.x 起）
+
+顶栏与菜单是壳**注入**进页面的（`shell-chrome.js`）。注入失败的历史症状是"顶栏与菜单消失"，
+而壳侧 `w.eval()` 即使脚本抛异常也只报"派发成功" ⇒ 现场一无所有。现在有三道可见性：
+
+1. **等 DOM 就绪再注入**（2026-10-15 起）：导航早期注入时 `<body>`/`<html>` 还不存在，chrome 里任何早期 DOM 访问都会抛异常。
+2. **派发失败入日志**（2026-10-15 起）：`w.eval` 本身报错会写进 `dsh-desktop-session.log`（`chrome 注入失败…`）。
+3. **引导自证**（2026-10-16 起）：chrome 把引导过程分五个点上报到同一个日志（走环回桥 `/log`，
+   有界 ≤12 条/次注入、永不抛、无桥时静默放弃）：
+
+| 日志行 | 含义 | 判读 |
+|---|---|---|
+| `client/log chrome inject boot=bXk2p readyState=… body=…` | eval 真的执行到了 | 没有这一行 ⇒ 根本没注入（看 ② 的报错行） |
+| `… chrome mounted … bar=0px h37 hidden=false hostH=36 btns=4` | 宿主与顶栏在 DOM 里 | `bar` 为负 / `hidden=true` ⇒ **挂上了但不可见**（全屏浮层自适应收起） |
+| `… chrome ready … btns=12` | 整段引导跑完 | 只有 inject/mounted 而无 ready ⇒ 中途死了，看下一条 |
+| `… chrome fatal stage=<阶段> <错误名>: <消息> @<文件:行:列>` | 抛在哪一步 | 直接回答"停在哪一步" |
+| `… chrome remount …` | SPA 重渲染清掉顶栏后自愈重挂 | 出现它 = 顶栏**曾经消失又被自动恢复** |
+
+- 引导的四个阶段（mount / auth-probe / observe / 首屏扫描）各自隔离：单个阶段抛异常不再让它**后面全部**静默死亡。
+- 回归门禁：`npm run test:chrome-real`（见上）；它断言的自愈与上报两条都实测过**会失败**。
 
 ### 误报提示（0.16.0 起）
 
