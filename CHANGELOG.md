@@ -21,6 +21,13 @@
 >
 > 详情见 `.agents/notes/implemented/bug-fix/2026-09-08-legacy-uninstaller-name-kill.md`。
 
+## [0.18.3](https://github.com/karoc/dsh-desktop/compare/v0.18.2...v0.18.3) (2026-10-16)
+
+
+### Bug Fixes
+
+* **shell:** 导航守卫加退避去重，止住 live 端口不可达时的重载风暴 ([#169](https://github.com/karoc/dsh-desktop/issues/169)) ([3125b6e](https://github.com/karoc/dsh-desktop/commit/3125b6efbdb850a1fba6bd4da23a454144c7fab2))
+
 ## [0.18.2](https://github.com/karoc/dsh-desktop/compare/v0.18.1...v0.18.2) (2026-10-16)
 
 
