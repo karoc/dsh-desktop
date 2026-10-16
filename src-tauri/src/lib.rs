@@ -258,6 +258,12 @@ static LIVE_DSH_URL: Mutex<Option<String>> = Mutex::new(None);
 /// 比 `window.url()` 可靠——后者在导航"空转"（URL 已变但 WebView 未渲染）时
 /// 会误报已到达 dsh 页，导致导航兜底过早撒手 → 黑屏）。
 static LAST_MAIN_LOADED: Mutex<Option<String>> = Mutex::new(None);
+/// on_page_load 导航守卫的"上次尝试"：`(目标 URL, 时刻, 连续次数)`。
+/// 存在的理由——**失败的导航不会改变 webview 的 URL**：连接被拒后 `payload.url()`
+/// 仍是那个死端口，守卫的判定恒为真 ⇒ 导航→失败→再触发，紧循环。2026-10-16 实测
+/// 约 160 次/秒 `main page load`、单次事故 25,708 行，CPU 打满、连确认窗都渲染不出来
+/// （触发条件：dsh 起不来，例如刚清过缓存或升级失败）。有这份状态才能按退避窗口去重。
+static NAV_GUARD_LAST: Mutex<Option<(String, std::time::Instant, u32)>> = Mutex::new(None);
 /// 页面"真正可用"信号：桥收到 client 的 /alive（= 页面 JS 已运行并回连）。
 /// 只有这个能证明 webview 渲染完成；URL 层/on_page_load 都可能"空转"。
 /// 每次 server-url 事件（新 dsh web 地址）时 reset，由导航兜底驱动重试。
@@ -1419,6 +1425,75 @@ mod bridge_guard_tests {
         assert!(!ok.contains("Access-Control-Allow-Origin: *"), "不再无条件通配");
         assert_eq!(bridge_cors_headers(Some("https://evil.com")), "");
         assert_eq!(bridge_cors_headers(None), "");
+    }
+}
+
+#[cfg(test)]
+mod nav_guard_tests {
+    use super::{nav_guard_decision, NavGuard};
+
+    const LIVE: &str = "http://127.0.0.1:51560/?token=t";
+    const DEAD: &str = "http://127.0.0.1:55232/";
+
+    #[test]
+    fn same_origin_reaches_live() {
+        assert_eq!(
+            nav_guard_decision("http://127.0.0.1:51560/session/abc", Some(LIVE), None),
+            NavGuard::ReachedLive
+        );
+    }
+
+    #[test]
+    fn non_loopback_and_missing_live_are_skipped() {
+        assert_eq!(nav_guard_decision("about:blank", Some(LIVE), None), NavGuard::Skip);
+        assert_eq!(
+            nav_guard_decision("http://tauri.localhost/index.html", Some(LIVE), None),
+            NavGuard::Skip
+        );
+        assert_eq!(nav_guard_decision(DEAD, None, None), NavGuard::Skip);
+    }
+
+    #[test]
+    fn dead_port_navigates_to_live_when_never_tried() {
+        assert_eq!(
+            nav_guard_decision(DEAD, Some(LIVE), None),
+            NavGuard::Navigate(LIVE.to_string())
+        );
+    }
+
+    /// 负向对照（本修复的核心）：刚试过同一目标 ⇒ 退避窗口内**不得**再导航。
+    /// 旧实现只看"origin 不同"，这里会返回 Navigate —— 而失败的导航不改 URL，
+    /// 于是以连接被拒的速度紧循环（2026-10-16 实测 ~160 次/秒）。
+    #[test]
+    fn repeated_target_within_backoff_is_skipped() {
+        assert_eq!(
+            nav_guard_decision(DEAD, Some(LIVE), Some((LIVE, 100, 0))),
+            NavGuard::Skip
+        );
+        assert_eq!(
+            nav_guard_decision(DEAD, Some(LIVE), Some((LIVE, 2_999, 0))),
+            NavGuard::Skip,
+            "窗口边界内（3s 曲线）仍不得重复"
+        );
+        // 窗口过后允许再试：服务晚起来这种良性场景仍能恢复
+        assert_eq!(
+            nav_guard_decision(DEAD, Some(LIVE), Some((LIVE, 3_000, 0))),
+            NavGuard::Navigate(LIVE.to_string())
+        );
+        // 连续失败按 3/3/6/12/24/30s 曲线放大，封顶 30s
+        assert_eq!(
+            nav_guard_decision(DEAD, Some(LIVE), Some((LIVE, 29_999, 8))),
+            NavGuard::Skip
+        );
+        assert_eq!(
+            nav_guard_decision(DEAD, Some(LIVE), Some((LIVE, 30_000, 8))),
+            NavGuard::Navigate(LIVE.to_string())
+        );
+        // 目标变了（live 端口又漂移）→ 不受旧目标窗口约束
+        assert_eq!(
+            nav_guard_decision(DEAD, Some(LIVE), Some(("http://127.0.0.1:1/", 0, 5))),
+            NavGuard::Navigate(LIVE.to_string())
+        );
     }
 }
 
@@ -3321,6 +3396,56 @@ fn nav_fallback_interval_secs(attempts: u32) -> u64 {
 /// 一旦恢复可用仍能自愈）。
 const NAV_FALLBACK_MAX_ATTEMPTS: u32 = 8;
 
+/// on_page_load 导航守卫的判定结果。
+#[derive(Debug, PartialEq, Eq)]
+enum NavGuard {
+    /// 这次不要动（不是环回 dsh 页 / 与 live 同源已就位不算 / 退避窗口内不重复）。
+    Skip,
+    /// 当前就落在 live origin 上 → 风暴解除，调用方重置尝试状态。
+    ReachedLive,
+    /// 应当导航到该目标。
+    Navigate(String),
+}
+
+/// on_page_load 导航守卫的判定（纯函数，可单测）。
+///
+/// 规则（顺序即优先级）：
+///   1) 没有 live URL，或当前 URL 不是环回 dsh 页（`about:blank`/`tauri://` 交给
+///      其它路径）→ `Skip`；
+///   2) 与 live 同 origin → `ReachedLive`（端口内路由变化不管）；
+///   3) 与 live 不同 origin → 导航，但**同一目标在退避窗口内不重复导航**。
+///      窗口复用 `nav_fallback_interval_secs`（3/3/6/12/24/30s 封顶），与导航兜底
+///      定时器同一套曲线 —— 这条是 2026-10-16 重载风暴的修复：旧实现只看
+///      "origin 不同就导航"，而失败的导航不改 URL，于是形成紧循环。
+fn nav_guard_decision(
+    current: &str,
+    live: Option<&str>,
+    last: Option<(&str, u64, u32)>,
+) -> NavGuard {
+    let Some(live) = live else {
+        return NavGuard::Skip;
+    };
+    if !(current.starts_with("http://127.0.0.1:") || current.starts_with("http://localhost:")) {
+        return NavGuard::Skip;
+    }
+    let origin = |u: &str| {
+        tauri::Url::parse(u)
+            .ok()
+            .map(|x| x.origin().ascii_serialization())
+    };
+    if origin(current) == origin(live) {
+        return NavGuard::ReachedLive;
+    }
+    if let Some((last_target, since_ms, attempts)) = last {
+        if last_target == live
+            && since_ms < nav_fallback_interval_secs(attempts).saturating_mul(1000)
+        {
+            return NavGuard::Skip;
+        }
+    }
+    NavGuard::Navigate(live.to_string())
+}
+
 /// 本地壳页面（启动页）URL 判定：macOS/Linux 是 `tauri://localhost`，Windows
 /// 是 `http://tauri.localhost`（WebView2 不支持自定义 scheme，Tauri 用
 /// `<scheme>.localhost` 代管）。故障回退导航只认这两种，否则会落到
@@ -4519,22 +4644,54 @@ pub fn run() {
                 //     on_page_load，但一定触发 pageshow——覆盖"back 到死端口
                 //     且从 bfcache 恢复"（原症状的直接成因）。
                 // 判断按 origin（host+port），不影响 live 端口内的路由。
+                // 2026-10-16：判定抽成 nav_guard_decision 并加**退避去重** ——
+                // 失败的导航不改 URL，只看"origin 不同"会以连接被拒的速度死循环
+                // （实测 ~160 次/秒、25,708 行）。详见 NavGuard 的文档注释。
                 let live = LIVE_DSH_URL.lock().unwrap().clone();
                 let url = payload.url().to_string();
-                if let Some(live_url) = live {
-                    let is_dsh_like =
-                        url.starts_with("http://127.0.0.1:") || url.starts_with("http://localhost:");
-                    let same_origin = |u: &str| {
-                        tauri::Url::parse(u).ok().map(|x| x.origin().ascii_serialization())
-                    };
-                    if is_dsh_like && same_origin(&url) != same_origin(&live_url) {
-                        if let Ok(u) = tauri::Url::parse(&live_url) {
+                let decision = {
+                    let last = NAV_GUARD_LAST.lock().unwrap();
+                    let last_ref = last
+                        .as_ref()
+                        .map(|(t, at, n)| (t.as_str(), at.elapsed().as_millis() as u64, *n));
+                    nav_guard_decision(&url, live.as_deref(), last_ref)
+                };
+                match decision {
+                    NavGuard::Skip => {}
+                    NavGuard::ReachedLive => {
+                        // 已经落在 live origin 上（或本来就在）→ 清掉尝试状态，
+                        // 下一次端口漂移重新从 3s 起步。
+                        *NAV_GUARD_LAST.lock().unwrap() = None;
+                    }
+                    NavGuard::Navigate(target) => {
+                        let attempts = {
+                            let mut last = NAV_GUARD_LAST.lock().unwrap();
+                            let n = match last.as_ref() {
+                                Some((t, _, n)) if t == &target => n.saturating_add(1),
+                                _ => 0,
+                            };
+                            *last = Some((target.clone(), std::time::Instant::now(), n));
+                            n
+                        };
+                        let data = w
+                            .app_handle()
+                            .path()
+                            .app_data_dir()
+                            .unwrap_or_else(|_| std::path::PathBuf::from("."));
+                        log_line(
+                            &data,
+                            &format!("nav-guard: navigate -> {target} (attempt {attempts})"),
+                        );
+                        if let Ok(u) = tauri::Url::parse(&target) {
                             let _ = w.navigate(u);
                         }
                     }
-                    // Bfcache 恢复兜底（Rust 侧 on_page_load 拦不到）：
-                    // 用 JSON 字面量安全注入，避免手拼字符串转义问题。
-                    let live_json = serde_json::to_string(&live_url).unwrap_or_else(|_| "\"\"".into());
+                }
+                // Bfcache 恢复兜底（Rust 侧 on_page_load 拦不到）：
+                // 用 JSON 字面量安全注入，避免手拼字符串转义问题。
+                if let Some(live_url) = live {
+                    let live_json =
+                        serde_json::to_string(&live_url).unwrap_or_else(|_| "\"\"".into());
                     let js = format!(
                         "(()=>{{const live=JSON.parse({live_json});const fix=()=>{{const h=location.hostname;if((h==='127.0.0.1'||h==='localhost')&&location.origin!==new URL(live).origin)location.replace(live)}};window.addEventListener('pageshow',fix);window.addEventListener('popstate',fix)}})()"
                     );
