@@ -442,6 +442,87 @@
       "createdAt": 1787833765826,
       "updatedAt": 1787835034225,
       "summary": "主窗口无边框（decorations:false+shadow:true），新增 src-tauri/resources/ui/shell-chrome.js（SHELL_MENUS 定义点：DSH Desktop 应用菜单 + 代理设置…直开 + 视图/帮助下拉 + 窗口三键），lib.rs include_str! 内嵌并在 on_page_load 注入 main webview；新增 window_control/get_shell_state/toggle_dev_mode/open_settings/show_about 命令与 10 个桥端点（/window/*、/shell/*）；scripts/test-shell-chrome.mjs 契约测试接入 npm test（全量 7 套通过）；README 更新架构图与「壳菜单栏」小节；Agent Note 已写（.agents/notes/implemented/feature/2026-08-27-shell-menu-bar.md）。"
+    },
+    {
+      "id": "card-c57d06fb-b9c6-408a-9d3e-a3ce04c7d6a6",
+      "title": "独立开发版：tauri.dev.conf.json 覆盖 identity，与正式版同机并存",
+      "summary": "新增 src-tauri/tauri.dev.conf.json（深合并覆盖 productName=\"DSH Desktop Dev\"、identifier=\"dev.dsh.desktop.dev\"）+ `npm run bundle:dev`；lib.rs toast 激活参数化（AUMID=config().identifier、CLSID=toast_clsid() FNV-1a 派生、快捷方式按 productName 查找）；窗口标题/托盘 tooltip/设置窗口标题/关于 toast 用 package_info().name 并加「（开发版）」标识；chrome 注入 __DSH_PRODUCT_NAME__；契约测试新增 dev identity 断言；README「开发版」小节。CI 全绿（check/windows/linux；linux-smoke 为 main 既有失败不阻塞）。",
+      "rationale": "用户 Windows 已装正式版，覆盖安装会动到工作数据；需要同机并存的独立开发版安装包用于调试。Tauri identity（identifier/productName）天然决定安装目录/应用数据/单实例互斥/AUMID 等全部隔离维度，dev 配置覆盖 + toast 激活参数化即可完整隔离。",
+      "rejected": "放弃环境变量/编译开关切换身份（易误产出正式包）；放弃单独 Cargo feature + 完整双配置（维护面翻倍）；dev 配置不覆盖 version（tauri-cli 强制与 Cargo.toml 一致）；CLSID 派生不引入 uuid crate（FNV-1a×2 足够，正式版保持原固定 GUID 不变）。",
+      "sourceSessionId": "session-2022bc96-7d1e-49fd-8ada-307acaff05a9",
+      "status": "done",
+      "tags": [
+        "dev-build",
+        "windows",
+        "feature"
+      ],
+      "createdAt": 1787836681548,
+      "updatedAt": 1787837867847
+    },
+    {
+      "id": "card-61582c12-bd82-48e5-8eb7-b447b163031a",
+      "title": "流程约定：开发版本地构建（D:\\Dev\\dsh-desktop-dev），不上 GitHub Actions",
+      "summary": "首次部署+编译已完成：Windows 侧 git clone（https，公开仓库）→ D:\\Dev\\dsh-desktop-dev，检出 feat/shell-menu-bar（bd349c8），npm install + npm run bundle:dev 成功，产物 D:\\Dev\\dsh-desktop-dev\\src-tauri\\target\\release\\bundle\\nsis\\DSH Desktop Dev_0.3.10_x64-setup.exe（27.9MB）。README「开发版」小节已写入构建流程约定；后续出开发版照此执行（WSL 侧 /mnt/d 为 9p 只读，部署/编译一律走 Windows interop powershell）。",
+      "rationale": "用户明确流程约定：开发版不上 GitHub Actions、GitHub 只放正式版；开发版固定在本机 D:\\Dev\\dsh-desktop-dev 部署并编译后告知。首次执行已验证整条链路可用。",
+      "rejected": "放弃在 GitHub 加 dev 构建 workflow（用户明确不要）；放弃从 WSL 直接写 /mnt/d（该环境 9p 只读挂载，改走 Windows interop 以 Windows 身份写入 D:\\）；放弃 WSL 侧编译（Linux 宿主无法出 NSIS 包，必须 Windows 侧）。",
+      "sourceSessionId": "session-2022bc96-7d1e-49fd-8ada-307acaff05a9",
+      "status": "done",
+      "tags": [
+        "dev-build",
+        "process",
+        "convention"
+      ],
+      "createdAt": 1787839111529,
+      "updatedAt": 1787839327670
+    },
+    {
+      "id": "card-bebcd921-a3ec-43de-9994-e2eac3b510ed",
+      "title": "沉淀 dsh-desktop-shell-dev Skill（壳开发经验 + 维护约定）",
+      "summary": "新增 .dsh/skills/dsh-desktop-shell-dev/SKILL.md（已提交推送 feat/shell-menu-bar@7cf027d）：八节结构含架构三事实、菜单开发手册（SHELL_MENUS/ACTIONS 定义点、注入机制、窗口控制、桥端点约定）、开发版身份隔离、本地构建工作流（Windows interop 链路）、Tauri 2 踩坑速查表、验证门禁、维护章节（触发场景+改动后四步+自检命令）、相关产物。会话 catalog 已即时发现该 skill（available_skills 出现 dsh-desktop-shell-dev），无需全局拷贝。Agent Note 已写（process/skill-distillation-shell-dev）。",
+      "rationale": "用户要求总结本轮全部会话经验（壳顶栏、菜单栏、开发版身份隔离、本地构建工作流、Tauri 2 踩坑）沉淀为 Skill 并做好维护，便于后续快速推进。dsh-skill-filesystem 自动扫描 projectRoot/.dsh/skills（project-dsh 层），仓库内即为合法真源。",
+      "rejected": "放弃写全局 ~/.dsh/skills（本环境只读且非必需——project 层自动发现已验证即时生效）；放弃并入 windows-desktop-shell-debugging（职责不同：排障 vs 壳功能开发）；放弃独立自检脚本（契约测试已是常新守护，skill 内用自检命令段）。",
+      "sourceSessionId": "session-2022bc96-7d1e-49fd-8ada-307acaff05a9",
+      "status": "done",
+      "tags": [
+        "skill",
+        "process",
+        "distillation"
+      ],
+      "createdAt": 1787844360769,
+      "updatedAt": 1787844367870
+    },
+    {
+      "id": "card-e86f3b44-4005-4ac9-a44d-eb7729f515b0",
+      "title": "开发流程规范化：GitHub Flow + CI 分层门禁 + release-please 自动发布",
+      "summary": "全链路落地并实测通过：PR #1-3（feat 合并 / release-please jsonpath 修复 / workflow_dispatch）squash 进 main；main 保护已设（需 check+test，禁 force push）；CI 分层（PR 快层 ~5min / main 全量）+ clippy -D warnings（修 9 处存量 lint）+ fmt 暂缓（注释恢复条件）；release-please 首次成功创建 release PR #4（0.4.0：三处版本+CHANGELOG 正确）；仓库 can_approve_pull_request_reviews=true；main 全量 CI 绿；项目专用 gh token 机制（token 文件 + .envrc + scripts/gh）验证通过；KANBAN 清理完成（v0.3.10 done、字段补齐）。Agent Note 已写（process/dev-process-standardization）。",
+      "rationale": "用户要求开发流程规范化（实践检验+未来趋势+贴合项目）。落地 GitHub Flow、CI 分层、质量门禁、release-please 自动发布、token 按项目隔离，并全程用真实 PR 演练闭环。",
+      "rejected": "放弃手动 tag+校验脚本（选 release-please 全自动）；放弃 fmt 门禁立即启用（60 处存量漂移，待格式化 PR 后恢复）；放弃改全局 token（改项目专用 PAT 目录隔离）；release-please 兼容旧字段 toml-path（17.x 已统一 jsonpath，实测确认）。",
+      "sourceSessionId": "session-2022bc96-7d1e-49fd-8ada-307acaff05a9",
+      "status": "done",
+      "tags": [
+        "process",
+        "ci",
+        "release",
+        "github-flow"
+      ],
+      "createdAt": 1787865885502,
+      "updatedAt": 1787865893560
+    },
+    {
+      "id": "card-f54f54df-b28e-4ea6-a1cf-77f2fe1b069c",
+      "title": "跟进：resources/plugin 插件同步拷贝滞后（提交 plugins/ 源后未提交拷贝）",
+      "rationale": "board 遗留的 repo-hygiene 跟进：commit 375712d (#15) 改了 plugins/dsh-plugin-console/client.js 但没跑 sync-resources，打包副本带旧版悬浮按钮代码；本次全量更新顺手通过统一同步脚本修复，避免继续手工拷一处漏一处。",
+      "rejected": "放弃单独手工拷贝 plugin-console 副本——正解是跑 sync-resources.mjs 统一同步，杜绝「改一处、拷一处」易漏模式（本次滞后正是该模式造成的）。",
+      "sourceSessionId": "session-2022bc96-7d1e-49fd-8ada-307acaff05a9",
+      "status": "done",
+      "tags": [
+        "repo-hygiene",
+        "plugins",
+        "follow-up"
+      ],
+      "createdAt": 1788267731908,
+      "updatedAt": 1788706433945,
+      "summary": "已修复：重跑 scripts/sync-resources.mjs 后 diff 确认 src-tauri/resources/plugin/@dsh-desktop/plugin-console 与 plugins/dsh-plugin-console 源树完全一致（#15 去悬浮按钮改动随 918673b 提交）。client-notifications/manager/proxy 副本同样一致。"
     }
   ]
 }

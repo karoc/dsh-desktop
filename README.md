@@ -130,8 +130,9 @@ node_modules 符号链接树、写迁移标记、绝不上移覆盖已有新数�
 ## 本地验证（Linux 可跑的部分）
 
 ```bash
-npm test                 # 全量 21 套：清单一致性 / overlay 目标行 / 升级标记 / 通知插件 / 控制面 / 代理 / 代理e2e /
-                         #   启动页设置 / 壳顶栏契约 / 启动器扫动 / 请求头预算 / 半截安装自愈 / 副本一致性
+npm test                 # 全量 23 套：清单一致性 / overlay 目标行 / 升级标记 / 通知插件 / 控制面 / 代理 / 代理e2e /
+                         #   启动页设置 / 壳顶栏契约 / 壳引导桩（纯 Node，无浏览器）/ 启动器扫动 / 请求头预算 /
+                         #   半截安装自愈 / 副本一致性
 npm run test:slow        # 安装卡死快速失败（~3 分钟，不进 PR 门禁；CI 的 linux job 会跑）
 npm run test:plugin      # 通知插件行为测试（纯 Node，无浏览器）
 npm run test:chrome-real    # 壳注入脚本的**真实初始化**自检（不带 TEST_HOOK、真实 Chromium 注入，需本机
@@ -141,6 +142,14 @@ npm run test:chrome-real    # 壳注入脚本的**真实初始化**自检（不�
                             # test-shell-chrome.mjs 设了 __DSH_CHROME_TEST__ ⇒ chrome 提前 return ⇒ 真实
                             # 初始化路径从不执行。负向对照：`DSH_CHROME_FILE=<别的 chrome> npm run
                             # test:chrome-real` 必须变红（已用 0.18.0 的事故版验过，7 项失败）
+npm run test:chrome-bootstrap   # 同一条链路的**纯 Node 门禁**（进 `npm test`，CI 里真的会跑；不设 TEST_HOOK、
+                            # 不启动浏览器、零依赖）：手写最小 DOM + vm 沙箱加载 chrome，断言引导上报链
+                            # inject→mounted→ready（无 fatal）/ 宿主与顶栏在 shadowRoot 里 / 宿主被移除 +
+                            # 触发 MutationObserver 回调后**自愈重挂** / 契约写入（开与关两态）/ **极早时序**
+                            # （documentElement 与 body 尚为 null）不抛异常。自带 **2 个内存变异体**自证可失败：
+                            # 删契约的 `if (rootEl)` 守卫 ⇒ 极早时序变红；删自愈的 observe 注册 ⇒ 自愈变红。
+                            # 做不到的：顶栏"真的在视口顶部"、菜单尺寸/滚动条仍归 test:chrome-real（本套件的
+                            # getBoundingClientRect 是桩常量，不对几何下结论）
 npm run test:control     # manager 控制面（11 场景，含版本地板闸门）
 npm run test:proxy       # 内置正向代理（12 场景）
 npm run test:launcher-settings  # 代理设置窗口（6 场景）
@@ -206,8 +215,13 @@ node scripts/server-manager.mjs \
   **注意它的口径是"可见"而不是"不致命"**：未包住的顶层语句抛异常**仍会**吃掉其后全部（这正是
   0.18.0 的形态），区别只在于现在会被兜底上报成 `chrome fatal stage=…`，不再无声无息。新增顶层
   动作时请一并包进 `boot()`，否则至少要知道它是"可见的致命"。
-- 回归门禁：`npm run test:chrome-real`（见上）；它断言的自愈、上报与菜单可打开三条都实测过**会失败**
-  （负向对照：0.18.0 的 chrome ⇒ 7 项红；缺 `rootEl` 守卫的变体 ⇒ 早期注入 `TypeError` 2 项红）。
+- 回归门禁（两条，口径不同、互补）：
+  - `scripts/test-chrome-bootstrap.mjs`（进 `npm test` = **CI 真的会跑**；纯 Node、无浏览器）：守"真实初始化
+    路径活着"的结构判据（上报链跑到 ready、宿主与顶栏在、自愈重挂、契约写入、极早时序空安全）；自带 2 个
+    内存变异体自证可失败。它**判不了**渲染：顶栏在不在视口顶部、菜单点不点得开。
+  - `npm run test:chrome-real`（见上；需本机 dsh + playwright，CI 里无浏览器 ⇒ 显式 SKIP）：守渲染与交互
+    口径。它断言的自愈、上报与菜单可打开三条都实测过**会失败**（负向对照：0.18.0 的 chrome ⇒ 7 项红；
+    缺 `rootEl` 守卫的变体 ⇒ 早期注入 `TypeError` 2 项红）。
 
 ### 误报提示（0.16.0 起）
 

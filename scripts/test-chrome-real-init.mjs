@@ -36,15 +36,37 @@ function liveUrl(logPath) {
 }
 
 const candidates = [
-  'C:/Users/qqwto/AppData/Roaming/dsh.smoothly.desktop/runtime/manager.log',
   '/mnt/c/Users/qqwto/AppData/Roaming/dsh.smoothly.desktop/runtime/manager.log',
   '/mnt/c/Users/qqwto/AppData/Roaming/dsh.smoothly.desktop.dev/runtime/manager.log',
+  'C:/Users/qqwto/AppData/Roaming/dsh.smoothly.desktop/runtime/manager.log',
 ]
-const url = candidates.map(liveUrl).find(Boolean)
+// 2026-10-17：**必须探活再选**。原来只取"最后一条日志里的 URL" —— 壳重启/退出后日志里
+// 留着旧端口，于是本自检会去连一个死端口并抛导航异常（实测发生过一次假失败）。现在按
+// "每个日志的最后一条往前回溯，取第一个真的能应答 HTTP 的地址"。
+async function reachable(u) {
+  try {
+    const ctl = AbortSignal.timeout(2500)
+    const r = await fetch(u, { signal: ctl, redirect: 'manual' })
+    return r.status > 0
+  } catch { return false }
+}
+let url = null
+for (const log of candidates) {
+  if (!existsSync(log)) continue
+  const urls = [...readFileSync(log, 'utf8').matchAll(/^\S+ .*dsh web: (http:\/\/127\.0\.0\.1:\d+\/\?token=[^\s]+)/gm)]
+    .map((m) => m[1])
+    .reverse()
+    .slice(0, 4)
+  for (const u of urls) {
+    if (await reachable(u)) { url = u; break }
+  }
+  if (url) break
+}
 if (!url) {
-  console.log('SKIP: 没有可用的活动 dsh 页面（需要本机 dsh 正在运行）—— 本自检只在本机真机环境下有意义')
+  console.log('SKIP: 没有可用的活动 dsh 页面（本机 dsh 未运行 / 日志里的地址都不可达）—— 本自检只在本机真机环境下有意义')
   process.exit(0)
 }
+console.log(`  使用活动 dsh 页面: ${mask(url)}`)
 
 const require = createRequire(import.meta.url)
 let chromium

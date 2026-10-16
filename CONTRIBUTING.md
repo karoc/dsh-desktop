@@ -42,11 +42,28 @@
 > `cp scripts/git-hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit`
 > 为什么需要它：2026-09-27 与 2026-10-04 两次误直推 `main`（第二次发生在纪律写进技能之后）——靠自觉不够。
 
-npm test                          # 全量 21 套（行为 + 契约 + 副本一致性 + 清单/补丁目标门禁 + 升级标记）
+npm test                          # 全量 23 套（行为 + 契约 + 副本一致性 + 清单/补丁目标门禁 + 升级标记）
 
 第 18 套 `scripts/test-silent-failures.mjs` 是**静默失效审计**：它扫描"销毁/写入类操作的结果被忽略"的站点（Rust `let _ = std::fs::remove|copy|write|rename|create_dir*`、`.ok()` 吞错、JS 空 catch），每个站点必须在本行或上一行带 `// fail-open-ok: <理由>`。它**先跑 4 个变异夹具自检再跑审计**（自检不过即失败），也可单独跑 `npm run audit:self-test` —— 恒真的门禁不算门禁。
+第 22 套 `scripts/test-bake-bridge-port.mjs` 守**"就地改写别人的源码"**这条路径：manager 把桥端口烘进插件 `client.js` 前，必须先用 `node:vm` 的 `Script` 编译候选（**与浏览器 `<script src>` 同语义**；`new Function` 与 `node --check` 都会放过脚本里非法的顶层 `return` —— 两个都实测过），编译不过就**保留原文件** + 留一行 `bridge port bake ABORTED`。同族的静态门禁在 `scripts/test-launcher-settings.mjs` 末尾：启动页 JS 里 `getElementById` 的每个 id 都必须在对应 HTML 里存在 —— 那个套件的 DOM 桩会**按需自动建元素**，所以光靠它测不出"HTML 里少了一个 id"（生产后果是 `null.addEventListener` 打死该页后续脚本，与顶栏事故同族）。
+
+**Rust `let _ =` 的判读标准**（全仓约 108 处，2026-10-07 抽查后定稿、2026-10-17 成文）：以下三类**可接受**，但仍要在静默失效门禁里逐点标注 `// fail-open-ok: <理由>` —— ①纯尽力而为的清理（缓存/临时文件删除，失败无副作用）；②关闭/销毁路径（关窗、kill 进程，失败时已无补救动作）；③日志与通知写入。**不可接受**：任何"用户数据/配置/备份"的写入与移动（丢失不可逆），以及任何"后续逻辑依赖其结果"的调用（例如先建目录再往里写）。判据是**失败后有没有兜底或幂等重试**，不是"能不能忽略"。
+
+**依赖面（2026-10-17 起是机制，不靠谁想起来）**：仓库已开启 Dependabot **漏洞告警** + **自动安全修复**（核验：`gh api -i /repos/<owner>/<repo>/vulnerability-alerts` 返回 204、`/automated-security-fixes` 返回 200；开启命令是同路径的 `-X PUT`），告警出现在仓库 Security 页、修复以 PR 自动开出。本地自查用 `npm audit --omit=dev`（当前 0 漏洞）。**为什么不把 `npm audit` 塞进 CI 必过**：它依赖 registry 网络，上游发一条与我们无关的 advisory 就会红掉整条 PR —— 门禁的信噪比比覆盖率更重要。
+
+`scripts/test-chrome-bootstrap.mjs`（链上紧随 `test-shell-chrome`）是**壳注入脚本"真实初始化路径"的纯 Node
+门禁**：`test-shell-chrome.mjs` 设了 `__DSH_CHROME_TEST__` ⇒ chrome 在 TEST_HOOK 处提前 return ⇒ 它后面那段
+（挂载守卫 / 契约写入 / MutationObserver 自愈 / 引导上报）在单测里**从不执行**，而真机门禁 `test:chrome-real`
+在 CI 里没有浏览器 ⇒ 恒 SKIP —— 0.18.0「注入即死」正是从这条缝里溜过去的。本套件用 `node:vm` + 手写最小 DOM
+**不设 TEST_HOOK** 地加载 chrome，断言：上报链 inject→mounted→ready（无 fatal）/ 宿主与顶栏在 shadowRoot 里 /
+宿主被移除 + 触发 MutationObserver 回调后自愈重挂 / 契约写入（顶栏契约开与关两态）/ 极早时序
+（documentElement 与 body 尚为 null）不抛异常 / 桥请求准入头。它自带 **2 个内存变异体**（删 `if (rootEl)` 守卫、
+删自愈 `observe` 注册）并**要求指定断言变红**——没红、或锚点与被测文本脱钩（夹具失效），整条套件判失败。
+边界：没有渲染引擎，顶栏几何/菜单尺寸/点击命中仍只由 `test:chrome-real` 判定。
+
 node scripts/test-copy-consistency.mjs  # 副本一致性（改了 scripts/ 或 plugins/ 后先 npm run sync:resources）
 node scripts/test-shell-chrome.mjs  # 壳契约（菜单 id ↔ ACTIONS ↔ lib.rs）
+node scripts/test-chrome-bootstrap.mjs  # 壳"真实初始化路径"（纯 Node、无浏览器；自带 2 个变异体）
 # Rust：cargo clippy -D warnings + cargo test --lib（CI 快层会跑；本地有工具链时先跑）
 # 注意：cargo fmt --check **不在 CI 里**（build.yml 里被注释：60 处历史格式差异），
 # 格式靠自律——禁止提交全仓格式化 diff（会淹没真实改动）。
@@ -96,7 +113,7 @@ git fetch origin release-please--branches--main
 git checkout FETCH_HEAD
 node -e "…四处版本一致性…"        # package.json / .release-please-manifest.json / tauri.conf.json / Cargo.toml
 grep -n "^## \[<version>\]" CHANGELOG.md
-npm test                          # 17 套（另：npm run test:slow 跑安装卡死用例，约 3 分钟，不进 PR 门禁）
+npm test                          # 23 套（另：npm run test:slow 跑安装卡死用例，约 3 分钟，不进 PR 门禁）
 node scripts/audit-preinstalled.mjs
 ```
 
