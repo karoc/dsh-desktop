@@ -21,6 +21,13 @@
 >
 > 详情见 `.agents/notes/implemented/bug-fix/2026-09-08-legacy-uninstaller-name-kill.md`。
 
+## [0.18.4](https://github.com/karoc/dsh-desktop/compare/v0.18.3...v0.18.4) (2026-10-16)
+
+
+### Bug Fixes
+
+* **manager:** 就地改写插件源码前先自证合法 + 启动页 id 静态门禁 + 壳引导桩进 CI ([#171](https://github.com/karoc/dsh-desktop/issues/171)) ([5024823](https://github.com/karoc/dsh-desktop/commit/5024823d862a9d8e966a051f4df52ed2b509d937))
+
 ## [0.18.3](https://github.com/karoc/dsh-desktop/compare/v0.18.2...v0.18.3) (2026-10-16)
 
 
