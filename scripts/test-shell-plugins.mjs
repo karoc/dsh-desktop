@@ -45,6 +45,30 @@ check('备份目录 .bak-stale-* 不再被反复改名（runtime 侧）', () => 
   assert.deepEqual(plan.removeCopies, [])
 })
 
+check('备份目录：生产实见的**链式**名（3 个时间戳）也不得再被改名', () => {
+  // 2026-10-17：生产 runtime 里实测 `plugin-console.bak-stale-A.bak-stale-B.bak-stale-C`。
+  // 旧判据（以 .bak-stale-<数字> 结尾）恰好还能挡住它，但换 ISO 戳就漏 —— 见下一条。
+  const chained = '@dsh-desktop/plugin-console.bak-stale-1791115035052.bak-stale-1791144277936.bak-stale-1791190009865'
+  const plan = planShellPluginCleanup({
+    shipped: ['@dsh-desktop/client-notifications'],
+    present: [chained, '@dsh-desktop/client-notifications'],
+    bundles: [chained],
+  })
+  assert.deepEqual(plan.removeCopies, [])
+  assert.deepEqual(plan.dropBundles, [])
+})
+
+check('备份目录：非数字戳（ISO 形式）同样不得被改名 —— 旧判据会漏（负向对照）', () => {
+  // 若把判据改回 `/\\.bak-stale-\\d+$/`（只认纯数字戳），这条必红。
+  const iso = '@dsh-desktop/plugin-console.bak-stale-2026-10-17T01-50-00'
+  const plan = planShellPluginCleanup({
+    shipped: ['@dsh-desktop/client-notifications'],
+    present: [iso],
+    bundles: [],
+  })
+  assert.deepEqual(plan.removeCopies, [])
+})
+
 check('资源侧：未被 patch 引用的随包插件要移走（本次缺陷 a）', () => {
   const plan = planStaleResourcePlugins({
     present: ['client-notifications', 'plugin-console'],

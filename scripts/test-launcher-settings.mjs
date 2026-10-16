@@ -220,4 +220,32 @@ search.value = ''
 assert.equal(getEl('providerHosts').querySelectorAll('.host-check').length, 3, 'clearing the search restores the full list')
 
 console.log('PASS — proxy settings window (6 scenarios)')
+// ── 静态门禁（2026-10-17，审计遗留②）：JS 里 getElementById 的每个 id 都必须在对应 HTML 里 ──
+// 为什么必须单独做：本文件的 DOM 桩**按需自动创建**元素（见上面的 getEl），所以从 HTML 里删掉一个
+// id ⇒ 本套件静默通过 ⇒ 生产里 `null.addEventListener` 直接打死该页后续脚本（与 0.18.0 顶栏事故
+// 同族：整段静默死亡）。判据故意做成**静态**的（比对源码，不经过桩）。
+// 真的由 JS 在运行时创建/注入的 id，要在这里显式登记并写明理由 —— 不允许"加个白名单就算了"。
+const DYNAMIC_IDS = new Map([
+  // ['settings.html', new Set(['example'])],  // 例：运行时应由 xx 注入
+])
+const pairs = [['index.html', 'app.js'], ['confirm.html', 'confirm.js'], ['settings.html', 'settings.js']]
+let idCount = 0
+for (const [htmlName, jsName] of pairs) {
+  const htmlSrc = readFileSync(join(root, '..', 'src', htmlName), 'utf8')
+  const jsSrc = readFileSync(join(root, '..', 'src', jsName), 'utf8')
+  const ids = [...jsSrc.matchAll(/getElementById\(\s*['"]([^'"]+)['"]\s*\)/g)].map((m) => m[1])
+  const allow = DYNAMIC_IDS.get(htmlName) ?? new Set()
+  const missing = [...new Set(ids)].filter(
+    (id) => !new RegExp(`id=["']${id}["']`).test(htmlSrc) && !allow.has(id),
+  )
+  assert.equal(
+    missing.length,
+    0,
+    `${jsName} 引用了 ${htmlName} 里不存在的 id: ${missing.join(', ')}`
+      + '（若确为运行时注入，请登记进 DYNAMIC_IDS 并写明理由；否则补回 HTML）',
+  )
+  idCount += new Set(ids).size
+}
+console.log(`ok   启动页 id↔DOM 存在性（app/confirm/settings 共 ${idCount} 个 id 全部在对应 HTML 中）`)
+
 process.exit(0)

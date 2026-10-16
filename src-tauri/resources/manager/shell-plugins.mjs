@@ -9,6 +9,9 @@
 // 绝不碰用户的第三方插件。
 export const SHELL_PLUGIN_SCOPE = '@dsh-desktop/'
 
+/** 备份目录标记：任何含它的条目都是「上一次清理留下的备份」，不是待清理的插件。 */
+export const BAK_STALE_MARK = '.bak-stale-'
+
 /**
  * @param {{shipped?: string[], present?: string[], bundles?: string[]}} input
  *   shipped：本次随包分发的壳自有插件名（来自 resources/plugin/@dsh-desktop/*）
@@ -20,7 +23,11 @@ export function planShellPluginCleanup({ shipped = [], present = [], bundles = [
   const shippedSet = new Set(shipped)
   // `.bak-stale-<ts>` 是上一次清理留下的备份目录：**必须排除**，否则每次启动都会再改一次名
   // （`x.bak-stale-1` → `x.bak-stale-1.bak-stale-2` …）。2026-10-05 修。
-  const stale = (name) => name.startsWith(SHELL_PLUGIN_SCOPE) && !shippedSet.has(name) && !/\.bak-stale-\d+$/.test(name)
+  // 2026-10-17：判据从「以 .bak-stale-<数字> 结尾」放宽到「含 .bak-stale-」—— 前者只在时间戳
+  // 是纯数字时才成立（链式名恰好仍以数字结尾才被挡住），换成 ISO/短横线戳就会漏；而名字里带
+  // .bak-stale- 本身就是备份的充分标志（真实插件名不含它）。生产链式名已作为回归用例锁住。
+  const stale = (name) =>
+    name.startsWith(SHELL_PLUGIN_SCOPE) && !shippedSet.has(name) && !name.includes(BAK_STALE_MARK)
   return {
     removeCopies: present.filter(stale).sort(),
     dropBundles: bundles.filter(stale).sort(),
@@ -42,7 +49,7 @@ export function planStaleResourcePlugins({ present = [], referenced = [] } = {})
   const refs = new Set(referenced)
   return {
     removeDirs: present
-      .filter((dir) => !/\.bak-stale-\d+$/.test(dir))
+      .filter((dir) => !dir.includes(BAK_STALE_MARK))
       .filter((dir) => !refs.has(dir) && !refs.has(`${SHELL_PLUGIN_SCOPE}${dir}`))
       .sort(),
   }

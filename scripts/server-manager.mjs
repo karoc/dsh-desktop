@@ -27,6 +27,7 @@ import { createForwardProxy, providerHostsFromProfileDocument, providerHostsFrom
 import { allowsVersionSwitch, nextUpgradeMarker, upgradeMarkerPath } from './upgrade-marker.mjs'
 import { planPluginGuard } from './plugin-floor.mjs'
 import { planShellPluginCleanup } from './shell-plugins.mjs'
+import { bakeBridgePortSource, checkScriptSyntax } from './bake-port.mjs'
 
 const PACKAGE = '@deepseek-ai/dsh'
 
@@ -1299,11 +1300,20 @@ function bakeBridgePort(dest) {
   // Replace ONLY the quoted literal `'__DSH_BRIDGE_PORT__'` — the unquoted
   // `globalThis.__DSH_BRIDGE_PORT__` read path must survive (replacing it
   // produced `globalThis.12345`, a SyntaxError that killed plugin loading).
-  const next = raw.split("'__DSH_BRIDGE_PORT__'").join(`'${args.bridgePort}'`)
-  if (next !== raw) {
-    writeFileSync(p, next)
-    log(`bridge port baked: ${args.bridgePort}`)
+  const { source: next, changed } = bakeBridgePortSource(raw, args.bridgePort)
+  if (!changed) return
+  // 2026-10-17（审计遗留①）：**先证明结果是合法脚本，再落盘**。就地改写插件源码一旦写出
+  // 语法坏文件，`<script src>` 整文件失效（与 0.18.0 顶栏事故同族：整段静默死亡），而上面
+  // 注释记录的那次 `globalThis.12345` 事故就是这么发生的。校验用 `node --check`
+  // （与浏览器加载同语义，且不会把顶层 return 误判为合法）。校验不过 ⇒ **保留原文件** +
+  // 明确日志（fail-closed：宁可端口没烘进去，也不写出坏文件）。判据由 test-bake-bridge-port.mjs 守护。
+  const verdict = checkScriptSyntax(next)
+  if (!verdict.ok) {
+    log(`bridge port bake ABORTED (candidate is not valid JS, keeping original): ${verdict.why}`)
+    return
   }
+  writeFileSync(p, next)
+  log(`bridge port baked: ${args.bridgePort}`)
 }
 
 // Cheap tree comparison: same file set, byte-identical contents. (Plugin is a

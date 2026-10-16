@@ -28,7 +28,7 @@ Status: implemented
 
 代价：每次页面加载多 4–5 条日志（有界，但生产日志会略增）；上报依赖注入前缀里的 `__DSH_BRIDGE_PORT__`，桥未起来时静默无输出（此时"没有 inject 行"本身也是信息）；`remount` 会在长会话里如实暴露"顶栏被清掉又恢复"的频率，属于噪声换可见性。收益：一次"顶栏消失"类故障现在能从日志直接判到三分（没注入 / 挂上了但不可见 / 中途死在某阶段），fatal 行给出错误名+文件:行:列；并且这条链路在真机上被验证过——把 dev 壳装成修复版后，日志如实出现 `client/log chrome mounted … bar=0px h37 hidden=false btns=4` 与 `ready … btns=12`，而注入一个顶层 `throw` 的变体会写出 `fatal stage=mount:ok uncaught Error: probe-fatal-after-mount @<anonymous>:664:9`。
 
-遗留义务（已登记看板）：① CI 可跑的"完整引导桩"缺位（当前门禁需要本机 dsh 在跑，CI 里恒 SKIP）⇒ 事故类回归仍靠 agent 手动跑；② `boot()` 之外仍有约 190 条顶层语句未被隔离，其中已修掉两处（`scheduleAuthProbe` 作用域、`rootEl.dataset` 漏守卫），剩余单条风险见 chrome-audit 的顶层清单（`.tmp-investigate/audit/toplevel.*.json`，未入库）。
+遗留义务（已登记看板）：① ~~CI 可跑的"完整引导桩"缺位（当前门禁需要本机 dsh 在跑，CI 里恒 SKIP）⇒ 事故类回归仍靠 agent 手动跑~~ —— **2026-10-17 关闭**：`scripts/test-chrome-bootstrap.mjs`（进 `npm test`、纯 Node 且不设 TEST_HOOK、自带 2 个内存变异体）已覆盖引导上报链 / 自愈重挂 / 契约写入 / 极早时序空安全；真机渲染口径仍留在 `test:chrome-real`。设计取舍见 `.agents/notes/implemented/testing/2026-10-17-chrome-bootstrap-gate.md`；② `boot()` 之外仍有约 190 条顶层语句未被隔离，其中已修掉两处（`scheduleAuthProbe` 作用域、`rootEl.dataset` 漏守卫），剩余单条风险见 chrome-audit 的顶层清单（`.tmp-investigate/audit/toplevel.*.json`，未入库）。
 
 相关：`.agents/notes/implemented/feature/2026-08-27-shell-menu-bar.md`（注入式顶栏的起源与双通道设计）、`.agents/notes/implemented/bug-fix/2026-09-17-shell-menubar-modal-false-positive.md`（同一段全屏浮层探测的既有缺陷）。
 
