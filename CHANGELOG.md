@@ -21,6 +21,13 @@
 >
 > 详情见 `.agents/notes/implemented/bug-fix/2026-09-08-legacy-uninstaller-name-kill.md`。
 
+## [0.18.2](https://github.com/karoc/dsh-desktop/compare/v0.18.1...v0.18.2) (2026-10-16)
+
+
+### Bug Fixes
+
+* **shell:** 下拉菜单上限容得下全部条目（旧值 440px ⇒ 任何屏幕上都有滚动条） ([#167](https://github.com/karoc/dsh-desktop/issues/167)) ([cce3e10](https://github.com/karoc/dsh-desktop/commit/cce3e10156b18026af0fff1814b0b4066950db84))
+
 ## [0.18.1](https://github.com/karoc/dsh-desktop/compare/v0.18.0...v0.18.1) (2026-10-15)
 
 
