@@ -443,21 +443,37 @@
     .dropdown {
       position: fixed; top: 37px;
       min-width: 236px;
-      max-height: min(72vh, 440px);
+      /* 2026-10-16 修：原来是 min(72vh, 440px)，而菜单内容实测 **466px**（18 行：品牌头 +
+         14 项 + 4 个分隔）⇒ **任何屏幕尺寸下都必然出滚动条**（0.18.0 里菜单根本打不开，所以
+         这个上限一直没人看见；用户装上 0.18.1 后第一次真正看到菜单，报的就是"出现滚动条"）。
+         改成"视口剩余高度"与 560px 取小：既装得下当前全部菜单项（466px + 余量），又保证浮层
+         不越出窗口（top 37px + 8px 边距）。窗口真的很矮时（如 400px 高）仍会滚动 —— 那是对的。 */
+      max-height: min(calc(100vh - 52px), 560px);
       overflow-y: auto;
-      scrollbar-width: thin;
       /* 随系统配色的毛玻璃浮层 */
       background: var(--dsh-dd-bg);
       backdrop-filter: blur(24px) saturate(1.4);
       -webkit-backdrop-filter: blur(24px) saturate(1.4);
       border: 1px solid var(--dsh-dd-border);
-      border-radius: 12px;
+      border-radius: 14px; /* 下拉浮层 = 设计 token 的 lg（docs/2026-09-02-ui-design-tokens.md）；2026-10-16 由 12px 对齐 */
       box-shadow: var(--dsh-dd-shadow);
       padding: 6px;
       z-index: 2147483647;
       animation: dsh-dd-in 0.15s ease-out;
     }
     .dropdown[hidden] { display: none; }
+    /* 真要滚动时（矮窗口）的滚动条：8px 圆角滑块（沿用设计 token 的 sm 圆角）+ 透明轨道，
+       免得在毛玻璃浮层上压出一条系统样式的灰边。
+       注意：**不能同时**写 scrollbar-width / scrollbar-color —— 新版 Chromium 一旦看到标准属性
+       就忽略 ::-webkit-scrollbar，那条系统灰滚动条正是它造成的（原来那行 scrollbar-width: thin
+       已按此删除）。WebView2 与 WebKitGTK 都认 webkit 伪元素，两端一致。 */
+    .dropdown::-webkit-scrollbar { width: 8px; }
+    .dropdown::-webkit-scrollbar-track { background: transparent; }
+    .dropdown::-webkit-scrollbar-thumb {
+      background: rgba(127, 127, 127, 0.45);
+      border-radius: 8px;
+    }
+    .dropdown::-webkit-scrollbar-thumb:hover { background: rgba(127, 127, 127, 0.65); }
     @keyframes dsh-dd-in {
       from { opacity: 0; transform: translateY(-5px); }
       to { opacity: 1; transform: translateY(0); }

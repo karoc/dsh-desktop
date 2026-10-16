@@ -160,10 +160,42 @@ const info = await page.evaluate(() => {
     const open = dds.filter((d) => !d.hidden)
     out.menuOpened = open.length > 0
     out.menuItems = open.length ? open[0].querySelectorAll('[data-item],[data-action],.dd-brand').length : 0
+    // 2026-10-16（用户装上 0.18.1 后立刻报的问题）：菜单**能开**但内容 466px > 上限 440px
+    // ⇒ 任何屏幕尺寸下都出滚动条。判据拆两条：正常窗口尺寸下不该有滚动条（内容装得下）；
+    // 矮窗口下允许滚动但**不得越出视口**（下面用 420px 高的视口复测）。
+    if (open.length) {
+      const dd = open[0]
+      out.menuScrolls = dd.scrollHeight > dd.clientHeight
+      out.menuBottom = Math.round(dd.getBoundingClientRect().bottom)
+      out.viewportH = window.innerHeight
+    }
     btn.click() // 收起，保持现场干净
   }
   return out
 })
+// 矮窗口复测：允许滚动，但不许越出视口底部
+await page.setViewportSize({ width: 1147, height: 420 })
+await page.waitForTimeout(400)
+await page.evaluate(() => {
+  const sr = document.getElementById('dsh-shell-chrome')?.shadowRoot
+  const btn = sr && sr.querySelector('.menu-btn')
+  if (btn) btn.click()
+})
+await page.waitForTimeout(300)
+const shortVp = await page.evaluate(() => {
+  const sr = document.getElementById('dsh-shell-chrome')?.shadowRoot
+  const dd = sr && [...sr.querySelectorAll('.dropdown')].find((d) => !d.hidden)
+  if (!dd) return null
+  const r = dd.getBoundingClientRect()
+  return { bottom: Math.round(r.bottom), top: Math.round(r.top), vh: window.innerHeight, scrolls: dd.scrollHeight > dd.clientHeight }
+})
+await page.evaluate(() => {
+  const sr = document.getElementById('dsh-shell-chrome')?.shadowRoot
+  const btn = sr && sr.querySelector('.menu-btn')
+  if (btn) btn.click()
+})
+await page.setViewportSize({ width: 1344, height: 1025 })
+await page.waitForTimeout(300)
 const bootStages = stagesOf()
 const mountedLine = reports.find((d) => d.startsWith('mounted')) || ''
 
@@ -189,6 +221,10 @@ check('宿主被移除后自愈重挂（SPA 重渲染不再永久丢顶栏）', 
 check('自愈会上报 remount（"曾经消失"可回溯）', healStages.includes('remount'))
 check(`唯一菜单点得开：点 logo → 下拉出现且有条目（opened=${info.menuOpened} items=${info.menuItems}）`,
   info.menuOpened && info.menuItems >= 5)
+check(`正常窗口尺寸下菜单不出滚动条（scrolls=${info.menuScrolls} 内容=${info.menuItems} 项）`,
+  info.menuScrolls === false)
+check(`矮窗口（420px）下菜单允许滚动但不越出视口（bottom=${shortVp ? shortVp.bottom : '-'} vh=${shortVp ? shortVp.vh : '-'} scrolls=${shortVp ? shortVp.scrolls : '-'}）`,
+  !!shortVp && shortVp.bottom <= shortVp.vh)
 console.log(`  契约开（加载后注入）: paddingTop='${info.contract.paddingTop}'` +
   ` windowsTitlebar=${JSON.stringify(info.contract.windowsTitlebar)}` +
   ` menubarVar='${info.contract.menubarVar}' titlebarVar='${info.contract.titlebarVar}'` +
