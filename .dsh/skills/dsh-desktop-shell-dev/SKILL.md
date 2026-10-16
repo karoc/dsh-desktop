@@ -374,6 +374,7 @@ CI 的 `check` 作业跑的是 **host（ubuntu）** 的 `cargo clippy -- -D warn
 |---|---|
 | 注入脚本顶层抛异常 = **其后整段静默死亡** | `w.eval()` 即使脚本抛异常也只报"派发成功"（JS 异常不回传），日志里一字没有。0.18.0 实测：`scheduleAuthProbe()` 抛 ReferenceError（定义被误插进函数作用域），其后的自愈/图标同步/菜单关闭**以及 window 级点击分发器**全没装上 ⇒ 顶栏先可见、"菜单点不开"、被 SPA 清掉后永久消失。对策：顶层动作走 `boot(stage, fn)` 隔离 + 引导上报（见 §2.2），并用 `npm run test:chrome-real` 的真实注入自检兜住（`test-shell-chrome.mjs` 因 TEST_HOOK 提前 return **测不到**这条路径）。⚠️ 注意 `boot()` 只买到"可见"，不买"不致命" |
 | "全部空安全"式修复会漏行 | 2026-10-15 给契约块三行加了 `if (rootEl)`，**漏了 `captionPlan.dataset` 那一行**；2026-10-16 审计发现并用夹具复现 `Cannot read properties of null (reading 'dataset')`（契约开 + 最早期注入 ⇒ 与 0.18.0 同签名：host 在但只有 4 个按钮、自愈失效、契约静默降级）。修同类"补守卫"时按**同一作用域内的兄弟行逐行对照**，并让门禁真的走到那条分支（`test-chrome-real-init.mjs` 的 prefix 加 `__DSH_TITLEBAR_CONTRACT__=true;`，否则 dataset 永远走空转分支、门禁结构上看不见） |
+| `main page load` 每秒成百上千行 = **导航守卫失控**（CPU 打满、确认窗都渲染不出来） | `on_page_load` 里"origin 不同就 `navigate(live)`"在**目标不可达**时紧循环：**失败的导航不会改变 webview 的 URL** ⇒ 判定恒真 ⇒ 导航→失败→再触发。0.18.2 及更早没有去重；0.18.3 起判定抽成 `nav_guard_decision` + 按 `nav_fallback_interval_secs` 曲线去重，并写 `nav-guard: navigate -> … (attempt N)`。注意 `nav-fallback: giving up fast retries` 只覆盖**定时器**那条路径，看到它并不代表守卫也安全。触发条件很常见：dsh 启动失败 / 刚跑过「清理缓存」删了 `runtime/node_modules` / 升级出错 |
 | Windows 菜单栏 | `Menu` 只在 macOS 渲染窗口菜单栏；Windows 仅托盘/上下文 → 自绘注入 |
 | 远程页无 `__TAURI__` | tauri#11934；一切走环回桥，桥端口靠注入前缀传递 |
 | `set_title` / notify-rust `app_id` | 接收 **`&str`** 不是 `Into<String>`；Windows 专属路径的错误只在 Windows 侧编译暴露（Linux cargo check 发现不了）→ 改了通用代码后必须等 CI windows job |
