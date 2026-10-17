@@ -285,3 +285,19 @@ process.exit(red.length ? 1 : 0)
 //    下一步最快的取证：**手工跑一次 manager** 抓 stderr（shell 不捕获它）；或重置 dev runtime 后重试。
 // ⑥ 因此"清欠账"的真实前置条件被重新定义：**先把安装链路弄通**（registry/代理路线），
 //    而不是改地板 —— 地板只是触发那次安装的开关。
+
+// ── 2026-10-17 深夜 终极定位：**两次误判都是我造成的，产品侧没有"安装链路不通"这回事** ────────────
+// 手工跑 manager 抓 stderr（壳不捕获它，见上方"诊断盲点"）拿到真正的报错：
+//   Error [ERR_MODULE_NOT_FOUND]: Cannot find module
+//     '…\DSH Smoothly Desktop Dev\resources\manager\bake-port.mjs'
+//     imported from '…\resources\manager\server-manager.mjs'
+// ⇒ 根因：我上一步"还原"时把**仓库当前版**的 server-manager.mjs（它 import './bake-port.mjs'）覆盖到
+//   **旧构建的 dev 安装**上，而那个 manager 目录里没有 bake-port.mjs ⇒ import 失败 ⇒ 秒退 1。
+//   所以此前所有"启动期失败 / 网络不通 / 地板触发安装失败"的推论**全部作废** —— manager 根本没走到安装那一步。
+// ✅ 修复（仓库文档化的热部署做法：整目录覆盖）：`tar -czf - -C src-tauri/resources/manager .` 经 stdin 管道
+//   送进 Windows 后 `tar -xzf` 到 dev 安装的 resources\manager\ ⇒ 六个 .mjs 全部就位。
+// ✅ 恢复验证：manager 重启后日志有**新行**、`dsh web: http://127.0.0.1:58078/?token=…` 起来 ⇒ dev 健康。
+// 新数据（同时刻 registry）：`npm latest … 0.2.0-rc.2 (next 0.2.1-rc.2)` ⇒ 欠账现为 **alpha.4/alpha.5/rc.1/rc.2 四个**；
+//   manager 明示 `pre-release update available … (next tag, user decides)` ⇒ **预发布走用户显式触发**
+//   （壳内「检查更新」→ 立即更新，或桥 `/update-dsh`），这正是清欠账该走的路径 —— 而不是手工改地板。
+// 下一步（顺序）：① 用产品自己的预发布升级路径在 dev 上装 0.2.1-rc.2；② 装成后按方案走仓库侧适配。
