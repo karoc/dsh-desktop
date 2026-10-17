@@ -270,3 +270,18 @@ process.exit(red.length ? 1 : 0)
 //    ② 写入通路确认后，优先用**产品自己的升级路径**（壳内「检查更新」→ 更新，或 manager 的 update-dsh）
 //       让 manager 安装候选版本，而不是手工改它随包副本的地板；
 //    ③ 候选装成后，才做仓库侧适配（抬 `MIN_DSH_VERSION` 两份副本 + `--update-fixture` 重采 + 插件 peer 对齐 + 门禁）。
+
+// ── 2026-10-17 深夜 结论修正（上方"写入被挡"假设**已证伪**，真因另有其物） ──────────────
+// ① 写入通路是好的：放开策略后探针文件写入 + 回读成功（WRITE-OK / PROBE-CLEANED）。
+// ② 真因：我用的 `Set-Content -Encoding UTF8` 在 PS 5.1 下**给文件加了 BOM 并把中文注释写成乱码**
+//    （`—` → `鈥?`，读时按 ANSI 解码）⇒ 改的是 dev 已安装副本 `…\DSH Smoothly Desktop Dev\resources\manager\server-manager.mjs`。
+//    教训：改 Windows 侧文本文件**不要用 PS Set-Content 往返**；正解是 python 生成字节 + stdin 管道 WriteAllBytes（已验证）。
+// ③ 用逐字节干净副本（只差地板行 = 0.2.1-rc.1）重跑：manager **仍在 ~2s 内 exit 1**
+//    ⇒ "我写坏文件"也被推翻；**真凶是地板值触发的安装路径**（该环境里 registry 路线不通那一类）。
+// ④ 已还原：dev 副本逐字节恢复为仓库版本（floor=0.2.1-alpha.3，diff 空）、dev 壳已停（无 crash 循环）、
+//    **正式版全程未触碰**。dev runtime 文件完好（dsh bin.js 在、node_modules 247 项）但该实例当前起不来服务。
+// ⑤ **新发现的诊断盲点（值得进方案）**：crash 报告目录只有 summary.json / wer.txt / shell-session.log.tail /
+//    orphans.txt，**没有 manager 自己的 stdout/stderr** ⇒ "启动期失败（退出码 1）"看不到原因。
+//    下一步最快的取证：**手工跑一次 manager** 抓 stderr（shell 不捕获它）；或重置 dev runtime 后重试。
+// ⑥ 因此"清欠账"的真实前置条件被重新定义：**先把安装链路弄通**（registry/代理路线），
+//    而不是改地板 —— 地板只是触发那次安装的开关。
