@@ -321,3 +321,22 @@ process.exit(red.length ? 1 : 0)
 // 下一步（很短）：前台跑 manager 并把输出重定向到文件（`cmd /c node … > log 2>&1` 比 Start-Process 重定向可靠），
 //   给足 10–15 分钟并轮询 `runtime/node_modules/@deepseek-ai/dsh/package.json` 的 version，直到变成 0.2.1-rc.2；
 //   装机完成后即可进入仓库侧适配（抬地板两份副本 + `--update-fixture` 重采 + 插件 peer 对齐 + 门禁）。
+
+// ── 2026-10-18 凌晨 突破：**候选版本装成了**（清欠账的前置条件打通） ────────────────────────
+// 用 `cmd /c "<<node>>" "<<manager>>" … > D:\Dev\_install\mgr2.log 2>&1` 前台重定向（比
+// Start-Process -RedirectStandardOutput 可靠，后者上次没抓到输出），轮询 runtime 的 dsh version。
+// 实测（60 秒内完成）：
+//   Done in 31.9s using pnpm v11.24.0
+//   updated to 0.2.1-rc.2 / install-status {"phase":"done","version":"0.2.1-rc.2"}
+//   upgrade marker: 0.2.1-alpha.3 -> 0.2.1-rc.2（kind=update, attempts=1, 版本切换可用…）
+//   installed @deepseek-ai/dsh: 0.2.1-rc.2 + preinstalled bundles + launching dsh web
+// ⇒ **安装链路完全正常、且只要 32 秒**；此前"装不上"的全部结论都是我的文件覆盖事故造成的假象。
+// 现场：dev runtime 的 dsh = **0.2.1-rc.2**（候选版本），dev 已部署 manager 地板 = 0.2.1-rc.2（我改的）；
+//   dev 壳可随时启动做**真机验收**（浏览器/桥/四预装插件渲染）；正式版全程未触碰。
+// 剩余工作（顺序）：
+//   ① 仓库侧适配：抬 `MIN_DSH_VERSION`（scripts + resources/manager 两份）→ 追加适配记录注释 →
+//      `node scripts/test-patch-targets.mjs --update-fixture --runtime "<dev runtime>"` 重采夹具
+//      （现在 runtime 就是 rc.2，可直接采）→ 四预装插件 peer 对齐 → `npm test` 全绿；
+//   ② dev 实机验收（chrome 三上报 / 桥 / 四插件渲染）；
+//   ③ PR → 合并 → 发 v0.18.5 → tag 构建 → 装机；
+//   ④ 回到自动化（探针按 runtime 架构重写 + alpha.3 校准到绿 + watch/tag-dispatch 两个 workflow）。
