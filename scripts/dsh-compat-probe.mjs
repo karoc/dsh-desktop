@@ -236,3 +236,21 @@ if (OUT) { writeFileSync(OUT, JSON.stringify(report, null, 2)); log(`报告已�
 if (!KEEP) rmSync(tmp, { recursive: true, force: true })
 else log(`tarball 保留在 ${tmp}`)
 process.exit(red.length ? 1 : 0)
+
+// ── 2026-10-17 路线甲（先清欠账）尝试记录：**两次都没能让候选版本装上，原因待查** ──────────
+// 目的：把 dsh 抬到 0.2.1-rc.1（欠账：alpha.4 41.0h / alpha.5 17.6h / rc.1 2.9h）。
+// 尝试①：手工跑 runtime 自带 pnpm —— `& <runtime>\bin\pnpm.cmd add '@deepseek-ai/dsh@0.2.1-rc.1'`
+//   （cwd=runtime）。结果：**no-op** —— 装完 runtime/package.json 仍是 `0.2.1-alpha.3`，
+//   `node node_modules/@deepseek-ai/dsh/lib/bin.js --version` 仍报 alpha.3。
+//   已定位的可能原因（未验证，别当结论）：manager 的注释写明"store 路径失配修复**必须在任何 pnpm install 前**执行"，
+//   手搓 pnpm 绕过了它；另外 native 依赖（koffi/node-pty…）与 allowBuilds 也需要 manager 的管线。
+// 尝试②：改 **dev 已安装副本**的 `resources\manager\server-manager.mjs` 地板为 0.2.1-rc.1 后启动 dev 壳，
+//   让 manager 自己按 max(latest, floor) 安装。结果：等 150s 后 runtime 仍是 alpha.3，日志里**没有任何安装尝试行**
+//   （只有 `activated: pending-open=None`）。是"地板编辑没生效"还是"manager 判定无需安装"**尚未确定**。
+// ⚠️ **未核实项（下一会话第一件事）**：尝试② 对 dev 安装副本的那处编辑是否真的生效、是否已回滚**没验证成功**
+//   （回滚脚本无输出）。核实/回滚一行命令：
+//   `Select-String -Path 'C:\Users\qqwto\AppData\Local\DSH Smoothly Desktop Dev\resources\manager\server-manager.mjs' -Pattern "MIN_DSH_VERSION = '([^']+)'"`
+//   —— 期望值 `0.2.1-alpha.3`；若为 `0.2.1-rc.1` 就把它改回去（正式版从未被触碰）。
+// 结论：清欠账的正确入口是**跑 manager 自己的升级路径**（或找出 install 未触发的原因），不是手搓 pnpm；
+//   下一步建议：先只读核实那处编辑状态，然后在 dev 上触发一次真实升级（壳内菜单「检查更新」/ manager 的
+//   `update-dsh` 路径），用它的日志确认候选版本能否干净装上。
