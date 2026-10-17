@@ -84,7 +84,12 @@ const NATIVE_BUILD_PKGS = [
  * `dsh plugin allow-version`。地板与预装 bundle 必须**同一批**落地：旧 bundle
  * （如 kanban 0.2.8）用的是 0.1.7 已删除的图标名，单独抬地板会让它们在新运行时上崩。
  */
-const MIN_DSH_VERSION = '0.2.1-alpha.3'
+/*
+ * 2026-10-18 抬到 0.2.1-rc.2：夹具重采 188 → 190 id（--update-fixture，dev runtime 实装 rc.2），
+ * overlay 唯一兜底目标 `ui-sidebar-browser` 仍为 `disabled: false`（test-patch-targets 绿）；四个预装
+ * bundle 的 peer 范围均被新地板满足（test-plugin-dsh-compat 绿）；manager 安装链路实测 32s 完成升级。
+ */
+const MIN_DSH_VERSION = '0.2.1-rc.2'
 
 // ── args ───────────────────────────────────────────────────────────────────
 function parseArgs(argv) {
