@@ -254,3 +254,19 @@ process.exit(red.length ? 1 : 0)
 // 结论：清欠账的正确入口是**跑 manager 自己的升级路径**（或找出 install 未触发的原因），不是手搓 pnpm；
 //   下一步建议：先只读核实那处编辑状态，然后在 dev 上触发一次真实升级（壳内菜单「检查更新」/ manager 的
 //   `update-dsh` 路径），用它的日志确认候选版本能否干净装上。
+
+// ── 2026-10-17 晚 续查：未核实项已清，但"改地板让 manager 自己装"仍无效果，且**写入本身疑似被挡** ──
+// ✅ 已核实（上轮遗留）：dev 安装副本 `C:\Users\qqwto\AppData\Local\DSH Smoothly Desktop Dev\resources\manager\server-manager.mjs`
+//    存在，地板值 = `0.2.1-alpha.3` ⇒ **上轮那处编辑从未生效**（脚本判为 "no revert needed"）。所以尝试②的真实原因是
+//    "地板没被改"（而不是"manager 判定无需安装"）—— 正式版全程未被触碰。
+// ❌ 尝试③：改用**按行号精确改写**（Select-String 取行号 → 改该行 → Set-Content → 回读校验）并启动 dev 观察安装。
+//    结果又是**静默无输出**：脚本自报的"命中行/写后/已启动"一行都没打印，runtime 仍是 alpha.3，日志无安装行。
+// 🔎 新增假设（有旁证，**未证实**）：**经 PowerShell 写入 Windows 侧用户目录的写操作在本会话里失败/被挡** ——
+//    旁证：本轮三次 `Set-Content` 到 `AppData\Local\...` 全部无输出无效，而**同一会话里经 stdin 管道写
+//    `D:\Dev\_install\*.exe` 是大文件也成功**（安装器落地 + SHA256 校验通过）。可能与环境/文件策略有关。
+// ⚠️ 因此"清欠账"下一步的正确顺序（别直接再改地板）：
+//    ① 先验证写入通路：往目标目录写一个小探针文件并回读（**不要再用 grep 过滤 PowerShell 输出**，
+//       静默失败就是这样漏掉的 —— 必须看 stderr/CLIXML 原文）；
+//    ② 写入通路确认后，优先用**产品自己的升级路径**（壳内「检查更新」→ 更新，或 manager 的 update-dsh）
+//       让 manager 安装候选版本，而不是手工改它随包副本的地板；
+//    ③ 候选装成后，才做仓库侧适配（抬 `MIN_DSH_VERSION` 两份副本 + `--update-fixture` 重采 + 插件 peer 对齐 + 门禁）。
