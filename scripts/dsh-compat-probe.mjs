@@ -301,3 +301,23 @@ process.exit(red.length ? 1 : 0)
 //   manager 明示 `pre-release update available … (next tag, user decides)` ⇒ **预发布走用户显式触发**
 //   （壳内「检查更新」→ 立即更新，或桥 `/update-dsh`），这正是清欠账该走的路径 —— 而不是手工改地板。
 // 下一步（顺序）：① 用产品自己的预发布升级路径在 dev 上装 0.2.1-rc.2；② 装成后按方案走仓库侧适配。
+
+// ── 2026-10-17 深夜 决定性一轮：**安装链路证实是通的**（此前"网络不通"结论彻底作废） ──────────
+// 方法：把**已部署** dev manager 的地板字节安全地改成 0.2.1-rc.2（python 生成 + stdin 管道 WriteAllBytes，
+// 不用 PS Set-Content），然后**手工跑 manager**（node = `<install>\resources\node\win32-x64\node.exe`，
+// 参数 `--runtime-dir <dev rt> --resource-dir <install>\resources --patch <rt>\dsh-desktop.patch.yml`），
+// 这样它的 stdout 直接在我眼前（壳不捕获它，见上文诊断盲点）。实测输出：
+//   dsh 0.2.1-alpha.3 低于最低要求 0.2.1-rc.2 … 升级到地板版本
+//   updating @deepseek-ai/dsh 0.2.1-alpha.3 -> 0.2.1-rc.2
+//   install-status {"phase":"start","version":"0.2.1-rc.2"}
+//   ensureStorePathsMatch: rewrote store dirs in .modules.yaml (legacy path after migration)
+//   ✅ Lockfile passes supply-chain policies / Progress: resolved 1 → 2 → 10 → 66 → 78 …
+// ⇒ **registry/代理路线是通的，pnpm 正常解析下载**；"装不上=网络问题"这条从根上错了。
+// ⚠️ 两次没装完都是**我自己的观察方式**打断的：第一次 `Select-Object -First 25` 截断管道把安装掐了；
+//   第二次改为后台重定向到 `D:\Dev\_install\mgr-run.log` + 轮询 300s，仍停在 alpha.3，且日志为空
+//   （`Start-Process -RedirectStandardOutput` 这次没抓到输出，原因未查）。
+// 现场状态（下一会话接手时的事实）：dev 已部署 manager 的**地板 = 0.2.1-rc.2**（我改的，未完成意图），
+//   实际安装的 dsh 仍 = **0.2.1-alpha.3**；dev 壳已停；**正式版全程未触碰**。
+// 下一步（很短）：前台跑 manager 并把输出重定向到文件（`cmd /c node … > log 2>&1` 比 Start-Process 重定向可靠），
+//   给足 10–15 分钟并轮询 `runtime/node_modules/@deepseek-ai/dsh/package.json` 的 version，直到变成 0.2.1-rc.2；
+//   装机完成后即可进入仓库侧适配（抬地板两份副本 + `--update-fixture` 重采 + 插件 peer 对齐 + 门禁）。
