@@ -11,6 +11,19 @@
 //      要先查清它们在哪个产物（当年人工审计是"抽检 web-app tarball"，需重新取证，别猜）；
 //   ④ CLI 开关按文本搜 `.js` 命中不到 ⇒ 上游用动态拼装/配置对象，需换判据（或改在装好后跑 `--help`）。
 // 修好并**通过 alpha.3 校准（必须绿）**之后，才允许接进 workflow 与清欠账。
+//
+// ── 2026-10-17 二次取证：**架构结论（本骨架的"不装 runtime"前提是错的）** ─────────────
+// 用本机已装的 dev runtime（dsh 0.2.1-alpha.3，`…/dsh.smoothly.desktop.dev/runtime/node_modules/@deepseek-ai`）
+// 直接 grep，实测 seam 的所在地：
+//   settings.section → dsh-client-ui-settings-account/lib/client.js、dsh-client-ui-agent-preset/lib/client.js
+//   configForms      → dsh-client-locale/lib/client.js、dsh-client-ui-agent-preset/lib/client.js
+//   __ModuleLoader__ → dsh-api-gateway/lib/client.browser.js
+// ⇒ seam **不在** `@deepseek-ai/dsh-web-app` tarball 里，而是散在几十个 `dsh-*` / `dsh-client-ui-*` 包里。
+// 同理：patch id 的权威来源是运行时 `dsh --dump-config`（夹具 188 个正是这么来的），CLI 开关要看运行时的
+// `dsh web --help`。⇒ 正确架构与仓库既有模式一致：**探针 = 装一个候选版本到临时 runtime，然后跑既有的
+// 权威判据**（`test-patch-targets.mjs --runtime <dir>` 的 id 集合、`--dump-config`、`--help`、以及本文件
+// 的 seam grep 改为在 runtime 树上跑），探针只负责"编排 + 分级 + 出报告"。本文件里基于 tarball 的
+// ①②③④ 四处检查因此全部作废（保留作反面参考），重写时不要再用 tarball 静态搜索。
 // dsh 兼容性探针：给定一个 dsh 版本（或 latest / next），把"抬地板前必须人工核对"的那几件事
 // 变成一次确定性检查，产出 verdict + 证据 JSON。
 //
