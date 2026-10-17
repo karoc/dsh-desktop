@@ -1,6 +1,6 @@
 {
   "note": "由 scripts/test-patch-targets.mjs --update-fixture 生成；抬 dsh 地板时刷新",
-  "dshVersion": "0.2.1-alpha.3",
+  "dshVersion": "0.2.1-rc.2",
   "capturedFrom": "@deepseek-ai/dsh-web-app/cordis.patch.yml",
   "ids": [
     "account-controller",
@@ -136,6 +136,7 @@
     "ui-commands",
     "ui-conversation",
     "ui-cordis",
+    "ui-deepseek-model-label-1017",
     "ui-deliverables",
     "ui-goal",
     "ui-input-trigger",
@@ -180,6 +181,7 @@
     "ui-workspace",
     "user-questions",
     "web",
+    "web-deepseek-api",
     "web-fetch-http",
     "web-runtime",
     "web-search-deepseek",
