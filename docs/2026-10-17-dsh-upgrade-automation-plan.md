@@ -230,3 +230,14 @@ Release（v0.14.0 / v0.16.0 / v0.18.1–v0.18.4）**与抬版无关**（地板�
 - **M2（P1，2–3 天）**：`dsh:adapt` 一条命令 + canary 验收。此时顺利路径 ≈2h（§2）。
 - **M3（P2，3–5 天）**：SLA 报表 + 预装插件自动同步 PR + （按决策）发布链路自动化。
 - **M4（P3，可选）**：双地板矩阵 / alpha 节奏。
+
+---
+
+## 实施状态（2026-10-18 更新）
+
+- **P0 已落地**：`scripts/dsh-compat-probe.mjs`（按 runtime 架构重写，校准 GREEN + 真实负向对照）、
+  `.github/workflows/dsh-watch.yml`（cron `*/15`，开/更新 `dsh-upgrade` issue，零 secret）、
+  `.github/workflows/tag-dispatch.yml`（cron `*/10`，补派发 `workflow_dispatch`，零 secret）。
+- 二者都带 `workflow_dispatch`，合并后可在 Actions 页手动触发一次做首次实跑验证（cron 只在默认分支生效）。
+- 仍未做：P1（`dsh:adapt` 一条命令 + canary 验收）、P2（SLA 报表 + 预装插件自动同步 PR）。
+- 清欠账侧：地板已到 `0.2.1-rc.2` 并随 **v0.19.0** 装入正式版（随包 manager 地板已核验）。
