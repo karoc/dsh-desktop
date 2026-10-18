@@ -434,3 +434,26 @@ Windows 安装包由 GitHub Actions（`.github/workflows/build.yml`）在 `windo
 ## License
 
 MIT
+
+## 维护者：dsh 升级自动化
+
+- **探针**：`node scripts/dsh-compat-probe.mjs --runtime <已装新版的 runtime>`（等价 `npm run dsh:probe -- --runtime …`）
+  —— 核对「已装版本 ↔ 壳地板 ↔ patch 夹具」三方一致、6 个客户端 seam、CLI 开关、native 白名单、
+  四个预装插件的 peer 范围。GREEN 才算过；RED 时退出码 1。**已在本机用真实数据校准**：
+  已知良好 runtime（rc.2）⇒ GREEN；仍是旧版的正式版 runtime ⇒ RED。
+- **一条命令适配**：`node scripts/dsh-adapt.mjs --version <版本>`（等价 `npm run dsh:adapt -- --version <版本>`）
+  —— 依次做：地板两份 + 适配记录（写进注释块内部，`node --check` 校验，不过则回滚）→ README 地板数值 →
+  patch 夹具重采 → 预装 peer 兼容 → 探针非 RED → 全量门禁（23 套，CI 等价）。**任一步失败立即停**；
+  `--dry-run` 只打印计划；`--canary` 读取 dev 实例日志断言 chrome/client-ready/预装 bundle 三个标记
+  （只读，不启动也不杀进程）。装版本、发版、装机刻意不做。
+- **两个定时工作流**（零 secret，只用 `GITHUB_TOKEN`）：`dsh-watch.yml` 每 15 分钟探测 npm dist-tags，
+  比地板新就开/更新 `dsh-upgrade` issue（含 6h 倒计时与适配清单）；`tag-dispatch.yml` 每 10 分钟扫
+  Release，对「有 tag 但资产不全且尚无构建运行」的版本补派发 `workflow_dispatch`
+  （release-please 用 API 打 tag ⇒ 不触发 push 事件，故必须补派发）。
+
+- **SLA 报表**：`node scripts/dsh-sla-report.mjs`（`--issue` 把报表 upsert 到 `sla-report` issue；
+  `--fail-on-breach --recent 3` 只把**最近 3 个**版本的 6h 超时算作门禁失败，历史数据不会让门禁恒红）
+  —— 按 **dsh 版本**聚合量出「官方发布 → 我们发出稳定版」的真实耗时（同一地板被多个壳版本携带时不重复计量）。
+- **另两个定时工作流**：`dsh-sla-report.yml`（每周一 01:00 UTC 出 SLA 报表）与 `preinstalled-sync.yml`
+  （每周一 02:00 UTC 检测四个预装 bundle 与 npm `dist-tags.latest` 的漂移，**有漂移才**同步 → 过
+  `copy-consistency` + `plugin-dsh-compat` 两道门禁 → 开/更新 PR，PR 正文写明当前 dsh 地板；无漂移则静默 no-op）。

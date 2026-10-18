@@ -1,0 +1,101 @@
+# 预装插件自动同步 PR（自动化方案 P2）—— 每周检查壳内四个预装 bundle 是否有新版本，
+# 有就同步 + 开 PR；没有就静默 no-op。
+#
+# 为什么必须自动化：目标②要求「预装插件与 dsh 地板同批同步维护」—— 手工靠"想起来"就会漏，
+# 而漏掉的后果是真实缺陷（历史事故：旧 bundle 引用了 0.1.7 已删除的 icon 名）。
+#
+# 复用既有脚本，不重写逻辑：`scripts/sync-preinstalled-plugin.mjs <包名> <版本>`（内部会跑
+# sync-resources.mjs 把 plugins/preinstalled → src-tauri/resources/preinstalled 同步）。
+# 零 secret：只用 GITHUB_TOKEN（contents + pull-requests: write）。
+#
+# 幂等：① 无漂移 ⇒ 不开 PR；② 已有同分支 PR ⇒ 推送更新它（不新建）；③ 同步后无 diff ⇒ 不开 PR 且删分支。
+name: preinstalled-sync
+
+on:
+  schedule:
+    - cron: '0 2 * * 1'      # 每周一 02:00 UTC（SLA 报表后一小时）
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: preinstalled-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 检测漂移（预装目录里的 name/version vs npm dist-tags.latest）
+        id: drift
+        run: |
+          set -euo pipefail
+          : > /tmp/drift.tsv
+          for dir in src-tauri/resources/preinstalled/*/; do
+            pj="$dir/package.json"
+            [ -f "$pj" ] || continue
+            name=$(jq -r .name "$pj")
+            local_v=$(jq -r .version "$pj")
+            latest=$(npm view "$name" dist-tags.latest 2>/dev/null || echo '?')
+            printf '%s\t%s\t%s\t%s\n' "$dir" "$name" "$local_v" "$latest" >> /tmp/drift.tsv
+            echo "$name: 本地 $local_v / npm latest $latest"
+          done
+          drifted=$(awk -F'\t' '$3 != $4 { print $2"@"$4 }' /tmp/drift.tsv | tr '\n' ' ' | sed 's/ $//')
+          echo "drifted=$drifted" >> "$GITHUB_OUTPUT"
+          {
+            echo "### preinstalled-sync"
+            echo ""
+            echo "| 包 | 本地 | npm latest |"
+            echo "|---|---|---|"
+            awk -F'\t' '{ print "| " $2 " | " $3 " | " $4 " |" }' /tmp/drift.tsv
+            echo ""
+            echo "漂移：**${drifted:-无}**"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 同步并开 PR
+        if: steps.drift.outputs.drifted != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DRIFTED: ${{ steps.drift.outputs.drifted }}
+        run: |
+          set -euo pipefail
+          branch="chore/preinstalled-sync"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout -B "$branch"
+
+          for item in $DRIFTED; do
+            name="${item%@*}"; version="${item##*@}"
+            echo "同步 $name → $version"
+            node scripts/sync-preinstalled-plugin.mjs "$name" "$version"
+          done
+
+          # 与地板同批：把当前 dsh 地板写进 PR 正文，方便 reviewer 判断是否要一起抬
+          floor=$(grep -oP "MIN_DSH_VERSION = '\K[^']+" scripts/server-manager.mjs)
+          if git diff --quiet; then
+            echo "同步后无差异 ⇒ 不开 PR"
+            exit 0
+          fi
+
+          # 同步是有行为影响的改动：必须过与预装插件相关的门禁，红了就不开 PR
+          node scripts/test-copy-consistency.mjs
+          node scripts/test-plugin-dsh-compat.mjs
+
+          git add -A
+          git commit -m "chore(preinstalled): 同步预装插件（$DRIFTED）
+
+          壳内 dsh 地板：$floor。预装 bundle 必须与地板同批维护（历史事故：旧 bundle 引用已删除的 icon 名）。"
+          git push -u origin "$branch" --force-with-lease
+
+          body=$(printf '自动同步预装插件：%s\n\n当前壳内 dsh 地板：`%s`\n\n门禁：copy-consistency + plugin-dsh-compat 已在本工作流内跑过；合并前请确认是否需要同批抬地板。\n\n（本 PR 由 preinstalled-sync 工作流生成；幂等：再次运行会更新同一分支。）\n' "$DRIFTED" "$floor")
+          if gh pr view "$branch" --json number >/dev/null 2>&1; then
+            gh pr comment "$branch" --body "再次检测到新版本：$DRIFTED（已推送更新）。"
+            echo "已更新既有 PR"
+          else
+            gh pr create --base main --head "$branch" \
+              --title "chore(preinstalled): 同步预装插件（$DRIFTED）" --body "$body"
+          fi

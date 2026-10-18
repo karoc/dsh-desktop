@@ -1,0 +1,59 @@
+# tag 构建补派发（自动化方案 P0，docs/2026-10-17-dsh-upgrade-automation-plan.md §3.3）
+#
+# 为什么需要它：release-please 用 **GitHub API** 打 tag，而 API 创建的 tag **不触发 push 事件** ⇒
+# `v*` 的 build 从不自动跑（历史证据：每个 v0.18.x 的构建运行 event 都是 workflow_dispatch，
+# 没有一个 push；v0.11.0 的 Release 最终 assets 为空）。
+#
+# 本工作流每 10 分钟扫最近 20 个 Release：**Release 已存在但资产数 < 3、且该 tag 尚无构建运行**时，
+# 补发一次 `workflow_dispatch`。这是**零 secret** 方案（只用 GITHUB_TOKEN 的 actions: write），
+# 明确不引入 RELEASE_PLEASE_TOKEN —— 2026-09-22 的凭证面否决依然有效。
+#
+# 幂等保证：① 资产够 3 个 ⇒ 跳过；② 已有该 tag 的构建运行（排队/进行中/完成）⇒ 跳过。
+name: tag-dispatch
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: tag-dispatch
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 找出「有 tag 但 Release 资产不全」的版本并补派发构建
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPO/releases?per_page=20" --jq '.[] | [.tag_name, (.assets | length)] | @tsv' > /tmp/releases.tsv
+          echo "最近 Release（tag / 资产数）："; cat /tmp/releases.tsv
+
+          dispatched=0
+          while IFS=$'\t' read -r tag assets; do
+            case "$tag" in v*) ;; *) echo "跳过非版本 tag: $tag"; continue ;; esac
+            if [ "${assets:-0}" -ge 3 ]; then continue; fi
+            runs=$(gh api "repos/$REPO/actions/workflows/build.yml/runs?per_page=100" \
+              --jq "[.workflow_runs[] | select(.head_branch == \"$tag\")] | length")
+            if [ "$runs" -gt 0 ]; then
+              echo "$tag: 已有 $runs 次构建运行，跳过"
+              continue
+            fi
+            gh workflow run build.yml --ref "$tag"
+            echo "已补派发构建：$tag（当前资产数 $assets）"
+            dispatched=$((dispatched + 1))
+          done < /tmp/releases.tsv
+
+          {
+            echo "### tag-dispatch"
+            echo ""
+            echo "本轮补派发次数：**$dispatched**"
+          } >> "$GITHUB_STEP_SUMMARY"
