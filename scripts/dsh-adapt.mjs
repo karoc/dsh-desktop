@@ -14,6 +14,9 @@
 //   7 全量门禁（按 package.json 的 test 链逐条跑，等价 CI；本机 npm CLI 不可用，故直接跑 node）
 //   8 汇总 + 剩余人工步骤（dev 实机验收 / PR / 发布 / 装机）
 //
+// --canary 的前提：它只认「脚本启动**之后**新写入的日志行」，所以 dev 壳必须在检查期间**新启动**
+//（一个早就开着且空闲的壳不会产生新标记行）。检查只读日志，不启动也不杀任何进程。
+//
 // **刻意不做**：装候选版本（走 manager 的安装路径，实测 31.9s）、建 PR、发版、装机 —— 这些有对外副作用，
 // 由人和产品流程执行。`--canary` 只**读取** dev 实例日志做验收断言，不启动/不杀任何进程。
 //
@@ -34,7 +37,7 @@ const PATCH_GATE = join(ROOT, 'scripts/test-patch-targets.mjs')
 const PLUGIN_GATE = join(ROOT, 'scripts/test-plugin-dsh-compat.mjs')
 const PROBE = join(ROOT, 'scripts/dsh-compat-probe.mjs')
 const DEFAULT_DEV_RUNTIME = join(process.env.APPDATA ?? '', 'dsh.smoothly.desktop.dev', 'runtime')
-const DEFAULT_DEV_LOG = join(process.env.APPDATA ?? '', 'dsh.smoothly.desktop.dev', 'dsh-desktop-session.log')
+const DEFAULT_DEV_LOG = join(process.env.APPDATA ?? '', 'dsh.smoothly.desktop.dev', 'dsh-desktop-session.log')  // 仅在 Windows 宿主上可用
 
 const argv = process.argv.slice(2)
 const arg = (name, fallback = null) => {
@@ -47,7 +50,12 @@ const DRY = argv.includes('--dry-run')
 const ALLOW_YELLOW = argv.includes('--allow-yellow')
 const CANARY = argv.includes('--canary')
 const CANARY_TIMEOUT = Number(arg('--canary-timeout', '180'))
-const DEV_LOG = arg('--dev-log', DEFAULT_DEV_LOG)
+// 默认日志路径：$APPDATA 只在 Windows 宿主上有（在 WSL 里跑会塌成相对路径 —— 实测踩过），
+// 因此回退到从 --runtime 推导：<dev 数据目录>/runtime ⇒ 同级的 dsh-desktop-session.log。
+const resolvedDevLog = process.env.APPDATA
+  ? join(process.env.APPDATA, 'dsh.smoothly.desktop.dev', 'dsh-desktop-session.log')
+  : (RUNTIME ? join(dirname(RUNTIME), 'dsh-desktop-session.log') : DEFAULT_DEV_LOG)
+const DEV_LOG = arg('--dev-log', resolvedDevLog)
 
 if (!TARGET || !RUNTIME) {
   console.error('usage: dsh-adapt.mjs --version <x.y.z[-pre]> [--runtime <dir>] [--dry-run] [--allow-yellow] [--canary]')
@@ -207,7 +215,7 @@ if (DRY) {
 
 // ── 8. canary 验收（只读 dev 实例日志，不启动/不杀进程）─────────────────────
 if (CANARY) {
-  if (!existsSync(DEV_LOG)) abort('8 canary 验收', `找不到 dev 日志 ${DEV_LOG}（先启动 dev 壳）`)
+  if (!existsSync(DEV_LOG)) abort('8 canary 验收', `找不到 dev 日志 ${DEV_LOG}（用 --dev-log 指定，或让 --runtime 指向 dev 实例）`)
   const startSize = readFileSync(DEV_LOG, 'utf8').length
   const need = ['client/log chrome ready', 'client-ready (http)', 'preinstalled bundles:']
   const deadline = Date.now() + CANARY_TIMEOUT * 1000
