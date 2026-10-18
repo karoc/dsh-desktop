@@ -66,13 +66,22 @@ for (const [tag, publishedAt] of rel) {
   rows.push({ tag, shell: tag.slice(1), floor, t0, floorCommitAt, publishedAt, adapt, release, total, ok: total <= SLA_HOURS })
 }
 
-const measured = rows.filter((r) => !r.skip).sort((a, b) => new Date(a.publishedAt) - new Date(b.publishedAt))
+// SLA 的量纲是「**一个上游版本**从发布到我们发出稳定版」，所以必须按 dsh 版本聚合：
+// 同一个地板可能被多个壳版本携带（0.18.0–0.18.4 都是 alpha.3），按 Release 计数会重复计量。
+// 取每个地板**最早**的那次 Release（= 该版本适配完成的时点），全量明细仍留在 JSON 里。
+const allMeasured = rows.filter((r) => !r.skip)
+const byFloor = new Map()
+for (const r of allMeasured) {
+  const prev = byFloor.get(r.floor)
+  if (!prev || new Date(r.publishedAt) < new Date(prev.publishedAt)) byFloor.set(r.floor, r)
+}
+const measured = [...byFloor.values()].sort((a, b) => new Date(a.publishedAt) - new Date(b.publishedAt))
 const skipped = rows.filter((r) => r.skip)
 const totals = measured.map((r) => r.total).sort((a, b) => a - b)
 const median = totals.length ? totals[Math.floor(totals.length / 2)] : NaN
 
 const lines = []
-lines.push('| 版本 | 随包地板 | 上游发布 | 地板提交 | 我方发布 | 适配 | 发布 | **合计** | ≤6h |')
+lines.push('| 首个携带该地板的版本 | 随包地板 | 上游发布 | 地板提交 | 我方发布 | 适配 | 发布 | **合计** | ≤6h |')
 lines.push('|---|---|---|---|---|---|---|---|---|')
 for (const r of measured) {
   lines.push(`| ${r.shell} | \`${r.floor}\` | ${r.t0} | ${r.floorCommitAt ? r.floorCommitAt.slice(0, 16) : '—'} | ${r.publishedAt.slice(0, 16)} | ${fmt(r.adapt)} | ${fmt(r.release)} | **${fmt(r.total)}** | ${r.ok ? '✅' : '❌'} |`)
@@ -87,7 +96,7 @@ const stats = [
 const md = ['## dsh 升级 SLA 报表', '', ...stats, '', ...lines, skipped.length ? `\n跳过：${skipped.map((r) => `${r.tag}（${r.skip}）`).join('；')}` : ''].join('\n')
 console.log(md)
 
-if (OUT) { writeFileSync(OUT, JSON.stringify({ generatedAt: new Date().toISOString(), slaHours: SLA_HOURS, stats, rows }, null, 2)); console.log(`\nJSON 已写入 ${OUT}`) }
+if (OUT) { writeFileSync(OUT, JSON.stringify({ generatedAt: new Date().toISOString(), slaHours: SLA_HOURS, stats, perVersion: measured, allReleases: rows }, null, 2)); console.log(`\nJSON 已写入 ${OUT}`) }
 
 if (UPSERT_ISSUE) {
   const body = md
