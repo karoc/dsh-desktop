@@ -454,6 +454,8 @@ MIT
 - **SLA 报表**：`node scripts/dsh-sla-report.mjs`（`--issue` 把报表 upsert 到 `sla-report` issue；
   `--fail-on-breach --recent 3` 只把**最近 3 个**版本的 6h 超时算作门禁失败，历史数据不会让门禁恒红）
   —— 按 **dsh 版本**聚合量出「官方发布 → 我们发出稳定版」的真实耗时（同一地板被多个壳版本携带时不重复计量）。
+- **探测逻辑脚本**：`node scripts/dsh-watch.mjs [--dry-run] [--force-target <v>]`（`dsh-watch.yml` 只是薄壳）
+  —— 提取成脚本是为了让「建 issue 那条路径」可本地演练：`--force-target x --dry-run` 零副作用走完整条路径。
 - **另两个定时工作流**：`dsh-sla-report.yml`（每周一 01:00 UTC 出 SLA 报表）与 `preinstalled-sync.yml`
   （每周一 02:00 UTC 检测四个预装 bundle 与 npm `dist-tags.latest` 的漂移，**有漂移才**同步 → 过
   `copy-consistency` + `plugin-dsh-compat` 两道门禁 → 开/更新 PR，PR 正文写明当前 dsh 地板；无漂移则静默 no-op）。

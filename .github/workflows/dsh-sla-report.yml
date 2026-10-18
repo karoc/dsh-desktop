@@ -1,16 +1,15 @@
-# dsh 升级 SLA 报表（自动化方案 P2）—— 每周生成「官方发布 → 我们发出稳定版」的真实耗时报表，
-# 并 upsert 到一个长期存在的 issue 里（零 secret，只用 GITHUB_TOKEN 的 issues: write）。
+# dsh 升级 SLA 报表（方案 P2）—— 每周出「官方发布 → 我们发出稳定版」的真实耗时并 upsert 到 issue。
 #
-# 为什么要有它：6h SLA 必须有可核对的量尺，否则"跟上了/没跟上"只能靠感觉。脚本口径见
-# scripts/dsh-sla-report.mjs 头部注释（起点 = npm time[随包地板]，终点 = Release publishedAt，
-# 按 **dsh 版本**聚合，避免同一地板被多个壳版本重复计量）。
-#
-# 注意：`--fail-on-breach` 只把**最近 3 个版本**的 6h 超时算作失败，历史数据不会让门禁恒红。
+# 信号分离（首次实跑暴露的缺陷修正）：原先报表与门禁同一步，导致"SLA 未达标"与"job 坏了"都是红色、
+# 无法区分。现在拆成两步：
+#   ① 生成报表 —— 恒绿（它的职责是发布报表；报表已写进 step summary 与 issue）
+#   ② SLA 门禁（未达标即红）—— 只有它红才代表"最近 N 个版本超 6h"，步骤名字自解释
+# 历史数据不会让门禁恒红：只检查最近 `--recent 3` 个版本。
 name: dsh-sla-report
 
 on:
   schedule:
-    - cron: '0 1 * * 1'      # 每周一 01:00 UTC
+    - cron: '0 1 * * 1'
   workflow_dispatch:
 
 permissions:
@@ -27,11 +26,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0      # 需要在 tag 树上读 MIN_DSH_VERSION、并 git log -G 找地板提交
+          fetch-depth: 0      # 需要读 tag 树上的 MIN_DSH_VERSION，并 git log -G 找地板提交
 
-      - name: 生成 SLA 报表并 upsert issue
+      - name: 生成 SLA 报表（写 summary + upsert issue）
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_BIN: gh
-          HTTPS_PROXY: ''
-        run: node scripts/dsh-sla-report.mjs --issue --fail-on-breach --recent 3
+        run: node scripts/dsh-sla-report.mjs --issue --json /tmp/sla.json
+
+      - name: SLA 门禁（未达标即红）
+        run: node scripts/dsh-sla-report.mjs --check /tmp/sla.json --recent 3
