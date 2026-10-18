@@ -17,7 +17,7 @@
 
 import { tmpdir } from 'node:os'
 import { execFileSync } from 'node:child_process'
-import { writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const argv = process.argv.slice(2)
@@ -29,6 +29,16 @@ const RECENT = Number(arg('--recent', '3'))
 const REPO = arg('--repo', process.env.GITHUB_REPOSITORY ?? 'karoc/dsh-desktop')
 const GH = process.env.GH_BIN ?? 'gh'
 const SLA_HOURS = 6
+
+const CHECK = arg('--check')
+if (CHECK) {
+  // 门禁独立成步：红色只代表"最近 N 个版本超 SLA"，与"报表 job 坏了"可区分（首次实跑的教训）
+  const data = JSON.parse(readFileSync(CHECK, 'utf8'))
+  const recent = (data.perVersion ?? []).slice(-RECENT)
+  const bad = recent.filter((r) => !r.ok)
+  console.log(`SLA 门禁：最近 ${recent.length} 个版本中 ${bad.length} 个超 ${SLA_HOURS}h` + (bad.length ? `：${bad.map((r) => `${r.shell}=${r.total.toFixed(2)}h`).join(', ')}` : ''))
+  process.exit(bad.length ? 1 : 0)
+}
 
 const sh = (cmd, args) => execFileSync(cmd, args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).trim()
 const hours = (a, b) => (new Date(b).getTime() - new Date(a).getTime()) / 3600000
