@@ -9,6 +9,12 @@
 # 明确不引入 RELEASE_PLEASE_TOKEN —— 2026-09-22 的凭证面否决依然有效。
 #
 # 幂等保证：① 资产够 3 个 ⇒ 跳过；② 已有该 tag 的构建运行（排队/进行中/完成）⇒ 跳过。
+#
+# "已有构建运行"的判据（2026-10-19 审计修正）：旧写法拉最近的 100 条运行再在客户端 select head_branch，
+# 而本仓已有 799 条运行 ⇒ 老 tag（如 v0.11.0）的运行早已落在 100 条之外，被判成"没有构建"⇒
+# 资产长期 <3 时**每 10 分钟重复派发**。现在改成**服务端按 branch 过滤**并读 total_count：
+#   gh api "repos/$REPO/actions/workflows/build.yml/runs?branch=$tag&per_page=1" --jq '.total_count'
+# total_count 是该 branch 全部运行数（不分状态、不受默认分页影响），语料与旧判据一致。
 name: tag-dispatch
 
 on:
@@ -27,6 +33,7 @@ concurrency:
 jobs:
   dispatch:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: 找出「有 tag 但 Release 资产不全」的版本并补派发构建
         env:
@@ -41,9 +48,9 @@ jobs:
           while IFS=$'\t' read -r tag assets; do
             case "$tag" in v*) ;; *) echo "跳过非版本 tag: $tag"; continue ;; esac
             if [ "${assets:-0}" -ge 3 ]; then continue; fi
-            runs=$(gh api "repos/$REPO/actions/workflows/build.yml/runs?per_page=100" \
-              --jq "[.workflow_runs[] | select(.head_branch == \"$tag\")] | length")
-            if [ "$runs" -gt 0 ]; then
+            # 服务端过滤 + total_count：与"最近 100 条运行"无关，老 tag 也能正确判
+            runs=$(gh api "repos/$REPO/actions/workflows/build.yml/runs?branch=$tag&per_page=1" --jq '.total_count')
+            if [ "${runs:-0}" -gt 0 ]; then
               echo "$tag: 已有 $runs 次构建运行，跳过"
               continue
             fi

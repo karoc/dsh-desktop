@@ -162,10 +162,24 @@ if (absent.length) add('yellow', 'native-build', `壳的 native 白名单里这�
 else add('info', 'native-build', `native 白名单 ${whitelist.length} 个包都能在 runtime 里找到`)
 
 // ⑥ 预装插件 peer 范围 vs 已装版本（地板与 bundle 必须同批）
+// 比较必须**预发布感知**（与 dsh-watch 的 cmp、manager 的 versionGt 同一口径）：
+// 旧实现 `v.split('-')[0]` 直接丢掉预发布段 ⇒ `0.2.1` 与 `0.2.1-rc.2` 判为相等
+// （审计 P0-1 的第三份独立实现）。无预发布必须回空数组，否则 `0.2.1` 被当成"有预发布"。
+const preParts = (v) => { const s = String(v ?? '').split('-').slice(1).join('-'); return s === '' ? [] : s.split('.') }
 const cmp = (a, b) => {
-  const norm = (v) => v.split('-')[0].split('.').map(Number)
+  const norm = (v) => String(v).split('-')[0].split('.').map(Number)
   const [A, B] = [norm(a), norm(b)]
   for (let i = 0; i < 3; i++) if ((A[i] || 0) !== (B[i] || 0)) return (A[i] || 0) - (B[i] || 0)
+  const [x, y] = [preParts(a), preParts(b)]
+  if (x.length === 0 && y.length === 0) return 0
+  if (x.length === 0) return 1    // 正式版 > 同号任何预发布
+  if (y.length === 0) return -1
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const u = x[i] ?? '', v = y[i] ?? ''
+    const un = /^\d+$/.test(u), vn = /^\d+$/.test(v)
+    if (un && vn) { if (+u !== +v) return +u - +v }
+    else if (u !== v) return u < v ? -1 : 1
+  }
   return 0
 }
 if (existsSync(PREINSTALLED)) {
