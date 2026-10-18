@@ -1,9 +1,13 @@
 # Release automation: Conventional Commits → version bump (all three version
 # files) → CHANGELOG.md → release PR → auto tag vX.Y.Z on merge.
 #
-# The v* tag then triggers the existing build.yml full gate + release job,
-# which attaches the CI-built installers to the GitHub Release. No manual
-# version bumping or tagging needed anymore.
+# ⚠️ 修正（2026-10-19）：这里的 tag 由 `secrets.GITHUB_TOKEN` 创建，而 GitHub 的递归保护让
+# **GITHUB_TOKEN 创建的事件不触发其它 workflow** ⇒ `v*` tag **不会**自动触发 build.yml
+# （实测：v0.18.x 每个 build run 的 event 都是 workflow_dispatch，无一 push；v0.11.0 的
+# Release 因此 assets 为空）。补派发由 `.github/workflows/tag-dispatch.yml`（cron */10）承担：
+# 对「Release 存在但资产 <3 且该 tag 尚无构建运行」的版本执行 workflow_dispatch。
+# 旧注释写的 "The v* tag then triggers the existing build.yml" 与行为不符，已删。
+# 零 secret 是刻意选择（引入 PAT 属凭证面扩张，2026-09-22 已明文否决）。
 name: release-please
 on:
   push:

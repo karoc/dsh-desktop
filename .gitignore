@@ -10,3 +10,6 @@ dist/
 # `scripts/audit-preinstalled.mjs` 的 npm cache 与调查临时产物（NPM_CACHE 就指向
 # 这里）；工作目录而非交付内容，别让它以 untracked 形态污染发布 PR。
 .tmp-investigate/
+# `tools/iso8601-duration`（C++14 子项目）的编译产物：实测 build/ 下的 ELF 可执行文件
+# 既没被跟踪也没被忽略 ⇒ `git add -A` 会把它暂存进发布 PR。构建产物不入库。
+tools/iso8601-duration/build/

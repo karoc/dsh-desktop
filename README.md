@@ -6,7 +6,7 @@
 
 DSH Smoothly Desktop（**DSH SD**）把 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）打包成可独立运行的 Windows 桌面 App。
 
-- **dsh 更新由你决定**：启动时只检查 npm 上 `@deepseek-ai/dsh` 的稳定版（`latest` tag）与预发布（`next`/`alpha` tag），**不自动安装**。有新版时托盘菜单高亮「有更新 vX → 点击更新」，壳菜单「检查更新…」弹窗也能一键更新（含预发布，想升才升）；点一下即下载安装并自动重启。dsh 永远来自官方 npm 包（经内置 pnpm 安装），本地零改动。**唯一例外是版本地板**：壳要求 dsh ≥ `0.2.1-rc.2`（0.1.6-alpha.2 起 dsh 才自带插件管理；随壳分发的预装插件要能被 dsh 的插件兼容门禁放行；`0.2.0-rc.1` / `0.2.0-rc.2` / `0.2.1-alpha.2` 三版都做过全面回归——overlay 目标行 / CLI / 客户端 seam 与槽位均成立、四个预装插件实机渲染正常；`0.2.1-rc.2` 已完成静态契约核对，dev 实机验证在途。见 `docs/2026-09-25-shell-improvement-plan.md` §15），低于地板的运行时会先自动升到地板，失败则如实提示并继续启动。
+- **dsh 更新由你决定**：启动时只检查 npm 上 `@deepseek-ai/dsh` 的稳定版（`latest` tag）与预发布（`next`/`alpha` tag），**不自动安装**。有新版时托盘菜单高亮「有更新 vX → 点击更新」，壳菜单「检查更新…」弹窗也能一键更新（含预发布，想升才升）；点一下即下载安装并自动重启。dsh 永远来自官方 npm 包（经内置 pnpm 安装），本地零改动。**唯一例外是版本地板**：壳要求 dsh ≥ `0.2.1-rc.2`（0.1.6-alpha.2 起 dsh 才自带插件管理；随壳分发的预装插件要能被 dsh 的插件兼容门禁放行；`0.2.0-rc.1` / `0.2.0-rc.2` / `0.2.1-alpha.2` 三版都做过全面回归——overlay 目标行 / CLI / 客户端 seam 与槽位均成立、四个预装插件实机渲染正常；`0.2.1-rc.2` 已完成静态契约核对与 dev 实机验证，**已随 v0.19.0 发布并核验**（`CHANGELOG.md` 的 0.19.0 条目 + 随包 `manager/server-manager.mjs` 同值）。见 `docs/2026-09-25-shell-improvement-plan.md` §15），低于地板的运行时会先自动升到地板，失败则如实提示并继续启动。
 - **插件管理在 dsh 自己的页面里**：dsh 0.1.6-alpha.2 起自带插件管理（Web 侧边栏 **Plugins** 页：安装/卸载/启用/停用/行级开关/构建脚本审批/插件配置页）。壳内不再有自建的插件管理窗口——dsh 起不来时用壳菜单「停用全部第三方插件…」自救（会先备份 profile `package.json`）。
 - **升级后自动清理残留嵌套包**：pnpm 的 hoisted 安装不清理上一版留下的嵌套目录，而 Node 解析嵌套副本优先于提升到根的新版 —— 实测 0.1.5-rc.2 → 0.1.6-alpha.2 后 `dsh-session-persistence-jsonl/node_modules/@deepseek-ai/*` 仍是旧版（不导出新版需要的 `./message-projections`）→ dsh 启动即崩。壳在**升级后与每次启动**都检查一次，只删版本与父包不一致的嵌套副本（不重建整棵树、不需要联网）。
 - **内置 Node 24 运行时**：安装包自带 Node（满足 dsh 的运行要求），用户机器无需装 Node。
@@ -275,7 +275,7 @@ Web 侧边栏有 **Plugins** 页（安装 / 卸载 / 启用 / 停用 / bundle �
 - **预装插件（随壳自带，默认关闭）**：`dsh-kanban`（看板）、`dsh-model-reasoning`（按模型推理档位）、`dsh-turn-navigator`（会话轮次导航）、`@karoc/dsh-smoothly-opencode-session`（OpenCode 会话头，无它会 `400 MissingSessionID`）。它们随安装包发布、被复制进运行时并**版本锁定**（离线可用）；在 dsh 的 **Plugins** 页打开开关即可启用。
 - **用户自装插件**：在 dsh 的 **Plugins** 页按包名 / Git 地址 / tarball / 本地路径安装与卸载（走壳内置 pnpm，壳已把 pnpm shim 挂到 `dsh web` 子进程的 PATH）。
 - **能力边界（相对已移除的壳内控制台）**：① dsh 起不来时无法在图形界面里管理插件（改用壳菜单「停用全部第三方插件…」，它不依赖 dsh）；② 新管理器没有"更新到新版本"操作——需要时用 `dsh plugin --profile web update <包名>`，或卸载后重装；③ 预装插件不再支持"从 npm 升级 / 恢复出厂"，版本随壳发布走。
-- **dsh 更新**：壳菜单「检查更新…」弹窗显示当前/可升版本。稳定版（`latest` tag）随时可一键升；若 npm 有更新的**预发布**（`next`/`alpha` tag）也会提示「（预发布）」可升，想升才升，不点就保持原版本。**版本地板**：dsh < `0.2.1-rc.2` 时启动会自动升到地板（0.1.6-alpha.2 起才有自带插件管理；预装插件要能被兼容门禁放行；0.2.0-rc.1 / rc.2 / 0.2.1-alpha.2 均已全面回归，见方案 §15；alpha.3 静态契约核对通过、dev 实机验证在途），失败会如实提示并继续启动；`dsh.json` 的 `devMode` 会冻结这一自动升级。**地板迁移史**：`0.1.7-rc.2`（2026-09-25）→ `0.2.0-rc.1`（2026-09-29）→ `0.2.0-rc.2`（2026-10-05）→ `0.2.1-alpha.2`（2026-10-09，dev 全面验证后随 v0.17.0 发布）→ `0.2.1-rc.2`（2026-10-15，仓库已抬，发布待 dev 验证）；patch 目标 id fixture 随之逐版重采（当前采自 alpha.2 的实机，185 个 id）。
+- **dsh 更新**：壳菜单「检查更新…」弹窗显示当前/可升版本。稳定版（`latest` tag）随时可一键升；若 npm 有更新的**预发布**（`next`/`alpha` tag）也会提示「（预发布）」可升，想升才升，不点就保持原版本。**版本地板**：dsh < `0.2.1-rc.2` 时启动会自动升到地板（0.1.6-alpha.2 起才有自带插件管理；预装插件要能被兼容门禁放行；0.2.0-rc.1 / rc.2 / 0.2.1-alpha.2 均已全面回归，见方案 §15；alpha.3 静态契约核对通过、已随 v0.18.0 发布并核验），失败会如实提示并继续启动；`dsh.json` 的 `devMode` 会冻结这一自动升级。**地板迁移史**：`0.1.7-rc.2`（2026-09-25）→ `0.2.0-rc.1`（2026-09-29）→ `0.2.0-rc.2`（2026-10-05）→ `0.2.1-alpha.2`（2026-10-09，dev 全面验证后随 v0.17.0 发布）→ `0.2.1-rc.2`（2026-10-15 抬升，**已随 v0.19.0 发布并核验**）；patch 目标 id fixture 随之逐版重采，**当前值以 `scripts/fixtures/dsh-web-app-patch-ids.json` 为准**（该文件的 `dshVersion` 与 `ids` 是权威，别抄文档里的数；2026-10-19 实测：`dshVersion=0.2.1-rc.2`、190 个 id）。
 - 代理设置入口在**顶栏菜单「代理设置…」**（独立设置窗口，托盘菜单同样可达）。
 
 ## 环境变量（可选）
@@ -441,22 +441,74 @@ MIT
   —— 核对「已装版本 ↔ 壳地板 ↔ patch 夹具」三方一致、6 个客户端 seam、CLI 开关、native 白名单、
   四个预装插件的 peer 范围。GREEN 才算过；RED 时退出码 1。**已在本机用真实数据校准**：
   已知良好 runtime（rc.2）⇒ GREEN；仍是旧版的正式版 runtime ⇒ RED。
-- **一条命令适配**：`node scripts/dsh-adapt.mjs --version <版本>`（等价 `npm run dsh:adapt -- --version <版本>`）
+- **一条命令适配**：`node scripts/dsh-adapt.mjs --version <版本> [--runtime <已装新版的 runtime 目录>]`
+  `[--dry-run] [--allow-yellow] [--canary] [--canary-timeout 180] [--dev-log <session.log>] [--manager-log <runtime/manager.log>] [--strict-chain]`
+  （等价 `npm run dsh:adapt -- --version <版本> …`）
   —— 依次做：地板两份 + 适配记录（写进注释块内部，`node --check` 校验，不过则回滚）→ README 地板数值 →
-  patch 夹具重采 → 预装 peer 兼容 → 探针非 RED → 全量门禁（23 套，CI 等价）。**任一步失败立即停**；
-  `--dry-run` 只打印计划；`--canary` 读取 dev 实例日志断言 chrome/client-ready/预装 bundle 三个标记
-  （只读，不启动也不杀进程）。装版本、发版、装机刻意不做。
+  patch 夹具重采 → 预装 peer 兼容 → 探针非 RED（YELLOW 需显式 `--allow-yellow`，探针**没产出报告**也算失败）→
+  全量门禁。**任一步失败立即停**；
+  `--runtime` 缺省时会尝试 dev 实例的固定 runtime 路径，**路径不存在且未显式给出 ⇒ 直接 exit 2**（不发车）。
+  第 7 步（全量门禁）按 `package.json` 的 `test` 链**逐条直接跑 `node`**（不经 npm，与 `npm test` 是同一条链），
+  当前这条链 23 条全是 node ⇒ 本机 23/23 真跑。将来链上若出现非 node 条目（如 cargo），
+  本机会**跳过并逐条列出**：默认容忍这种覆盖缺口，`--strict-chain` 则把"跳过"也算失败（CI 上它们确实会跑，
+  跳过 ≠ 通过）。
+  `--dry-run` **只跳过写文件（地板/README/夹具那几步），只读门禁照样真跑**——插件门禁、探针、全量门禁
+  都会实际执行，探针判 RED 时仍然 exit 1；所以它不是"只打印计划"，而是"不落盘地走一遍真实门禁"
+  （实测 `--version 0.2.1-rc.2 --runtime <dev runtime> --dry-run` ⇒ exit 0、23 套通过，且运行前后
+  `git status --porcelain` 完全一致）。⚠️ 也正因第 4 步（夹具重采）被跳过，**目标版本 ≠ 当前地板/夹具时它
+  必然停在第 6 步探针**（`version-vs-*` RED）⇒ dry-run 只对"目标 == 现状"的幂等路径能全绿，
+  **不能**用它演练一次版本变更。
+  `--canary`（第 8 步）**读两个日志、断言三个标记**：session 日志（默认 `<dev 数据目录>/dsh-desktop-session.log`，
+  可 `--dev-log` 覆盖）出 `client/log chrome ready` 与 `client-ready (http)`；`<runtime>/manager.log`
+  （可 `--manager-log` 覆盖，是随包 manager 的 `log()` 落盘处）出 `preinstalled bundles:`。**只认检查开始之后
+  新写入的行** ⇒ 前提是 dev 壳必须在检查期间**新启动**（早就开着且空闲的壳不产生新标记行）；缺哪个标记会
+  指名它来自哪个文件。只读，不启动也不杀进程。装版本、发版、装机刻意不做（汇总里会打印剩余人工步骤）。
 - **两个定时工作流**（零 secret，只用 `GITHUB_TOKEN`）：`dsh-watch.yml` 每 15 分钟探测 npm dist-tags，
-  比地板新就开/更新 `dsh-upgrade` issue（含 6h 倒计时与适配清单）；`tag-dispatch.yml` 每 10 分钟扫
-  Release，对「有 tag 但资产不全且尚无构建运行」的版本补派发 `workflow_dispatch`
-  （release-please 用 API 打 tag ⇒ 不触发 push 事件，故必须补派发）。
+  比地板新就开/更新 `dsh-upgrade` issue（含门槛倒计时与适配清单）——门槛文案按**实际门槛**打印
+  `${threshold}h 截止`：`latest` 通道默认 6h（硬指标）、预发布通道默认 24h（best-effort），
+  可用 `--sla-hours` / `--best-effort-hours` 覆盖（2026-10-19 前这里写死 "6h"，预发布单上照印 6h）；
+  `tag-dispatch.yml` 每 10 分钟扫最近 20 个 Release，对「有 tag 但资产 <3 且尚无构建运行」的版本补派发
+  `workflow_dispatch`（release-please 用 API 打 tag ⇒ 不触发 push 事件，故必须补派发）。"尚无构建运行"的判据是
+  **服务端过滤**：`runs?branch=<tag>&per_page=1` 的 `total_count`（不是"拉最近 100 条运行再在客户端筛"——
+  本仓 build.yml 的运行数已达 800 次（审计当时 799），老 tag 的运行早落在 100 条之外：实测
+  `total_count(v0.11.0)=1`，而旧判据筛出 `0` ⇒ 资产长期 <3 时每 10 分钟重复派发）。
 
-- **SLA 报表**：`node scripts/dsh-sla-report.mjs`（`--issue` 把报表 upsert 到 `sla-report` issue；
-  `--fail-on-breach --recent 3` 只把**最近 3 个**版本的 6h 超时算作门禁失败，历史数据不会让门禁恒红）
-  —— 按 **dsh 版本**聚合量出「官方发布 → 我们发出稳定版」的真实耗时（同一地板被多个壳版本携带时不重复计量）。
-- **探测逻辑脚本**：`node scripts/dsh-watch.mjs [--dry-run] [--force-target <v>]`（`dsh-watch.yml` 只是薄壳）
-  —— 提取成脚本是为了让「建 issue 那条路径」可本地演练：`--force-target x --dry-run` 零副作用走完整条路径。
-- **SLA 未达标自动开 blocker issue**：`dsh-watch.mjs` 在「门槛已过而地板没动」时自动开/更新 `sla-breach` issue（latest 6h / 预发布 24h；退出码不变，红色仍只代表 job 坏了）
-- **另两个定时工作流**：`dsh-sla-report.yml`（每周一 01:00 UTC 出 SLA 报表）与 `preinstalled-sync.yml`
-  （每周一 02:00 UTC 检测四个预装 bundle 与 npm `dist-tags.latest` 的漂移，**有漂移才**同步 → 过
-  `copy-consistency` + `plugin-dsh-compat` 两道门禁 → 开/更新 PR，PR 正文写明当前 dsh 地板；无漂移则静默 no-op）。
+- **SLA 报表**：`node scripts/dsh-sla-report.mjs [--json <out>] [--issue] [--check <json>] [--recent 3] [--since 2026-10-19] [--registry <url>]`
+  —— 按 **dsh 版本**聚合量出「随包地板版本的上游发布 → 我们发出首个携带该地板的稳定版」的真实耗时
+  （同一地板被多个壳版本携带时不重复计量）。**起点口径说清楚**：T0 = npm registry 上 **`time[该版本随包地板]`**，
+  即"我们把地板抬到哪个版本，就从哪个版本的上游发布时间起算"——**该地板很可能是预发布**（如 `0.2.1-rc.2`），
+  因为地板长期高于 npm `latest`；终点 = 该地板的**首个稳定 Release** 的 `publishedAt`。
+  `--issue` 把报表 upsert 到 `sla-report` issue；`--registry` 只为演练/离线复核指向 stub registry。
+  **门禁口径**（CI 用 `--check <json>`；`--fail-on-breach` 是同口径的脚本内变体）：① **无数据即红**——报表缺
+  `perVersion` 或为空数组 ⇒ exit 1（"量不出来"不等于"达标"；旧实现 0/0 判绿是假绿）；② "历史欠账不会让门禁
+  恒红"是这么实现的：只有 `--since`（默认 `2026-10-19`，方案落地日）之后**上游首发**的版本参与退出码，
+  欠账仍在报表里逐行显示并单列一行说明（真实数据实测：7 条历史欠账、`--check` exit 0；since 之后新首发的
+  版本超时仍会红）；③ `--recent 3` 只看该范围内的最近 3 个。
+  报表三个时间戳列的**时区口径不统一，别按列对读**：`上游发布` 是 npm 原样 ISO（`…Z`）、`地板提交` 是
+  `git log --format=%cI` 的提交**本地时区**再截到分钟（偏移被截掉）、`我方发布` 是 Release `publishedAt`
+  的 UTC 再截到分钟；要看绝对时间请以 `--json` 里的原值为准（见方案 §3.7 的实测例子）。
+- **探测逻辑脚本**：`node scripts/dsh-watch.mjs [--dry-run] [--json <out>] [--force-target <v>]
+  [--force-published <iso>] [--force-pre] [--now <iso>] [--sla-hours <n>] [--best-effort-hours <n>]
+  [--registry <url>] [--floor <ver>]`（`dsh-watch.yml` 只是薄壳；退出码恒 0 —— 红色只代表 job 坏了，
+  只有取不到 npm packument 才非零退出）
+  —— 提取成脚本是为了让「建 issue 那条路径」可本地演练。`--registry` / `--floor` / `--now` / `--force-*`
+  都是**演练注入点**（本机 npm CLI 不可用、直连 npmjs 会超时 ⇒ 演练指向本地 stub registry 的 packument）。
+  **演练路径（零副作用）**：`--force-target X --force-published <ISO> --dry-run` 会走完"门槛已过而地板没动"
+  的违约分支，并打印会开的 label / 标题 / 正文长度，但**不执行任何写操作**（实测：8h 前发布 ⇒
+  `breached=true`、label `sla-breach`、exit 0；换成 `--force-pre` 则按 24h best-effort 判 ⇒ `breached=false`）。
+- **SLA 未达标自动开 blocker issue**：`dsh-watch.mjs` 在「门槛已过而地板没动」时自动开/更新 `sla-breach`
+  issue（门槛随通道：`latest` 6h / 预发布 24h，可用 `--sla-hours` / `--best-effort-hours` 覆盖；issue 标题与
+  正文都印**实际门槛**，退出码不变）。**取不到该版本的上游发布时间时 fail-closed 记为未达标**（JSON 里的
+  `pubUnknown`；"量不出来"不等于"达标"）。幂等靠 issue **标题里版本号的词边界匹配**
+  （`gh issue list --limit 100` 取回后在 node 里过滤）：`contains("0.2.1")` 会把评论挂到 `0.2.1-rc.2` 的单子上。
+- **另两个定时工作流**：`dsh-sla-report.yml`（每周一 01:00 UTC 出 SLA 报表；门禁是独立一步 `--check`，
+  只有它红才代表"有版本超 6h 或根本没量出来"）与 `preinstalled-sync.yml`（每周一 02:00 UTC 检测四个预装
+  bundle 与 npm `dist-tags.latest` 的漂移，**有漂移才**同步 → 过 `copy-consistency` + `plugin-dsh-compat`
+  两道门禁 → 开/更新 PR，PR 正文写明当前 dsh 地板；无漂移则静默 no-op）。漂移判定分**三态**：漂移（npm 更新
+  ⇒ 同步）/ 本地领先（不动 —— 否则会用旧版覆盖已发布的 bundle）/ **查询失败**（逐个记账、跑完所有包，最后
+  判红；把失败折成 `?` 会制造假漂移，而 `set -e` 会在第一个坏查询就中断整批）。另外四处：同步后"无差异"
+  看 `git status --porcelain`（含未跟踪新文件，`git diff --quiet` 看不见）；push 前 `git ls-remote` 取期望值 +
+  `git fetch` 建远端跟踪引用 + 显式 `--force-with-lease=refs/heads/<b>:<sha>`（干净检出没有跟踪引用，裸 lease
+  会以 stale info 拒绝 ⇒ 旧实现第二次运行必失败、既有 PR 永不更新）；四个自动化工作流
+  （`dsh-watch` / `dsh-sla-report` / `tag-dispatch` / `preinstalled-sync`）都加了 `timeout-minutes`，
+  `workflow_dispatch` 的输入一律经 env 进 bash（直接插进 `run:` 文本会让 `$(...)` 被执行且 step 仍绿）。

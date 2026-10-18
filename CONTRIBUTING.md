@@ -152,6 +152,21 @@ gh CLI 默认读全局 `~/.config/gh/hosts.yml`。本项目使用**项目专用 
 
 **任何新增的门禁/断言，必须在同一个 PR 里带一个"注入对应缺陷 ⇒ 必须变红"的夹具**，否则视为未验证（恒真的门禁比没有门禁更糟：它给出虚假的安心）。本仓已有先例：`scripts/test-silent-failures.mjs` 的 4 个变异夹具、`test-shell-chrome.mjs` 的变异对照。反面教材（2026-10-07）：静默失效审计脚本的前两版试图"自动跳过 `#[cfg(test)]` 区域"，两次都判错 —— 一次**漏检生产代码**（假阴性），一次把 20 条测试区命中当生产报出；是夹具把这两次都钉了出来。
 
-**行为改动必须同步文档**：改了 `src-tauri/resources/ui/shell-chrome.js` 或 `scripts/server-manager.mjs` 时，PR 必须同时改 `README.md`（**约定**，暂无 CI 强制：曾加过一条 diff 型门禁，但浅克隆下取不到变更列表 ⇒ 静默放行 = 假阴性门禁，已按"宁可没有也不能假绿"移除；要做真门禁需先把 checkout 改为 `fetch-depth: 0` 并实测）。结构校验只能保证"文档存在"，语义一致性仍由交付前逐句走查负责。
+**行为改动必须同步文档（这道门禁是活的）**：`.github/workflows/build.yml` 的 `test` job 里有一条步骤
+**「文档同步」**（只在 `pull_request` 事件、且非"板卡专属 PR"时跑）：本 PR 的变更文件里出现
+`src-tauri/resources/ui/shell-chrome.js` 或 `scripts/server-manager.mjs` 时，**必须同 PR 改 `README.md`**，
+否则该步骤红（可用 PR 标签 `docs-not-needed` 显式放行）。判据是 `git diff --name-only origin/<base>...HEAD`，
+而 `test` job 的 checkout 是 `fetch-depth: 0`（2026-10-15 的**一行级**修复）—— 早先的浅克隆拿不到 base 对象、
+"取不到就跳过"= 静默放行的假阴性门禁，已修掉。结构校验只能保证"文档存在"，语义一致性仍由交付前逐句走查负责。
+
+> ⚠️ **已知覆盖缺口（2026-10-19 登记）**：白名单目前**只有** `src-tauri/resources/ui/shell-chrome.js` 与
+> `scripts/server-manager.mjs` 两个文件。而维护者向的行为面还包括 `scripts/dsh-adapt.mjs` /
+> `scripts/dsh-compat-probe.mjs` / `scripts/dsh-sla-report.mjs` / `scripts/dsh-watch.mjs` 与四个自动化 workflow
+> （`dsh-watch` / `dsh-sla-report` / `tag-dispatch` / `preinstalled-sync`）—— 改它们的**参数名、issue label、
+> 门槛数值、判据**都不会被要求同步任何文档（README / 本文件 / 方案文档都不查）。2026-10-19 那批
+> 「参数名与门槛文案漂移」能长期存活，结构原因就在这里：**门禁的覆盖面比"行为面"窄**。
+> 补白名单之前先想清楚哪些文件**真的需要**文档同步：README 是用户向真源，维护者向的自动化细节可以只由
+> 方案文档（`docs/2026-10-17-dsh-upgrade-automation-plan.md`）与 Agent Note 承载 —— 若要扩白名单，
+> 应同时定义"改了它必须改哪份文档"，否则只是把假阴性换成假阳性。
 
 **板卡专属 PR**：只改 `KANBAN.json` 的 PR 会跳过 `check`/`test` 的重步骤（`cargo`/`npm test`），但两个必过检查仍照常上报（分支保护要求 `check`+`test`，用 `paths-ignore` 会让它们永不上报、PR 卡死 —— 所以是"作业照跑、步骤条件化"）。
