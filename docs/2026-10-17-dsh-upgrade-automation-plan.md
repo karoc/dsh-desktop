@@ -241,3 +241,15 @@ Release（v0.14.0 / v0.16.0 / v0.18.1–v0.18.4）**与抬版无关**（地板�
 - 二者都带 `workflow_dispatch`，合并后可在 Actions 页手动触发一次做首次实跑验证（cron 只在默认分支生效）。
 - 仍未做：P1（`dsh:adapt` 一条命令 + canary 验收）、P2（SLA 报表 + 预装插件自动同步 PR）。
 - 清欠账侧：地板已到 `0.2.1-rc.2` 并随 **v0.19.0** 装入正式版（随包 manager 地板已核验）。
+
+## §6 失败语义：已自动化（2026-10-19）
+
+决策 ③C：保留 §6 的措辞，并把它从「承诺」变成「必然发生」—— `scripts/dsh-watch.mjs`（cron `*/15`）
+在**门槛已过而地板没动**时自动开/更新 blocker issue（label `sla-breach`，标题形如
+`[SLA 未达标] dsh X 已发布 Nh（门槛 Mh），地板仍停在 Y`），正文直接给出 §6 要求的两件事
+（写清具体 blocker + ETA；同时发一个保持旧地板的稳定版）。门槛：`latest` 6h 硬指标，预发布通道 24h
+best-effort。**该行为不改变退出码**（红色仍然只代表 job 坏了 —— 与 SLA 流拆开信号的决策一致）。
+
+另两项决策（同日确认）：① 发布链路**维持零 secret**（人工 approve 一次 + `tag-dispatch` 补派发），
+不引入长期 PAT；② canary **不进 CI**（CI 是 Linux、壳是 Windows 桌面应用），保持本地
+`dsh:adapt --canary` 并作为流程硬门槛。

@@ -456,6 +456,7 @@ MIT
   —— 按 **dsh 版本**聚合量出「官方发布 → 我们发出稳定版」的真实耗时（同一地板被多个壳版本携带时不重复计量）。
 - **探测逻辑脚本**：`node scripts/dsh-watch.mjs [--dry-run] [--force-target <v>]`（`dsh-watch.yml` 只是薄壳）
   —— 提取成脚本是为了让「建 issue 那条路径」可本地演练：`--force-target x --dry-run` 零副作用走完整条路径。
+- **SLA 未达标自动开 blocker issue**：`dsh-watch.mjs` 在「门槛已过而地板没动」时自动开/更新 `sla-breach` issue（latest 6h / 预发布 24h；退出码不变，红色仍只代表 job 坏了）
 - **另两个定时工作流**：`dsh-sla-report.yml`（每周一 01:00 UTC 出 SLA 报表）与 `preinstalled-sync.yml`
   （每周一 02:00 UTC 检测四个预装 bundle 与 npm `dist-tags.latest` 的漂移，**有漂移才**同步 → 过
   `copy-consistency` + `plugin-dsh-compat` 两道门禁 → 开/更新 PR，PR 正文写明当前 dsh 地板；无漂移则静默 no-op）。
