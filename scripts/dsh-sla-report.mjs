@@ -15,8 +15,10 @@
 // 零 secret：只用 GITHUB_TOKEN（issues: write）。默认只出报表；--fail-on-breach 才让最近 N 个版本
 // 的 6h 超时把退出码置 1（给工作流当门禁用，且只盯最近的，避免历史数据让门禁恒红）。
 
+import { tmpdir } from 'node:os'
 import { execFileSync } from 'node:child_process'
 import { writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 const argv = process.argv.slice(2)
 const arg = (n, d = null) => { const i = argv.indexOf(n); return i >= 0 ? argv[i + 1] : d }
@@ -99,11 +101,18 @@ console.log(md)
 if (OUT) { writeFileSync(OUT, JSON.stringify({ generatedAt: new Date().toISOString(), slaHours: SLA_HOURS, stats, perVersion: measured, allReleases: rows }, null, 2)); console.log(`\nJSON 已写入 ${OUT}`) }
 
 if (UPSERT_ISSUE) {
-  const body = md
+  // /dev/stdin 在 runner 上不可用（实测：open /dev/stdin: no such device or address）⇒ 写临时文件
+  const bodyFile = join(tmpdir(), 'dsh-sla-report-body.md')
+  writeFileSync(bodyFile, md)
+  try { sh(GH, ['label', 'create', 'sla-report', '--description', 'dsh 升级 SLA 报表', '--color', '0e8a16']) } catch (e) { /* 已存在即可 */ }
   const existing = sh(GH, ['issue', 'list', '--label', 'sla-report', '--state', 'open', '--json', 'number', '--jq', '.[0].number // empty'])
-  sh(GH, ['label', 'create', 'sla-report', '--description', 'dsh 升级 SLA 报表', '--color', '0e8a16']).toString?.()
-  if (existing) { sh(GH, ['issue', 'edit', existing, '--body-file', '/dev/stdin'], { input: body }); console.log(`已更新 SLA issue #${existing}`) }
-  else { sh(GH, ['issue', 'create', '--label', 'sla-report', '--title', 'dsh 升级 SLA 报表（自动更新）', '--body-file', '/dev/stdin'], { input: body }); console.log('已创建 SLA issue') }
+  if (existing) {
+    sh(GH, ['issue', 'edit', existing, '--body-file', bodyFile])
+    console.log('已更新 SLA issue #' + existing)
+  } else {
+    sh(GH, ['issue', 'create', '--label', 'sla-report', '--title', 'dsh 升级 SLA 报表（自动更新）', '--body-file', bodyFile])
+    console.log('已创建 SLA issue')
+  }
 }
 
 const recent = measured.slice(-RECENT)
