@@ -8,7 +8,17 @@
 # sync-resources.mjs 把 plugins/preinstalled → src-tauri/resources/preinstalled 同步）。
 # 零 secret：只用 GITHUB_TOKEN（contents + pull-requests: write）。
 #
-# 幂等：① 无漂移 ⇒ 不开 PR；② 已有同分支 PR ⇒ 推送更新它（不新建）；③ 同步后无 diff ⇒ 不开 PR 且删分支。
+# 幂等：① 无漂移 ⇒ 不开 PR；② 已有同分支 PR ⇒ 推送更新它（不新建）；③ 同步后无差异 ⇒ 不开 PR。
+#
+# 2026-10-19 审计修正（三处，都是"门禁失真"而非风格问题）：
+#   ① npm 查询失败曾经被折成 `?`（`2>/dev/null || echo '?'`）⇒ 与任何版本号都不等 ⇒ **制造假漂移**，
+#      而且 `set -e` 下第一个坏查询就中断整批。现在：查询失败**逐个记账、跑完所有包**，最后判红并
+#      指名哪个包、什么原因；摘要表把"漂移 / 本地领先 / 查询失败"分成三态。
+#   ② `--force-with-lease` 在**没有远端跟踪引用**时以 stale info 拒绝（干净检出 = 没有
+#      refs/remotes/origin/<branch>）⇒ 第二次运行必失败、既有 PR 永不更新。现在 push 前先
+#      `git ls-remote` 取期望值 + `git fetch` 建跟踪引用，再带显式 lease 推送。
+#   ③ 非 fast-forward 的"无差异"判断曾经只看 `git diff --quiet` ⇒ **未跟踪的新文件**（插件新增的
+#      skill 资产等）不可见 ⇒ 会被静默丢弃而 PR 不更新。现在看 `git status --porcelain`（含未跟踪）。
 name: preinstalled-sync
 
 on:
@@ -27,34 +37,88 @@ concurrency:
 jobs:
   sync:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
       - name: 检测漂移（预装目录里的 name/version vs npm dist-tags.latest）
         id: drift
+        # 刻意**不**用 set -e：一个包的 npm 查询失败必须继续跑完，才能一次报出所有坏包
+        #（旧实现既造假又中断，两个方向都坏）。
+        # name/version 用 node 读（runner 有 jq，但 node 是本仓本就依赖的运行时 ⇒ 这一步在开发机
+        # 也能原样跑，审计/演练不必再造一个 jq 桩）。
         run: |
-          set -euo pipefail
+          set -uo pipefail
           : > /tmp/drift.tsv
+          dirs=0
+          drifted=""
+          leading=""
+          failed=0
+          # npm 比本地新才算漂移；`sort -V` 对 x.y.z 正确（latest 通道恒为正式版，无预发布）
+          newer() { [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n1)" = "$1" ]; }
           for dir in src-tauri/resources/preinstalled/*/; do
+            [ -d "$dir" ] || continue
+            dirs=$((dirs + 1))
             pj="$dir/package.json"
-            [ -f "$pj" ] || continue
-            name=$(jq -r .name "$pj")
-            local_v=$(jq -r .version "$pj")
-            latest=$(npm view "$name" dist-tags.latest 2>/dev/null || echo '?')
-            printf '%s\t%s\t%s\t%s\n' "$dir" "$name" "$local_v" "$latest" >> /tmp/drift.tsv
+            if [ ! -f "$pj" ]; then
+              echo "::error::预装目录缺少 package.json：$dir（这是真异常，不是「无漂移」）"
+              printf '%s\t%s\t%s\t%s\t%s\n' "$dir" "-" "-" "-" "目录里没有 package.json" >> /tmp/drift.tsv
+              failed=$((failed + 1))
+              continue
+            fi
+            name=$(node -e "process.stdout.write(String(JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).name||''))" "$pj")
+            local_v=$(node -e "process.stdout.write(String(JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).version||''))" "$pj")
+            if ! latest=$(npm view "$name" dist-tags.latest 2>/tmp/npm-query.err); then
+              reason=$(tr '\n' ' ' < /tmp/npm-query.err | cut -c1-160)
+              printf '%s\t%s\t%s\t%s\t%s\n' "$dir" "$name" "$local_v" "?" "查询失败：${reason:-未知原因}" >> /tmp/drift.tsv
+              echo "::error::$name 的 npm 查询失败（不是「无漂移」）：${reason:-未知原因}"
+              failed=$((failed + 1))
+              continue
+            fi
+            # 只对**匹配版本号正则**的返回值判漂移：垃圾/警告文本一律按查询失败处理，绝不制造假漂移
+            if ! printf '%s' "$latest" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+              printf '%s\t%s\t%s\t%s\t%s\n' "$dir" "$name" "$local_v" "$latest" "查询失败：返回值不是版本号" >> /tmp/drift.tsv
+              echo "::error::$name 的 npm 返回值不是版本号：$latest"
+              failed=$((failed + 1))
+              continue
+            fi
+            if [ "$latest" = "$local_v" ]; then
+              printf '%s\t%s\t%s\t%s\t%s\n' "$dir" "$name" "$local_v" "$latest" "一致" >> /tmp/drift.tsv
+            elif newer "$latest" "$local_v"; then
+              printf '%s\t%s\t%s\t%s\t%s\n' "$dir" "$name" "$local_v" "$latest" "漂移" >> /tmp/drift.tsv
+              drifted="$drifted $name@$latest"
+            else
+              # 本地比 npm latest 新（已发布但还没随壳发/回滚过）⇒ 不能"同步"成旧的
+              printf '%s\t%s\t%s\t%s\t%s\n' "$dir" "$name" "$local_v" "$latest" "本地领先（不动）" >> /tmp/drift.tsv
+              leading="$leading $name@$local_v"
+            fi
             echo "$name: 本地 $local_v / npm latest $latest"
           done
-          drifted=$(awk -F'\t' '$3 != $4 { print $2"@"$4 }' /tmp/drift.tsv | tr '\n' ' ' | sed 's/ $//')
-          echo "drifted=$drifted" >> "$GITHUB_OUTPUT"
+
+          drifted="${drifted# }"; leading="${leading# }"
           {
             echo "### preinstalled-sync"
             echo ""
-            echo "| 包 | 本地 | npm latest |"
-            echo "|---|---|---|"
-            awk -F'\t' '{ print "| " $2 " | " $3 " | " $4 " |" }' /tmp/drift.tsv
+            echo "| 包 | 本地 | npm latest | 判定 |"
+            echo "|---|---|---|---|"
+            awk -F'\t' '{ print "| " $2 " | " $3 " | " $4 " | " $5 " |" }' /tmp/drift.tsv
             echo ""
-            echo "漂移：**${drifted:-无}**"
+            echo "漂移（会同步）：**${drifted:-无}**"
+            echo ""
+            echo "本地领先（不动）：**${leading:-无}**"
+            echo ""
+            echo "查询失败：**$failed 个**（>0 即本 job 判红，不制造假漂移、不开 PR）"
           } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$dirs" -eq 0 ]; then
+            echo "::error::src-tauri/resources/preinstalled/ 下没有任何预装目录 —— 这不是「无漂移」（检出/路径异常）"
+            exit 1
+          fi
+          if [ "$failed" -gt 0 ]; then
+            echo "::error::有 $failed 个包的 npm 查询失败（详见 step summary）—— 查询失败不等于「无漂移」"
+            exit 1
+          fi
+          echo "drifted=$drifted" >> "$GITHUB_OUTPUT"
 
       - name: 同步并开 PR
         if: steps.drift.outputs.drifted != ''
@@ -76,8 +140,9 @@ jobs:
 
           # 与地板同批：把当前 dsh 地板写进 PR 正文，方便 reviewer 判断是否要一起抬
           floor=$(grep -oP "MIN_DSH_VERSION = '\K[^']+" scripts/server-manager.mjs)
-          if git diff --quiet; then
-            echo "同步后无差异 ⇒ 不开 PR"
+          # 无差异 = 同时看已跟踪改动**与未跟踪新文件**（旧写法 `git diff --quiet` 看不见后者）
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "同步后无差异（含未跟踪文件）⇒ 不开 PR"
             exit 0
           fi
 
@@ -89,7 +154,19 @@ jobs:
           git commit -m "chore(preinstalled): 同步预装插件（$DRIFTED）
 
           壳内 dsh 地板：$floor。预装 bundle 必须与地板同批维护（历史事故：旧 bundle 引用已删除的 icon 名）。"
-          git push -u origin "$branch" --force-with-lease
+
+          # push 前先取得"远端分支现在在哪"：干净检出里没有 refs/remotes/origin/<branch>，
+          # 裸 `--force-with-lease` 会以 stale info 拒绝（第二次运行必失败、既有 PR 永不更新）。
+          remote_sha=$(git ls-remote --heads origin "$branch" | cut -f1)
+          if [ -n "$remote_sha" ]; then
+            git fetch --no-tags origin "+refs/heads/$branch:refs/remotes/origin/$branch"
+            lease="--force-with-lease=refs/heads/$branch:$remote_sha"
+            echo "远端 $branch 当前 = $remote_sha（已取回跟踪引用，lease 用这个值）"
+          else
+            lease="--force-with-lease=refs/heads/$branch:"
+            echo "远端还没有 $branch（首次推送，lease 断言「远端仍不存在」）"
+          fi
+          git push -u origin "$branch" "$lease"
 
           body=$(printf '自动同步预装插件：%s\n\n当前壳内 dsh 地板：`%s`\n\n门禁：copy-consistency + plugin-dsh-compat 已在本工作流内跑过；合并前请确认是否需要同批抬地板。\n\n（本 PR 由 preinstalled-sync 工作流生成；幂等：再次运行会更新同一分支。）\n' "$DRIFTED" "$floor")
           if gh pr view "$branch" --json number >/dev/null 2>&1; then

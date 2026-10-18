@@ -3,8 +3,13 @@
 # 信号分离（首次实跑暴露的缺陷修正）：原先报表与门禁同一步，导致"SLA 未达标"与"job 坏了"都是红色、
 # 无法区分。现在拆成两步：
 #   ① 生成报表 —— 恒绿（它的职责是发布报表；报表已写进 step summary 与 issue）
-#   ② SLA 门禁（未达标即红）—— 只有它红才代表"最近 N 个版本超 6h"，步骤名字自解释
-# 历史数据不会让门禁恒红：只检查最近 `--recent 3` 个版本。
+#   ② SLA 门禁（未达标即红）—— 只有它红才代表"有版本超 6h"或"根本没量出来"，步骤名字自解释
+#
+# 门禁口径（2026-10-19 审计修正，两个方向都曾失真）：
+#   · 无数据不是绿：`perVersion: []` ⇒ 「最近 0 个版本中 0 个超 6h ⇒ exit 0」是假绿。
+#     现在量不出任何版本即红（量不出来 ≠ 达标）。
+#   · 历史欠账不是门禁：真实数据下最近 3 个版本全超 ⇒ 恒红，等于没有门禁。现在只判
+#     **`--since 2026-10-19`（方案落地日）之后首发**的版本；历史欠账仍在报表里逐条显示。
 name: dsh-sla-report
 
 on:
@@ -23,6 +28,7 @@ concurrency:
 jobs:
   report:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -34,5 +40,6 @@ jobs:
           GH_BIN: gh
         run: node scripts/dsh-sla-report.mjs --issue --json /tmp/sla.json
 
-      - name: SLA 门禁（未达标即红）
+      - name: SLA 门禁（since 之后首发且超 6h、或量不出数据，即红）
+        # --since 默认 2026-10-19（方案落地日），仅在需要改口径时显式传
         run: node scripts/dsh-sla-report.mjs --check /tmp/sla.json --recent 3

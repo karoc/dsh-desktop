@@ -408,23 +408,36 @@ async function resolveRemoteVersions() {
   nextVersion = best
 }
 
-/** 预发布排序值：无 pre 最高（正式版）；alpha < beta < rc；数字越大越高。 */
-function preOrder(v) {
-  const pre = String(v).split('-')[1]
-  if (!pre) return 999
-  const m = /^([a-z]+)\.?(\d+)?/.exec(pre)
-  const rank = { alpha: 0, beta: 1, rc: 2 }[m ? m[1] : ''] ?? 0
-  return rank * 1000 + Number(m && m[2] ? m[2] : 0)
+/** 预发布标识切分：**无预发布返回空数组**（正式版高于同号任何预发布）。
+ *  旧实现 `String(v).split('-')[1]` 对 `0.2.1` 得 undefined，再经 `preOrder` 的 `!pre` 分支给 999，
+ *  而 `rc.2` 给 2*1000+2=2002 ⇒ `versionGt('0.2.1','0.2.1-rc.2')` 为 false（审计 P0-2 产品面：
+ *  壳"永不提示/永不安装"rc→stable 的转正版；反向还成立 —— rc 会被判成比同号正式版新）。 */
+function preParts(v) {
+  const s = String(v ?? '').split('-').slice(1).join('-')
+  return s === '' ? [] : s.split('.')
 }
-
-/** 极简预发布感知比较：0.1.2-rc.1 > 0.1.2-alpha.5；正式版 > 任何预发布。 */
+/** 预发布比较：a > b ⇒ >0；空数组（正式版）高于任何非空预发布。 */
+function preCmp(a, b) {
+  const [x, y] = [preParts(a), preParts(b)]
+  if (x.length === 0 && y.length === 0) return 0
+  if (x.length === 0) return 1
+  if (y.length === 0) return -1
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const u = x[i] ?? '', v = y[i] ?? ''
+    const un = /^\d+$/.test(u), vn = /^\d+$/.test(v)
+    if (un && vn) { if (+u !== +v) return +u - +v }
+    else if (u !== v) return u < v ? -1 : 1
+  }
+  return 0
+}
+/** 极简预发布感知比较：0.1.2-rc.1 > 0.1.2-alpha.5；正式版 > 同号任何预发布。 */
 function versionGt(a, b) {
   const pa = String(a).split('-')[0].split('.').map(Number)
   const pb = String(b).split('-')[0].split('.').map(Number)
   for (let i = 0; i < 3; i++) {
     if ((pa[i] ?? 0) !== (pb[i] ?? 0)) return (pa[i] ?? 0) > (pb[i] ?? 0)
   }
-  return preOrder(a) > preOrder(b)
+  return preCmp(a, b) > 0
 }
 
 function installedVersion(runtimeDir) {

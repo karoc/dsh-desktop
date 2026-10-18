@@ -3,6 +3,7 @@
 //
 //   node scripts/dsh-adapt.mjs --version 0.2.1-rc.2 [--runtime <dir>] [--dry-run]
 //                              [--allow-yellow] [--canary] [--canary-timeout 180]
+//                              [--dev-log <file>] [--manager-log <file>] [--strict-chain]
 //
 // 每步都有可失败的判据，任一步失败**立即停下**（fail-closed，不静默通过）：
 //   1 runtime 里装的 dsh 版本 == 目标版本（安装由产品自身路径完成，见方案 §3.1）
@@ -16,6 +17,11 @@
 //
 // --canary 的前提：它只认「脚本启动**之后**新写入的日志行」，所以 dev 壳必须在检查期间**新启动**
 //（一个早就开着且空闲的壳不会产生新标记行）。检查只读日志，不启动也不杀任何进程。
+//
+// **三个标记分居两个文件**（2026-10-19 审计定性：旧实现只读 --dev-log ⇒ 该"硬门槛"结构上永不通过）：
+//   session 日志（<dev 数据目录>/dsh-desktop-session.log）= 壳 chrome 与 dsh web 的就绪上报；
+//   **manager 日志（<runtime>/manager.log，由随包 manager 的 log() 落盘）** = 预装 bundle 装载。
+// 两个文件都必须给出、都要读、都要在"检查开始之后新写入的行"里匹配；缺哪个标记要指名哪个文件。
 //
 // **刻意不做**：装候选版本（走 manager 的安装路径，实测 31.9s）、建 PR、发版、装机 —— 这些有对外副作用，
 // 由人和产品流程执行。`--canary` 只**读取** dev 实例日志做验收断言，不启动/不杀任何进程。
@@ -50,15 +56,20 @@ const DRY = argv.includes('--dry-run')
 const ALLOW_YELLOW = argv.includes('--allow-yellow')
 const CANARY = argv.includes('--canary')
 const CANARY_TIMEOUT = Number(arg('--canary-timeout', '180'))
+const STRICT_CHAIN = argv.includes('--strict-chain')
 // 默认日志路径：$APPDATA 只在 Windows 宿主上有（在 WSL 里跑会塌成相对路径 —— 实测踩过），
 // 因此回退到从 --runtime 推导：<dev 数据目录>/runtime ⇒ 同级的 dsh-desktop-session.log。
 const resolvedDevLog = process.env.APPDATA
   ? join(process.env.APPDATA, 'dsh.smoothly.desktop.dev', 'dsh-desktop-session.log')
   : (RUNTIME ? join(dirname(RUNTIME), 'dsh-desktop-session.log') : DEFAULT_DEV_LOG)
 const DEV_LOG = arg('--dev-log', resolvedDevLog)
+// manager 日志 = <runtime>/manager.log：随包 manager 的 log() 落盘位置（server-manager.mjs 的
+// appendFileSync(join(args.runtimeDir, 'manager.log'), …)）。预装 bundle 的装载标记只在这里。
+const MANAGER_LOG = arg('--manager-log', RUNTIME ? join(RUNTIME, 'manager.log') : null)
 
 if (!TARGET || !RUNTIME) {
-  console.error('usage: dsh-adapt.mjs --version <x.y.z[-pre]> [--runtime <dir>] [--dry-run] [--allow-yellow] [--canary]')
+  console.error('usage: dsh-adapt.mjs --version <x.y.z[-pre]> [--runtime <dir>] [--dry-run] [--allow-yellow] [--canary] [--strict-chain]')
+  console.error('       [--dev-log <session.log>] [--manager-log <runtime/manager.log>]')
   console.error(`  （--runtime 缺省尝试 dev 实例：${DEFAULT_DEV_RUNTIME}）`)
   process.exit(2)
 }
@@ -181,9 +192,19 @@ if (DRY) {
 // ── 6. 探针：RED 即停；yellow 需显式放行 ───────────────────────────────────
 {
   const report = join(tmpdir(), `dsh-adapt-probe-${TARGET}.json`)
+  try { rmSync(report, { force: true }) } catch { /* ignore */ }   // 先删旧报告，避免读到上一轮的绿
   const out = spawnSync(process.execPath, [PROBE, '--runtime', RUNTIME, '--json', report], { encoding: 'utf8' })
-  const verdict = existsSync(report) ? JSON.parse(readFileSync(report, 'utf8')).verdict : '(no report)'
+  // 没有报告 = 探针没跑成 = **不能**算通过。旧实现把缺失报告读成 '(no report)' 再落到 ok 分支
+  // ⇒ 探针崩了/没写文件时全链路假绿（2026-10-19 审计定性）。
+  if (!existsSync(report)) {
+    abort('6 探针', `探针没有产出报告（${report}）—— 探针失败不等于通过（status=${out.status}）：${(out.stderr ?? out.stdout ?? '').trim().split('\n').slice(-2).join(' | ').slice(0, 200)}`)
+  }
+  let verdict = null
+  try { verdict = JSON.parse(readFileSync(report, 'utf8')).verdict ?? null } catch (error) {
+    abort('6 探针', `报告无法解析：${error.message}`)
+  }
   try { rmSync(report, { force: true }) } catch { /* ignore */ }
+  if (!['red', 'yellow', 'green'].includes(verdict)) abort('6 探针', `报告里的 verdict 非法：${JSON.stringify(verdict)}`)
   if (verdict === 'red') abort('6 探针', `RED：${(out.stdout ?? '').split('\n').filter((l) => l.includes('[RED]')).slice(0, 3).join(' | ').slice(0, 240)}`)
   if (verdict === 'yellow' && !ALLOW_YELLOW) abort('6 探针', 'YELLOW：需人工看一眼再显式加 --allow-yellow 重跑')
   note('6 探针', 'ok', `verdict=${verdict.toUpperCase()}`)
@@ -209,25 +230,55 @@ if (DRY) {
       console.log(`      ${(out.stdout ?? '').trim().split('\n').slice(-4).join('\n      ').slice(0, 400)}`)
     }
   }
+  // 跳过的条目必须**看得见**（旧实现只把它们塞进 ok 的 detail 里）：默认容忍，但显著打印；
+  // --strict-chain 把跳过也算失败（CI 上这些确实会跑，本机跳过 = 覆盖缺口）。
+  if (skipped.length) {
+    console.log(`      本机跳过 ${skipped.length} 项（非 node 命令，CI 覆盖）：`)
+    for (const s of skipped) console.log(`        · ${s}`)
+  }
   if (failed > 0) abort('7 全量门禁', `${failed}/${ran} 套失败`)
-  note('7 全量门禁', 'ok', `${ran} 套通过（CI 等价：直接跑 node，不经 npm）${skipped.length ? `；本机跳过 ${skipped.length} 项非 node 命令（CI 覆盖）：${skipped.join(' / ')}` : ''}`)
+  if (skipped.length && STRICT_CHAIN) abort('7 全量门禁', `--strict-chain：${ran} 套通过，但有 ${skipped.length} 项被本机跳过（${skipped.join(' / ')}）—— 覆盖缺口不算通过`)
+  note('7 全量门禁', 'ok', `${ran} 套通过（CI 等价：直接跑 node，不经 npm）${skipped.length ? `；本机跳过 ${skipped.length} 项非 node 命令（CI 覆盖，已列在上面；--strict-chain 可把它们算失败）` : ''}`)
 }
 
-// ── 8. canary 验收（只读 dev 实例日志，不启动/不杀进程）─────────────────────
+// ── 8. canary 验收（只读两个日志文件，不启动/不杀进程）─────────────────────
+// 三个标记的来源必须写死在断言里：session 日志给 chrome/就绪，manager 日志给预装 bundle 装载。
+const CANARY_MARKERS = [
+  { text: 'client/log chrome ready', from: 'session', who: '壳 chrome 注入完成' },
+  { text: 'client-ready (http)', from: 'session', who: 'dsh web 就绪（HTTP）' },
+  { text: 'preinstalled bundles:', from: 'manager', who: '预装 bundle 装载（随包 manager 的 log() 落盘）' },
+]
 if (CANARY) {
-  if (!existsSync(DEV_LOG)) abort('8 canary 验收', `找不到 dev 日志 ${DEV_LOG}（用 --dev-log 指定，或让 --runtime 指向 dev 实例）`)
-  const startSize = readFileSync(DEV_LOG, 'utf8').length
-  const need = ['client/log chrome ready', 'client-ready (http)', 'preinstalled bundles:']
+  const logs = { session: DEV_LOG, manager: MANAGER_LOG }
+  const missingFiles = Object.entries(logs).filter(([, p]) => !p || !existsSync(p))
+    .map(([k, p]) => `${k} 日志（${k === 'session' ? '--dev-log' : '--manager-log'}）= ${p ?? '(未解析出路径，--runtime 为空？)'}`)
+  if (missingFiles.length) {
+    abort('8 canary 验收', `找不到日志文件：${missingFiles.join('；')}。`
+      + '（session 日志默认 <dev 数据目录>/dsh-desktop-session.log；manager 日志默认 <runtime>/manager.log）')
+  }
+  // 只认"检查开始之后新写入的行"：分别记下两个文件的起始长度，每轮各读自己那段。
+  const startSizes = { session: readFileSync(logs.session, 'utf8').length, manager: readFileSync(logs.manager, 'utf8').length }
   const deadline = Date.now() + CANARY_TIMEOUT * 1000
-  let missing = need
+  let missing = CANARY_MARKERS
+  const missingText = (list) => list
+    .map((m) => `${m.text}（来自 ${m.from === 'session' ? 'session' : 'manager'} 日志 ${logs[m.from]}）`)
+    .join(' / ')
   while (Date.now() < deadline) {
-    const fresh = readFileSync(DEV_LOG, 'utf8').slice(startSize)
-    missing = need.filter((m) => !fresh.includes(m))
+    const fresh = {
+      session: readFileSync(logs.session, 'utf8').slice(startSizes.session),
+      manager: readFileSync(logs.manager, 'utf8').slice(startSizes.manager),
+    }
+    missing = CANARY_MARKERS.filter((m) => !fresh[m.from].includes(m.text))
     if (missing.length === 0) break
     execFileSync(process.execPath, ['-e', 'setTimeout(()=>{},5000)'])
   }
-  if (missing.length) abort('8 canary 验收', `${CANARY_TIMEOUT}s 内没看到这些标记：${missing.join(' / ')}（确认 dev 壳真的在跑，且日志路径正确）`)
-  note('8 canary 验收', 'ok', `chrome ready / client-ready / preinstalled bundles 三个标记齐全（新增行内）`)
+  if (missing.length) {
+    abort('8 canary 验收', `${CANARY_TIMEOUT}s 内没看到这些标记（新增行内）：${missingText(missing)}。`
+      + `本次新写入的字节数：session ${readFileSync(logs.session, 'utf8').length - startSizes.session}、`
+      + `manager ${readFileSync(logs.manager, 'utf8').length - startSizes.manager}`
+      + ' —— 确认 dev 壳真的在检查期间**新启动**（空闲的壳不产生新标记行），且两个日志路径都指对')
+  }
+  note('8 canary 验收', 'ok', '三标记齐全（新增行内）：chrome ready / client-ready 来自 session 日志；preinstalled bundles 来自 manager 日志')
 } else {
   note('8 canary 验收', 'skip', '未加 --canary（dev 实机验收需 dev 壳在运行）')
 }

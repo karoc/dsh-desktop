@@ -4,6 +4,11 @@
 # 从未被跑过**。提取成脚本后可以本地演练：`--force-target <v> --dry-run` 会零副作用地走完整条路径。
 # 定时任务本身也用 `--dev` 之外的默认参数跑真实探测。
 #
+# 输入传递纪律（2026-10-19 审计修正）：workflow_dispatch 的输入**只能经 env** 进 bash。
+# 旧写法把 `${{ inputs.force_target }}` 直接插进 run: 文本 —— GitHub 的表达式替换发生在 bash 解析
+# **之前**，于是 `$(id;touch PWNED)` 会被当命令执行，而 step 仍然绿（审计复现过）；输入里带引号
+# 还会直接造成语法错误。现在 FORCE_TARGET / DRY_RUN 走 env，bash 里用 "$FORCE_TARGET"。
+#
 # 零 secret（只用 GITHUB_TOKEN 的 issues: write）；不改地板、不建 PR。
 name: dsh-watch
 
@@ -32,15 +37,19 @@ concurrency:
 jobs:
   watch:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - name: 比地板并（必要时）开跟踪 issue
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_BIN: gh
+          # 输入 → 环境变量（**不要**插进 run: 文本；见文件头）
+          FORCE_TARGET: ${{ inputs.force_target }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
           args=()
-          [ -n "${{ inputs.force_target }}" ] && args+=(--force-target "${{ inputs.force_target }}")
-          [ "${{ inputs.dry_run }}" = "true" ] && args+=(--dry-run)
+          if [ -n "$FORCE_TARGET" ]; then args+=(--force-target "$FORCE_TARGET"); fi
+          if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
           node scripts/dsh-watch.mjs "${args[@]}"
