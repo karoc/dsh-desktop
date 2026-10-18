@@ -450,3 +450,10 @@ MIT
   比地板新就开/更新 `dsh-upgrade` issue（含 6h 倒计时与适配清单）；`tag-dispatch.yml` 每 10 分钟扫
   Release，对「有 tag 但资产不全且尚无构建运行」的版本补派发 `workflow_dispatch`
   （release-please 用 API 打 tag ⇒ 不触发 push 事件，故必须补派发）。
+
+- **SLA 报表**：`node scripts/dsh-sla-report.mjs`（`--issue` 把报表 upsert 到 `sla-report` issue；
+  `--fail-on-breach --recent 3` 只把**最近 3 个**版本的 6h 超时算作门禁失败，历史数据不会让门禁恒红）
+  —— 按 **dsh 版本**聚合量出「官方发布 → 我们发出稳定版」的真实耗时（同一地板被多个壳版本携带时不重复计量）。
+- **另两个定时工作流**：`dsh-sla-report.yml`（每周一 01:00 UTC 出 SLA 报表）与 `preinstalled-sync.yml`
+  （每周一 02:00 UTC 检测四个预装 bundle 与 npm `dist-tags.latest` 的漂移，**有漂移才**同步 → 过
+  `copy-consistency` + `plugin-dsh-compat` 两道门禁 → 开/更新 PR，PR 正文写明当前 dsh 地板；无漂移则静默 no-op）。
