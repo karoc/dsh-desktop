@@ -21,6 +21,24 @@
 >
 > 详情见 `.agents/notes/implemented/bug-fix/2026-09-08-legacy-uninstaller-name-kill.md`。
 
+## [0.20.0](https://github.com/karoc/dsh-desktop/compare/v0.19.0...v0.20.0) (2026-10-19)
+
+
+### Features
+
+* **automation:** dsh 升级自动化 P0+P1+P2（探针/探测/补派发/dsh:adapt/SLA 报表/预装同步，零 secret） ([#177](https://github.com/karoc/dsh-desktop/issues/177)) ([8391938](https://github.com/karoc/dsh-desktop/commit/839193863d75c9d71dc178626594207b10e2c37b))
+* **automation:** dsh-rehearse --scenario bump（抬地板全链路可重放） ([#187](https://github.com/karoc/dsh-desktop/issues/187)) ([ddc1406](https://github.com/karoc/dsh-desktop/commit/ddc140649d484969f35a72333f96f2da2f09d493))
+* **automation:** SLA 未达标自动开 blocker issue（§6 从承诺变机制） ([#183](https://github.com/karoc/dsh-desktop/issues/183)) ([5082c44](https://github.com/karoc/dsh-desktop/commit/5082c448550a7afd36d17f6cdc5caf41b17dee27))
+* **automation:** 第二轮修复 + 104 条门禁自证 + 发版日重放（审计闭环） ([#186](https://github.com/karoc/dsh-desktop/issues/186)) ([a4a70fa](https://github.com/karoc/dsh-desktop/commit/a4a70face7d7d58f3afe3f00fd89e9fdf5320e30))
+
+
+### Bug Fixes
+
+* **automation:** dsh:adapt --canary 默认日志路径在 WSL 下塌陷 ([#184](https://github.com/karoc/dsh-desktop/issues/184)) ([926fb6b](https://github.com/karoc/dsh-desktop/commit/926fb6b7b85ca9b23ed7993d7ecd085e143d4f31))
+* **automation:** SLA 报表 issue upsert 在 runner 上失败（/dev/stdin） ([#180](https://github.com/karoc/dsh-desktop/issues/180)) ([33a5268](https://github.com/karoc/dsh-desktop/commit/33a52687168cb3300b5da666c6311a8b68160c7a))
+* **automation:** 审计定性的 12 项缺陷 + 文档同步 ([#185](https://github.com/karoc/dsh-desktop/issues/185)) ([5f15ae3](https://github.com/karoc/dsh-desktop/commit/5f15ae3dcb7356be5068a8f92d4a23e86cf9ef57))
+* **automation:** 拆开 SLA 红绿语义 + 探测逻辑提取成可演练脚本 ([#182](https://github.com/karoc/dsh-desktop/issues/182)) ([532372e](https://github.com/karoc/dsh-desktop/commit/532372eb779960bdeab728969a3bd15716209f3b))
+
 ## [0.19.0](https://github.com/karoc/dsh-desktop/compare/v0.18.4...v0.19.0) (2026-10-17)
 
 
