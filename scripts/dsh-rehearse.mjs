@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // dsh:rehearse —— 把「装候选版本」这一步固化成**一条可重复执行的命令**（上游发版日全流程干跑，P1）。
 //
-//   node scripts/dsh-rehearse.mjs [--version <v>] [--keep] [--json <out>] [--timeout <sec>]
+//   node scripts/dsh-rehearse.mjs [--scenario install|bump] [--version <v>] [--from-floor <v>]
+//                                 [--keep] [--json <out>] [--timeout <sec>]
 //                                 [--warm-store <dir>] [--registry <url>] [--help]
 //
 // 它做什么：建一个**空**临时 runtime（只把真实 dev runtime 的 `.pnpm-store` 与
@@ -33,10 +34,33 @@
 // 想演练比地板新的版本：把 `--registry` 指向 latest 更高的镜像（或等上游把 latest 挪上去），
 // 然后用 `--version <那个版本>` 表达期望。
 //
+// ── 两个场景 ───────────────────────────────────────────────────────────────
+//  install（默认）= 上面这条：空临时 runtime → manager 启动期自动安装 → 探针 → 只读自证。
+//  bump           = 「抬地板」全链路演练（本次新增）：
+//    1 clone 真实仓库到 /tmp（`git clone --local --shared`），要求克隆里 `git log` 可读；
+//      克隆**之前**确认真实仓库没有非记录层改动（记录层 = KANBAN.json / .agents/notes/archive.json /
+//      未跟踪的 .agents/notes/** 与 tools/）—— 有 ⇒ exit 3，绝不带脏状态演练。
+//    2 在克隆里把两份 MIN_DSH_VERSION 改成 `--from-floor`（默认 0.2.1-alpha.5），并同步克隆里
+//      README 的对应数值 ⇒ 制造"地板低于目标版本"的真实前提（否则 dsh-adapt 第 2/3 步会 skip）。
+//    3 复用 install 场景的积木（本脚本子进程 `--scenario install --keep --json`）：建临时 runtime、
+//      让 manager 走自己的安装路径装到 `--version`（默认 = 真实仓库当前地板），断言落地版本 == 目标。
+//    4 在克隆里跑 `node scripts/dsh-adapt.mjs --version <目标> --runtime <临时 runtime>`（**不加**
+//      `--dry-run`）—— 它写的是克隆里的地板 / README / patch 夹具，并跑全量门禁。
+//    5 五项断言（任何一条不满足 ⇒ exit 1）：① 克隆两份地板 == 目标且 `node --check` 通过；
+//      ② 克隆 README 里的旧地板被替换（打印替换处数）；③ 克隆夹具 dshVersion == 目标（打印 id 数）；
+//      ④ **真实仓库**的 scripts/fixtures/dsh-web-app-patch-ids.json sha256/mtime/size 未变
+//      （证明脚本写的是克隆里那份）；⑤ 真实仓库非记录层 `git status --porcelain` 为空。
+//  bump 的写域只有 /tmp：克隆 + 临时 runtime；脚本**不执行任何 git 写操作**（除 clone 外不碰 .git），
+//  真实仓库的 manager / README / 夹具在跑前跑后都有 sha256+mtime+size 指纹对照。
+//
+// bump 退出码沿用同一套：0 全绿；1 演练失败（任何断言/步骤不达标）；2 用法错误
+//  （含"目标 ≤ --from-floor"这种违反场景语义的参数组合：那是假演练，直接拒绝）；3 前置不满足
+//  （真实仓库脏 / 热 runtime 缺件 / 读不到地板）。
+//
 // 退出码：0 = 全绿；1 = 演练失败（安装/版本/探针/自证任一步不达标）；2 = 用法错误；
 //         3 = 前置不满足（热 runtime 不存在或缺 `.pnpm-store` / 随包 pnpm）。
 
-import { execFileSync, spawn } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import {
   appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync,
@@ -52,6 +76,26 @@ const PROBE = join(ROOT, 'scripts/dsh-compat-probe.mjs')
 const RESOURCE_DIR = join(ROOT, 'src-tauri/resources')
 const PATCH_FILE = join(RESOURCE_DIR, 'patch/dsh-desktop.patch.yml')
 const DSH_PKG = '@deepseek-ai/dsh'
+/** bump 场景在克隆里把地板降到这个版本（低于当前真实地板，且是上游真实存在的预发布版本）。 */
+const BUMP_DEFAULT_FROM_FLOOR = '0.2.1-alpha.5'
+/** 记录层豁免：与看板同属会话记录，不算脏；每次运行都把豁免明细打印出来，不静默。
+ *  注意：必须声明在场景分发**之前** —— bump 分支在模块顶部就被调用，`const` 有 TDZ。 */
+const BUMP_EXEMPT_EXACT = new Set(['KANBAN.json', '.agents/notes/archive.json'])
+/** bump 场景要自证「真实仓库零改动」的文件（跑前跑后各取一次 sha256+mtime+size）。 */
+const BUMP_REAL_FILES = {
+  'scripts/server-manager.mjs': join(ROOT, 'scripts/server-manager.mjs'),
+  'src-tauri/resources/manager/server-manager.mjs': join(ROOT, 'src-tauri/resources/manager/server-manager.mjs'),
+  'README.md': join(ROOT, 'README.md'),
+  'scripts/fixtures/dsh-web-app-patch-ids.json': join(ROOT, 'scripts/fixtures/dsh-web-app-patch-ids.json'),
+  'scripts/dsh-adapt.mjs': join(ROOT, 'scripts/dsh-adapt.mjs'),
+  'scripts/dsh-rehearse.mjs': join(ROOT, 'scripts/dsh-rehearse.mjs'),
+}
+/** bump 场景结构上覆盖不到的地方（每次运行都打印）。 */
+const BUMP_GAPS = [
+  'bump 只演练「克隆内的地板/README/夹具改写 + 目标版本安装 + 全量门禁」这条链路；**不覆盖**真实仓库的提交/PR/发版，也不覆盖"已有 dsh 的升级覆盖分支"（第 3 步用的仍是 install 场景的全新安装）。',
+  '克隆是 `--local --shared`（对象库共享真实仓库的 .git/objects，只读），且克隆里没有 node_modules —— dsh-adapt 第 7 步直接跑 node，本机实测无需依赖；CI 上等价命令会跑 npm test。',
+  '真实仓库的 manager / README / 夹具只做"未改动"自证；bump 不验证"抬地板后真实仓库仍能被 CI 接受"（那要等真实提交后的门禁）。',
+]
 /** 真实（热）runtime 默认路径：dev 壳的数据目录。可用 --warm-store 覆盖。 */
 const DEFAULT_WARM_RUNTIME = '/mnt/c/Users/qqwto/AppData/Roaming/dsh.smoothly.desktop.dev/runtime'
 /** install-status done 之后额外等这么久，让收尾（profile bundles 补回 / 升级标记）走完；
@@ -59,9 +103,14 @@ const DEFAULT_WARM_RUNTIME = '/mnt/c/Users/qqwto/AppData/Roaming/dsh.smoothly.de
 const POST_INSTALL_GRACE_MS = 2000
 const KILL_GRACE_MS = 4000
 
-const USAGE = `usage: node scripts/dsh-rehearse.mjs [--version <v>] [--keep] [--json <out>] [--timeout <sec>]
+const USAGE = `usage: node scripts/dsh-rehearse.mjs [--scenario install|bump] [--version <v>] [--from-floor <v>]
+                                      [--keep] [--json <out>] [--timeout <sec>]
                                       [--warm-store <dir>] [--registry <url>]
 
+  --scenario <s>     install（默认）= 全新安装演练；bump = 在 /tmp 克隆里演练「抬地板」全链路
+                     （降地板 → 复用 install 装目标版本 → 克隆里跑 dsh-adapt → 五项断言）。
+  --from-floor <v>   仅 bump：把克隆里的地板降到这个版本（默认 ${BUMP_DEFAULT_FROM_FLOOR}）。必须**低于**目标版本，
+                     否则 exit 2（低于/持平会让 dsh-adapt 第 2/3 步静默 skip = 假演练）。
   --version <v>      期望落地的 dsh 版本（默认 = 壳地板 MIN_DSH_VERSION）。不等于"指定安装版本"：
                      启动期路径的目标 = max(壳地板, registry latest)，不一致时如实报 MISMATCH。
   --keep             保留临时 runtime（默认成功即清理；失败一律保留现场）
@@ -75,7 +124,7 @@ const USAGE = `usage: node scripts/dsh-rehearse.mjs [--version <v>] [--keep] [--
 
 // ── 参数 ───────────────────────────────────────────────────────────────────
 function parseArgs(argv) {
-  const out = { version: null, keep: false, json: null, timeoutSec: 300, warmStore: null, registry: null, help: false }
+  const out = { scenario: 'install', version: null, fromFloor: null, keep: false, json: null, timeoutSec: 300, warmStore: null, registry: null, help: false }
   const val = (i, name) => {
     const v = argv[i + 1]
     if (v === undefined || v.startsWith('--')) throw new Error(`${name} 需要值`)
@@ -88,6 +137,8 @@ function parseArgs(argv) {
     const take = () => (inline !== null ? inline : val(i++, a))
     if (a === '--keep') out.keep = true
     else if (a === '--help' || a === '-h') out.help = true
+    else if (a === '--scenario' || eq === '--scenario') out.scenario = take()
+    else if (a === '--from-floor' || eq === '--from-floor') out.fromFloor = take()
     else if (a === '--version' || eq === '--version') out.version = take()
     else if (a === '--json' || eq === '--json') out.json = resolve(take())
     else if (a === '--timeout' || eq === '--timeout') out.timeoutSec = Number(take())
@@ -96,6 +147,8 @@ function parseArgs(argv) {
     else throw new Error(`未知参数 ${a}`)
   }
   if (!Number.isFinite(out.timeoutSec) || out.timeoutSec <= 0) throw new Error('--timeout 必须是正数（秒）')
+  if (!['install', 'bump'].includes(out.scenario)) throw new Error(`--scenario 只支持 install | bump（收到 ${out.scenario}）`)
+  if (out.fromFloor && out.scenario !== 'bump') throw new Error('--from-floor 只对 --scenario bump 有意义（install 场景安装目标 = max(壳地板, registry latest)）')
   return out
 }
 
@@ -165,6 +218,13 @@ function readJson(file) {
   } catch {
     return null
   }
+}
+
+// ── 场景分发 ───────────────────────────────────────────────────────────────
+// bump 走独立分支：它自己复用 install 场景（以子进程方式调本脚本），所以这里必须先分流，
+// 否则会落地一份"真实仓库里的安装演练"再跑 bump。
+if (opts.scenario === 'bump') {
+  process.exit(await runBumpScenario())
 }
 
 // ── 前置：读壳地板 + 解析热 runtime + 快照（只读） ─────────────────────────
@@ -565,6 +625,430 @@ const result = {
 }
 writeJson(opts.json, result)
 process.exit(status === 'GREEN' ? 0 : 1)
+
+// ══ 场景 bump：在 /tmp 克隆里演练「抬地板」全链路 ══════════════════════════════
+// 步骤与五项断言见文件头。两条纪律：
+//   1) 真实仓库只读：地板 / README / 夹具的改写全部发生在 clone 里，跑前跑后用
+//      sha256+mtime+size 指纹逐一自证 —— 尤其 scripts/fixtures/dsh-web-app-patch-ids.json，
+//      它最容易被"脚本写的是克隆里那份"这个假设掩盖。
+//   2) 任一步 / 任一断言不达标 ⇒ exit 1，绝不把"没跑成"报成通过。
+/** 记录层豁免：与看板同属会话记录，不算脏；每次运行都把豁免明细打印出来，不静默。 */
+function bumpExemptWhy(entry) {
+  if (BUMP_EXEMPT_EXACT.has(entry.path)) return '看板/笔记索引'
+  if (entry.code !== '??') return null
+  if (entry.path === 'tools' || entry.path.startsWith('tools/')) return '未跟踪 tools/'
+  if (entry.path.startsWith('.agents/notes/')) return '未跟踪 Agent Note（记录层）'
+  return null
+}
+/** 真实仓库的非记录层改动清单（porcelain v1 + -z；改名/复制条目占两个 NUL 字段）。 */
+function bumpRepoStatus() {
+  const out = execFileSync('git', ['-C', ROOT, 'status', '--porcelain=v1', '-z'], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 })
+  const fields = out.split('\0')
+  const entries = []
+  for (let i = 0; i < fields.length; i++) {
+    const f = fields[i]
+    if (!f) continue
+    const code = f.slice(0, 2)
+    const path = f.slice(3)
+    entries.push({ code, path })
+    if (/[RC]/.test(code)) { const renamed = fields[++i]; if (renamed) entries.push({ code: '=>', path: renamed }) }
+  }
+  const exempt = []
+  const dirty = []
+  for (const e of entries) {
+    if (e.code === '=>') continue
+    const why = bumpExemptWhy(e)
+    if (why) exempt.push({ ...e, why })
+    else dirty.push(e)
+  }
+  return { entries, exempt, dirty }
+}
+/** 语义化版本比较（与 manager / probe 的 preOrder 同口径：无 prerelease > 有 prerelease）。 */
+function bumpCmpVer(a, b) {
+  const parse = (v) => {
+    const s = String(v).replace(/^v/, '')
+    const dash = s.indexOf('-')
+    return {
+      core: (dash < 0 ? s : s.slice(0, dash)).split('.').map(Number),
+      pre: dash < 0 ? [] : s.slice(dash + 1).split('.'),
+    }
+  }
+  const A = parse(a)
+  const B = parse(b)
+  for (let i = 0; i < 3; i++) {
+    const x = A.core[i] ?? 0
+    const y = B.core[i] ?? 0
+    if (x !== y) return x < y ? -1 : 1
+  }
+  if (!A.pre.length && !B.pre.length) return 0
+  if (!A.pre.length) return 1
+  if (!B.pre.length) return -1
+  for (let i = 0; i < Math.max(A.pre.length, B.pre.length); i++) {
+    const x = A.pre[i]
+    const y = B.pre[i]
+    if (x === undefined) return -1
+    if (y === undefined) return 1
+    const nx = /^\d+$/.test(x)
+    const ny = /^\d+$/.test(y)
+    if (nx && ny) { if (Number(x) !== Number(y)) return Number(x) < Number(y) ? -1 : 1; continue }
+    if (nx !== ny) return nx ? -1 : 1
+    if (x !== y) return x < y ? -1 : 1
+  }
+  return 0
+}
+/** 跑子进程：输出按行前缀转发到本脚本 stdout，同时完整捕获（断言要取实际值）。 */
+function bumpSpawn(cmd, args, spawnOpts = {}) {
+  return new Promise((resolvePromise) => {
+    const label = spawnOpts.label ?? null
+    const child = spawn(cmd, args, { cwd: spawnOpts.cwd ?? ROOT, env: process.env, stdio: ['ignore', 'pipe', 'pipe'] })
+    const captured = { stdout: '', stderr: '' }
+    let settled = false
+    const done = (payload) => { if (!settled) { settled = true; resolvePromise(payload) } }
+    for (const key of ['stdout', 'stderr']) {
+      const stream = child[key]
+      stream.setEncoding('utf8')
+      let carry = ''
+      stream.on('data', (text) => {
+        captured[key] += text
+        if (!label) return
+        carry += text
+        const lines = carry.split('\n')
+        carry = lines.pop() ?? ''
+        for (const l of lines) if (l.trim()) console.log(`      ${label}| ${l.slice(0, 220)}`)
+      })
+      stream.on('end', () => { if (label && carry.trim()) console.log(`      ${label}| ${carry.slice(0, 220)}`) })
+    }
+    child.on('error', (err) => done({ code: -1, signal: null, error: err.message, stdout: captured.stdout, stderr: captured.stderr }))
+    child.on('close', (code, signal) => done({ code: code ?? -1, signal, error: null, stdout: captured.stdout, stderr: captured.stderr }))
+  })
+}
+/** 只删自己建的临时目录（路径必须落在 tmpdir，且自身或父目录带 dsh-rehearse 前缀）。 */
+function bumpOwnsTempDir(p) {
+  if (!p) return false
+  const abs = resolve(p)
+  if (!abs.startsWith(resolve(tmpdir()) + '/')) return false
+  return basename(abs).startsWith('dsh-rehearse') || basename(dirname(abs)).startsWith('dsh-rehearse')
+}
+
+async function runBumpScenario() {
+  steps.length = 0
+  const tBump = now()
+  const timing = { cloneMs: 0, setupMs: 0, installMs: 0, adaptMs: 0, assertMs: 0, cleanupMs: 0, totalMs: 0 }
+  const versionRe = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/
+  const fromFloor = opts.fromFloor ?? BUMP_DEFAULT_FROM_FLOOR
+  const realFloor = /MIN_DSH_VERSION\s*=\s*'([^']+)'/.exec(readFileSync(MANAGER, 'utf8'))?.[1] ?? null
+  const target = opts.version ?? realFloor
+  let bumpRoot = null
+  let cloneDir = null
+  let runtimeDir = null
+  let installJsonPath = null
+  let installChild = null
+  let installChildExit = null
+  let readmeHits = 0
+  let repoExempt = []
+  let adaptResult = { code: null, signal: null, gateLine: null, outputTail: [] }
+  const asserts = {}
+  const realFingerprints = {}
+  let status = 'PREFLIGHT'
+  let errorMsg = null
+  let kept = false
+
+  const emit = (code, st) => {
+    status = st
+    timing.totalMs = now() - tBump
+    const anyFail = steps.some((s) => s.status === 'fail')
+    kept = opts.keep || anyFail
+    const result = {
+      tool: 'dsh-rehearse', scenario: 'bump', ok: code === 0, status, error: errorMsg,
+      repo: ROOT, startedAt: new Date(t0).toISOString(), finishedAt: new Date().toISOString(),
+      floorVersion: realFloor, targetVersion: target, fromFloor,
+      targetSource: opts.version ? '--version' : 'MIN_DSH_VERSION',
+      cloneDir, runtimeDir, installJson: installJsonPath,
+      readmeReplaced: readmeHits,
+      installChild: installChild
+        ? {
+          exitCode: installChildExit, status: installChild.status, installedVersion: installChild.installedVersion,
+          registryLatest: installChild.registryLatest, probe: installChild.probe,
+          tmpDir: installChild.tmpDir, kept: installChild.kept,
+        }
+        : null,
+      adapt: adaptResult,
+      asserts, realFingerprints, repoStatusExempt: repoExempt,
+      steps, timings: timing, kept, gaps: BUMP_GAPS,
+    }
+    writeJson(opts.json, result)
+    console.log('')
+    if (code === 0) {
+      console.log(`  结论: GREEN — 克隆里 ${realFloor} → ${target} 的抬地板全链路走通（dsh-adapt exit 0 + 五项断言全绿），真实仓库零改动`)
+    } else {
+      console.log(`  结论: ${status} — ${errorMsg ?? steps.filter((s) => s.status === 'fail').map((s) => `${s.name}(${s.detail})`).join('；')}`)
+    }
+    for (const g of BUMP_GAPS) console.log(`  ⚠ ${g}`)
+    if (kept) console.log(`  现场保留：clone=${cloneDir ?? '-'}  runtime=${runtimeDir ?? '-'}`)
+    return code
+  }
+
+  console.log('dsh:rehearse --scenario bump —— 在 /tmp 克隆里演练「抬地板」全链路（真实仓库只读）')
+  console.log(`  目标版本     ${target}${opts.version ? '（--version）' : '（真实仓库地板 MIN_DSH_VERSION）'}`)
+  console.log(`  演练起始地板 ${fromFloor}${opts.fromFloor ? '（--from-floor）' : `（默认 ${BUMP_DEFAULT_FROM_FLOOR}）`}`)
+  console.log('')
+
+  // ── 语义前置（exit 2）────────────────────────────────────────────────────
+  const usageErr = (msg) => console.error(`\ndsh-rehearse --scenario bump: ${msg}\n\n${USAGE}`)
+  if (!realFloor) {
+    errorMsg = '读不到真实仓库地板 MIN_DSH_VERSION'
+    usageErr(`${errorMsg}（${MANAGER}）`)
+    return emit(3, 'PREFLIGHT')
+  }
+  if (!versionRe.test(target)) { errorMsg = `--version 不是合法版本号：${target}`; usageErr(errorMsg); return emit(2, 'USAGE') }
+  if (!versionRe.test(fromFloor)) { errorMsg = `--from-floor 不是合法版本号：${fromFloor}`; usageErr(errorMsg); return emit(2, 'USAGE') }
+  if (bumpCmpVer(target, fromFloor) <= 0) {
+    errorMsg = `目标 ${target} 不高于 --from-floor ${fromFloor}`
+    usageErr(`${errorMsg} —— bump 演练的是"把地板抬上去"；低于/持平会让 dsh-adapt 第 2/3 步静默 skip（假演练），拒绝执行。\n  想抬到更低的地板？那是另一件事，请显式给出更低的 --from-floor（必须低于目标）。`)
+    return emit(2, 'USAGE')
+  }
+
+  // ── 前置：热 runtime（exit 3）────────────────────────────────────────────
+  const warmArg = opts.warmStore ?? DEFAULT_WARM_RUNTIME
+  let warmRuntime = resolve(warmArg)
+  if (basename(warmRuntime) === '.pnpm-store') warmRuntime = dirname(warmRuntime)
+  const warmMissing = [
+    [warmRuntime, '热 runtime 不存在'],
+    [join(warmRuntime, '.pnpm-store'), '缺 .pnpm-store（不是热 store）'],
+    [join(warmRuntime, 'node_modules/pnpm/bin/pnpm.cjs'), '缺随包 pnpm'],
+  ].filter(([p]) => !existsSync(p))
+  if (warmMissing.length) {
+    errorMsg = '热 runtime 前置不满足'
+    console.error(`\ndsh-rehearse --scenario bump: ${errorMsg} —— ${warmMissing.map(([p, w]) => `${w}：${p}`).join('；')}\n  用 --warm-store <dir> 指向本机真实的 dsh runtime。`)
+    return emit(3, 'PREFLIGHT')
+  }
+
+  // ── 前置：真实仓库干净（exit 3）+ 关键文件指纹 ────────────────────────────
+  for (const [name, file] of Object.entries(BUMP_REAL_FILES)) realFingerprints[name] = { before: fingerprint(file) }
+  let repoStatus
+  try {
+    repoStatus = bumpRepoStatus()
+  } catch (err) {
+    errorMsg = `git status 读不到：${err.message}`
+    console.error(`\ndsh-rehearse --scenario bump: ${errorMsg}（${ROOT} 是 git 仓库吗？）`)
+    return emit(3, 'PREFLIGHT')
+  }
+  repoExempt = repoStatus.exempt
+  if (repoExempt.length) {
+    console.log(`  记录层豁免（不算脏）：${repoExempt.map((e) => `${e.code} ${e.path}（${e.why}）`).join('；')}`)
+  }
+  if (repoStatus.dirty.length) {
+    errorMsg = `真实仓库有 ${repoStatus.dirty.length} 处非记录层改动`
+    console.error(`\ndsh-rehearse --scenario bump: ${errorMsg} ⇒ exit 3（不带脏状态演练）：`)
+    for (const d of repoStatus.dirty) console.error(`  ${d.code} ${d.path}`)
+    console.error('  请先提交或还原这些改动（本脚本不执行任何 git 写操作）。')
+    return emit(3, 'PREFLIGHT')
+  }
+  step('bump-preflight', 'ok', now() - tBump,
+    `真实仓库非记录层改动 0 条（豁免 ${repoExempt.length} 条记录层）；${Object.keys(BUMP_REAL_FILES).length} 份关键文件指纹已记录；目标 ${target} > 起始地板 ${fromFloor}`)
+
+  // ── 1. clone ─────────────────────────────────────────────────────────────
+  bumpRoot = mkdtempSync(join(tmpdir(), 'dsh-rehearse-bump-'))
+  cloneDir = join(bumpRoot, 'repo')
+  {
+    const s = now()
+    let cloneError = null
+    try {
+      execFileSync('git', ['clone', '--local', '--shared', ROOT, cloneDir], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 120_000 })
+    } catch (err) {
+      cloneError = String(err.stderr ?? err.message ?? err).trim().split('\n').slice(-2).join(' | ').slice(0, 240)
+    }
+    if (cloneError) { step('clone', 'fail', now() - s, `git clone 失败：${cloneError}`); errorMsg = 'clone 失败'; return emit(1, 'FAILED') }
+    let logLine = null
+    try {
+      logLine = execFileSync('git', ['-C', cloneDir, 'log', '-1', '--oneline'], { encoding: 'utf8' }).trim()
+    } catch (err) { /* 下面按失败处理 */ }
+    timing.cloneMs = now() - s
+    if (!logLine) { step('clone', 'fail', timing.cloneMs, `克隆里 git log 读不到（${cloneDir}）`); errorMsg = '克隆里 git log 不可用'; return emit(1, 'FAILED') }
+    step('clone', 'ok', timing.cloneMs, `${cloneDir}；git log: ${logLine.slice(0, 90)}`)
+  }
+
+  // ── 2. 降到 --from-floor（只在克隆里）────────────────────────────────────
+  {
+    const s = now()
+    const cloneFloors = ['scripts/server-manager.mjs', 'src-tauri/resources/manager/server-manager.mjs']
+    for (const rel of cloneFloors) {
+      const file = join(cloneDir, rel)
+      const text = readFileSync(file, 'utf8')
+      const cur = /MIN_DSH_VERSION\s*=\s*'([^']+)'/.exec(text)?.[1] ?? null
+      if (cur !== realFloor) {
+        step('from-floor', 'fail', now() - s, `${rel} 的地板是 ${cur ?? '(读不到)'}，不是真实仓库的 ${realFloor}（克隆与工作区不一致？）`)
+        errorMsg = '克隆里的地板与真实仓库不一致'
+        return emit(1, 'FAILED')
+      }
+      writeFileSync(file, text.replace(`const MIN_DSH_VERSION = '${realFloor}'`, `const MIN_DSH_VERSION = '${fromFloor}'`))
+    }
+    const cloneReadme = readFileSync(join(cloneDir, 'README.md'), 'utf8')
+    readmeHits = cloneReadme.split(realFloor).length - 1
+    if (readmeHits === 0) {
+      step('from-floor', 'fail', now() - s, `克隆 README 里找不到真实地板 ${realFloor} ⇒ "README 被替换"这条断言会失真`)
+      errorMsg = 'README 里找不到真实地板'
+      return emit(1, 'FAILED')
+    }
+    writeFileSync(join(cloneDir, 'README.md'), cloneReadme.split(realFloor).join(fromFloor))
+    timing.setupMs = now() - s
+    step('from-floor', 'ok', timing.setupMs, `克隆内两份 manager 地板 + README ${readmeHits} 处：${realFloor} → ${fromFloor}`)
+    console.log(`  ⚠ 演练 setup：地板被降到 ${fromFloor}（只在克隆 ${cloneDir} 内；真实仓库未动）——目标 ${target} 高于它，`)
+    console.log('     所以 dsh-adapt 的第 2/3/4 步会真的执行而不是 skip。')
+  }
+
+  // ── 3. 复用 install 场景装目标版本 ───────────────────────────────────────
+  {
+    const s = now()
+    installJsonPath = join(bumpRoot, 'install.json')
+    const selfArgs = [fileURLToPath(import.meta.url), '--scenario', 'install', '--version', target, '--keep', '--json', installJsonPath, '--timeout', String(opts.timeoutSec)]
+    if (opts.warmStore) selfArgs.push('--warm-store', opts.warmStore)
+    if (opts.registry) selfArgs.push('--registry', opts.registry)
+    const out = await bumpSpawn(process.execPath, selfArgs, { label: 'install' })
+    installChildExit = out.code
+    installChild = readJson(installJsonPath)
+    timing.installMs = now() - s
+    if (!installChild) {
+      step('install', 'fail', timing.installMs, `install 场景没有写出 JSON（exit=${out.code}）⇒ 不能断言落地版本`)
+      errorMsg = 'install 场景未产出 JSON'
+      return emit(1, 'FAILED')
+    }
+    runtimeDir = installChild.tmpDir ?? null
+    const landed = installChild.installedVersion ?? null
+    if (out.code !== 0 || landed !== target || !runtimeDir) {
+      const why = landed === target ? `install 子进程 exit=${out.code}（status=${installChild.status}）` : `落地 ${landed ?? '(未装上)'} ≠ 目标 ${target}`
+      step('install', 'fail', timing.installMs, `${why}${installChild.registryLatest ? `；manager 目标 = max(地板 ${installChild.floorVersion}, registry latest ${installChild.registryLatest})` : ''}`)
+      console.log(`      install 场景 JSON：${installJsonPath}${runtimeDir ? `；临时 runtime：${runtimeDir}` : ''}`)
+      errorMsg = `install 场景未装到目标版本（${why}）`
+      return emit(1, 'FAILED')
+    }
+    step('install', 'ok', timing.installMs,
+      `复用 install 场景：临时 runtime ${runtimeDir}，落地 ${landed} == 目标（install exit 0，probe ${String(installChild.probe?.verdict ?? '?').toUpperCase()}）`)
+  }
+
+  // ── 4. 在克隆里跑 dsh-adapt（不加 --dry-run）──────────────────────────────
+  {
+    const s = now()
+    const out = await bumpSpawn(process.execPath, [join(cloneDir, 'scripts/dsh-adapt.mjs'), '--version', target, '--runtime', runtimeDir], { cwd: cloneDir, label: 'adapt' })
+    timing.adaptMs = now() - s
+    const lines = out.stdout.split('\n').map((l) => l.trim()).filter(Boolean)
+    adaptResult = {
+      code: out.code, signal: out.signal ?? null,
+      gateLine: lines.filter((l) => /全量门禁/.test(l)).slice(-1)[0] ?? null,
+      outputTail: lines.slice(-12),
+      stderrTail: out.stderr.trim().split('\n').slice(-3).join(' | ').slice(0, 240),
+    }
+    step('adapt', out.code === 0 ? 'ok' : 'fail', timing.adaptMs,
+      `克隆内 dsh-adapt（无 --dry-run）exit=${out.code}${adaptResult.gateLine ? `；${adaptResult.gateLine.replace(/^\[\s*\w+\s*\]\s*/, '').slice(0, 160)}` : ''}`)
+  }
+
+  // ── 5. 五项断言（实际值全部打印进报告）──────────────────────────────────
+  {
+    const s = now()
+    // ① 克隆两份地板 == 目标 且 node --check 通过
+    const floorRows = ['scripts/server-manager.mjs', 'src-tauri/resources/manager/server-manager.mjs'].map((rel) => {
+      const file = join(cloneDir, rel)
+      const floorNow = /MIN_DSH_VERSION\s*=\s*'([^']+)'/.exec(readFileSync(file, 'utf8'))?.[1] ?? null
+      const check = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' })
+      return { rel, floorNow, checkExit: check.status }
+    })
+    const ok1 = floorRows.every((r) => r.floorNow === target && r.checkExit === 0)
+    asserts.floors = { ok: ok1, values: floorRows.map((r) => `${r.rel}=${r.floorNow ?? '(读不到)'}(node --check exit=${r.checkExit})`) }
+    step('assert-1-floors', ok1 ? 'ok' : 'fail', 0, asserts.floors.values.join('；'))
+
+    // ② 克隆 README：降下去的那份旧地板被 dsh-adapt 换成目标
+    const readmeAfter = readFileSync(join(cloneDir, 'README.md'), 'utf8')
+    const oldLeft = readmeAfter.split(fromFloor).length - 1
+    const targetNow = readmeAfter.split(target).length - 1
+    const ok2 = oldLeft === 0 && targetNow >= readmeHits
+    asserts.readme = { ok: ok2, replaced: readmeHits, oldFloorLeft: oldLeft, targetOccurrences: targetNow }
+    step('assert-2-readme', ok2 ? 'ok' : 'fail', 0,
+      `旧地板 ${fromFloor} 被替换 ${readmeHits} 处 → ${target}；替换后残留 ${fromFloor} ${oldLeft} 处、${target} 现 ${targetNow} 处`)
+
+    // ③ 克隆夹具（--update-fixture 写的是克隆里那份）
+    const cloneFixturePath = join(cloneDir, 'scripts/fixtures/dsh-web-app-patch-ids.json')
+    const cloneFixture = readJson(cloneFixturePath)
+    const fixtureIds = Array.isArray(cloneFixture?.ids) ? cloneFixture.ids.length : null
+    const ok3 = cloneFixture?.dshVersion === target && typeof fixtureIds === 'number'
+    asserts.fixture = { ok: ok3, path: cloneFixturePath, dshVersion: cloneFixture?.dshVersion ?? null, ids: fixtureIds, sha256: sha256(cloneFixturePath) }
+    step('assert-3-fixture', ok3 ? 'ok' : 'fail', 0,
+      `克隆夹具 dshVersion=${cloneFixture?.dshVersion ?? '(读不到)'}（期望 ${target}），${fixtureIds ?? '?'} 个 id`)
+
+    // ④ 真实仓库夹具未变（最关键的一条：证明写的是克隆里那份）
+    const realFixturePath = BUMP_REAL_FILES['scripts/fixtures/dsh-web-app-patch-ids.json']
+    const realFixtureAfter = fingerprint(realFixturePath)
+    const realFixtureBefore = realFingerprints['scripts/fixtures/dsh-web-app-patch-ids.json'].before
+    realFingerprints['scripts/fixtures/dsh-web-app-patch-ids.json'].after = realFixtureAfter
+    const ok4 = realFixtureBefore.exists && realFixtureAfter.exists &&
+      realFixtureAfter.sha256 === realFixtureBefore.sha256 &&
+      realFixtureAfter.mtimeMs === realFixtureBefore.mtimeMs &&
+      realFixtureAfter.size === realFixtureBefore.size
+    asserts.realFixture = {
+      ok: ok4, path: realFixturePath, before: realFixtureBefore.sha256, after: realFixtureAfter.sha256,
+      mtimeSame: realFixtureAfter.mtimeMs === realFixtureBefore.mtimeMs,
+      cloneSha256: asserts.fixture.sha256,
+    }
+    step('assert-4-real-fixture', ok4 ? 'ok' : 'fail', 0,
+      `真实夹具 sha256 ${String(realFixtureBefore.sha256).slice(0, 12)}… → ${String(realFixtureAfter.sha256).slice(0, 12)}…（mtime/size 同）；克隆那份 sha256 ${String(asserts.fixture.sha256).slice(0, 12)}…`)
+
+    // ⑤ 真实仓库非记录层 status 为空 + 其余关键文件指纹未变
+    let statusAfter = null
+    let statusError = null
+    try {
+      statusAfter = bumpRepoStatus()
+    } catch (err) { statusError = err.message }
+    let filesUnchanged = 0
+    const changedFiles = []
+    for (const [name, file] of Object.entries(BUMP_REAL_FILES)) {
+      const after = fingerprint(file)
+      realFingerprints[name].after = after
+      const before = realFingerprints[name].before
+      const same = before.exists === after.exists && before.sha256 === after.sha256 && before.mtimeMs === after.mtimeMs && before.size === after.size
+      if (same) filesUnchanged += 1
+      else changedFiles.push(name)
+    }
+    const ok5 = statusAfter !== null && statusAfter.dirty.length === 0 && filesUnchanged === Object.keys(BUMP_REAL_FILES).length
+    asserts.realRepo = {
+      ok: ok5, dirty: statusAfter?.dirty ?? null, statusError,
+      exempt: statusAfter?.exempt ?? [],
+      filesUnchanged, filesTotal: Object.keys(BUMP_REAL_FILES).length, changedFiles,
+    }
+    step('assert-5-real-repo', ok5 ? 'ok' : 'fail', 0,
+      `非记录层 status ${statusAfter ? `${statusAfter.dirty.length} 条` : `读不到（${statusError}）`}；关键文件指纹 ${filesUnchanged}/${Object.keys(BUMP_REAL_FILES).length} 未变`)
+    timing.assertMs = now() - s
+
+    console.log('')
+    console.log('  ── bump 五项断言（实际值）────────────────────────────────')
+    console.log(`  ① 克隆地板    ${(asserts.floors.values ?? []).join('；')}  ⇒ ${asserts.floors.ok ? 'OK' : 'FAIL'}`)
+    console.log(`  ② 克隆 README 旧地板 ${realFloor} ${readmeHits} 处 → ${fromFloor}（演练 setup）→ dsh-adapt 替换为目标；残留 ${fromFloor} ${oldLeft} 处、${target} 现 ${targetNow} 处  ⇒ ${asserts.readme.ok ? 'OK' : 'FAIL'}`)
+    console.log(`  ③ 克隆夹具    dshVersion=${asserts.fixture.dshVersion ?? '?'}（期望 ${target}），${asserts.fixture.ids ?? '?'} 个 id  ⇒ ${asserts.fixture.ok ? 'OK' : 'FAIL'}`)
+    console.log(`  ④ 真实夹具    sha256 ${String(asserts.realFixture.before).slice(0, 12)}… → ${String(asserts.realFixture.after).slice(0, 12)}…（mtime/size 未变）  ⇒ ${asserts.realFixture.ok ? 'OK（写入的是克隆里那份）' : 'FAIL'}`)
+    console.log(`  ⑤ 真实仓库    非记录层 status ${statusAfter ? `${statusAfter.dirty.length} 条` : '读不到'}；关键文件指纹 ${filesUnchanged}/${Object.keys(BUMP_REAL_FILES).length} 未变  ⇒ ${asserts.realRepo.ok ? 'OK' : 'FAIL'}`)
+  }
+
+  // ── 6. 清理（默认删克隆与临时 runtime；--keep 或失败保留现场）────────────
+  const anyFail = steps.some((s) => s.status === 'fail')
+  kept = opts.keep || anyFail
+  {
+    const s = now()
+    if (kept) {
+      step('cleanup', 'skip', 0, `${opts.keep ? '--keep' : '失败保留现场'}：clone=${cloneDir} runtime=${runtimeDir ?? '-'}`)
+    } else {
+      let removed = true
+      // bumpRoot 里还有 install.json（子进程场景的结构化结果），必须一起删掉，否则每次成功运行
+      // 都会在 /tmp 留下一个小目录（实测踩过）。
+      for (const [what, dir] of [['clone', cloneDir], ['临时 runtime', runtimeDir], ['bump 工作目录', bumpRoot]]) {
+        if (!bumpOwnsTempDir(dir)) { removed = false; console.log(`      ⚠ 拒绝删除非本脚本创建的路径（${what}）：${dir}`); continue }
+        rmSync(dir, { recursive: true, force: true })
+        if (existsSync(dir)) removed = false
+      }
+      step('cleanup', removed ? 'ok' : 'fail', now() - s, removed ? '克隆、临时 runtime 与 bump 工作目录已删（只删自己建的目录）' : '有目录没能删掉')
+    }
+    timing.cleanupMs = now() - s
+  }
+  const allGreen = !steps.some((s) => s.status === 'fail') && adaptResult.code === 0
+  return emit(allGreen ? 0 : 1, allGreen ? 'GREEN' : 'FAILED')
+}
 
 function writeJson(out, obj) {
   if (!out) return

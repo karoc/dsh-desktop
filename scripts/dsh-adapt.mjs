@@ -11,7 +11,8 @@
 //   3 README 里的地板数值同步（CI 有「改了 manager 必改 README」门禁）
 //   4 patch 夹具重采（--update-fixture --runtime）并核对采集版本
 //   5 预装插件 peer 兼容（test-plugin-dsh-compat）—— 地板与 bundle 必须同批
-//   6 探针非 RED（红色即停；yellow 需显式 --allow-yellow）
+//   6 探针非 RED（红色即停；**默认给探针带 --fail-on-yellow ⇒ YELLOW 也停**，要放行必须显式
+//     --allow-yellow —— 以前 yellow 会以 exit 0 通过，等于把"含糊"当"绿"）
 //     **--dry-run 时**：探针按"演练假设值"判定版本一致性（`--assume-floor <TARGET> --assume-fixture <TARGET>`）。
 //     为什么：dry-run 跳过第 2/4 步（写地板 / 重采夹具），而 `version-vs-floor` / `version-vs-fixture` 两条 RED
 //     只能靠那两步消掉 ⇒ 旧实现下 target≠floor 时"演练"必然停在第 6 步 —— 那是假演练（2026-10-19 审计定性）。
@@ -209,6 +210,10 @@ if (DRY) {
   const report = join(tmpdir(), `dsh-adapt-probe-${TARGET}-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`)
   try { rmSync(report, { force: true }) } catch { /* ignore */ }   // 先删旧报告，避免读到上一轮的绿
   const probeArgs = [PROBE, '--runtime', RUNTIME, '--json', report]
+  // 默认把 yellow 视为失败（探针的 --fail-on-yellow）：yellow 只表示"只差门禁开关/peer 判据不全"
+  // 这类含糊态，让整步以 exit 0 通过等于把含糊报成绿。--allow-yellow 仍能显式放行（那时不加此开关，
+  // 由下面的 verdict 分支给出 YELLOW⇒ok 的结论）。
+  if (!ALLOW_YELLOW) probeArgs.push('--fail-on-yellow')
   if (DRY) probeArgs.push('--assume-floor', TARGET, '--assume-fixture', TARGET)
   const out = spawnSync(process.execPath, probeArgs, { encoding: 'utf8' })
   // 没有报告 = 探针没跑成 = **不能**算通过。旧实现把缺失报告读成 '(no report)' 再落到 ok 分支
