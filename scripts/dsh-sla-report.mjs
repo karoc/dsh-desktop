@@ -16,7 +16,15 @@
 // 门禁口径（2026-10-19 两条修正，见 --check）：
 //   ① **无数据即红**：量不出任何版本 ⇒ 不能算通过（旧实现 `0/0 ⇒ exit 0`，是假绿）；
 //   ② **只看 since 之后首发的版本**：默认 `--since 2026-10-19`（方案落地日）。历史欠账（首发早于
-//      since）仍在报表里逐条显示，但**不参与退出码** —— 否则门禁在历史上恒红，等于没有门禁。
+//      since）仍在报表里逐条显示，但**不参与退出码** —— 否则门禁在历史信息上恒红，等于没有门禁。
+//
+// 时间口径（2026-10-19 修正）：表格与 JSON 里的三个时刻**统一成 UTC ISO（toISOString）**，列头写明 UTC。
+//   旧实现对新 npm 时间戳取 slice(0,16) 得 "2026-10-17T19:40"（Z），对 `git log --format=%cI` 得
+//   "2026-10-18T03:39"（+08:00 本地偏移）——两个不同时区的串都截到分钟且都看不到后缀，同一行里
+//   看起来"地板提交比上游发布晚 8 小时"，实际只差 54 秒。**不允许**再做这种跨时区混排。
+//
+// `--recent` 必须是正整数（0 = 退化成"检查全部"、负数/非数字 = slice 丢行或空集 ⇒ 静默改变门禁口径）。
+// `--check` 的阈值以**报表里的 slaHours** 为准：与脚本内常量不一致就是口径漂移，报错而非静默择一。
 //
 // 零 secret：只用 GITHUB_TOKEN（issues: write）。默认只出报表；--check 才按上面的口径判红绿。
 
@@ -30,7 +38,14 @@ const arg = (n, d = null) => { const i = argv.indexOf(n); return i >= 0 ? argv[i
 const OUT = arg('--json')
 const UPSERT_ISSUE = argv.includes('--issue')
 const FAIL_ON_BREACH = argv.includes('--fail-on-breach')
-const RECENT = Number(arg('--recent', '3'))
+// --recent 必须是正整数：0 会退化成 `slice(0)` = 检查全部（"最近 0 个"却判绿是假绿），
+// NaN（如 abc）会退化成"检查全部"，负数会 slice 掉前面的行 —— 三种都**静默改变门禁口径**。
+const RECENT_RAW = arg('--recent', '3')
+if (!/^\d+$/.test(String(RECENT_RAW).trim()) || Number(RECENT_RAW) < 1) {
+  console.error(`--recent 必须是正整数（实得 ${JSON.stringify(RECENT_RAW)}）：0 ⇒ "检查全部"、非数字 ⇒ 检查全部、负数 ⇒ 丢掉最早的行，都是静默改变门禁口径`)
+  process.exit(2)
+}
+const RECENT = Number(RECENT_RAW)
 const REPO = arg('--repo', process.env.GITHUB_REPOSITORY ?? 'karoc/dsh-desktop')
 const GH = process.env.GH_BIN ?? 'gh'
 const SLA_HOURS = 6
@@ -59,6 +74,16 @@ if (CHECK) {
     process.exit(1)
   }
   const perVersion = data.perVersion ?? []
+  // 阈值口径必须与报表一致：旧实现硬编码 6h，报表按别的 slaHours 量时，门禁按另一个阈值判 —— 口径漂移不可见。
+  if (data.slaHours === undefined || data.slaHours === null) {
+    console.error(`SLA 门禁红：报表 ${CHECK} 里没有 slaHours 字段 —— 阈值口径不可判定，拒绝用脚本内硬编码的 ${SLA_HOURS}h 静默替代（"量不出来"不等于"达标"）`)
+    process.exit(1)
+  }
+  if (Number(data.slaHours) !== SLA_HOURS) {
+    console.error(`SLA 门禁红：口径漂移 —— 报表的 slaHours=${data.slaHours}，本脚本内是 ${SLA_HOURS}h。`
+      + '报表按一个阈值量、门禁按另一个阈值判，两边必须同源；请统一（报表用 --sla-hours？改脚本常量？）后重跑。')
+    process.exit(2)
+  }
   if (perVersion.length === 0) {
     // ① 无数据即红：最近 0 个版本中 0 个超 6h 是**没有判断**，不是通过。
     console.error(`SLA 门禁红：报表里没有任何已量出的版本（${CHECK} 的 perVersion 为空）——`
@@ -83,6 +108,15 @@ if (CHECK) {
 const sh = (cmd, args) => execFileSync(cmd, args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).trim()
 const hours = (a, b) => (new Date(b).getTime() - new Date(a).getTime()) / 3600000
 const fmt = (h) => (Number.isFinite(h) ? `${h.toFixed(2)}h` : '—')
+/** 三个时刻统一成 UTC ISO（toISOString，带 Z）。**不要**再对原始串 slice：npm 给 Z、git 给本地偏移，
+ *  截断后两者都看不到时区后缀 ⇒ 同一行看起来相差 8 小时（审计实测 floorCommitAt=+08:00 与 publishedAt=Z）。 */
+const utc = (t) => {
+  if (!t) return null
+  const d = new Date(t)
+  return Number.isNaN(d.getTime()) ? null : d.toISOString()
+}
+/** 表格单元格：UTC ISO 截到分钟 + 显式 Z（列头已写明 UTC）。 */
+const utcCell = (iso) => (iso ? `${iso.slice(0, 16)}Z` : '—')
 
 // npm packument：直连失败时走 HTTPS_PROXY（本机取证：裸 fetch/直连会超时）
 function npmTimes() {
@@ -115,7 +149,8 @@ for (const [tag, publishedAt] of rel) {
   const total = hours(t0, publishedAt)
   const adapt = floorCommitAt ? hours(t0, floorCommitAt) : null
   const release = floorCommitAt ? hours(floorCommitAt, publishedAt) : null
-  rows.push({ tag, shell: tag.slice(1), floor, t0, floorCommitAt, publishedAt, adapt, release, total, ok: total <= SLA_HOURS })
+  // 时长用原值算（时区不影响差值），落表/落 JSON 的一律是 UTC ISO。
+  rows.push({ tag, shell: tag.slice(1), floor, t0: utc(t0), floorCommitAt: utc(floorCommitAt), publishedAt: utc(publishedAt), adapt, release, total, ok: total <= SLA_HOURS })
 }
 
 // SLA 的量纲是「**一个上游版本**从发布到我们发出稳定版」，所以必须按 dsh 版本聚合：
@@ -133,10 +168,10 @@ const totals = measured.map((r) => r.total).sort((a, b) => a - b)
 const median = totals.length ? totals[Math.floor(totals.length / 2)] : NaN
 
 const lines = []
-lines.push('| 首个携带该地板的版本 | 随包地板 | 上游发布 | 地板提交 | 我方发布 | 适配 | 发布 | **合计** | ≤6h |')
+lines.push('| 首个携带该地板的版本 | 随包地板 | 上游发布 (UTC) | 地板提交 (UTC) | 我方发布 (UTC) | 适配 | 发布 | **合计** | ≤6h |')
 lines.push('|---|---|---|---|---|---|---|---|---|')
 for (const r of measured) {
-  lines.push(`| ${r.shell} | \`${r.floor}\` | ${r.t0} | ${r.floorCommitAt ? r.floorCommitAt.slice(0, 16) : '—'} | ${r.publishedAt.slice(0, 16)} | ${fmt(r.adapt)} | ${fmt(r.release)} | **${fmt(r.total)}** | ${r.ok ? '✅' : '❌'} |`)
+  lines.push(`| ${r.shell} | \`${r.floor}\` | ${utcCell(r.t0)} | ${utcCell(r.floorCommitAt)} | ${utcCell(r.publishedAt)} | ${fmt(r.adapt)} | ${fmt(r.release)} | **${fmt(r.total)}** | ${r.ok ? '✅' : '❌'} |`)
 }
 const gateScoped = measured.filter(inScope)
 const gateHistory = measured.filter((r) => !inScope(r))
@@ -151,7 +186,7 @@ const stats = [
 const md = ['## dsh 升级 SLA 报表', '', ...stats, '', ...lines, skipped.length ? `\n跳过：${skipped.map((r) => `${r.tag}（${r.skip}）`).join('；')}` : ''].join('\n')
 console.log(md)
 
-if (OUT) { writeFileSync(OUT, JSON.stringify({ generatedAt: new Date().toISOString(), slaHours: SLA_HOURS, since: SINCE, gateScoped: gateScoped.map((r) => r.shell), gateHistory: gateHistory.map((r) => r.shell), stats, perVersion: measured, allReleases: rows }, null, 2)); console.log(`\nJSON 已写入 ${OUT}`) }
+if (OUT) { writeFileSync(OUT, JSON.stringify({ generatedAt: new Date().toISOString(), slaHours: SLA_HOURS, since: SINCE, timeFormat: 'UTC ISO 8601（toISOString；表格列头亦标 UTC）', gateScoped: gateScoped.map((r) => r.shell), gateHistory: gateHistory.map((r) => r.shell), stats, perVersion: measured, allReleases: rows }, null, 2)); console.log(`\nJSON 已写入 ${OUT}`) }
 
 if (UPSERT_ISSUE) {
   // /dev/stdin 在 runner 上不可用（实测：open /dev/stdin: no such device or address）⇒ 写临时文件

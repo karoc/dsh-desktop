@@ -130,9 +130,12 @@ node_modules 符号链接树、写迁移标记、绝不上移覆盖已有新数�
 ## 本地验证（Linux 可跑的部分）
 
 ```bash
-npm test                 # 全量 23 套：清单一致性 / overlay 目标行 / 升级标记 / 通知插件 / 控制面 / 代理 / 代理e2e /
-                         #   启动页设置 / 壳顶栏契约 / 壳引导桩（纯 Node，无浏览器）/ 启动器扫动 / 请求头预算 /
-                         #   半截安装自愈 / 副本一致性
+npm test                 # 全量 25 套（24 条 node 直接可跑 + 1 条条件式）：清单一致性 / overlay 目标行 / 升级标记 /
+                         #   通知插件 / 控制面 / 代理 / 代理e2e / 启动页设置 / 壳顶栏契约 / 壳引导桩（纯 Node，
+                         #   无浏览器）/ 启动器扫动 / 请求头预算 / 半截安装自愈 / 副本一致性 / 版本比较 parity /
+                         #   **自动化链路门禁自证**（scripts/test-automation-gates.mjs，见「维护者」小节）
+                         #   条件式那条 = `[ -f scripts/test-version-compare-parity.mjs ]`：文件已提供就真跑，
+                         #   尚未提供时打印 SKIP 并只跳过自己（不判红，也不掩盖它的失败 —— 失败码照传）
 npm run test:slow        # 安装卡死快速失败（~3 分钟，不进 PR 门禁；CI 的 linux job 会跑）
 npm run test:plugin      # 通知插件行为测试（纯 Node，无浏览器）
 npm run test:chrome-real    # 壳注入脚本的**真实初始化**自检（不带 TEST_HOOK、真实 Chromium 注入，需本机
@@ -449,13 +452,16 @@ MIT
   全量门禁。**任一步失败立即停**；
   `--runtime` 缺省时会尝试 dev 实例的固定 runtime 路径，**路径不存在且未显式给出 ⇒ 直接 exit 2**（不发车）。
   第 7 步（全量门禁）按 `package.json` 的 `test` 链**逐条直接跑 `node`**（不经 npm，与 `npm test` 是同一条链），
-  当前这条链 23 条全是 node ⇒ 本机 23/23 真跑。将来链上若出现非 node 条目（如 cargo），
-  本机会**跳过并逐条列出**：默认容忍这种覆盖缺口，`--strict-chain` 则把"跳过"也算失败（CI 上它们确实会跑，
-  跳过 ≠ 通过）。
+  当前这条链 25 条里 24 条是 `node …` ⇒ 本机 24/24 真跑；剩下 1 条是条件式
+  （`[ -f scripts/test-version-compare-parity.mjs ] && …`，parity 套件尚未提供时只跳过自己）——
+  它不匹配 `^node`，因此本机会把它**跳过并逐条列出**（CI 上由 `npm test` 真跑）。
+  将来链上若出现别的非 node 条目（如 cargo），处理方式相同：默认容忍这种覆盖缺口，
+  `--strict-chain` 则把"跳过"也算失败（跳过 ≠ 通过）。
   `--dry-run` **只跳过写文件（地板/README/夹具那几步），只读门禁照样真跑**——插件门禁、探针、全量门禁
   都会实际执行，探针判 RED 时仍然 exit 1；所以它不是"只打印计划"，而是"不落盘地走一遍真实门禁"
-  （实测 `--version 0.2.1-rc.2 --runtime <dev runtime> --dry-run` ⇒ exit 0、23 套通过，且运行前后
-  `git status --porcelain` 完全一致）。⚠️ 也正因第 4 步（夹具重采）被跳过，**目标版本 ≠ 当前地板/夹具时它
+  （2026-10-19 实测 `--version 0.2.1-rc.2 --runtime <dev runtime> --dry-run` ⇒ exit 0、当时 23 套通过，
+  且运行前后 `git status --porcelain` 完全一致；此后链上新增了 `test-automation-gates` 与 parity 两条，
+  数字相应变成 25）。⚠️ 也正因第 4 步（夹具重采）被跳过，**目标版本 ≠ 当前地板/夹具时它
   必然停在第 6 步探针**（`version-vs-*` RED）⇒ dry-run 只对"目标 == 现状"的幂等路径能全绿，
   **不能**用它演练一次版本变更。
   `--canary`（第 8 步）**读两个日志、断言三个标记**：session 日志（默认 `<dev 数据目录>/dsh-desktop-session.log`，
@@ -463,6 +469,17 @@ MIT
   （可 `--manager-log` 覆盖，是随包 manager 的 `log()` 落盘处）出 `preinstalled bundles:`。**只认检查开始之后
   新写入的行** ⇒ 前提是 dev 壳必须在检查期间**新启动**（早就开着且空闲的壳不产生新标记行）；缺哪个标记会
   指名它来自哪个文件。只读，不启动也不杀进程。装版本、发版、装机刻意不做（汇总里会打印剩余人工步骤）。
+- **门禁自证**（`node scripts/test-automation-gates.mjs`，`npm test` 链上的一员，约 60s）：它覆盖的是
+  **"自动化链路判据的可失败性"** —— 把 2026-10-19「假门禁猎手」审计的 49 条注入断言落成可重复运行的一道门禁：
+  用合成 runtime + npm/gh/curl **桩**（写在临时目录、经 PATH/GH_BIN 注入，零外部依赖：不要 jq、不要本机 npm），
+  断言上探针 / `--check` / `dsh-watch` / `dsh:adapt` / preinstalled-sync 漂移检测这些判据**该失败时会失败**
+  （该 RED 就 RED + exit 1、该 FATAL 就 exit 2、该停在第 N 步就停在第 N 步、"没有数据"就判红）。
+  **为什么存在**：恒真的门禁比没有门禁更糟 —— 那份 harness 原本只在 `/tmp`，CI 从不跑它，判据回归没人拦。
+  单跑：`node scripts/test-automation-gates.mjs`（`--only probe|sla|watch|adapt|drift|mutation` 只跑一组、
+  `--fast` 跳过等待型用例、`--keep` 保留临时目录排障）。它自带 **5 条变异自证**（在**工作树临时副本**上
+  **临时副本**上把判据改坏 ⇒ 本套件必须变红；绝不改仓库文件），已知仍不完美的判据标 `KNOWN_GAP`
+  —— 只逐条打印、**不判红**（既不用"跳过"掩盖假绿，也不会因为别的 agent 正在修它而把链判红；
+  行为一旦变化会打 `GAP?` 提醒把它升级成正确性断言）。
 - **两个定时工作流**（零 secret，只用 `GITHUB_TOKEN`）：`dsh-watch.yml` 每 15 分钟探测 npm dist-tags，
   比地板新就开/更新 `dsh-upgrade` issue（含门槛倒计时与适配清单）——门槛文案按**实际门槛**打印
   `${threshold}h 截止`：`latest` 通道默认 6h（硬指标）、预发布通道默认 24h（best-effort），
