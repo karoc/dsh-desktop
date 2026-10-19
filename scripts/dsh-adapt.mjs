@@ -12,6 +12,10 @@
 //   4 patch 夹具重采（--update-fixture --runtime）并核对采集版本
 //   5 预装插件 peer 兼容（test-plugin-dsh-compat）—— 地板与 bundle 必须同批
 //   6 探针非 RED（红色即停；yellow 需显式 --allow-yellow）
+//     **--dry-run 时**：探针按"演练假设值"判定版本一致性（`--assume-floor <TARGET> --assume-fixture <TARGET>`）。
+//     为什么：dry-run 跳过第 2/4 步（写地板 / 重采夹具），而 `version-vs-floor` / `version-vs-fixture` 两条 RED
+//     只能靠那两步消掉 ⇒ 旧实现下 target≠floor 时"演练"必然停在第 6 步 —— 那是假演练（2026-10-19 审计定性）。
+//     非 dry-run **绝不**传这两个开关（绝不静默假设），演练结论也不代表真实一致。
 //   7 全量门禁（按 package.json 的 test 链逐条跑，等价 CI；本机 npm CLI 不可用，故直接跑 node）
 //   8 汇总 + 剩余人工步骤（dev 实机验收 / PR / 发布 / 装机）
 //
@@ -70,6 +74,7 @@ const MANAGER_LOG = arg('--manager-log', RUNTIME ? join(RUNTIME, 'manager.log') 
 if (!TARGET || !RUNTIME) {
   console.error('usage: dsh-adapt.mjs --version <x.y.z[-pre]> [--runtime <dir>] [--dry-run] [--allow-yellow] [--canary] [--strict-chain]')
   console.error('       [--dev-log <session.log>] [--manager-log <runtime/manager.log>]')
+  console.error('  --dry-run：不写文件；探针按**演练假设值**判定版本一致性（--assume-floor/--assume-fixture = 目标版本），不代表真实一致')
   console.error(`  （--runtime 缺省尝试 dev 实例：${DEFAULT_DEV_RUNTIME}）`)
   process.exit(2)
 }
@@ -90,6 +95,11 @@ const abort = (name, detail) => {
 const summary = (code) => {
   console.log('\n—— 汇总 ——')
   for (const s of steps) console.log(`  ${s.status === 'ok' ? '✓' : s.status === 'skip' ? '·' : '✗'} ${s.name}${s.detail ? `：${s.detail}` : ''}`)
+  if (DRY) {
+    console.log('\n⚠️ 演练模式（版本一致性按假设值判定）：本次 --dry-run 让探针按 --assume-floor/--assume-fixture = '
+      + `${TARGET} 判 version-vs-floor / version-vs-fixture，**不代表版本已真实一致**；`
+      + '真实校验请去掉 --dry-run 重跑（非 dry-run 绝不带假设值）。')
+  }
   if (code === 0) {
     console.log('\n下一步（人工/产品流程，脚本刻意不做）：')
     console.log('  1) dev 实机验收：启动 dev 壳后跑 `node scripts/dsh-adapt.mjs --version ' + TARGET + ' --canary`')
@@ -99,7 +109,7 @@ const summary = (code) => {
   process.exit(code)
 }
 
-console.log(`dsh:adapt 目标 ${TARGET}${DRY ? '（dry-run，不写文件）' : ''}`)
+console.log(`dsh:adapt 目标 ${TARGET}${DRY ? '（dry-run，不写文件；版本一致性按**演练假设值**判定，不代表真实一致）' : ''}`)
 console.log(`  runtime = ${RUNTIME}`)
 console.log(`  地板 = ${floorOf(MANAGER_SRC)}（src）/ ${floorOf(MANAGER_COPY)}（随包副本）\n`)
 
@@ -190,24 +200,43 @@ if (DRY) {
 }
 
 // ── 6. 探针：RED 即停；yellow 需显式放行 ───────────────────────────────────
+// dry-run 走"演练假设"（--assume-floor/--assume-fixture = TARGET）：只替换版本一致性那两条判据的期望值，
+// 并**校验报告确实带上了 rehearsal 标记** —— 探针没吃到开关就停，否则等于"白演练还判绿"。
 {
-  const report = join(tmpdir(), `dsh-adapt-probe-${TARGET}.json`)
+  // 报告路径必须**唯一**：固定名（`dsh-adapt-probe-<target>.json`）会让同机并发的第二个 dsh-adapt
+  // 读到/删掉别人的报告 ⇒ 步骤 6 假失败或假绿（2026-10-19 复现：8 个并发 dry-run 里 2 个报
+  // "探针没有产出报告"）。pid + 时间戳 + 随机后缀同时覆盖"同机并发"与"同 pid 复用"两种撞车。
+  const report = join(tmpdir(), `dsh-adapt-probe-${TARGET}-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`)
   try { rmSync(report, { force: true }) } catch { /* ignore */ }   // 先删旧报告，避免读到上一轮的绿
-  const out = spawnSync(process.execPath, [PROBE, '--runtime', RUNTIME, '--json', report], { encoding: 'utf8' })
+  const probeArgs = [PROBE, '--runtime', RUNTIME, '--json', report]
+  if (DRY) probeArgs.push('--assume-floor', TARGET, '--assume-fixture', TARGET)
+  const out = spawnSync(process.execPath, probeArgs, { encoding: 'utf8' })
   // 没有报告 = 探针没跑成 = **不能**算通过。旧实现把缺失报告读成 '(no report)' 再落到 ok 分支
   // ⇒ 探针崩了/没写文件时全链路假绿（2026-10-19 审计定性）。
   if (!existsSync(report)) {
     abort('6 探针', `探针没有产出报告（${report}）—— 探针失败不等于通过（status=${out.status}）：${(out.stderr ?? out.stdout ?? '').trim().split('\n').slice(-2).join(' | ').slice(0, 200)}`)
   }
-  let verdict = null
-  try { verdict = JSON.parse(readFileSync(report, 'utf8')).verdict ?? null } catch (error) {
+  let parsed = null
+  try { parsed = JSON.parse(readFileSync(report, 'utf8')) } catch (error) {
     abort('6 探针', `报告无法解析：${error.message}`)
   }
   try { rmSync(report, { force: true }) } catch { /* ignore */ }
+  const verdict = parsed.verdict ?? null
   if (!['red', 'yellow', 'green'].includes(verdict)) abort('6 探针', `报告里的 verdict 非法：${JSON.stringify(verdict)}`)
-  if (verdict === 'red') abort('6 探针', `RED：${(out.stdout ?? '').split('\n').filter((l) => l.includes('[RED]')).slice(0, 3).join(' | ').slice(0, 240)}`)
-  if (verdict === 'yellow' && !ALLOW_YELLOW) abort('6 探针', 'YELLOW：需人工看一眼再显式加 --allow-yellow 重跑')
-  note('6 探针', 'ok', `verdict=${verdict.toUpperCase()}`)
+  // 演练假设必须**可证明**生效：报告里的 rehearsal/assumed 就是证据。两个方向都拦：
+  //   dry-run 没带假设 ⇒ 演练是假的（探针按真实值判）；非 dry-run 带了假设 ⇒ 真实校验被假设值污染。
+  const assumed = parsed.assumed ?? {}
+  if (DRY && !(parsed.rehearsal === true && assumed.floor === TARGET && assumed.fixture === TARGET)) {
+    abort('6 探针', `dry-run 要求按演练假设值判定，但报告里 rehearsal=${JSON.stringify(parsed.rehearsal)}、assumed=${JSON.stringify(assumed)}` +
+      `（期望 rehearsal=true 且 floor/fixture 都=${TARGET}）—— 拒绝把"没演练成"当通过`)
+  }
+  if (!DRY && parsed.rehearsal === true) {
+    abort('6 探针', `非 dry-run 却拿到 rehearsal=true 的报告（assumed=${JSON.stringify(assumed)}）—— 真实校验不许带假设值，停下人工确认`)
+  }
+  const rehearsalNote = DRY ? `；演练模式（版本一致性按假设值 ${TARGET} 判定，不代表真实一致）` : ''
+  if (verdict === 'red') abort('6 探针', `RED：${(out.stdout ?? '').split('\n').filter((l) => l.includes('[RED]')).slice(0, 3).join(' | ').slice(0, 240)}${rehearsalNote}`)
+  if (verdict === 'yellow' && !ALLOW_YELLOW) abort('6 探针', `YELLOW：需人工看一眼再显式加 --allow-yellow 重跑${rehearsalNote}`)
+  note('6 探针', 'ok', `verdict=${verdict.toUpperCase()}${rehearsalNote}`)
 }
 
 // ── 7. 全量门禁（按 package.json 的 test 链逐条跑；npm CLI 本机不可用，故直接跑 node）──

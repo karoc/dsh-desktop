@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // dsh 兼容性探针（P0）—— 对**已安装的 runtime** 跑一组确定性检查，产出 verdict + 证据 JSON。
 //
-//   node scripts/dsh-compat-probe.mjs --runtime <dir> [--json <out>]
+//   node scripts/dsh-compat-probe.mjs --runtime <dir> [--json <out>] [--fail-on-yellow]
+//                                      [--assume-floor <v>] [--assume-fixture <v>]
 //
 // 架构（2026-10-17 二次取证后定稿；旧版基于 npm tarball 的静态搜索已判定错误并删除）：
 //   本探针**不自己造判据**，而是
@@ -16,6 +17,16 @@
 // 或在临时 runtime 里用 manager 的 pnpm 管线装。探针只回答"装完之后它行不行"。
 //
 // 判据分级：red = 必须处理；yellow = 要看一眼；info = 仅记录。exit：有 red ⇒ 1，否则 0。
+//   `--fail-on-yellow`：yellow 也 ⇒ 1。**默认行为不变**（向后兼容）—— 但 CI 只跑 `npm run dsh:probe`
+//   时，native 白名单 / CLI 开关这两条只报 yellow，等于没门禁（2026-10-19 审计定性），要门禁就加这个开关。
+//
+// 演练专用开关（**只用于演练，不代表真实一致**）：
+//   --assume-floor <v>    把"runtime 版本 == 壳地板"这条判据的**期望值**换成 v
+//   --assume-fixture <v>  把"runtime 版本 == 夹具采集版本"这条判据的期望值换成 v
+//   加了任一开关 ⇒ 报告 JSON 里 rehearsal=true + assumed 值，stdout 打醒目声明，verdict 行也带演练标记。
+//   为什么需要：dsh-adapt --dry-run 结构上跳过第 2/4 步（写地板 / 重采夹具），而这两条是
+//   `version-vs-floor` / `version-vs-fixture` 两条 RED 的**唯一**消解途径 ⇒ target≠floor 时演练必然
+//   停在第 6 步（"以为演练过、其实没演练"）。非 dry-run 绝不用这两个开关，也绝不静默假设。
 
 import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
@@ -33,10 +44,26 @@ const arg = (name) => {
   const i = argv.indexOf(name)
   return i >= 0 ? argv[i + 1] : null
 }
+/** 取值型开关：出现在 argv 里就必须带合法版本号，否则 exit 2（坏输入不静默降级成"没给"）。 */
+const versionArg = (name) => {
+  const i = argv.indexOf(name)
+  if (i < 0) return null
+  const v = argv[i + 1]
+  if (!v || v.startsWith('--') || !/^\d+\.\d+\.\d+/.test(v)) {
+    console.error(`${name} 需要合法版本号（形如 0.2.1-rc.2），实得 ${JSON.stringify(v ?? null)}`)
+    process.exit(2)
+  }
+  return v
+}
 const RUNTIME = arg('--runtime')
 const OUT = arg('--json')
+const FAIL_ON_YELLOW = argv.includes('--fail-on-yellow')
+const ASSUME_FLOOR = versionArg('--assume-floor')
+const ASSUME_FIXTURE = versionArg('--assume-fixture')
+const REHEARSAL = ASSUME_FLOOR !== null || ASSUME_FIXTURE !== null
 if (!RUNTIME) {
-  console.error('usage: dsh-compat-probe.mjs --runtime <dir> [--json <out.json>]')
+  console.error('usage: dsh-compat-probe.mjs --runtime <dir> [--json <out.json>] [--fail-on-yellow]')
+  console.error('       [--assume-floor <v> --assume-fixture <v>]（演练专用；报告里会标 rehearsal=true）')
   process.exit(2)
 }
 
@@ -66,19 +93,28 @@ const installed = JSON.parse(readFileSync(pkgJson, 'utf8'))
 const version = installed.version
 const floor = /MIN_DSH_VERSION\s*=\s*'([^']+)'/.exec(readFileSync(MANAGER, 'utf8'))?.[1]
 const fixture = JSON.parse(readFileSync(FIXTURE, 'utf8'))
+// 演练假设只替换这两条判据的**期望值**（其余判据一律按实物判），默认（不给开关）= 真实值。
+const expectedFloor = ASSUME_FLOOR ?? floor
+const expectedFixture = ASSUME_FIXTURE ?? fixture.dshVersion
 console.log(`探针目标：runtime=${RUNTIME}`)
-console.log(`  已装 dsh=${version}  壳地板=${floor ?? '?'}  夹具=${fixture.dshVersion}（${fixture.ids.length} id）\n`)
+console.log(`  已装 dsh=${version}  壳地板=${floor ?? '?'}  夹具=${fixture.dshVersion}（${fixture.ids.length} id）${REHEARSAL ? '  ← 演练模式，见下方声明' : ''}\n`)
+if (REHEARSAL) {
+  console.log('  ！！！ 演练模式（rehearsal）：版本一致性按**假设值**判定，不代表真实一致 ！！！')
+  console.log(`      假设地板=${ASSUME_FLOOR ?? '(未假设，按真实值)'}、假设夹具=${ASSUME_FIXTURE ?? '(未假设，按真实值)'}`)
+  console.log(`      真实值：壳地板=${floor ?? '?'}、夹具=${fixture.dshVersion}。本模式只供 dsh-adapt --dry-run 演练，不构成"版本已一致"的证据。\n`)
+}
 
 // ① 版本三方一致：运行时装的东西 = 壳承诺的地板 = 夹具的采集版本
-if (version !== floor) {
-  add('red', 'version-vs-floor', `runtime 的 dsh=${version} 与壳地板 ${floor} 不一致（升级没成功，或地板没同步）`)
+//    演练时用 expected*（假设值），并在文案里点名"这是假设"，绝不冒充真实一致。
+if (version !== expectedFloor) {
+  add('red', 'version-vs-floor', `runtime 的 dsh=${version} 与壳地板 ${expectedFloor} 不一致（升级没成功，或地板没同步）${ASSUME_FLOOR !== null ? `（注意：地板期望值是**演练假设值**；真实地板 ${floor ?? '?'}）` : ''}`)
 } else {
-  add('info', 'version-vs-floor', `已装版本与壳地板一致：${version}`)
+  add('info', 'version-vs-floor', `已装版本与壳地板一致：${version}${ASSUME_FLOOR !== null ? `（演练假设值；真实地板 ${floor ?? '?'}）` : ''}`)
 }
-if (version !== fixture.dshVersion) {
-  add('red', 'version-vs-fixture', `patch 夹具仍是 ${fixture.dshVersion} 采的；需 --update-fixture 重采`)
+if (version !== expectedFixture) {
+  add('red', 'version-vs-fixture', `patch 夹具仍是 ${fixture.dshVersion} 采的；需 --update-fixture 重采${ASSUME_FIXTURE !== null ? `（注意：夹具期望值是**演练假设值** ${ASSUME_FIXTURE}；真实夹具版本 ${fixture.dshVersion}）` : ''}`)
 } else {
-  add('info', 'version-vs-fixture', `patch 夹具与已装版本一致：${fixture.ids.length} 个 id`)
+  add('info', 'version-vs-fixture', `patch 夹具与已装版本一致：${fixture.ids.length} 个 id${ASSUME_FIXTURE !== null ? `（演练假设值；真实夹具版本 ${fixture.dshVersion}）` : ''}`)
 }
 
 // ② overlay / loader-id：交给既有权威门禁，不重实现
@@ -161,7 +197,9 @@ const absent = whitelist.filter((p) => !(p in deps) && !installedAnywhere(p))
 if (absent.length) add('yellow', 'native-build', `壳的 native 白名单里这些包既不在 dsh 直接依赖里、也不在 runtime 顶层 node_modules（可能真被移除，人工确认后再决定是否同步删）：${absent.join(', ')}`)
 else add('info', 'native-build', `native 白名单 ${whitelist.length} 个包都能在 runtime 里找到`)
 
-// ⑥ 预装插件 peer 范围 vs 已装版本（地板与 bundle 必须同批）
+// ⑥ 预装插件 peer 范围 vs **runtime 里已装的 peer 包本体**（地板与 bundle 必须同批）
+// 旧实现拿 dsh CLI 版本当所有 `@deepseek-ai/dsh*` 子包版本的代理 —— "CLI 到位、子包滞后"的
+// 部分升级永远漏判（2026-10-19 审计定性）。现在读 runtime 里该 peer 包自己的 package.json。
 // 比较必须**预发布感知**（与 dsh-watch 的 cmp、manager 的 versionGt 同一口径）：
 // 旧实现 `v.split('-')[0]` 直接丢掉预发布段 ⇒ `0.2.1` 与 `0.2.1-rc.2` 判为相等
 // （审计 P0-1 的第三份独立实现）。无预发布必须回空数组，否则 `0.2.1` 被当成"有预发布"。
@@ -182,16 +220,53 @@ const cmp = (a, b) => {
   }
   return 0
 }
+/** 按 Node 的解析顺序找已装的 peer 包：runtime 根 → 该插件自己装的位置（pnpm 会把依赖挂在插件下）。 */
+const readPeerVersion = (name, pluginName) => {
+  const candidates = [join(nmRoot, name), ...(pluginName ? [join(nmRoot, pluginName, 'node_modules', name)] : [])]
+  for (const dir of candidates) {
+    const pj = join(dir, 'package.json')
+    if (!existsSync(pj)) continue
+    try {
+      const v = JSON.parse(readFileSync(pj, 'utf8')).version
+      if (typeof v === 'string' && v) return { version: v, from: pj }
+    } catch { /* 坏 package.json 视同"读不到"，落到下面的分支，不静默放行 */ }
+  }
+  return null
+}
+const absentOptionalPeers = []
 if (existsSync(PREINSTALLED)) {
   for (const dir of readdirSync(PREINSTALLED)) {
     const pj = join(PREINSTALLED, dir, 'package.json')
     if (!existsSync(pj)) continue
     const pkg = JSON.parse(readFileSync(pj, 'utf8'))
+    const meta = pkg.peerDependenciesMeta ?? {}
     for (const [name, range] of Object.entries(pkg.peerDependencies ?? {})) {
       if (!name.startsWith('@deepseek-ai/dsh')) continue
       const lo = /[>]=?\s*([\w.\-]+)/.exec(range)?.[1]
-      if (lo && cmp(version, lo) < 0) add('red', `peer:${dir}`, `${dir} 声明 ${name} ${range}，已装版本 ${version} 不满足`)
-      else add('info', `peer:${dir}`, `${dir} 的 peer ${range} 被 ${version} 满足`)
+      const installedPeer = readPeerVersion(name, pkg.name)
+      if (installedPeer === null) {
+        if (meta[name]?.optional === true) {
+          // npm 语义：optional peer 没装**不算错误**（四个预装包都把 dsh 平台包标成 optional）。
+          // 一律判 red 会让健康 runtime 恒红 —— 实测 0.2.1-rc.2 的 runtime 里没有
+          // @deepseek-ai/dsh-client-ui-slots（上游不再把它当 dsh 的运行时依赖安装，而它在 npm 上
+          // 确实有 0.2.1-rc.2），dsh-kanban 的 peer 正指着它。但**不许静默**：info 进报告 JSON，
+          // 并在 stdout 用专门一段点名（下面的 absentOptionalPeers）；要当门禁就配 --fail-on-yellow。
+          add('info', `peer-absent:${dir}`, `${dir} 声明了 peer ${name} ${range}，但 runtime 里找不到该包（peerDependenciesMeta.optional=true ⇒ 按 npm 语义缺失合法；无法核实其滞后）`)
+          absentOptionalPeers.push(`${dir} → ${name}`)
+        } else {
+          add('red', `peer:${dir}`, `${dir} 声明了 peer ${name} ${range}，但 runtime 里找不到该包（非 optional）—— 缺包不能算通过`)
+        }
+      } else if (lo && cmp(installedPeer.version, lo) < 0) {
+        add('red', `peer:${dir}`, `${dir} 声明 ${name} ${range}，runtime 里已装的 ${name}=${installedPeer.version} 不满足（CLI 版本 ${version} 只是代理信号，代表不了子包）`, installedPeer.from)
+      } else {
+        add('info', `peer:${dir}`, `${dir} 的 peer ${name} ${range} 被已装的 ${name}=${installedPeer.version} 满足`)
+      }
+      // CLI 版本检查**保留为额外信号**（旧实现唯一的判据）：平台包缺位时它仍是唯一线索。
+      if (lo && cmp(version, lo) < 0) {
+        add('red', `peer-cli:${dir}`, `额外信号：已装 dsh CLI=${version} 低于 ${dir} 声明的 ${name} 下限（平台包与 CLI lockstep 发布）`)
+      } else if (lo && installedPeer === null) {
+        add('info', `peer-cli:${dir}`, `额外信号：dsh CLI=${version} 满足 ${name} ${range} 的下限 ${lo}，但该平台包没随 runtime 安装`)
+      }
     }
   }
 }
@@ -199,22 +274,33 @@ if (existsSync(PREINSTALLED)) {
 const red = findings.filter((f) => f.sev === 'red')
 const yellow = findings.filter((f) => f.sev === 'yellow')
 const verdict = red.length ? 'red' : yellow.length ? 'yellow' : 'green'
+// --fail-on-yellow：yellow 也 ⇒ 1。默认不加时行为与旧版完全一致（向后兼容）。
+const failYellow = FAIL_ON_YELLOW && yellow.length > 0
 const report = {
   runtime: RUNTIME,
   version,
   floor,
   fixtureVersion: fixture.dshVersion,
+  rehearsal: REHEARSAL,
+  assumed: { floor: ASSUME_FLOOR, fixture: ASSUME_FIXTURE },
   verdict,
+  failOnYellow: FAIL_ON_YELLOW,
   generatedAt: new Date().toISOString(),
   counts: { red: red.length, yellow: yellow.length, info: findings.length - red.length - yellow.length },
   findings,
 }
+if (absentOptionalPeers.length) {
+  // info 不进下面的 [SEV] 打印块，所以这里专门点名：声明了 peer 却没随 runtime 装的包必须看得见。
+  console.log(`  说明（不影响退出码；明细在报告 JSON 的 peer-absent:* 里）：${absentOptionalPeers.length} 个声明了 peer 的平台包没随 runtime 安装，且插件把它标为 optional（npm 语义合法，无法据此判定滞后）：`)
+  for (const line of absentOptionalPeers) console.log(`    · ${line}`)
+}
 for (const f of findings.filter((x) => x.sev !== 'info')) {
   console.log(`  [${f.sev.toUpperCase()}] ${f.id}: ${f.msg}${f.evidence ? `\n         ${f.evidence}` : ''}`)
 }
-console.log(`\nverdict = ${verdict.toUpperCase()}（red ${red.length} / yellow ${yellow.length} / info ${report.counts.info}）`)
+console.log(`\nverdict = ${verdict.toUpperCase()}（red ${red.length} / yellow ${yellow.length} / info ${report.counts.info}）${REHEARSAL ? '  [演练模式：版本一致性按假设值判定，不代表真实一致]' : ''}`)
+if (failYellow) console.log(`--fail-on-yellow：${yellow.length} 条 yellow 计为失败 ⇒ exit 1（默认不加此开关时 yellow 仍 exit 0）`)
 if (OUT) {
   writeFileSync(OUT, JSON.stringify(report, null, 2))
   console.log(`报告已写入 ${OUT}`)
 }
-process.exit(red.length ? 1 : 0)
+process.exit(red.length || failYellow ? 1 : 0)

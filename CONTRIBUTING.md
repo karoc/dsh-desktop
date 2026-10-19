@@ -42,7 +42,8 @@
 > `cp scripts/git-hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit`
 > 为什么需要它：2026-09-27 与 2026-10-04 两次误直推 `main`（第二次发生在纪律写进技能之后）——靠自觉不够。
 
-npm test                          # 全量 23 套（行为 + 契约 + 副本一致性 + 清单/补丁目标门禁 + 升级标记）
+npm test                          # 全量 25 套（24 条 node + 1 条 `[ -f … ]` 条件式；行为 + 契约 + 副本一致性 +
+                                  #   清单/补丁目标门禁 + 升级标记 + 自动化链路门禁自证）
 
 第 18 套 `scripts/test-silent-failures.mjs` 是**静默失效审计**：它扫描"销毁/写入类操作的结果被忽略"的站点（Rust `let _ = std::fs::remove|copy|write|rename|create_dir*`、`.ok()` 吞错、JS 空 catch），每个站点必须在本行或上一行带 `// fail-open-ok: <理由>`。它**先跑 4 个变异夹具自检再跑审计**（自检不过即失败），也可单独跑 `npm run audit:self-test` —— 恒真的门禁不算门禁。
 第 22 套 `scripts/test-bake-bridge-port.mjs` 守**"就地改写别人的源码"**这条路径：manager 把桥端口烘进插件 `client.js` 前，必须先用 `node:vm` 的 `Script` 编译候选（**与浏览器 `<script src>` 同语义**；`new Function` 与 `node --check` 都会放过脚本里非法的顶层 `return` —— 两个都实测过），编译不过就**保留原文件** + 留一行 `bridge port bake ABORTED`。同族的静态门禁在 `scripts/test-launcher-settings.mjs` 末尾：启动页 JS 里 `getElementById` 的每个 id 都必须在对应 HTML 里存在 —— 那个套件的 DOM 桩会**按需自动建元素**，所以光靠它测不出"HTML 里少了一个 id"（生产后果是 `null.addEventListener` 打死该页后续脚本，与顶栏事故同族）。
@@ -113,7 +114,7 @@ git fetch origin release-please--branches--main
 git checkout FETCH_HEAD
 node -e "…四处版本一致性…"        # package.json / .release-please-manifest.json / tauri.conf.json / Cargo.toml
 grep -n "^## \[<version>\]" CHANGELOG.md
-npm test                          # 23 套（另：npm run test:slow 跑安装卡死用例，约 3 分钟，不进 PR 门禁）
+npm test                          # 25 条（另：npm run test:slow 跑安装卡死用例，约 3 分钟，不进 PR 门禁）
 node scripts/audit-preinstalled.mjs
 ```
 
@@ -151,6 +152,8 @@ gh CLI 默认读全局 `~/.config/gh/hosts.yml`。本项目使用**项目专用 
 ## 门禁自身的验证（2026-10-07 起，硬规则）
 
 **任何新增的门禁/断言，必须在同一个 PR 里带一个"注入对应缺陷 ⇒ 必须变红"的夹具**，否则视为未验证（恒真的门禁比没有门禁更糟：它给出虚假的安心）。本仓已有先例：`scripts/test-silent-failures.mjs` 的 4 个变异夹具、`test-shell-chrome.mjs` 的变异对照。反面教材（2026-10-07）：静默失效审计脚本的前两版试图"自动跳过 `#[cfg(test)]` 区域"，两次都判错 —— 一次**漏检生产代码**（假阴性），一次把 20 条测试区命中当生产报出；是夹具把这两次都钉了出来。
+
+**本条已被 `scripts/test-automation-gates.mjs` 遵守**（2026-10-19 起，`npm test` 链上的一员）：它是"自动化链路判据的可失败性"自证套件，自带 **5 条变异对照** —— 在**工作树临时副本**（`tar` 排除 `.git`/`node_modules` 等）上分别把「探针的 seam 判据」「`dsh:adapt` 第 6 步"探针 RED 却继续"」「`dsh:adapt` 第 6 步"探针没出报告"的放行分支」「SLA `--check` 的"没有数据即红"」「漂移检测的"目录不存在"守卫」改坏，断言**本套件在副本上变红**，且每条都配一个"未注入时该组必须是绿的"对照（同一份副本）。它**绝不修改仓库文件**（副本 + `--only <组> --fast --no-mutation` 子跑）；已知仍不完美的判据标 `KNOWN_GAP`（只逐条打印、不判红，既不掩盖假绿、也不因为别的 PR 正在修它而把链判红）。用法见 `README.md` 的「维护者：dsh 升级自动化」小节。
 
 **行为改动必须同步文档（这道门禁是活的）**：`.github/workflows/build.yml` 的 `test` job 里有一条步骤
 **「文档同步」**（只在 `pull_request` 事件、且非"板卡专属 PR"时跑）：本 PR 的变更文件里出现

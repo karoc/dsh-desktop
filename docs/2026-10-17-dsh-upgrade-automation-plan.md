@@ -124,7 +124,7 @@ T0 = `time[该壳版本随包地板]`（可能是预发布），终点 = 首个�
 |---|---|---|
 | 发现 | ≤ 15min | cron 15 分钟一轮（§3.2） |
 | probe（静态契约核对） | ≤ 5min | §3.1 把 1–3h 的人工核对压成脚本 |
-| 机械适配 + 开 PR | ≤ 15min | §3.4 一条命令；CI check+test ≈5min 与其重叠（**实际**：`dsh-adapt` 本机全链 ≈100s，含 23 套门禁） |
+| 机械适配 + 开 PR | ≤ 15min | §3.4 一条命令；CI check+test ≈5min 与其重叠（**实际**：`dsh-adapt` 本机全链 ≈100s，含当时 23 套门禁；2026-10-19 链上新增 `test-automation-gates`（自证套件，≈60s）与条件式 parity 套件 ⇒ 全链相应变长，共 25 条） |
 | 本机/CI 真机验收 | ≤ 60min | 原设计：§3.5 canary 并行构建（CI windows 11min）+ 自动验收脚本 ≤10min。**实际**：canary **不上 CI**、无自动验收脚本（§3.5 已标注设计稿未实现）⇒ 这一段是**纯人工** 30–60min，`dsh:adapt --canary` 只能替你做"三个日志标记"这一层断言 |
 | 发布 | ≤ 45min | §3.3 自动补派发（≤10min 延迟）+ 构建 11min + merge/资产核验 |
 | 预装插件同步 | 与上面重叠 | §3.8 与地板同批维护（硬规则：地板与 bundle 同批落地）。**实际**：`dsh-adapt` 只校验 peer 兼容，真正的同步是 `preinstalled-sync.yml` 每周一次（不同批，靠门禁兜住） |
@@ -201,8 +201,10 @@ T0 = `time[该壳版本随包地板]`（可能是预发布），终点 = 首个�
 4. 重采 patch 夹具（`test-patch-targets.mjs --update-fixture --runtime <dir>`）并核对采集版本；
 5. 预装插件 peer 兼容（`test-plugin-dsh-compat.mjs`；地板与四个 bundle 必须同批）；
 6. 探针非 RED（**没产出报告也算失败**；YELLOW 需显式 `--allow-yellow`）；
-7. 全量门禁（按 `package.json` 的 `test` 链逐条直接跑 `node`；当前 23 条全是 node ⇒ 23/23 真跑。非 node 条目
-   本机会**跳过并逐条列出**，默认容忍、`--strict-chain` 把跳过也算失败）；
+7. 全量门禁（按 `package.json` 的 `test` 链逐条直接跑 `node`；当前 25 条里 24 条是 `node …` ⇒ 24/24 真跑，
+   另 1 条是 `[ -f scripts/test-version-compare-parity.mjs ]` 条件式（parity 套件未提供时只跳过自己），
+   它不匹配 `^node` ⇒ 本机把它**跳过并逐条列出**，CI 上由 `npm test` 真跑。默认容忍这种覆盖缺口、
+   `--strict-chain` 把跳过也算失败；
 8. 汇总 + 打印剩余人工步骤（dev 实机验收 / PR / 发布 / 装机）；`--canary` 时在此读**两个日志**断言三个标记
    （session 日志：`client/log chrome ready`、`client-ready (http)`；`<runtime>/manager.log`：`preinstalled bundles:`），
    只认检查开始之后**新写入的行** ⇒ 前提是 dev 壳在检查期间**新启动**。
