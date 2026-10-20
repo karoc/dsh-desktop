@@ -2,7 +2,7 @@
 // dsh 升级 SLA 报表（自动化方案 P2）—— 对每个已发布版本量出「官方发布 → 我们发布稳定版」的真实耗时。
 //
 //   node scripts/dsh-sla-report.mjs [--json <out>] [--issue] [--fail-on-breach] [--recent 3]
-//                                   [--since 2026-10-19] [--registry <url>]
+//                                   [--since 2026-10-19] [--registry <url>] [--repo <owner/name>] [--assignee <login>]
 //
 // 口径（方案 §1.1a，与人工基线一致）：
 //   起点 T0   = npm `time[<该版本随包地板>]`（上游发布时间）
@@ -30,6 +30,7 @@
 
 import { tmpdir } from 'node:os'
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -46,8 +47,26 @@ if (!/^\d+$/.test(String(RECENT_RAW).trim()) || Number(RECENT_RAW) < 1) {
   process.exit(2)
 }
 const RECENT = Number(RECENT_RAW)
-const REPO = arg('--repo', process.env.GITHUB_REPOSITORY ?? 'karoc/dsh-desktop')
+const REPO = arg('--repo') || process.env.GH_REPO || process.env.GITHUB_REPOSITORY || (() => {
+  // issue 是 bot（GITHUB_TOKEN）创建的；GitHub 的推送默认只覆盖「参与中 / 被 @ 提及 / 被赋值」的线程
+  // ⇒ 报表 issue 必须带 assignee + 正文 @提及。属主从 repo slug 推导；本机回退到 git remote origin。
+  try {
+    const url = execFileSync('git', ['config', '--get', 'remote.origin.url'], { encoding: 'utf8' }).trim()
+    const m = /github\.com[:/]+([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/.exec(url)
+    return m ? `${m[1]}/${m[2]}` : null
+  } catch { return null }
+})() || 'karoc/dsh-desktop'
 const GH = process.env.GH_BIN ?? 'gh'
+// issue 由 bot 创建 ⇒ 必须显式 assignee + 正文 @提及（见下方 --issue 分支）。属主解析在**取数之前**做：
+// 解析不到就直接报错，不先跑完 npm/git 再静默跳过赋值。
+const OWNER = String(arg('--assignee') ?? process.env.DSH_ISSUE_ASSIGNEE ?? '').trim().replace(/^@/, '')
+  || (/^[^/\s]+\/[^/\s]+$/.test(REPO) ? REPO.split('/')[0] : null)
+if (UPSERT_ISSUE && !OWNER) {
+  console.error(`解析不到 issue 属主（assignee 目标）：REPO=${JSON.stringify(REPO)} 不是 OWNER/NAME。`
+    + '\n用 --assignee <login> / --repo <owner/name> / GH_REPO / GITHUB_REPOSITORY 指定。'
+    + '\n不赋值 = bot 开的 issue 很可能不推送（GitHub 只通知参与者/被@/被赋值者）—— 拒绝静默跳过。')
+  process.exit(2)
+}
 const SLA_HOURS = 6
 // 门禁起始日（方案落地日）。可用 --since 覆盖，便于演练与后续调整。
 const SINCE = arg('--since', '2026-10-19')
@@ -186,20 +205,52 @@ const stats = [
 const md = ['## dsh 升级 SLA 报表', '', ...stats, '', ...lines, skipped.length ? `\n跳过：${skipped.map((r) => `${r.tag}（${r.skip}）`).join('；')}` : ''].join('\n')
 console.log(md)
 
+// 更新路径的降噪判据：把「量到的版本集合 + 达标标记」压成一个 digest 写进 issue 正文（HTML 注释）。
+// 只有目标版本（最新量到的壳版本）或达标状态变化时才评论；其余更新静默 —— 报表 weekly cron
+// 不该每周刷一条通知。digest 相同则连 edit 都跳过（幂等）。
+const newestShell = measured.length ? measured[measured.length - 1].shell : '—'
+const okCount = measured.filter((r) => r.ok).length
+const stateDigest = createHash('sha1').update(JSON.stringify(measured.map((r) => [r.shell, r.floor, r.ok]))).digest('hex').slice(0, 12)
+const stateLine = `<!-- dsh-sla-report-state: ${stateDigest} newest=${newestShell} ok=${okCount}/${measured.length} -->`
+const parseReportState = (text) => {
+  const m = /<!-- dsh-sla-report-state: ([0-9a-f]+) newest=(\S+) ok=(\d+\/\d+) -->/.exec(String(text ?? ''))
+  return m ? { digest: m[1], newest: m[2], ok: m[3] } : null
+}
+
 if (OUT) { writeFileSync(OUT, JSON.stringify({ generatedAt: new Date().toISOString(), slaHours: SLA_HOURS, since: SINCE, timeFormat: 'UTC ISO 8601（toISOString；表格列头亦标 UTC）', gateScoped: gateScoped.map((r) => r.shell), gateHistory: gateHistory.map((r) => r.shell), stats, perVersion: measured, allReleases: rows }, null, 2)); console.log(`\nJSON 已写入 ${OUT}`) }
 
 if (UPSERT_ISSUE) {
   // /dev/stdin 在 runner 上不可用（实测：open /dev/stdin: no such device or address）⇒ 写临时文件
   const bodyFile = join(tmpdir(), 'dsh-sla-report-body.md')
-  writeFileSync(bodyFile, md)
+  writeFileSync(bodyFile, `@${OWNER}（负责人；自动化 SLA 报表：assignee + 提及双保险；只在目标版本/达标状态变化时评论）
+
+${md}
+
+${stateLine}`)
   try { sh(GH, ['label', 'create', 'sla-report', '--description', 'dsh 升级 SLA 报表', '--color', '0e8a16']) } catch (e) { /* 已存在即可 */ }
-  const existing = sh(GH, ['issue', 'list', '--label', 'sla-report', '--state', 'open', '--json', 'number', '--limit', '100', '--jq', '.[0].number // empty'])
+  // 取回 body 以便比对上次的状态标记；`gh issue list --json` 后由 node 解析（不依赖 jq）。
+  const listing = JSON.parse(sh(GH, ['issue', 'list', '--label', 'sla-report', '--state', 'open', '--json', 'number,body', '--limit', '100']))
+  const existing = Array.isArray(listing) ? listing[0] : null
   if (existing) {
-    sh(GH, ['issue', 'edit', existing, '--body-file', bodyFile])
-    console.log('已更新 SLA issue #' + existing)
+    const prev = parseReportState(existing.body)
+    if (prev && prev.digest === stateDigest) {
+      console.log(`SLA issue #${existing.number} 无变化（目标与达标状态均未变）⇒ 静默跳过，不 edit 也不评论`)
+    } else {
+      // edit 不推送 ⇒ 有意义的变化要补一条短 comment（comment 会通知 assignee/订阅者）。
+      sh(GH, ['issue', 'edit', String(existing.number), '--body-file', bodyFile, '--add-assignee', OWNER])
+      const changes = []
+      if (!prev) changes.push('首次接管（此前没有状态标记）')
+      else {
+        if (prev.newest !== newestShell) changes.push(`目标版本 ${prev.newest} → ${newestShell}`)
+        if (prev.ok !== `${okCount}/${measured.length}`) changes.push(`达标 ${prev.ok} → ${okCount}/${measured.length}`)
+      }
+      if (!changes.length) changes.push('报表数据已更新')
+      sh(GH, ['issue', 'comment', String(existing.number), '--body', `已更新 SLA 报表：${changes.join('；')}。`])
+      console.log(`已更新 SLA issue #${existing.number}（${changes.join('；')}）`)
+    }
   } else {
-    sh(GH, ['issue', 'create', '--label', 'sla-report', '--title', 'dsh 升级 SLA 报表（自动更新）', '--body-file', bodyFile])
-    console.log('已创建 SLA issue')
+    sh(GH, ['issue', 'create', '--label', 'sla-report', '--assignee', OWNER, '--title', 'dsh 升级 SLA 报表（自动更新）', '--body-file', bodyFile])
+    console.log('已创建 SLA issue（已赋值并 @ 提及属主）')
   }
 }
 

@@ -5,6 +5,7 @@
 //
 //   node scripts/dsh-watch.mjs [--dry-run] [--force-target <version>] [--json <out>]
 //                              [--registry <url>] [--floor <version>] [--now <iso>] [--force-published <iso>]
+//                              [--repo <owner/name>] [--assignee <login>]
 //
 // 演练参数（--registry / --floor / --now / --force-published）只为本地回放：本机 npm CLI 不可用、
 // 直连 npmjs 会超时，所以演练要用本地 stub registry（python http.server + 手写 packument）指向。
@@ -29,7 +30,32 @@ const arg = (n, d = null) => { const i = argv.indexOf(n); return i >= 0 ? argv[i
 const DRY = argv.includes('--dry-run')
 const FORCE = arg('--force-target')
 const OUT = arg('--json')
-const REPO = arg('--repo', process.env.GITHUB_REPOSITORY ?? 'karoc/dsh-desktop')
+// issue 是 bot（GITHUB_TOKEN）创建的，而 GitHub 的推送默认只覆盖「参与中 / 被 @ 提及 / 被赋值」的线程
+// ⇒ 只开 issue 不赋值、不提及，很可能**根本不会叫醒仓库属主**（2026-10-20 修正）。属主解析顺序：
+// --assignee > --repo > GH_REPO > GITHUB_REPOSITORY > git remote origin；**取不到就报错**，
+// 不静默跳过（静默跳过 = 又回到「issue 开着但没人知道」）。
+const GIT_SLUG = (() => {
+  try {
+    const url = execFileSync('git', ['config', '--get', 'remote.origin.url'], { cwd: ROOT, encoding: 'utf8' }).trim()
+    const m = /github\.com[:/]+([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/.exec(url)
+    return m ? `${m[1]}/${m[2]}` : null
+  } catch { return null }
+})()
+const REPO_ARG = arg('--repo')
+const REPO = REPO_ARG || process.env.GH_REPO || process.env.GITHUB_REPOSITORY || GIT_SLUG || 'karoc/dsh-desktop'
+const REPO_SOURCE = REPO_ARG ? '--repo' : process.env.GH_REPO ? 'GH_REPO' : process.env.GITHUB_REPOSITORY ? 'GITHUB_REPOSITORY' : GIT_SLUG ? 'git remote origin' : '内置默认'
+const OWNER_ARG = arg('--assignee')
+const OWNER_RESOLVED = String(OWNER_ARG ?? process.env.DSH_ISSUE_ASSIGNEE ?? '').trim().replace(/^@/, '')
+const OWNER_SLUG = /^[^/\s]+\/[^/\s]+$/.test(String(REPO).trim()) ? String(REPO).trim().split('/')[0] : null
+const OWNER = OWNER_RESOLVED || OWNER_SLUG
+// 注意：这里**不**立刻报错 —— "今天没有新版本"（target=null）根本不需要 issue/assignee，
+// 此时因解析不到属主而判红会把"无事发生"变成假故障。真正需要发 issue 的路径在 `if (!target)`
+// 之后单独 fail-closed（见下方）。
+const OWNER_SOURCE = OWNER_RESOLVED ? '--assignee/DSH_ISSUE_ASSIGNEE' : `${REPO_SOURCE}（${REPO}）`
+// 高优先级标记：先查过仓库现有 label（2026-10-20：只有默认 label + sla-report，没有任何优先级标记）
+// ⇒ 只新增这一个共享标记，不在每次运行里造一堆。label **不产生通知**，只用于 triage；
+// 真正叫醒人的是 assignee 与正文 @提及（见 README 维护者小节）。
+const PRIORITY_LABEL = 'priority:high'
 const GH = process.env.GH_BIN ?? 'gh'
 const SLA_HOURS = Number(arg('--sla-hours', '6'))
 const BEST_EFFORT_HOURS = Number(arg('--best-effort-hours', '24'))
@@ -134,6 +160,13 @@ console.log(md)
 if (process.env.GITHUB_STEP_SUMMARY) writeFileSync(process.env.GITHUB_STEP_SUMMARY, md + '\n', { flag: 'a' })
 if (OUT) writeFileSync(OUT, JSON.stringify({ floor, tags, target, kind, threshold, deadline, elapsed, breached, pubUnknown, registry: REGISTRY, generatedAt: new Date().toISOString() }, null, 2))
 if (!target) process.exit(0)
+// 只有真的要开/更新 issue 时才要求属主可解析：解析不到 = 会静默跳过赋值 ⇒ 显式 exit 2（不是假绿）。
+if (!OWNER) {
+  console.error(`解析不到 issue 属主（assignee 目标）：--repo=${JSON.stringify(REPO)} 不是 OWNER/NAME。`
+    + `\n用 --assignee <login> / --repo <owner/name> / GH_REPO / GITHUB_REPOSITORY 指定，或在本仓库配置 origin。`
+    + `\n不赋值 = bot 开的 issue 很可能不推送（GitHub 只通知参与者/被@/被赋值者）—— 拒绝静默跳过。`)
+  process.exit(2)
+}
 
 const checklist = `适配清单（方案 §4，按序执行；每步产物都要有坐标）：
 1. 抬 MIN_DSH_VERSION（scripts/server-manager.mjs + src-tauri/resources/manager/server-manager.mjs）+ 注释块追加适配记录
@@ -150,7 +183,7 @@ const checklist = `适配清单（方案 §4，按序执行；每步产物都要
 第 8 步（PR / 发布 / 装机）仍是人工流程 —— 脚本刻意不做（对外副作用）。`
 
 const pubText = FORCE_PUBLISHED ?? time[target] ?? '（npm packument 里没有该版本的发布时间）'
-const body = breached
+const bodyMain = breached
   ? `**SLA 未达标（方案 §6 的「合法失败」入口）**
 
 上游 dsh \`${target}\` 于 \`${pubText}\` 发布，门槛 **${threshold}h**（${kind}），截止 \`${deadline}\` ——
@@ -167,6 +200,15 @@ ${checklist}`
 截止时间：\`${deadline}\`（起点 = npm 上的发布时间，方案 §1.1a）
 
 ${checklist}`
+// 状态标记（HTML 注释，渲染不可见）：更新路径靠它判断「目标版本 / SLA 状态是否真的变了」，
+// 避免每 15 分钟的 cron 都刷一条评论（GitHub 的 comment 会推送，edit 不会）。
+const STATE_TAG = 'dsh-watch-state'
+// 首行以 @owner 开头（不要在前面加中文标点：mention 需要前面是行首/空白才成立）。
+const body = `@${OWNER}（负责人；自动化告警：assignee + 正文提及双保险）
+
+${bodyMain}
+
+<!-- ${STATE_TAG}: target=${target} breached=${breached} -->`
 const label = breached ? 'sla-breach' : 'dsh-upgrade'
 const title = breached
   ? `[SLA 未达标] dsh ${target} ${pubUnknown ? '发布时长未知（npm 无发布时间戳）' : `已发布 ${elapsed.toFixed(1)}h`}（门槛 ${threshold}h），地板仍停在 ${floor}`
@@ -174,27 +216,55 @@ const title = breached
 
 if (DRY) {
   console.log(`\n[dry-run] breached=${breached}（门槛 ${threshold}h，已过 ${elapsed === null ? '—' : elapsed.toFixed(2) + 'h'}）`
-  + `\n          会以 label=${label} 开/更新 issue，标题：${title}`
+  + `\n          会以 labels=${label},${PRIORITY_LABEL}、assignee=${OWNER}（来源 ${OWNER_SOURCE}；正文含 @${OWNER}）开/更新 issue，标题：${title}`
   + `\n          正文 ${body.length} 字符 —— 未执行任何写操作。`)
   process.exit(0)
 }
 
 const bodyFile = join(tmpdir(), 'dsh-watch-body.md')
 writeFileSync(bodyFile, body)
-try { execFileSync(GH, ['label', 'create', label, '--description', breached ? 'SLA 未达标（方案 §6）' : '上游 dsh 新版本待适配', '--color', breached ? 'b60205' : '1d76db'], { encoding: 'utf8' }) } catch (e) { /* 已存在即可 */ }
+// 两个 label 都走「已存在即可」：priority:high 是本仓库第一个优先级标记（先 `gh label list` 查过）。
+for (const [name, description, color] of [
+  [label, breached ? 'SLA 未达标（方案 §6）' : '上游 dsh 新版本待适配', breached ? 'b60205' : '1d76db'],
+  [PRIORITY_LABEL, '高优先级：自动化告警（dsh 升级 / SLA 未达标）', 'b60205'],
+]) {
+  try { execFileSync(GH, ['label', 'create', name, '--description', description, '--color', color], { encoding: 'utf8' }) } catch (e) { /* 已存在即可 */ }
+}
 // 去重必须按**版本号词边界**匹配，不能用 `contains(target)`：`contains("0.2.1")` 会命中已存在的
 // `0.2.1-rc.2` issue ⇒ 上游转正时评论挂到预发布单上，正式版永远没有自己的跟踪/未达标 issue。
 // 词边界 = 前后不能是 [0-9A-Za-z.-]，于是 `0.2.1` 不匹配 `0.2.1-rc.2`，也不匹配 `0.2.10`。
 // 同时：gh 的 `--jq` 过滤无从加 --limit（默认只取 30 条 open issue）⇒ 改成取 JSON 后在 node 里过滤，
-// 一次拿 100 条（本机无 jq 也照跑）。
+// 一次拿 100 条（本机无 jq 也照跑）。**兼容新增的 label/assignee**：`--label` 是"含该 label"过滤，
+// 同一 issue 再带 priority:high 仍会命中；title 里照旧带版本号，去重口径不变。
 const titlePattern = new RegExp(`(^|[^0-9A-Za-z.-])${target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^0-9A-Za-z.-]|$)`)
-const listing = JSON.parse(execFileSync(GH, ['issue', 'list', '--label', label, '--state', 'open', '--json', 'number,title', '--limit', '100'], { encoding: 'utf8' }))
-const existing = listing.find((i) => titlePattern.test(i.title ?? ''))?.number ?? ''
+const listing = JSON.parse(execFileSync(GH, ['issue', 'list', '--label', label, '--state', 'open', '--json', 'number,title,body,labels', '--limit', '100'], { encoding: 'utf8' }))
+const existing = listing.find((i) => titlePattern.test(i.title ?? '')) ?? null
+/** 读回上次写进正文的状态标记；没有 = 这单是本改动之前建的（状态未知）。 */
+const parseState = (text) => {
+  const m = new RegExp(`<!-- ${STATE_TAG}: target=(\\S+) breached=(true|false) -->`).exec(String(text ?? ''))
+  return m ? { target: m[1], breached: m[2] } : null
+}
 if (existing) {
-  execFileSync(GH, ['issue', 'comment', String(existing), '--body-file', bodyFile], { encoding: 'utf8' })
-  console.log(`${breached ? 'SLA 未达标' : '跟踪'} issue 已更新：#${existing}（按词边界命中标题）`)
+  const prev = parseState(existing.body)
+  // 更新一律先 edit（静默刷新正文、补齐 label/assignee；edit **不会**推送）；comment 只在
+  // 「目标版本变化」或「状态跨级（无→跟踪中→SLA 未达标）」时追加一条**短**评论，避免 cron 噪音。
+  execFileSync(GH, ['issue', 'edit', String(existing.number), '--body-file', bodyFile,
+    '--add-label', label, '--add-label', PRIORITY_LABEL, '--add-assignee', OWNER], { encoding: 'utf8' })
+  const changes = []
+  if (!prev) changes.push('首次接管（此前没有状态标记）')
+  else {
+    if (prev.target !== String(target)) changes.push(`目标版本 ${prev.target} → ${target}`)
+    if (prev.breached !== String(breached)) changes.push(`状态 ${prev.breached === 'true' ? 'SLA 未达标' : '跟踪中'} → ${breached ? 'SLA 未达标' : '跟踪中'}`)
+  }
+  if (changes.length) {
+    execFileSync(GH, ['issue', 'comment', String(existing.number), '--body', `已更新跟踪：${changes.join('；')}。`], { encoding: 'utf8' })
+    console.log(`${breached ? 'SLA 未达标' : '跟踪'} issue 已更新并通知：#${existing.number}（${changes.join('；')}）`)
+  } else {
+    console.log(`${breached ? 'SLA 未达标' : '跟踪'} issue 已静默更新：#${existing.number}（目标与状态均未变，不刷评论）`)
+  }
 } else {
   console.log(`（已扫描 ${listing.length} 个 open issue，无 ${target} 的词边界命中 ⇒ 新建）`)
-  execFileSync(GH, ['issue', 'create', '--label', label, '--title', title, '--body-file', bodyFile], { encoding: 'utf8' })
-  console.log(breached ? '已开 SLA 未达标 issue（方案 §6）' : '已开跟踪 issue')
+  execFileSync(GH, ['issue', 'create', '--label', label, '--label', PRIORITY_LABEL, '--assignee', OWNER,
+    '--title', title, '--body-file', bodyFile], { encoding: 'utf8' })
+  console.log(breached ? '已开 SLA 未达标 issue（方案 §6；已赋值并 @ 提及属主）' : '已开跟踪 issue（已赋值并 @ 提及属主）')
 }
