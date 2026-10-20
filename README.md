@@ -408,6 +408,9 @@ Windows 安装包由 GitHub Actions（`.github/workflows/build.yml`）在 `windo
    再用 `gh pr merge --squash --admin` 合并 —— 该 PR 由 bot 创建，它的 CI run 恒为
    `action_required`（GitHub 不自动跑 bot PR 的 workflow），所以 check/test 永不上报、
    分支保护恒为 BLOCKED，admin 合并是唯一路径（详见 CONTRIBUTING「发布」）。
+   > 全自动替代：`node scripts/dsh-release-autopilot.mjs`（默认连版本 PR 一起合并；`--stage1`
+   > 停在适配 PR 合并之后）。它用**本机项目 PAT** 做 `--admin`，不把 PAT 放进 CI；版本 PR 无 check 时
+   > 用「mergeable + 变更文件白名单」兜底（已知限制见「维护者：dsh 升级自动化」）。
 3) 合并后 release-please 打 vX.Y.Z tag 并创建 GitHub Release —— 但 tag 是用 API 创建的，
    不触发 workflow，此时 Release 的 assets 是空的。补一步：
    `gh workflow run build.yml --ref vX.Y.Z`
@@ -469,6 +472,47 @@ MIT
   （可 `--manager-log` 覆盖，是随包 manager 的 `log()` 落盘处）出 `preinstalled bundles:`。**只认检查开始之后
   新写入的行** ⇒ 前提是 dev 壳必须在检查期间**新启动**（早就开着且空闲的壳不产生新标记行）；缺哪个标记会
   指名它来自哪个文件。只读，不启动也不杀进程。装版本、发版、装机刻意不做（汇总里会打印剩余人工步骤）。
+- **全自动流水线（autopilot，2026-10-20）**：`node scripts/dsh-release-autopilot.mjs`（等价
+  `npm run dsh:autopilot`）—— 把「探测 → 适配 → 开 PR → 合并 → 发版 → 核验资产」收成一条可装进
+  systemd user timer 的命令（unit 模板在脚本头注释，本仓库不改你机器上的 systemd）：
+  ① `dsh-watch --json --dry-run`（不碰 issue）→ 无新版直接打印「无需适配」exit 0；
+  ② `git clone --local --shared` 到 /tmp → `dsh-rehearse --scenario install` 准备临时 runtime →
+     克隆里跑 `dsh-adapt`（只写克隆，不碰工作区/真实 runtime）；
+  ③ 只提交 `git status --porcelain` 里的**已跟踪、非看板**文件 → push `auto/dsh-<target>` →
+     `gh pr create`（正文含 target / 探针 verdict / 门禁套数 / 耗时 / 自动生成声明）；
+  ④ `gh pr view --json statusCheckRollup` 等 CI（默认 40 分钟；任一明确失败 ⇒ 不合并、回帖、exit 1。
+     本机 gh 2.45 的 `gh pr checks` 不支持 `--json`，故用方案允许的等价形式；SKIPPED/NEUTRAL 不算失败）；
+  ⑤ `mergeable=MERGEABLE` 才 `gh pr merge --squash --admin`（**必须**用 `./scripts/gh` 的项目 PAT；
+     冲突/UNKNOWN 超时都停下，绝不 force）；
+  ⑥ 等标题 `chore(main): release X.Y.Z` 的 release-please 版本 PR（≤15 分钟）→ MERGEABLE 后 `--admin` 合并。
+     **该 PR 是 bot 创建的，GitHub 结构上不给它跑 workflow ⇒ checks 恒空**；此时用「MERGEABLE + head 必须是
+     release-please 分支 + 变更文件全在写域白名单（三处版本文件 / Cargo.lock / CHANGELOG /
+     .release-please-manifest.json）」替代，日志会明写「按 bot PR 无 check 例外」，不假装 checks 绿；
+  ⑦ 从版本 PR 标题解析 tag → 等 Release 出现 → **该 tag 尚无构建运行才** `gh workflow run build.yml --ref <tag>`
+     （已有运行不重复派发：build 的 `concurrency` 是 cancel-in-progress）→ 轮询 Release 资产 ≥3（≤30 分钟）；
+  ⑧ 在触发 issue 回帖结构化总结（target / 适配耗时 / 探针 / 门禁 / PR 号 / 版本号 / 资产 / 总耗时 / 是否已发布）。
+  **安全阀**：`--dry-run` 只探测 + 打印计划（不 clone / 不 push / 不调 gh 写接口）；`--stage1` 在 ⑤ 之后停下
+  （适配 PR 已合并、版本 PR 留给人工；因为地板此时已等于 target，dsh-watch 不会再报这个 target，
+  **不要**指望重跑自动续走 ⑥–⑧）；`--require-canary` 在 ⑤ 之前额外要求 `dsh-adapt --canary` 通过
+  （默认关：canary 只认检查开始后新写入的两个 dev 日志标记 ⇒ 需要 dev 壳在窗口期内**新启动**；
+  缺日志 ⇒ 停在 ⑤ 之前、回帖「等真机验收」、exit 3）。
+  **幂等**：分支 `auto/dsh-<target>` + `gh pr list --state all` 判断——OPEN 复用（**不重复开 PR**）、
+  MERGED 从 ⑥ 续走、CLOSED 才重新适配并更新分支；更新既有分支用
+  `--force-with-lease=refs/heads/auto/dsh-<target>:<远端 sha>`（只限这条自动化分支，**绝不对 main 做任何写/force**）；
+  最新 Release 正文记录的 dsh `latest`/`next` == target 且资产 ≥3 ⇒ 直接打印「已发布」exit 0。
+  **回滚**：合并前的全部副作用都在 `auto/` 分支与 open PR（不碰 main），删分支/关 PR 即回滚；合并后按常规
+  revert PR 回滚（脚本不自动回滚、不删已合并提交）。
+  **失败时人看到什么**：失败阶段 + 原因 + 已完成步骤 + PR 是否保持打开 + 重跑提示会回帖到 issue；
+  ④/⑥ 的失败项会逐条列出 check 名与状态；⑦ 超时会写「资产仍 <3，去 Actions 看构建」。退出码
+  0 完成 / 1 失败 / 2 用法 / 3 前置不满足（探测失败、runtime 装不上、canary 缺日志等）。
+  **已知限制**：canary 默认关（定时器给不了「窗口期内新启动 dev 壳」这个前提）；进程在 ⑤ 之后被中断
+  （或用了 `--stage1`）不会自动续走——地板已等于 target，watch 不再报它，版本 PR 留在 open，需人工合并/派发；
+  版本 PR 自动合并 =
+  **零人工审阅**（只靠变更范围白名单 + mergeable 兜底）；资产 <3（如 windows job flake）就停在 ⑦、不自动重试；
+  `next`/alpha 通道按决策 ③C **不自动适配**（安装路径只装 max(地板, latest)）；合并/建 issue 依赖本机项目
+  PAT（`GH_BIN` 缺省自动指向 `scripts/gh`；CI 的 `GITHUB_TOKEN` 不能 `--admin`）；systemd 运行环境需能读
+  SSH key（`git push` 走 SSH）与网络。演练/测试注入点：`GH_BIN` / `GIT_BIN` / `NODE_BIN` 与
+  `DSH_AUTOPILOT_WATCH_JSON`（见脚本头注释）。
 - **门禁自证**（`node scripts/test-automation-gates.mjs`，`npm test` 链上的一员，约 60s）：它覆盖的是
   **"自动化链路判据的可失败性"** —— 把 2026-10-19「假门禁猎手」审计的 49 条注入断言落成可重复运行的一道门禁：
   用合成 runtime + npm/gh/curl **桩**（写在临时目录、经 PATH/GH_BIN 注入，零外部依赖：不要 jq、不要本机 npm），
@@ -490,12 +534,29 @@ MIT
   本仓 build.yml 的运行数已达 800 次（审计当时 799），老 tag 的运行早落在 100 条之外：实测
   `total_count(v0.11.0)=1`，而旧判据筛出 `0` ⇒ 资产长期 <3 时每 10 分钟重复派发）。
 
+- **告警如何送达**（2026-10-20 起，`dsh-watch` / `dsh-sla-report` 共用）：这两个脚本的 issue 都是 bot
+  （`GITHUB_TOKEN`）创建的，而 GitHub 的推送默认只覆盖「参与中 / 被 @ 提及 / 被赋值」的线程 ——
+  **只开 issue 不赋值、不提及，很可能根本不会叫醒人**。现在三件事一起做：
+  ① `gh issue create --assignee <owner>`（赋值**一定**会通知被赋值者；owner 解析顺序
+  `--assignee` → `--repo` → `GH_REPO` → `GITHUB_REPOSITORY` → `git remote origin`，**取不到直接 exit 2**，
+  不静默跳过）；② 正文以 `@<owner>` 开头（第二重保险；前面不放中文标点，mention 需要行首/空白才成立）；
+  ③ 高优先级 label：`dsh-upgrade` / `sla-breach`
+  之外再加 `priority:high`（先 `gh label list` 查过，仓库原有 label 里没有任何优先级标记，所以只新增这一个；
+  `sla-report` 是周报，不挂 high）。**label 本身不产生通知**，只用于 triage。
+  更新路径也保证可达：先 `gh issue edit`（静默刷新正文/补齐 label 与 assignee），只有**目标版本变化**或
+  **状态跨级**（跟踪中 → SLA 未达标）时才追加一条短 `comment`（comment 会通知 assignee / 订阅者）——
+  同一版本 cron 重复运行**不会重复评论**；SLA 周报靠正文里的 `dsh-sla-report-state` digest 判断
+  「量到的版本集合 + 达标状态」是否真的变了，没变时连 edit 都跳过。⚠️ 本机无法验证"推送是否真的到达手机"
+  （取决于该账号的 GitHub 通知设置）；**可验证**的是命令确实带上了 assignee / 提及 / label（门禁用 gh 桩断言）。
+
 - **SLA 报表**：`node scripts/dsh-sla-report.mjs [--json <out>] [--issue] [--check <json>] [--recent 3] [--since 2026-10-19] [--registry <url>]`
   —— 按 **dsh 版本**聚合量出「随包地板版本的上游发布 → 我们发出首个携带该地板的稳定版」的真实耗时
   （同一地板被多个壳版本携带时不重复计量）。**起点口径说清楚**：T0 = npm registry 上 **`time[该版本随包地板]`**，
   即"我们把地板抬到哪个版本，就从哪个版本的上游发布时间起算"——**该地板很可能是预发布**（如 `0.2.1-rc.2`），
   因为地板长期高于 npm `latest`；终点 = 该地板的**首个稳定 Release** 的 `publishedAt`。
-  `--issue` 把报表 upsert 到 `sla-report` issue；`--registry` 只为演练/离线复核指向 stub registry。
+  `--issue` 把报表 upsert 到 `sla-report` issue（创建时 `--assignee` + 正文 @ 提及属主；weekly 更新走
+  `edit`，仅当目标版本/达标状态变化才追加一条短 comment —— 见上一条「告警如何送达」）；
+  `--registry` 只为演练/离线复核指向 stub registry。
   **门禁口径**（CI 用 `--check <json>`；`--fail-on-breach` 是同口径的脚本内变体）：① **无数据即红**——报表缺
   `perVersion` 或为空数组 ⇒ exit 1（"量不出来"不等于"达标"；旧实现 0/0 判绿是假绿）；② "历史欠账不会让门禁
   恒红"是这么实现的：只有 `--since`（默认 `2026-10-19`，方案落地日）之后**上游首发**的版本参与退出码，

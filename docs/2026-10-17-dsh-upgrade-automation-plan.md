@@ -161,6 +161,14 @@ T0 = `time[该壳版本随包地板]`（可能是预发布），终点 = 首个�
   两件事：写清 blocker + ETA、同时发一个保持旧地板的稳定版）；
 - 去重：按 issue **标题里版本号的词边界**匹配（`gh issue list --json title,number --limit 100` 取回后在 node
   里过滤）—— `contains("0.2.1")` 会命中 `0.2.1-rc.2` 的单子，必须词边界；
+- **告警如何送达（2026-10-20）**：issue 由 bot（`GITHUB_TOKEN`）创建，而 GitHub 的推送默认只覆盖
+  「参与中 / 被 @ 提及 / 被赋值」的线程 ⇒ 只开 issue **不会**叫醒属主。现在 `gh issue create --assignee <owner>`
+  （owner 解析：`--assignee` → `--repo` → `GH_REPO` → `GITHUB_REPOSITORY` → `git remote origin`，取不到
+  **exit 2** 而不是静默跳过）+ 正文以 `@<owner>` 开头提及（前面不放中文标点）+ `dsh-upgrade`/`sla-breach` 之外的
+  `priority:high` label（label **不产生通知**，只用于 triage；仓库原有 label 里没有优先级标记，只新增这一个）。
+  更新路径先 `gh issue edit`（静默刷新正文、补齐 label/assignee），仅当**目标版本变化**或**状态跨级**
+  （跟踪中 → SLA 未达标）才补一条**短** comment（comment 会通知 assignee/订阅者）⇒ 同一版本 cron 重复运行
+  不重复评论、不重复赋值。
 - 取不到 npm 发布时间 ⇒ **fail-closed 记未达标**（`pubUnknown`，"量不出来"不等于"达标"）；npm packument
   直连与代理都失败 ⇒ 非零退出（真故障）；其余情况退出码恒 0（红色只代表 job 坏了）。
 
@@ -171,8 +179,12 @@ T0 = `time[该壳版本随包地板]`（可能是预发布），终点 = 首个�
 - ❌ 在 watch 里跑 §3.1 的 probe 并分 green/yellow/red 三态 —— **没做**；watch 只判"比地板新"，
   probe 是独立步骤（`dsh:adapt` 第 6 步或手动跑）。**结构原因**：`dsh-compat-probe.mjs` 需要
   `--runtime <已装候选版本的目录>`（无它 exit 2），而 watch 的 runner 上只有一份 checkout、没有 runtime。
-- ❌ `green` 自动建**适配 PR 骨架** —— **没做**（刻意的：脚本不建 PR，对外副作用留给人和产品流程）。
-- ❌ `red` 打 `blocked-upstream` 标签 —— **没做**；全链路只有两个 label：`dsh-upgrade` 与 `sla-breach`。
+- ✅ `green` 自动建适配 PR —— **2026-10-20 起由 `scripts/dsh-release-autopilot.mjs` 接管**（不是骨架：
+  在 /tmp 克隆里跑完整 `dsh-adapt`，推 `auto/dsh-<target>` 分支并开 PR；见文末「全自动流水线」）。
+  watch 本身仍然只探测/开 issue，不建 PR（职责分离不变）。
+- ❌ `red` 打 `blocked-upstream` 标签 —— **没做**；全链路的 label 只有 `dsh-upgrade` / `sla-breach` /
+  `sla-report` 三个业务标签，外加 2026-10-20 为「必然通知」新增的 `priority:high`（只挂在告警单上，
+  `sla-report` 周报不挂）。
 
 **3.3 `.github/workflows/tag-dispatch.yml`（cron `*/10 * * * *`，去掉手动派发）** —— **已落地**
 
@@ -248,7 +260,11 @@ T0 = `time[该壳版本随包地板]`（可能是预发布），终点 = 首个�
 > 方案若要碰，必须在决策里**显式推翻并写明理由**，不能顺手改掉。
 - 选项 A（原稿推荐，**已否决**）：加一个 `RELEASE_PLEASE_TOKEN`（fine-grained PAT）给 `release-please` 用 ⇒ tag 由 PAT 创建、**能触发** `build.yml`，链路闭环（需要在仓库 Settings 加 secret：**这是用户动作**）；
 - 选项 B（**已采纳**）：维持 §3.3 的定时补派发（≤10min 延迟），发布链路保持零 secret。
-- release PR 的合并：**保持 `--admin` 人工合并**（自动化前需决定的三条选项里选③）。它是"发版前的最后一道闸"，且 6h 预算里只占几分钟。
+- release PR 的合并：~~保持 `--admin` 人工合并~~ —— **2026-10-20 部分推翻（仅限本机自动化路径）**：
+  `scripts/dsh-release-autopilot.mjs` 用**本机项目 PAT**（`./scripts/gh`）做 `--admin` 合并，默认连版本 PR 一起合并；
+  零 secret 的决策**不变**（PAT 只在开发者本机，不进 CI/仓库；CI 里仍是人工 admin 合并）。
+  版本 PR 的 bot checks 恒空，autopilot 用「MERGEABLE + 变更文件写域白名单」替代人工审查；
+  代价是**零人工审阅**（已知限制，见文末）。`--stage1` 可只合并适配 PR、把版本 PR 留在原人工闸门。
 
 **3.7 `scripts/dsh-sla-report.mjs` + 定期 job（让 SLA 可证明）** —— **已落地**
 
@@ -263,6 +279,10 @@ T0 = `time[该壳版本随包地板]`（可能是预发布），终点 = 首个�
   ❌ 原稿的 **p90 没实现**（只有中位/最好/最差）；❌ "落到 `docs/dsh-upgrade-sla.md`（自动生成，进仓库，可 diff）"
   **没做，且 `docs/dsh-upgrade-sla.md` 不存在** —— 实际去处是：step summary + `--issue` upsert 到 `sla-report`
   issue + 可选 `--json <out>`。
+- **告警送达（2026-10-20）**：`sla-report` issue 由 bot 创建 ⇒ 创建时 `--assignee <owner>` + 正文
+  `@<owner>` 提及（属主解析同 §3.2，取不到 **exit 2**）。weekly 更新走 `edit`（**不推送**），正文末尾带
+  `dsh-sla-report-state` digest（量到的版本集合 + 逐版本达标标记）；digest 没变 ⇒ 连 edit 都跳过；
+  变了才追加一条短 comment 说明「目标版本 / 达标数」变化。⇒ 同一周重复运行幂等，不会每周刷评论。
 - **判据（实际）**：报表由 CI 生成（不许手填）。❌ 原稿的"连续两个 stable 版本无记录 ⇒ job 失败"**没实现**；
   实际门禁口径见下（**无数据即红** + **只判 since 之后首发**）。
 - **门禁口径（2026-10-19 两条修正，两个方向都曾失真）**：① **无数据即红** —— 报表缺 `perVersion` 或为空数组
@@ -325,7 +345,7 @@ push 前 `git ls-remote` 取期望值 + `git fetch` 建远端跟踪引用 + 显�
 | 机制 | 负向对照（**实际跑过的**用 ✅ 标出；未做的保留为待办） |
 |---|---|
 | §3.1 probe | ✅ 用**历史版本**跑（如 `0.2.0-rc.1`）⇒ 报出与当年人工核对一致的差异（锚点）；再人为删掉 overlay 目标行 ⇒ red。另：探针**没产出报告**从"通过"改成失败（假绿修正） |
-| §3.2 watch | ✅ 本地桩掉 registry（`--registry` 指 stub，无需改仓库代码）⇒ 走完开 issue 的路径；同一版本跑两次 ⇒ 只开一次（**按标题词边界**，非状态文件）。未做：`green ⇒ 自动建 PR` / `red ⇒ blocked-upstream`（见 §3.2 的设计稿标注） |
+| §3.2 watch | ✅ 本地桩掉 registry（`--registry` 指 stub，无需改仓库代码）⇒ 走完开 issue 的路径；同一版本跑两次 ⇒ 只开一次（**按标题词边界**，非状态文件）。`green ⇒ 自动建 PR` 已由 autopilot 接管（2026-10-20，见文末）；`red ⇒ blocked-upstream` 仍未做 |
 | §3.3 tag-dispatch | ✅ 服务端判据实测：`total_count(v0.11.0)=1`，而旧的"最近 100 条运行"筛出 `0`（这正是"每 10 分钟重复派发"的成因）。未做：真删一条 build run 记录来验证补派发（需要写操作，留给人工） |
 | §3.5 canary 验收 | ⚠️ 未做（`scripts/canary-accept.ps1` 不存在）。已做的等价验证：`dsh:adapt --canary` 对**空闲的** dev 实例必须红，且错误信息指名"哪个标记来自哪个文件"（实测两个日志路径都解析到、新增字节数 session 0 / manager 0 ⇒ 红） |
 | §3.7 SLA 报表 | ✅ 用历史配对数据回算，与手工核算（本方案 §1）一致（实测 7 个版本、合计中位 47.62h）；门禁侧：`perVersion: []` ⇒ exit 1（无数据即红）、只有历史欠账 ⇒ exit 0 并列出欠账、`since` 之后新首发的超时版本 ⇒ exit 1 |
@@ -349,6 +369,8 @@ push 前 `git ls-remote` 取期望值 + `git fetch` 建远端跟踪引用 + 显�
   （读**两个日志**断言三个标记；`scripts/canary-accept.ps1` 与 CI canary 构建是设计稿，见 §3.5）。
 - **P2 已落地**：`scripts/dsh-sla-report.mjs` + `dsh-sla-report.yml`（cron 每周一 01:00 UTC，报表与门禁分两步）、
   `preinstalled-sync.yml`（cron 每周一 02:00 UTC，三态判定 + 零 secret 开/更新 PR）。
+- **P2+ 已落地（2026-10-20）**：`scripts/dsh-release-autopilot.mjs` —— 探测/适配/PR/CI/合并/版本 PR/派发构建/资产核验/issue 回帖
+  一条命令；本机 systemd user timer 模板在脚本头注释。它是**本机编排**，不是 GitHub workflow。
 - 三个自动化 workflow 都带 `workflow_dispatch`，可在 Actions 页手动触发做首次实跑验证（cron 只在默认分支生效）。
 - **仍未做（P3，可选）**：§3.9 双地板测试矩阵、§3.10 alpha 跟踪降频。
 - 清欠账侧：地板已到 `0.2.1-rc.2`，并已随 **v0.19.0** 发布（`CHANGELOG.md` 的 0.19.0 条目「地板抬到 0.2.1-rc.2」；
@@ -366,3 +388,127 @@ best-effort（可 `--sla-hours` / `--best-effort-hours` 覆盖，标题与正文
 
 > 叫法说明：`scripts/dsh-watch.mjs` 的注释里把这段写成「方案 §6」——**它指的是本文件 §0 的「合法失败出口」**
 > （本文件 §6 是上面的负向对照表）。脚本注释不在本轮文档同步的写域内，故只在此处对齐口径。
+
+## 全自动流水线（autopilot，2026-10-20）—— §3.2 / §3.6 的人工步骤收成一条命令
+
+`node scripts/dsh-release-autopilot.mjs [--dry-run] [--stage1] [--require-canary] [--issue <n>] [--json [<file>]]
+[--wait-minutes 40] [--poll-seconds 20] [--runtime <dir>] [--repo <owner/name>] [--assignee <login>]
+[--canary-timeout 180] [--dev-log <session.log>] [--manager-log <runtime/manager.log>]`
+
+### 默认行为（全自动）
+
+检测到 npm 有比地板新的 `latest` ⇒ 一条路走到发布，不需要人：
+
+1. **探测**：`dsh-watch --json --dry-run`（不带 `--dry-run` 它会开 issue；autopilot 只在需要时自己回帖）。
+   无新版 ⇒ 打印「无需适配（当前无新版）」exit 0 —— 这是常态，不开单、不报红。
+2. **适配**：`git clone --local --shared` 到 /tmp（从 **GitHub 远端 main** fetch/checkout，避免工作区分支/脏树影响）→
+   用 `dsh-rehearse --scenario install --version <target> --keep --json <f>` 准备临时 runtime（复用它的安装机制，
+   不重写）→ 在克隆里 `dsh-adapt --version <target> --runtime <tmp>`。任一步失败 ⇒ issue 回帖 + exit，
+   **不 push、不留半截分支**（clone/临时 runtime 只写 /tmp）。
+3. **推送 + PR**：只提交 `git status --porcelain` 里**已跟踪、非看板**的文件（`KANBAN.json` 与未跟踪文件跳过并打印）；
+   push 到 `auto/dsh-<target>`（更新既有分支时 `--force-with-lease=refs/heads/auto/dsh-<target>:<远端 sha>`）；
+   `gh pr create` 正文含 target、探针 verdict、门禁套数、适配耗时、触发 issue 与「autopilot 自动生成」声明。
+4. **等 CI**：`gh pr view <n> --json statusCheckRollup` 轮询（默认 40 分钟）。**任一 check 明确失败 ⇒ 不合并**、
+   回帖失败项、exit 1；超时/pending 同样不合并。`SKIPPED` / `NEUTRAL` 视为非失败（PR 事件下 windows/linux/release
+   作业本来就 SKIP；把它们当失败会让任何 PR 永不可合并）。
+   > 实测事实：本机 gh 2.45 的 `gh pr checks` **不支持 `--json`**（`unknown flag: --json`），所以用方案允许的
+   > 等价形式 `gh pr view --json statusCheckRollup`，而不是硬编码一个在本机跑不了的命令。
+5. **合并适配 PR**：先 `git fetch`/`gh pr view` 确认 `mergeable=MERGEABLE`（`CONFLICTING`/`DIRTY` 直接停，**不 force**）
+   → `gh pr merge <n> --squash --admin` → 复核 `state=MERGED`。合并必须用本机项目 PAT：CI 的 `GITHUB_TOKEN`
+   不能绕过分支保护。`GH_BIN` 缺省自动指向 `scripts/gh`。
+6. **版本 PR**：等标题 `chore(main): release X.Y.Z` 的 open PR（≤15 分钟）→ `MERGEABLE` 后同样 `--admin` 合并。
+   **bot PR 例外必须说清**：release-please 用 `GITHUB_TOKEN` 建 PR，GitHub 结构上不跑它的 workflow ⇒
+   `statusCheckRollup` 恒空（实测 PR #178 = `checks: []`）。autopilot 不假装它绿：替代门禁是
+   ① `MERGEABLE`；② 若真有 check 上报必须全非失败；③ head 必须是 `release-please--branches--*`；
+   ④ `gh pr view --json files` 的变更必须全在写域白名单
+   （`package.json` / `src-tauri/tauri.conf.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` /
+   `CHANGELOG.md` / `.release-please-manifest.json` / `KANBAN.json`）。任何一条不满足 ⇒ 不合并、回帖、exit 1。
+7. **发版**：从版本 PR 标题解析 `X.Y.Z` → `vX.Y.Z`，等 Release 出现（≤10 分钟）→
+   **该 tag 尚无构建运行才** `gh workflow run build.yml --ref vX.Y.Z`（`gh api .../runs?branch=<tag>` 的 `total_count`；
+   已有运行不重复派发 —— build 的 `concurrency` 是 `cancel-in-progress`，重复派发会取消在跑的构建）。
+   然后轮询 Release 资产数（≤30 分钟）：`>=3` 完成；`<3` 停在 ⑦、回帖、exit 1（不自动重试，避免抖动）。
+8. **收尾**：在触发 issue 回帖结构化总结（target / 适配耗时 / 探针 / 门禁 / 适配 PR / 版本 PR / 版本号 / Release 链接 /
+   资产 / 总耗时 / 是否已合并发布）。成功与失败评论都带内容摘要标记，同内容重跑不重复刷屏。
+
+### 两个安全阀（外加 dry-run）
+
+- `--dry-run`：只走 ① + 打印计划；不 clone、不写文件、不 push、不调 gh 写接口。无新版时只打印「无需适配」。
+- `--stage1`：停在 ⑤ 之后（适配 PR 已合并，**不合并版本 PR**）。给「先建立信任」用。⚠️ 因为适配 PR 合并后
+  地板已等于 target，`dsh-watch` 不会再报这个 target ⇒ **不要**指望去掉 `--stage1` 重跑就能续走 ⑥–⑧；
+  这一点在成功回帖里明写。后续由人工合并版本 PR + 派发构建。
+- `--require-canary`：⑤ 之前额外要求 `dsh-adapt --canary` 通过。默认**关**：canary 只认检查开始之后
+  **新写入**的两个 dev 日志行 ⇒ 前提是 dev 壳在窗口期内**新启动**，无人值守的定时器给不了这个前提。
+  开启时需要 `--dev-log` / `--manager-log` 指向真实 dev 壳；缺日志或 canary 断言失败 ⇒ 停在 ⑤ 之前、
+  回帖「等真机验收」、**exit 3**（前置不满足，不是静默红也不是假绿），PR 保持打开。
+
+### 幂等规则
+
+- **同一 target 不重复开 PR**：按分支 `auto/dsh-<target>` + `gh pr list --state all --head` 判断。
+  `OPEN` ⇒ 复用（跳过 ②③，直接等 CI）；`MERGED` ⇒ 复用（从 ⑥ 续走）；`CLOSED` ⇒ 视为无 PR，重新适配并更新分支。
+- **同一 target 已发布**：最新 Release 正文记录的 dsh `latest`/`next` == target 且资产 ≥3 ⇒ 直接打印
+  「已发布」exit 0；不再克隆/推送。
+- **更新既有分支**：`--force-with-lease=refs/heads/auto/dsh-<target>:<远端 sha>`（只限这条自动化分支；
+  远端被别人推过就失败而不是覆盖）。**绝不对 main/master 做任何写操作或 force**；不删任何非本次新建的分支。
+- **构建派发**：`total_count == 0` 才派发；已有运行就只轮询资产，避免取消在跑的构建。
+
+### 回滚
+
+- **合并前**：全部副作用都在 `auto/dsh-<target>` 分支与 open PR；关 PR + 删分支即回滚（脚本自己只在「本次新建分支
+  且 PR 创建失败」时删分支，且删前会再查一次 PR，避免并发误删）。
+- **合并后**：按常规流程 revert 适配 PR / 版本 PR；autopilot 不做自动回滚，也不改写 main 历史。
+- **不变量**：任何路径都不对 main/master 执行 push/force；不改仓库设置/分支保护/密钥；不动真实 runtime；不 kill 进程。
+
+### 失败时人看到什么
+
+- issue 回帖：**失败阶段 + 原因 + 已完成步骤 + PR 是否保持打开 + 重跑提示**（`<!-- dsh-autopilot-failure -->` 标记）。
+- ④：逐条列出失败的 check 名与状态（如 `test=FAILURE`），不合并。
+- ⑤：明确写 `mergeable=CONFLICTING/CONFLICTING…` 或 `mergeStateStatus=DIRTY`，不 force。
+- ⑥：没等到版本 PR / 有失败 check / 变更超出 release-please 写域 / 冲突，分别有指名原因，不合并。
+- ⑦：超时写明「资产仍 <3，去 Actions 看构建」，不自动重试。
+- 退出码：0 完成（含无新版 / 已发布 / stage1）｜1 失败｜2 用法｜3 前置不满足（探测失败、runtime 装不上、
+  canary 缺日志/未通过、仓库或 issue 解析失败）。
+
+### 已知限制（诚实清单）
+
+- **canary 默认关**：自动定时器无法保证「窗口期内新启动 dev 壳」；`--require-canary` 是给有人值守的窗口用的。
+- **⑤ 之后中断不会自动续走**：适配 PR 合并后地板已等于 target，`dsh-watch` 不再报这个 target；release-please
+  版本 PR 会留在 open（或已合并但构建未核验）。重跑脚本无法知道该续哪个 target ⇒ 需人工合并版本 PR / 派发构建。
+  这是「可中断」的准确语义：中断前已 push 的分支/PR 不会被破坏，但后续阶段不保证自动恢复。
+- **版本 PR 自动合并 = 零人工审阅**：替代审查只有「写域白名单 + mergeable + 非失败 check」，不读 diff 语义。
+  这是默认全自动的代价；要保留人工闸门用 `--stage1`。
+- **资产 <3 就停在 ⑦**：Windows 打包/Chocolatey 外部源 flake 会让构建失败；autopilot 不做无限重试，
+  人工去 Actions 重跑后再重跑脚本（已发布检查会短路）。
+- **`next`/alpha 不自动适配**：manager 的启动期安装目标 = `max(地板, registry latest)`，结构上装不到更高的预发布；
+  按 §0 决策 ③C，预发布只开 issue。若 `latest` 本身是 rc（当前就是），仍按 latest 通道自动适配。
+- **依赖本机项目 PAT**：`--admin` 合并只能由本机 `./scripts/gh` 做；CI 的 `GITHUB_TOKEN` 不行。PAT 不进 CI，
+  零 secret 决策不变。systemd 运行环境还需要 SSH key（`git push`）与网络。
+- **release-please 版本 PR 没有 check**：bot PR 在 GitHub 上恒为 `action_required`，autopilot 用上述白名单兜底；
+  这不是"checks 绿"，日志与文档都如实写明。
+- **未覆盖**：真实 GitHub 写操作（建 PR/合并/派发构建）在本机验收时用桩验证；真实合并需要真仓库写权限
+  （本轮刻意没有对真实仓库执行任何写操作）。CONTRIBUTING 里「release PR 只能人工合并」的清单仍是**无 autopilot
+  时**的手工路径（本轮写域不含 CONTRIBUTING，未改；autopilot 走同一把本机 PAT 的 `--admin` 并加了范围白名单）。
+
+### 验证（2026-10-20 实跑，坐标）
+
+- `node --check scripts/dsh-release-autopilot.mjs` ⇒ exit 0。
+- **真实 dry-run**：`node scripts/dsh-release-autopilot.mjs --dry-run` ⇒ exit 0，打印
+  「无需适配（当前无新版）」；运行前后 `git status --porcelain` 完全一致（零仓库改动）。
+- **桩测 27 条断言**（/tmp 的 `GH_BIN` / `GIT_BIN` / `NODE_BIN` / `DSH_AUTOPILOT_WATCH_JSON` 注入，不碰真仓库）：
+  - 正向 CI 绿 ⇒ exit 0；push 目标分支 `auto/dsh-0.2.2`；`pr create` 正文含 target 与 verdict；
+    两次 `pr merge --squash --admin`（适配 PR 201 + 版本 PR 300）；`workflow run build.yml --ref v0.20.1`；
+    成功回帖含 3 个资产；JSON 模式 stdout 可解析。
+  - CI 红 ⇒ exit 1、无 `pr merge`、issue 回帖含失败 check。
+  - CI pending + `--wait-minutes 0` ⇒ exit 1、无 `pr merge`。
+  - PR 冲突（`CONFLICTING`）⇒ exit 1、无 `pr merge`、不 force。
+  - 目标版本装不上（runtime 桩 exit 3）⇒ 停在 ②、exit 3、无 `git push`、issue 回帖含原因。
+  - 重复运行（已有 `auto/dsh-0.2.2` 分支与 open PR）⇒ 不 `pr create`、不重跑 adapt/rehearse，直接合并既有 PR。
+  - 已发布幂等 ⇒ exit 0、无写操作。
+  - 默认 issue 查找：dsh-watch 已开的标题命中 ⇒ 复用它回帖，不新建；找不到 ⇒ 新建并在新 issue 回帖。
+  - `--require-canary` 缺日志 / canary 失败 ⇒ exit 3、不合并、回帖「等真机验收」。
+- `node scripts/test-automation-gates.mjs` ⇒ 104 条断言全部按预期（97 通过 / 0 失败 / 7 条 KNOWN_GAP），exit 0。
+
+### systemd user unit（模板）
+
+本仓库**不**改你机器上的 systemd；模板在 `scripts/dsh-release-autopilot.mjs` 头注释（service + timer）。
+要点：`Type=oneshot`、`OnUnitInactiveSec=30min`（不会重入）、`Environment=GH_BIN=%h/dsh-desktop/scripts/gh`、
+`TimeoutStartSec=2h`。启用由用户执行 `systemctl --user daemon-reload && systemctl --user enable --now dsh-release-autopilot.timer`。
