@@ -14,5 +14,5 @@ Status: implemented
 **只用 GitHub cron**：最省事，但实测 2–5h 的检测延迟意味着 6h 指标结构上不可达，且 tag 构建会静默不触发（已实际发生）。**Windows 计划任务做心跳**：更耐 WSL 未启动，但本机 `schtasks /create` 被拒绝（需管理员），且 GUI 里不可审计。**release-please 改用 PAT ⇒ `on: release: published` 立刻触发**：事件级最可靠，但用户明确选了零 secret 路线，且新增 PAT 会把发布权限扩散到 Actions。**外部云调度器**：同样要放 token，且把"谁在跑"移出了这台机器。
 ## Consequences
 
-买到的是：机器开着时 ≤10 分钟确定性检测（实测 service 单次 3–5s 完成），restart 后自动补跑一次，且与 Actions 完全无关地活下去。代价是：心跳的存在性变成"本机 + Windows 登录态"的属性 —— 关机即停；因此 SLA 必须拆成**检测延迟**（上游发布→我们开单）与**适配延迟**（开单→我们发版）两段分别计量，否则测出来的是机器开关机史而不是我们的响应能力（这一项尚未实现，是对 autopilot 报表的待办）。另：`tag-dispatch` 的本地心跳目前只是 `gh workflow run` kick，逻辑仍在 workflow 里，将来应抽成 `scripts/dsh-tag-dispatch.mjs` 与 workflow 共用。相关：[autopilot 决策](2026-10-20-dsh-release-autopilot.md)、[发版日干跑](../process/2026-10-18-dsh-upstream-release-day-drill.md)。
+买到的是：机器开着时 ≤10 分钟确定性检测（实测 service 单次 3–5s 完成），restart 后自动补跑一次，且与 Actions 完全无关地活下去。代价是：心跳的存在性变成"本机 + Windows 登录态"的属性 —— 关机即停；因此 SLA 必须拆成**检测延迟**（上游发布→我们开单）与**适配延迟**（开单→我们发版）两段分别计量，否则测出来的是机器开关机史而不是我们的响应能力（这一项尚未实现，是对 autopilot 报表的待办）。另：`tag-dispatch` 的本地心跳目前只是 `gh workflow run` kick，逻辑仍在 workflow 里，将来应抽成 `scripts/dsh-tag-dispatch.mjs` 与 workflow 共用。相关：[autopilot 决策](2026-10-20-dsh-release-autopilot.md)、发版日干跑（见 process/2026-10-18-dsh-upstream-release-day-drill.md）。
 
