@@ -549,22 +549,39 @@ MIT
   「量到的版本集合 + 达标状态」是否真的变了，没变时连 edit 都跳过。⚠️ 本机无法验证"推送是否真的到达手机"
   （取决于该账号的 GitHub 通知设置）；**可验证**的是命令确实带上了 assignee / 提及 / label（门禁用 gh 桩断言）。
 
-- **SLA 报表**：`node scripts/dsh-sla-report.mjs [--json <out>] [--issue] [--check <json>] [--recent 3] [--since 2026-10-19] [--registry <url>]`
-  —— 按 **dsh 版本**聚合量出「随包地板版本的上游发布 → 我们发出首个携带该地板的稳定版」的真实耗时
-  （同一地板被多个壳版本携带时不重复计量）。**起点口径说清楚**：T0 = npm registry 上 **`time[该版本随包地板]`**，
-  即"我们把地板抬到哪个版本，就从哪个版本的上游发布时间起算"——**该地板很可能是预发布**（如 `0.2.1-rc.2`），
-  因为地板长期高于 npm `latest`；终点 = 该地板的**首个稳定 Release** 的 `publishedAt`。
+- **SLA 报表**：`node scripts/dsh-sla-report.mjs [--json <out>] [--issue] [--check <json>] [--recent 3] [--since 2026-10-19] [--registry <url>] [--now <iso>]`
+  —— 按 **dsh 版本**聚合，把「随包地板版本的上游发布 → 我们发出首个携带该地板的稳定版」拆成**两段可指导行动的数字**：
+  **检测** = 上游发布 → **首次为该版本开 issue**（数据源 `gh issue list --label dsh-upgrade` / `--label sla-breach
+  --state all`，标题里的版本号按 `dsh-watch.mjs` 的**词边界**规则解析、优先取 `dsh <版本>` 锚点，再与 packument 的
+  `time[该版本]` 相减）；**适配** = 地板提交 → 我方发布（**沿用旧口径**，就是 JSON 里原有的 `release` 字段 ——
+  旧报表把这一列印成"发布"）。表里另有 **抬地板**（上游发布 → 地板提交，= 原有 `adapt` 字段，旧报表印成"适配"）
+  与 **合计**（上游发布 → 我方发布），末行给**两段中位/最大**（中位口径与旧实现一致：偶数个取上半；unknown 不计入、只报条数）。
+  ⚠️ **找不到对应 issue ⇒ 检测记为 unknown 并在表格里显式打印「未检测到」，绝不当 0**（"没有判断 = 没有验证"；
+  本仓库当前 `dsh-upgrade`/`sla-breach` **0 条 issue** ⇒ 7 个已量出版本全部「未检测到」、`--json` 的
+  `detectionStats.median` 是 `null`）。
+  两个取数细节：gh 的**重复 `--label` 是 AND 语义**（本仓库实测：`--label sla-report` 1 条，再加 `--label priority:high`
+  变 0 条），而 `dsh-watch` 对同一个 issue **只挂 `dsh-upgrade`/`sla-breach` 其中一个** ⇒ 脚本按 label 各查一次、
+  按 issue number 合并（= OR）；命中 `--limit 100` 上限会**拒绝出数**（gh 返回的是最新 100 条，被截掉的恰是最早的
+  issue ⇒ 检测延迟只会偏大）。
+  **起点口径说清楚**：T0 = npm registry 上 **`time[该版本随包地板]`**，即"我们把地板抬到哪个版本，就从哪个版本的上游
+  发布时间起算"——**该地板很可能是预发布**（如 `0.2.1-rc.2`），因为地板长期高于 npm `latest`；终点 = 该地板的
+  **首个稳定 Release** 的 `publishedAt`。
+  报表开头的**当前状态**是实时信号：最新 watch issue（标题 / 开单时间 / 距今多久 / 是否未关闭）、上游各通道最新版本
+  及其发布时间、壳地板（当前 HEAD 的 `scripts/server-manager.mjs`）、**有没有未关闭的跟踪 issue**，以及"上游最新是否
+  已晚于壳地板（按**发布时间**先后比较，不再养第二套 semver）且是否已被发现"。
   `--issue` 把报表 upsert 到 `sla-report` issue（创建时 `--assignee` + 正文 @ 提及属主；weekly 更新走
   `edit`，仅当目标版本/达标状态变化才追加一条短 comment —— 见上一条「告警如何送达」）；
-  `--registry` 只为演练/离线复核指向 stub registry。
+  `--registry` 只为演练/离线复核指向 stub registry；`--now <iso>` 只为演练钉住"现在"（只影响"距今多久"，坏输入 exit 2）。
   **门禁口径**（CI 用 `--check <json>`；`--fail-on-breach` 是同口径的脚本内变体）：① **无数据即红**——报表缺
   `perVersion` 或为空数组 ⇒ exit 1（"量不出来"不等于"达标"；旧实现 0/0 判绿是假绿）；② "历史欠账不会让门禁
   恒红"是这么实现的：只有 `--since`（默认 `2026-10-19`，方案落地日）之后**上游首发**的版本参与退出码，
   欠账仍在报表里逐行显示并单列一行说明（真实数据实测：7 条历史欠账、`--check` exit 0；since 之后新首发的
   版本超时仍会红）；③ `--recent 3` 只看该范围内的最近 3 个。
-  报表三个时间戳列的**时区口径不统一，别按列对读**：`上游发布` 是 npm 原样 ISO（`…Z`）、`地板提交` 是
-  `git log --format=%cI` 的提交**本地时区**再截到分钟（偏移被截掉）、`我方发布` 是 Release `publishedAt`
-  的 UTC 再截到分钟；要看绝对时间请以 `--json` 里的原值为准（见方案 §3.7 的实测例子）。
+  **检测延迟不进门禁**：它量的是"上游发出来之后我们多久才发现"，而发现取决于定时探测所在的机器 / runner 在不在跑、
+  issue 有没有被限流 —— 那是**平台属性**，不是适配能力；写进 `--check` / `--fail-on-breach` 只会让门禁随平台抖动而红绿。
+  门禁判定**与旧实现逐位相同**：仍只看 `total`（上游发布 → 我方发布 ≤ 6h）+ since/recent 两条窗口规则。
+  报表里三个时间戳列**统一是 UTC ISO 截到分钟**（`toISOString().slice(0,16)+'Z'`，列头写明 UTC）——2026-10-19 已修掉
+  "npm 给 `Z`、`git log --format=%cI` 给本地偏移、截断后两者都看不出时区后缀"的混排；要看绝对时间以 `--json` 原值为准。
 - **探测逻辑脚本**：`node scripts/dsh-watch.mjs [--dry-run] [--json <out>] [--force-target <v>]
   [--force-published <iso>] [--force-pre] [--now <iso>] [--sla-hours <n>] [--best-effort-hours <n>]
   [--registry <url>] [--floor <ver>]`（`dsh-watch.yml` 只是薄壳；退出码恒 0 —— 红色只代表 job 坏了，
