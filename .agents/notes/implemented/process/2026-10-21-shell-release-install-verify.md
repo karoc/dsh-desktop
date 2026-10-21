@@ -14,5 +14,5 @@ Status: implemented
 **用 `gh release download`**：实现最省事，但它对慢链路没有续传，且 240s 超时会把 28MB 截成 6.8MB —— 正是它让第一次装配失败。**用 `curl -x $HTTPS_PROXY` 直连 `github.com`**：实测 0 字节，代理对该域名不放行。**在 WSL 里交叉构建 NSIS**：缺 makensis，只能退回"Windows 侧构建"这一既有文档路线。**只看进程存活当验收**：会把"manager 起来了但 dsh web 没起"判成通过 —— 这次五项链式正是因为它才抓到 `alpha.3 → rc.2` 的自动升级确实发生。**跳过 dev 直接装正式版**：0.20.0 发布时 dev 实例最后启动是 10-17、早于发布，等于零验证 —— 用户否决了这种做法。
 ## Consequences
 
-买到的是：任何一次"装壳"都变成按清单执行、每步可回滚（0.20.0 的正式版安装 8.55s、五项链式全绿、dsh 从 alpha.3 自动升到 rc.2、探针 GREEN，dev 侧 0.18.1→0.20.0 同样全绿）。代价与遗留：每次要多花一次 dev 构建（~8 分钟）与两份备份；GUI 视觉/插件交互仍需人眼，不在本清单内；`--report-on-fatalerror` 会让 `manager.log` 里出现噪音式 `error` 字样，判读时要看完整行而不是 grep 关键字。相关：[双心跳](2026-10-21-dsh-upgrade-heartbeat-dual.md)、[发版日干跑](2026-10-18-dsh-upstream-release-day-drill.md)、[项目级 gh token](2026-09-19-project-scoped-gh-token.md)。
+买到的是：任何一次"装壳"都变成按清单执行、每步可回滚（0.20.0 的正式版安装 8.55s、五项链式全绿、dsh 从 alpha.3 自动升到 rc.2、探针 GREEN，dev 侧 0.18.1→0.20.0 同样全绿）。代价与遗留：每次要多花一次 dev 构建（~8 分钟）与两份备份；GUI 视觉/插件交互仍需人眼，不在本清单内；`--report-on-fatalerror` 会让 `manager.log` 里出现噪音式 `error` 字样，判读时要看完整行而不是 grep 关键字。相关：[双心跳](../architecture/2026-10-21-dsh-upgrade-heartbeat-dual.md)、[发版日干跑](2026-10-18-dsh-upstream-release-day-drill.md)、[项目级 gh token](2026-09-19-project-scoped-gh-token.md)。
 
