@@ -129,6 +129,17 @@ jobs:
         run: node scripts/sync-cargo-lock-version.mjs
       - run: npm test
         if: steps.changed.outputs.board_only != 'true'
+      # 2026-10-22：CI 辅助逻辑的负向对照。两套脚本都必须能"证明自己会红"，
+      # 否则「修好了 linux-smoke / 给 choco 加了重试」只是口头承诺：
+      #   · ci-choco-install 自检：2 次失败后成功 ⇒ 绿；3 次全失败 ⇒ 红；已装 ⇒ 不碰网络；首次成功 ⇒ 只跑 1 次。
+      #   · ci-linux-smoke 自检：静默 app / 假 resources / 缺 node / 无 URL / 早退 / 缺 deb ⇒ 必须红；
+      #     完整链路 ⇒ 必须绿（用桩二进制 + 桩 xvfb/dbus，不需要真实 WebKitGTK）。
+      # 纯 Node、无外部依赖、合计 ~10s，放快层跑，PR 阶段就能挡住"把门禁改成永真"的回归。
+      - name: CI 辅助脚本自检（choco 重试 / linux smoke 判据）
+        if: steps.changed.outputs.board_only != 'true'
+        run: |
+          node scripts/ci-choco-install.mjs --self-test
+          node scripts/test-ci-linux-smoke.mjs
       - name: 文档同步（改了壳/manager 行为文件 ⇒ 同 PR 必须改 README，除非打 docs-not-needed 标签）
         if: steps.changed.outputs.board_only != 'true'
         run: |
@@ -217,7 +228,15 @@ jobs:
       # bundled Node at the exact path the Rust probe expects.
       - name: Install 7zip (for NSIS inspection)
         shell: pwsh
-        run: choco install 7zip -y --no-progress
+        # 2026-10-22：这一行原来直接 `choco install 7zip -y --no-progress`，社区源一次 499 就
+        # 把整个 windows（连带 tag 的 release）拖红（run 39282899675：
+        # "Failed to fetch results from V2 feed … Response status code does not indicate success: 499"
+        # ⇒ installed 0/1 ⇒ exit 1）。现改为 scripts/ci-choco-install.mjs：
+        #   · 7-Zip 已在 runner 上（断言步骤用的同一个 C:\Program Files\7-Zip\7z.exe）⇒ 完全不碰社区源；
+        #   · 否则有界重试：最多 3 次、间隔 25s、每次打印原因 + 输出尾巴；`--no-progress --limit-output` 缩小 V2 往返体积；
+        #   · 预算耗尽 ⇒ exit 1（不吞错 —— 缺 7-Zip 时下面的 NSIS 布局断言会静默失效，那才是真事故）。
+        # 逻辑自检见 test 作业的 "CI 辅助脚本自检"（含 2 失败后成功 ⇒ 绿 / 3 次全失败 ⇒ 红）。
+        run: node scripts/ci-choco-install.mjs 7zip
 
       - name: Assert installer contains node runtime
         shell: pwsh
@@ -429,29 +448,25 @@ jobs:
   linux-smoke:
     # Smoke the packaged Linux binary end-to-end (manager spawn + URL event).
     #
-    # History (important): this job had NEVER gone green (traced back to
-    # 2026-08-20) and was kept NON-BLOCKING (continue-on-error) on the theory
-    # that WebKitGTK stalls before setup() under CI's headless xvfb. That theory
-    # is now suspect: the step picked its "binary" with a bare
-    # `find smoke -type f -perm -111 | head -1`, which matched the packaged Node
-    # toolchain (…/corepack/shims/yarn.cmd on the v0.13.0 run) and died inside
-    # `sh` with a syntax error — so the app was never executed and the canary
-    # proved nothing. Locally reproduced with a real deb (same `find` picked
-    # …/@npmcli/arborist/bin/index.js).
-    #
-    # Fixed 2026-09-30 (PR #66): locate the app via the deb's `usr/bin` entry
-    # point (fall back to `usr/lib` outside resources/, else fail loudly).
-    # CONFIRMED on run 36716676801 (commit 3e3d81c): the step now logs
-    # `binary: smoke/usr/bin/dsh-desktop`, the app finally executes, emits only
-    # `(dsh-desktop:NNNN): dbind-WARNING … AT-SPI: Error retrieving accessibility
-    # bus address` and then produces ZERO further output — i.e. the WebKitGTK
-    # stall under headless xvfb is real, and it is why this job can never assert
-    # app-level behaviour in CI. Kept NON-BLOCKING for that reason; the parts of
-    # this contract that CI *can* enforce now live in the blocking `linux` job
-    # ("Verify packaged Linux layout").
-    # Wins on windows/check/test/linux gate the release artifact.
+    # 历史（重要，别再走回头路）：
+    # · 2026-08-20 起这个作业**从未真正绿过**，却因为 `continue-on-error: true` 在 run 级
+    #   一直显示 success —— 它已经假绿了一个多月，真回归全被它下面的红淹没。
+    # · 2026-09-30（PR #66）修过"挑错二进制"（裸 `find smoke -type f -perm -111` 命中打包的
+    #   Node 工具链）：run 36716676801 起能真正执行 app 了，但之后的输出只剩一条 dbind-WARNING。
+    # · 2026-10-22 定性：失败**不是"资源缺失"**，而是固定的 `sleep 18` 撞上 headless 下
+    #   WebKitGTK 初始化慢。证据：run 39454938815 的日志里 app 在作业结束时仍活着
+    #   （runner 打印 "Terminate orphan process: … (dsh-desktop)"），而 smoke.log 里连
+    #   `resources root:` 都还没出现。push 与 tag 两条路径在这一步**完全同源**（同一个
+    #   download-artifact + 同一段逻辑；windows/linux/linux-smoke 的条件都是
+    #   `github.event_name != 'pull_request'`），所以"tag 绿 / push 红"的差别只来自
+    #   continue-on-error 对 run 级结论的掩盖，不是打包路径差异。
+    #   旧报错 "resources root missing or node absent" 只是**症状**：ROOT 由 app 自己打印，
+    #   而 resource_paths() 只在 node 真存在时才返回该目录 —— 真正该断言的是"这行有没有出现"。
+    # · 现在的判据：scripts/ci-linux-smoke.sh —— 有界轮询（默认 180s）+ app 提前退出即失败 +
+    #   失败时打印进程/GL/日志诊断。断言强度不变（resources root 必须真存在且含内置
+    #   node/linux-x64/node；URL 事件必须出现）。**没有 skip / continue-on-error / `|| true`。**
+    #   自检（test 作业）：静默 app、假 resources、缺 node、无 URL、早退、缺 deb 都必须红。
     if: github.event_name != 'pull_request'
-    continue-on-error: true
     needs: linux
     runs-on: ubuntu-latest
     steps:
@@ -459,73 +474,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: sudo apt-get update && sudo apt-get install -y xvfb libwebkit2gtk-4.1-0 libappindicator3-1 librsvg2-2 libgtk-3-0
+      # dbus：给 GTK 一个 session bus（缺它时 accessibility/portal 探针表现为超时而非快失败）
+      - run: sudo apt-get update && sudo apt-get install -y xvfb dbus libwebkit2gtk-4.1-0 libappindicator3-1 librsvg2-2 libgtk-3-0
       - uses: actions/download-artifact@v4
         with:
           name: dsh-desktop-linux
           path: artifact
       - name: Smoke test packaged binary
-        run: |
-          set -e
-          cd artifact
-          dpkg-deb -x deb/*.deb smoke/
-          # Locate the APP binary explicitly. A bare `find smoke -type f -perm -111`
-          # matched the packaged Node toolchain first (e.g. .../corepack/shims/yarn.cmd
-          # on the v0.13.0 run) and then died inside `sh` with "Syntax error: \"(\"
-          # unexpected — the canary never actually exercised the app. Prefer the deb's
-          # own `usr/bin` entry point, fall back to `usr/lib/<product>/` outside
-          # resources/, and fail loudly with a listing when neither exists.
-          BIN=$(find smoke/usr/bin -maxdepth 1 -type f -perm -111 2>/dev/null | head -1)
-          if [ -z "$BIN" ]; then
-            BIN=$(find smoke/usr/lib -maxdepth 3 -type f -perm -111 -not -path "*/resources/*" 2>/dev/null | head -1)
-          fi
-          if [ -z "$BIN" ] || [ ! -x "$BIN" ]; then
-            echo "FAIL: no app binary under smoke/usr/bin or smoke/usr/lib"
-            ls -la smoke/usr/bin 2>/dev/null || true
-            find smoke/usr/lib -maxdepth 2 -type d 2>/dev/null | head -10 || true
-            exit 1
-          fi
-          echo "binary: $BIN"
-
-          # Pre-seed a stub @deepseek-ai/dsh so the manager never hits npm and
-          # instead gets an immediate URL line (validates the spawn+event path).
-          RT="$HOME/.local/share/dev.dsh.desktop/runtime"
-          mkdir -p "$RT/node_modules/@deepseek-ai/dsh/lib"
-          echo '{"name":"@deepseek-ai/dsh","version":"0.0.0-stub"}' > "$RT/node_modules/@deepseek-ai/dsh/package.json"
-          cat > "$RT/node_modules/@deepseek-ai/dsh/lib/bin.js" <<'EOF'
-          console.log('dsh web: http://127.0.0.1:39999')
-          setInterval(() => {}, 1000)
-          EOF
-
-          # WebKitGTK under headless xvfb needs DMABUF disabled or the webview
-          # init stalls before setup() runs (no Rust logs, process alive).
-          DSH_DESKTOP_NO_UPDATE=1 \
-          WEBKIT_DISABLE_DMABUF_RENDERER=1 \
-          WEBKIT_DISABLE_COMPOSITING_MODE=1 \
-          timeout 35 xvfb-run -a "$BIN" >smoke.log 2>&1 &
-          APP_PID=$!
-          sleep 18
-
-          echo "== resources root line =="
-          ROOT=$(grep -oE "resources root: .*" smoke.log | head -1 | sed 's/^resources root: //')
-          echo "ROOT=[$ROOT]" || true
-          if [ -n "$ROOT" ] && test -f "$ROOT/node/linux-x64/node"; then
-            echo "PASS: resources root resolves and node exists"
-          else
-            echo "FAIL: resources root missing or node absent"
-            echo "--- smoke.log head (no output at all == never reached setup) ---"; head -20 smoke.log
-            echo "--- smoke.log tail ---"; tail -50 smoke.log; exit 1
-          fi
-
-          echo "== URL event =="
-          if grep -q '"t":"url"\|dsh web: http://127.0.0.1:39999' smoke.log; then
-            echo "PASS: URL reached the manager protocol stream"
-          else
-            echo "FAIL: no URL event"; echo "--- smoke.log ---"; tail -50 smoke.log; exit 1
-          fi
-
-          # clean shutdown
-          pkill -f dsh-desktop || true
-          pkill -f "server-manager" || true
-          sleep 2
-          echo "SMOKE PASS"
+        env:
+          ARTIFACT_DIR: artifact
+        run: bash scripts/ci-linux-smoke.sh
