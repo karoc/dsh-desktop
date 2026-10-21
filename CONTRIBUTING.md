@@ -70,7 +70,7 @@ node scripts/test-chrome-bootstrap.mjs  # 壳"真实初始化路径"（纯 Node�
 # 格式靠自律——禁止提交全仓格式化 diff（会淹没真实改动）。
 ```
 
-CI 分层：PR 只跑快层（check + test，~5min）；main/tag 跑全量（windows 打包+冒烟、linux）。
+CI 分层：PR 只跑快层（check + test，~5min，含两套 CI 辅助脚本自检）；main/tag 跑全量（windows 打包+冒烟、linux 打包、**阻断式** linux-smoke）。
 
 **外部网络访问必须走 npm / curl 的传输，不要用裸 `fetch`**：Node 的 `fetch` 不读 npm 的
 `.npmrc` 代理配置，且代理变量与 `NODE_USE_ENV_PROXY` 在进程启动时就被采样（脚本内再设无效），
@@ -148,6 +148,26 @@ gh CLI 默认读全局 `~/.config/gh/hosts.yml`。本项目使用**项目专用 
 ## CI 里的度量作业（非必过）
 
 `rust-coverage`（2026-10-15 起）：在 push 到 main / tag 时跑 `cargo llvm-cov --lib --summary-only`，**只报告不设阈值**（先有数字再谈门槛）。它**不在 PR 的必过检查里** —— 度量不该拖慢每个 PR。基线（2026-10-15，main run 38605299315）：`lib.rs` 行覆盖 **15.72%**、`manager_guard.rs` 86.88%、`web_dump.rs` 72.38%，**TOTAL 行 23.68%**。含义：Rust 侧被测到的主要是纯函数，**桥 / 安装器 / 进程与窗口生命周期基本没有测试**。
+
+## CI 冒烟与外部源重试（2026-10-22）
+
+**`linux-smoke` 现在是阻断式门禁**（`continue-on-error` 已删除）。它执行 `scripts/ci-linux-smoke.sh`：
+解出 artifact 里的 `.deb` → 定位 `usr/bin` 入口 → 在 headless xvfb（+ 有则用 `dbus-run-session`、软件渲染环境）
+里启动**打包后的 app** → 有界轮询（默认 180s，`SMOKE_WAIT_SECONDS` / `SMOKE_TIMEOUT_SECONDS` 可调）直到
+① `resources root:` 出现且该目录里真有 `node/linux-x64/node`；② URL 事件出现在 manager 协议流里。
+app 提前退出即失败；超时打印进程/GL/日志诊断。历史教训写在该作业的注释里：旧的固定 `sleep 18`
+在 runner 上必然早于 app 的首行输出，这条 "canary" 于是每天红、又因 `continue-on-error` 在 run 级显示绿
+——**假绿比红更贵**（它让真回归无从分辨）。
+
+改判据前先跑自检（CI 快层也会跑）：
+
+    node scripts/test-ci-linux-smoke.mjs   # 静默 app / 假 resources / 缺 node / 无 URL / 早退 / 缺 deb ⇒ 必须红；完整链路 ⇒ 绿
+
+**windows 的 7-Zip 不再直连社区源**：`node scripts/ci-choco-install.mjs 7zip` —— 已装则完全不联网；
+否则最多 3 次、间隔 25s 的有界重试（每次打印原因 + 输出尾巴）；预算耗尽仍 exit 1（不吞错 —— 缺 7-Zip
+时 NSIS 布局断言会静默失效）。自检：`node scripts/ci-choco-install.mjs --self-test`
+（2 失败后成功 ⇒ 绿；3 次全失败 ⇒ 红；已装 ⇒ 0 次调用；首次成功 ⇒ 只跑 1 次）。
+两条自检都挂在 build.yml 的 `test` 作业上，所以"把门禁改成永真"的回归会在 PR 阶段被挡住。
 
 ## 门禁自身的验证（2026-10-07 起，硬规则）
 
