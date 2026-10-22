@@ -130,11 +130,12 @@ node_modules 符号链接树、写迁移标记、绝不上移覆盖已有新数�
 ## 本地验证（Linux 可跑的部分）
 
 ```bash
-npm test                 # 全量 26 套（25 条 node 直接可跑 + 1 条条件式）：清单一致性 / overlay 目标行 / 升级标记 /
+npm test                 # 全量 27 套（26 条 node 直接可跑 + 1 条条件式）：清单一致性 / overlay 目标行 / 升级标记 /
                          #   通知插件 / 控制面 / 代理 / 代理e2e / 启动页设置 / 壳顶栏契约 / 壳不吞页面原生行为
                          #   （拖放与外链，见下）/ 壳引导桩（纯 Node，无浏览器）/ 启动器扫动 / 请求头预算 /
                          #   半截安装自愈 / 副本一致性 / 版本比较 parity /
                          #   **自动化链路门禁自证**（scripts/test-automation-gates.mjs，见「维护者」小节）
+                         #   **挂起看护"dump 后再探一次"**（scripts/test-watchdog-recovery.mjs，含 3 个变异自证）
                          #   条件式那条 = `[ -f scripts/test-version-compare-parity.mjs ]`：文件已提供就真跑，
                          #   尚未提供时打印 SKIP 并只跳过自己（不判红，也不掩盖它的失败 —— 失败码照传）
 npm run test:slow        # 安装卡死快速失败（~3 分钟，不进 PR 门禁；CI 的 linux job 会跑）
@@ -205,6 +206,9 @@ node scripts/server-manager.mjs \
 - 服务异常退出：加载页显示日志，"重试"按钮 → `restart_server`。
 - 关窗（含顶栏关闭键、Alt+F4、任务栏关闭）→ 隐藏到托盘：**Windows 上首次隐藏前会弹一次确认**（说明任务不会中断、可从托盘找回；确认一次后不再询问，标记在数据目录的 `background-close-confirmed`）；Linux 退化为最小化（GNOME 可能没有托盘）。顶栏/托盘"退出" → 杀掉整棵服务进程树并退出。
 - 点系统通知 → 窗口回到前台并打开对应会话（不重复启动第二个实例）。
+- **服务无响应看护（挂起自动恢复）**：manager 每 3s 探一次 dsh web（任意 2xx–4xx 都算"在听"，401/404 不算挂起）；连续 3 次失败先请壳抓内存 dump，**抓完后、杀进程前再探一次**——若这期间已自行恢复就记
+  `watchdog: dsh web recovered after 3 miss(es) (probe 200, <耗时>ms, dump ready) — no restart` 并清零，**不杀、不重启**；只有再探仍失败才 `watchdog: dsh web still UNRESPONSIVE after dump … — restarting dsh`（安全边界：真挂起照旧 dump + 重启）。两者的 URL 只记 `scheme://host:port`，启动 token 不落日志。
+- **退出/重启可追溯**：每次退出/重启都写来源——`quit requested by <tray|bridge|chrome|launcher> path=…`、`restart requested by …`；桥的**成功**危险请求也记 `bridge danger accepted: action=… source=… path=… origin=…`（不再只有 reject 才留痕），确认窗执行时沿用登记时的来源（`danger-action: … approved (source=… path=…)`）。
 
 ### 页面交互：文件拖放与外链（2026-10-23 起）
 
@@ -396,9 +400,10 @@ Electron 壳一致。切换后**必须刷新页面**（注入前缀只在页面�
 
 **数据出问题时的处理**：
 1. 先看 `dsh-desktop-session.log` 与 `runtime/manager.log`（壳菜单「打开数据目录」）；
-2. 若会话/配置异常：从 `%LOCALAPPDATA%\dsh-backup\` 按时间戳目录恢复
+2. 若怀疑"服务/应用被谁重启或退出了"：在 `manager.log` 里搜 `requested by`（退出/重启来源，tray / bridge / chrome / launcher）与 `watchdog:`（挂起看护：`recovered` = 已恢复未重启；`still UNRESPONSIVE` = 确实重启过）——每次退出/重启都有来源，不再只有"重启发生了"这一条；
+3. 若会话/配置异常：从 `%LOCALAPPDATA%\dsh-backup\` 按时间戳目录恢复
    （sessions/、settings.yaml、storages/ 拷回 `%APPDATA%\dsh.smoothly.desktop\runtime\dsh-home\` 同路径）；
-3. 恢复后重启壳；仍有问题请保留 `dsh-backup` 与两份日志再求助。
+4. 恢复后重启壳；仍有问题请保留 `dsh-backup` 与两份日志再求助。
 
 ## 注入原理（为什么更新 dsh 不会冲掉通知）
 
@@ -491,7 +496,7 @@ MIT
   全量门禁（**跑链前先 sync 派生的 `Cargo.lock`**，与 CI 的 `test` 作业一致）。**任一步失败立即停**；
   `--runtime` 缺省时会尝试 dev 实例的固定 runtime 路径，**路径不存在且未显式给出 ⇒ 直接 exit 2**（不发车）。
   第 7 步（全量门禁）按 `package.json` 的 `test` 链**逐条直接跑 `node`**（不经 npm，与 `npm test` 是同一条链），
-  当前这条链 25 条里 24 条是 `node …` ⇒ 本机 24/24 真跑；剩下 1 条是条件式
+  当前这条链 27 条里 26 条是 `node …` ⇒ 本机 26/26 真跑；剩下 1 条是条件式
   （`[ -f scripts/test-version-compare-parity.mjs ] && …`，parity 套件尚未提供时只跳过自己）——
   它不匹配 `^node`，因此本机会把它**跳过并逐条列出**（CI 上由 `npm test` 真跑）。
   将来链上若出现别的非 node 条目（如 cargo），处理方式相同：默认容忍这种覆盖缺口，

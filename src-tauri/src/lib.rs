@@ -1322,6 +1322,21 @@ mod close_confirm_tests {
 }
 
 #[cfg(test)]
+mod lifecycle_log_tests {
+    use super::lifecycle_log_line;
+
+    #[test]
+    fn names_source_and_path_without_urls_or_tokens() {
+        assert_eq!(lifecycle_log_line("quit", "tray", "tray:quit"), "quit requested by tray path=tray:quit");
+        assert_eq!(lifecycle_log_line("restart", "bridge", "/restart"), "restart requested by bridge path=/restart");
+        // 日志契约：来源 + 路径；不得把完整 URL / 启动 token 带进日志。
+        let line = lifecycle_log_line("quit", "chrome", "/shell/quit");
+        assert!(!line.contains("token"), "{line}");
+        assert!(!line.contains("http://") && !line.contains("https://"), "{line}");
+    }
+}
+
+#[cfg(test)]
 mod danger_action_tests {
     use super::dangerous_bridge_action;
 
@@ -1424,7 +1439,7 @@ mod external_url_tests {
 
 #[cfg(test)]
 mod bridge_guard_tests {
-    use super::{bridge_cors_headers, bridge_origin_allowed, bridge_request_decision};
+    use super::{bridge_cors_headers, bridge_danger_source, bridge_origin_allowed, bridge_request_decision};
 
     const PORT: u16 = 41234;
 
@@ -1479,6 +1494,17 @@ mod bridge_guard_tests {
         // GET/HEAD/OPTIONS 不需要（预检不带自定义头；GET 只读）
         for method in ["GET", "HEAD", "OPTIONS"] {
             assert!(bridge_request_decision(method, Some("127.0.0.1:41234"), None, false, PORT).is_ok());
+        }
+    }
+
+    #[test]
+    fn danger_source_names_chrome_only_for_dsh_loopback_pages() {
+        // dsh 页面上的桥请求 = 壳注入的顶栏/菜单；没有 Origin 或壳本地页 = 通用 bridge。
+        for origin in [Some("http://127.0.0.1:62962"), Some("http://localhost:5173"), Some(" HTTP://127.0.0.1:1 ")] {
+            assert_eq!(bridge_danger_source(origin), "chrome", "origin={origin:?}");
+        }
+        for origin in [None, Some(""), Some("tauri://localhost"), Some("http://tauri.localhost"), Some("https://evil.com")] {
+            assert_eq!(bridge_danger_source(origin), "bridge", "origin={origin:?}");
         }
     }
 
@@ -2255,6 +2281,23 @@ fn bridge_origin_allowed(origin: &str) -> bool {
     host == "127.0.0.1" || host == "localhost"
 }
 
+/// 桥危险请求的来源归类（写进日志 + 确认槽位）：dsh 回环页面上的请求 = 壳注入的
+/// 顶栏/菜单（chrome）；无 Origin（本机脚本/工具）或壳本地页 = bridge。
+/// **只用于日志，不参与授权判断**（授权仍是 Host/Origin/X-DSH-Shell 三重准入）。
+fn bridge_danger_source(origin: Option<&str>) -> &'static str {
+    let Some(raw) = origin.map(str::trim).filter(|o| !o.is_empty()) else { return "bridge" };
+    let o = raw.to_ascii_lowercase();
+    let is_dsh_page = o
+        .strip_prefix("http://")
+        .map(|rest| {
+            let host = rest.split('/').next().unwrap_or("");
+            let host = host.split(':').next().unwrap_or("");
+            host == "127.0.0.1" || host == "localhost"
+        })
+        .unwrap_or(false);
+    if is_dsh_page { "chrome" } else { "bridge" }
+}
+
 /// 桥的 CORS 响应头（阶段 3：不再无条件 `*`）。`None` = 不回 ACAO（浏览器读不到响应）。
 fn bridge_cors_headers(origin: Option<&str>) -> String {
     match origin.map(str::trim).filter(|o| !o.is_empty()) {
@@ -2379,6 +2422,11 @@ struct PendingConfirm {
     /// `/update-dsh` 的真实目标版本（来自调用方 body）。确认窗必须显示它 —— 否则文案说
     /// 「安装 npm 上的新版本」而实际装的是调用方指定的任意版本（2026-09-27 评审）。
     target: Option<String>,
+    /// 发起这次危险请求的来源（chrome / bridge / shell）与路径：确认窗执行时原样传给
+    /// quit_app/restart_server 的来源日志。没有它，事后只能看到"服务被重启了"，
+    /// 回答不了"是谁点的"（2026-10-23 05:54 取证缺口）。
+    source: &'static str,
+    path: String,
 }
 
 static PENDING_CONFIRM: Mutex<Option<PendingConfirm>> = Mutex::new(None);
@@ -2399,7 +2447,9 @@ fn new_confirm_nonce() -> String {
 }
 
 /// 登记槽位并打开确认窗；已有未过期的槽位时返回 `Err("pending")`（单飞 + 去重）。
-fn request_confirmation(app: &AppHandle, action: DangerAction, body: String) -> Result<String, &'static str> {
+/// `source`/`path` 由调用点传入（桥 = chrome/bridge + 请求路径；关窗确认 = shell），
+/// 只用于执行时的来源日志。
+fn request_confirmation(app: &AppHandle, action: DangerAction, body: String, source: &'static str, path: &str) -> Result<String, &'static str> {
     let nonce = {
 let mut slot = PENDING_CONFIRM.lock().unwrap();
         // 只有「未过期 **且** 确认窗还在」才算被占用（聚焦而不是叠窗）。
@@ -2437,6 +2487,8 @@ let nonce = new_confirm_nonce();
             body,
             created: std::time::Instant::now(),
             target,
+            source,
+            path: path.to_string(),
         });
         nonce
     };
@@ -2502,21 +2554,22 @@ fn resolve_pending_action(app: AppHandle, nonce: String, approved: bool) -> Resu
     let Some(pending) = pending else { return Err("stale".into()) };
     let data = app.path().app_data_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     if !approved {
-        log_line(&data, &format!("danger-action: {} declined", pending.action.id));
+        log_line(&data, &format!("danger-action: {} declined (source={} path={})", pending.action.id, pending.source, pending.path));
         return Ok(serde_json::json!({ "ok": true, "declined": true }));
     }
-    log_line(&data, &format!("danger-action: {} approved", pending.action.id));
-    let outcome = execute_danger_action(&app, pending.action.id, &pending.body);
+    log_line(&data, &format!("danger-action: {} approved (source={} path={})", pending.action.id, pending.source, pending.path));
+    let outcome = execute_danger_action(&app, pending.action.id, &pending.body, pending.source, &pending.path);
     Ok(serde_json::json!({ "ok": outcome.is_ok(), "error": outcome.err() }))
 }
 
 /// 执行危险动作。**桥路径的唯一执行点**：远程页与 `http://tauri.localhost` 的本地页都只能
 /// 经确认窗走到这里；`tauri:` 协议的 launcher/settings 面板走各自的 IPC 命令、不经确认窗
 /// —— Windows 主窗口是 `http://tauri.localhost`，所以那条路是经确认窗的（2026-09-27 评审澄清）。
-fn execute_danger_action(app: &AppHandle, id: &str, body: &str) -> Result<(), String> {
+/// `source`/`path` 来自登记槽位时的桥请求（chrome / bridge），只写日志，不参与授权判断。
+fn execute_danger_action(app: &AppHandle, id: &str, body: &str, source: &str, path: &str) -> Result<(), String> {
     match id {
-        "quit" => quit_app(app.clone(), app.state::<ServerState>()),
-        "restart" => restart_server(app.clone(), app.state::<ServerState>()),
+        "quit" => quit_app_from(app, source, path),
+        "restart" => restart_server_from(app, source, path),
         "restart-dsh" => {
             send_manager(&mut app.state::<ServerState>().stdin.lock().unwrap(), "restart-dsh");
             Ok(())
@@ -2539,7 +2592,7 @@ fn execute_danger_action(app: &AppHandle, id: &str, body: &str) -> Result<(), St
                 // 停用后**必须重启**才生效：运行中的 dsh 进程已经加载了那些插件，只 reload
                 // 页面不够（2026-10-05 实测：停用后不重启，界面仍是「Failed to load plugins」）。
                 // 菜单项与桥端点走的是同一个动作，两个入口同时受益。
-                let _ = restart_server(app.clone(), app.state::<ServerState>());
+                let _ = restart_server_from(app, source, path);
                 Ok(())
             } else { Err(r.to_string()) }
         }
@@ -2654,7 +2707,17 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
         let mut body_bytes = vec![0u8; content_length];
         let _ = reader.read_exact(&mut body_bytes);
         let body_text = String::from_utf8_lossy(&body_bytes).into_owned();
-        let (status, payload) = match request_confirmation(app, action, body_text) {
+        // 成功的危险请求也留痕（origin + path）：旧实现只有 reject 记日志，导致
+        // "谁发起的退出/重启"无从回答（2026-10-23 05:54 取证缺口）。日志只写
+        // origin（scheme://host:port）与桥路径，不含 token / 完整 URL。
+        let source = bridge_danger_source(origin.as_deref());
+        let data = app.path().app_data_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        log_line(&data, &format!(
+            "bridge danger accepted: action={} source={source} method={method} path={path} origin={}",
+            action.id,
+            origin.as_deref().map(str::trim).filter(|o| !o.is_empty()).unwrap_or("(none)")
+        ));
+        let (status, payload) = match request_confirmation(app, action, body_text, source, path) {
             Ok(nonce) => (
                 "202 Accepted",
                 serde_json::json!({ "ok": false, "pending": true, "nonce": nonce, "action": action.id }),
@@ -2837,7 +2900,9 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
             ("200 OK", String::new())
         }
         ("POST", "/restart") => {
-            let _ = restart_server(app.clone(), app.state::<ServerState>());
+            // 注意：POST /restart 已被危险动作表接管（上面阶段 1 提前返回），这里只服务
+            // 非危险表的调用路径；保留来源日志，避免将来入口变化时又回到"无来源"。
+            let _ = restart_server_from(app, "bridge", "/restart");
             ("200 OK", String::new())
         }
         ("POST", "/devtools") => {
@@ -2972,7 +3037,8 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
             ("200 OK", serde_json::json!({ "ok": true }).to_string())
         }
         ("POST", "/shell/quit") => {
-            let _ = quit_app(app.clone(), app.state::<ServerState>());
+            // 同上：POST /shell/quit 已被危险动作表接管（阶段 1 提前返回）。
+            let _ = quit_app_from(app, "bridge", "/shell/quit");
             ("200 OK", serde_json::json!({ "ok": true }).to_string())
         }
         ("GET", "/shell/state") => {
@@ -4088,11 +4154,33 @@ fn shell_status_json(app: &AppHandle, state: &ServerState) -> serde_json::Value 
     })
 }
 
+/// 退出/重启的来源日志行（纯格式化，便于 CI 单测）。只允许来源 + 调用路径：
+/// 完整 URL 里的 token 不得出现在日志里。
+fn lifecycle_log_line(action: &str, source: &str, path: &str) -> String {
+    format!("{action} requested by {source} path={path}")
+}
+
+/// 退出/重启的来源日志（2026-10-23 取证缺口）：这两个动作会打断正在运行的任务，
+/// 事后必须能回答"是谁点的"（tray / bridge / chrome / launcher / path）。只记来源
+/// 与调用路径 —— **不记完整 URL / token**（URL 里的启动凭据一律不落日志）。
+fn log_lifecycle_request(app: &AppHandle, action: &str, source: &str, path: &str) {
+    let data = app.path().app_data_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    log_line(&data, &lifecycle_log_line(action, source, path));
+}
+
+/// 重启服务（带来源）。所有调用点都必须点名 source/path，否则又会回到 05:54
+/// 那种"日志里只有 restarting、没有是谁要求重启"的状态。
+fn restart_server_from(app: &AppHandle, source: &str, path: &str) -> Result<(), String> {
+    log_lifecycle_request(app, "restart", source, path);
+    stop_child(&app.state::<ServerState>());
+    start_server(app)
+}
+
 /// Restart the service (used by the tray and the launcher's retry button).
+/// IPC entry point: the local launcher/settings pages call this command.
 #[tauri::command]
-fn restart_server(app: AppHandle, state: State<'_, ServerState>) -> Result<(), String> {
-    stop_child(&state);
-    start_server(&app)
+fn restart_server(app: AppHandle, _state: State<'_, ServerState>) -> Result<(), String> {
+    restart_server_from(&app, "launcher", "ipc:restart_server")
 }
 
 /// Open a directory in the platform file manager.
@@ -4508,13 +4596,19 @@ fn test_proxy(upstream: serde_json::Value) -> Result<serde_json::Value, String> 
 }
 
 /// Quit: kill the service tree and exit the app.
-#[tauri::command]
-fn quit_app(app: AppHandle, state: State<'_, ServerState>) -> Result<(), String> {
-    // 先置退出标志：manager 下线是预期行为，看护线程不得写成"异常退出"。
+/// 退出应用（带来源）。先置退出标志再停服务，看护线程不得把它写成"异常退出"。
+fn quit_app_from(app: &AppHandle, source: &str, path: &str) -> Result<(), String> {
+    log_lifecycle_request(app, "quit", source, path);
     manager_guard::mark_shutting_down();
-    stop_child(&state);
+    stop_child(&app.state::<ServerState>());
     app.exit(0);
     Ok(())
+}
+
+/// Quit: kill the service tree and exit the app. IPC entry point (launcher/settings).
+#[tauri::command]
+fn quit_app(app: AppHandle, _state: State<'_, ServerState>) -> Result<(), String> {
+    quit_app_from(&app, "launcher", "ipc:quit_app")
 }
 
 /// Current dsh update status (launcher page banner / console).
@@ -5072,7 +5166,7 @@ pub fn run() {
                         }
                     }
                     "restart" => {
-                        let _ = restart_server(app.clone(), app.state::<ServerState>());
+                        let _ = restart_server_from(app, "tray", "tray:restart");
                     }
                     "proxy-settings" => {
                         open_settings_window(app);
@@ -5106,7 +5200,7 @@ pub fn run() {
                         let _ = open_data_dir(app.clone());
                     }
                     "quit" => {
-                        let _ = quit_app(app.clone(), app.state::<ServerState>());
+                        let _ = quit_app_from(app, "tray", "tray:quit");
                     }
                     _ => {}
                 })
@@ -5133,7 +5227,7 @@ pub fn run() {
                         #[cfg(not(target_os = "linux"))]
                         {
                             if close_needs_confirmation(close_confirmed(&handle), false) {
-                                let _ = request_confirmation(&handle, CLOSE_HIDE_ACTION, String::new());
+                                let _ = request_confirmation(&handle, CLOSE_HIDE_ACTION, String::new(), "shell", "window:close-hide");
                             } else if let Some(w) = handle.get_webview_window("main") {
                                 let _ = w.hide();
                             }
