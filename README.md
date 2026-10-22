@@ -130,9 +130,10 @@ node_modules 符号链接树、写迁移标记、绝不上移覆盖已有新数�
 ## 本地验证（Linux 可跑的部分）
 
 ```bash
-npm test                 # 全量 25 套（24 条 node 直接可跑 + 1 条条件式）：清单一致性 / overlay 目标行 / 升级标记 /
-                         #   通知插件 / 控制面 / 代理 / 代理e2e / 启动页设置 / 壳顶栏契约 / 壳引导桩（纯 Node，
-                         #   无浏览器）/ 启动器扫动 / 请求头预算 / 半截安装自愈 / 副本一致性 / 版本比较 parity /
+npm test                 # 全量 26 套（25 条 node 直接可跑 + 1 条条件式）：清单一致性 / overlay 目标行 / 升级标记 /
+                         #   通知插件 / 控制面 / 代理 / 代理e2e / 启动页设置 / 壳顶栏契约 / 壳不吞页面原生行为
+                         #   （拖放与外链，见下）/ 壳引导桩（纯 Node，无浏览器）/ 启动器扫动 / 请求头预算 /
+                         #   半截安装自愈 / 副本一致性 / 版本比较 parity /
                          #   **自动化链路门禁自证**（scripts/test-automation-gates.mjs，见「维护者」小节）
                          #   条件式那条 = `[ -f scripts/test-version-compare-parity.mjs ]`：文件已提供就真跑，
                          #   尚未提供时打印 SKIP 并只跳过自己（不判红，也不掩盖它的失败 —— 失败码照传）
@@ -157,6 +158,15 @@ npm run test:control     # manager 控制面（11 场景，含版本地板闸门
 npm run test:proxy       # 内置正向代理（12 场景）
 npm run test:launcher-settings  # 代理设置窗口（6 场景）
 npm run test:shell-chrome       # 壳顶栏契约（菜单 id ↔ ACTIONS ↔ lib.rs 桥/命令）
+node scripts/test-shell-passthrough.mjs
+                         # 壳不吞页面原生行为的门禁（进 `npm test`，纯 Node、零依赖）：① A1：main 窗口
+                         #   必须 `dragDropEnabled:false`（Tauri 默认 true 会关掉页面 HTML5 拖放），且 dev
+                         #   配置不得自带 `app.windows`（--config 数组整体替换会静默丢掉该标志）、无别处依赖
+                         #   Tauri 的原生 drag-drop 事件；② A2：`externalUrlVerdict` 的正/负用例（只放行
+                         #   http(s)，file:/javascript:/data:/ms-* 全拒、about:blank 原样交回）、chrome 接线、
+                         #   lib.rs 的桥端点/IPC 命令与唯一安全边界 `validate_external_url`。自带 2 个变异体
+                         #   自证可失败：把 `dragDropEnabled` 改回 true ⇒ A1 断言红；放宽 chrome 的 scheme
+                         #   白名单 ⇒ A2 断言红（都在临时副本里造，绝不改仓库）
 npm run test:cargo-lock-sync   # Cargo.lock 版本同步（LF/CRLF 双行尾 / 精确匹配 / 失败诊断；
                                # 它红了 = 打不出安装包，2026-10-16 的发布阻断事故就在这)
 npm run test:copies      # 副本一致性（manager / 客户端插件 / 预装 ship list / SKILL.md frontmatter）
@@ -195,6 +205,24 @@ node scripts/server-manager.mjs \
 - 服务异常退出：加载页显示日志，"重试"按钮 → `restart_server`。
 - 关窗（含顶栏关闭键、Alt+F4、任务栏关闭）→ 隐藏到托盘：**Windows 上首次隐藏前会弹一次确认**（说明任务不会中断、可从托盘找回；确认一次后不再询问，标记在数据目录的 `background-close-confirmed`）；Linux 退化为最小化（GNOME 可能没有托盘）。顶栏/托盘"退出" → 杀掉整棵服务进程树并退出。
 - 点系统通知 → 窗口回到前台并打开对应会话（不重复启动第二个实例）。
+
+### 页面交互：文件拖放与外链（2026-10-23 起）
+
+壳默认会把 WebView 的**页面级**行为拦在自己手里（Tauri/wry 的默认值），而壳没接管的那部分
+就是"点了没反应"的静默失效。这两处已按官方客户端对比调研（`docs/2026-10-23-official-client-adoption-review.md`
+的 A1/A2）修掉，并各配了一条会变红的门禁：
+
+- **文件拖放**：主窗口 `dragDropEnabled: false` ⇒ 拖放交给 WebView 自己处理（HTML5 拖放），
+  dsh 输入框的"文件或图片拖动到此处即可添加"恢复可用；壳**不再**挂 Tauri 的原生拖放处理器
+  （我们从没有监听 `onDragDropEvent`，关掉它零损失）。边界：拖入的文件是**上传附件**，
+  不是 `@路径` 引用 —— WebView2 没有 Electron 的 `webUtils.getPathForFile`，页面拿不到真实路径。
+- **外链 / 新窗口**：`target="_blank"`、中键、`Ctrl(⌘)+点击` 的 http(s) 链接，以及页面里的
+  `window.open(http(s))`，都改由**默认浏览器**打开（经环回桥 `POST /shell/open-url`；本地启动页
+  走 IPC `open_url`，两条通道共用同一套校验）。边界：① **同窗口内导航不拦**（dsh 自己的
+  `linkOpening` 行为不变）；② `about:blank` 原样交回页面（OAuth 类"先开空窗再写 location"的形态）；
+  ③ 只允许 `http:`/`https:`，其余 scheme（`file:` / `javascript:` / `data:` / `ms-*` …）拒绝并写日志。
+  点击处理走**冒泡阶段**且延后一拍看 `defaultPrevented`：页面自己接管了（例如侧栏浏览器）就不动，
+  避免"系统浏览器 + 页面内面板"双开。
 
 ### 壳注入的自证与失败可见性（0.16.x 起）
 
@@ -301,6 +329,14 @@ dsh 页面以纯远程页面加载，只授予 loopback 权限
 `~/.dsh`）——这也是必要设计：插件包藏在 `<runtime>/node_modules` 里，profile 的模块解析
 沿目录链向上能找到它。想与浏览器版共享数据的用户，可自行在系统环境里放
 `DSH_HOME=~/.dsh`（需先把插件装进该 profile，见"注入原理"）。
+
+**外链能力边界（2026-10-23 起）**：页面（含被注入的第三方内容）**只能交出一个 URL 字符串**，
+"打开哪个程序、传什么参数"这类 shell 执行能力永不下放。壳在 Rust 侧用 `validate_external_url`
+校验后交系统浏览器（Windows `ShellExecuteW`、Linux `xdg-open`）—— 不经过 `cmd`/shell 拼命令，
+所以 URL 里不可能夹带命令行。只放行 `http:`/`https:`；拒绝控制字符与换行（防参数走私）、
+userinfo（`https://user:pass@host` 的钓鱼形态）、反斜杠与超长串。**拒绝也留痕**：会话日志里
+出现 `open-url rejected: <原因>`；正常打开只记 `scheme://host`（URL 的 query 可能带一次性凭据，
+日志是长期留存的文件，不该成为凭据副本）。
 
 ## 升级与数据安全（0.4.x 起）
 

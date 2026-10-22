@@ -22,7 +22,8 @@
         "url": "index.html",
         "backgroundColor": "#0d1117",
         "decorations": false,
-        "shadow": true
+        "shadow": true,
+        "dragDropEnabled": false
       }
     ],
     "security": {

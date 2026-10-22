@@ -27,6 +27,9 @@ serde_json = "1"
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61", features = [
     "Win32_UI_Shell",
+    # ShellExecuteW 的 nShowCmd 参数类型（SHOW_WINDOW_CMD / SW_SHOWNORMAL）在这个
+    # feature 下；缺它编译报 "no SHOW_WINDOW_CMD in Win32::UI::WindowsAndMessaging"。
+    "Win32_UI_WindowsAndMessaging",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
     "Win32_UI_Shell_PropertiesSystem",

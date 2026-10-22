@@ -1357,6 +1357,71 @@ mod danger_action_tests {
     }
 }
 
+// A2（2026-10-23）：外链白名单是安全边界 —— 页面交出的任何字符串都不许变成
+// "打开任意程序 / 任意 scheme"的能力。这里把判定函数钉成可失败的单测。
+#[cfg(test)]
+mod external_url_tests {
+    use super::{url_origin, validate_external_url};
+
+    #[test]
+    fn only_http_and_https_pass() {
+        assert_eq!(
+            validate_external_url("https://example.com/a?b=1").as_deref(),
+            Ok("https://example.com/a?b=1")
+        );
+        // 前后空白被 trim，其余**原样**返回（不重新拼装 URL）
+        assert_eq!(validate_external_url("  http://127.0.0.1:3080/x  ").as_deref(), Ok("http://127.0.0.1:3080/x"));
+        // scheme 大小写不敏感
+        assert_eq!(validate_external_url("HTTPS://Example.com/A").as_deref(), Ok("HTTPS://Example.com/A"));
+        for bad in [
+            "file:///C:/Windows/System32/cmd.exe",
+            // 带 authority 的 file:/ms-settings::它们**只**被 scheme 白名单挡住
+            // （authority/userinfo 等形态检查会放行它们），是"白名单被放宽"这条
+            // 负向对照的靶子（`file:///…` 会被 empty-host 拒绝，结构上看不见放宽）。
+            "file://fileserver/share/x",
+            "ms-settings://privacy",
+            "javascript:alert(1)",
+            "data:text/html,<script>alert(1)</script>",
+            "ms-settings:privacy",
+            "vbscript:msgbox(1)",
+            "chrome://settings",
+            "ftp://example.com/x",
+            "//example.com/x",
+            "http:example.com",
+            "https:///path",
+            "example.com",
+            "",
+            "   ",
+        ] {
+            assert!(validate_external_url(bad).is_err(), "{bad:?} 必须被拒");
+        }
+    }
+
+    #[test]
+    fn rejects_smuggling_shapes() {
+        // 换行/制表符：把额外参数走私给系统处理程序
+        assert_eq!(validate_external_url("https://example.com\n--evil").unwrap_err(), "control-char");
+        assert_eq!(validate_external_url("https://example.com\t/x").unwrap_err(), "control-char");
+        // userinfo（钓鱼形态 https://user:pass@host）
+        assert_eq!(validate_external_url("https://user:pass@example.com/").unwrap_err(), "userinfo");
+        // 反斜杠（Windows 路径形态）
+        assert_eq!(validate_external_url("https://example.com\\..\\evil").unwrap_err(), "backslash");
+        // 空 host / 超长
+        assert_eq!(validate_external_url("https://").unwrap_err(), "empty-host");
+        let tail = "a".repeat(3000);
+        let long = format!("https://example.com/{tail}");
+        assert_eq!(validate_external_url(&long).unwrap_err(), "too-long");
+    }
+
+    #[test]
+    fn log_origin_drops_path_and_query() {
+        // 会话日志只留 origin：query 可能带一次性凭据（token），不该落进长期日志。
+        assert_eq!(url_origin("https://example.com/a/b?token=secret#frag"), "https://example.com");
+        assert_eq!(url_origin("http://127.0.0.1:3080/?token=secret"), "http://127.0.0.1:3080");
+        assert_eq!(url_origin("nonsense"), "<invalid>");
+    }
+}
+
 #[cfg(test)]
 mod bridge_guard_tests {
     use super::{bridge_cors_headers, bridge_origin_allowed, bridge_request_decision};
@@ -2870,6 +2935,37 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
             let _ = open_data_dir(app.clone());
             ("200 OK", serde_json::json!({ "ok": true }).to_string())
         }
+        // A2：外链交系统浏览器（页面只给 URL；scheme 白名单与真正的打开都在 Rust）。
+        // 不是危险动作 ⇒ 不经确认窗；但拒绝原因必须落日志（否则又是一类静默失效）。
+        ("POST", "/shell/open-url") => {
+            let url = serde_json::from_str::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|v| v.get("url").and_then(|x| x.as_str()).map(|s| s.to_string()))
+                .unwrap_or_default();
+            let data = app_data_dir(app);
+            match validate_external_url(&url) {
+                Ok(target) => {
+                    log_line(&data, &format!("bridge: /shell/open-url -> {}", url_origin(&target)));
+                    match open_external_url(&target) {
+                        Ok(()) => ("200 OK", serde_json::json!({ "ok": true }).to_string()),
+                        Err(e) => {
+                            log_line(&data, &format!("bridge: /shell/open-url failed: {e}"));
+                            (
+                                "500 Internal Server Error",
+                                serde_json::json!({ "ok": false, "error": e }).to_string(),
+                            )
+                        }
+                    }
+                }
+                Err(reason) => {
+                    log_line(&data, &format!("bridge: /shell/open-url rejected: {reason}"));
+                    (
+                        "400 Bad Request",
+                        serde_json::json!({ "ok": false, "error": reason }).to_string(),
+                    )
+                }
+            }
+        }
         ("POST", "/shell/open-evidence") => {
             // 最近一次 manager 故障的证据目录（无故障时开 reports 根目录）。
             let _ = open_evidence_dir(app.clone());
@@ -4021,6 +4117,119 @@ fn open_data_dir(app: AppHandle) -> Result<(), String> {
     open_dir(&data)
 }
 
+// ── 外链（A2，2026-10-23）：页面只能交出 URL 字符串，不能交出命令 ───────────
+// 背景：wry 在**没有** new-window handler 时对 NewWindowRequested 直接 deny ⇒
+// 页面里 window.open / target=_blank 的链接点了没有任何反应（静默失效）。
+// 修法是把它们导到系统浏览器，但**安全边界必须落在 Rust**：页面（含被注入的
+// 第三方内容）只能给一个 URL 字符串；"打开哪个程序、传什么参数"这类 shell 执行
+// 能力永不下放。
+const EXTERNAL_URL_MAX: usize = 2048;
+
+/// 外链白名单的**唯一判定点**（纯函数，平台无关 ⇒ CI 的 ubuntu job 会跑它的单测）。
+///
+/// 只放行 `http:` / `https:`，并拒绝：控制字符与空白（换行可把额外参数走私给系统
+/// 处理程序）、userinfo（`https://user:pass@host` 的钓鱼形态）、反斜杠、超长串。
+/// 通过后**原样**返回（不重新拼装 URL）：交给系统浏览器的是页面本来要开的地址。
+fn validate_external_url(raw: &str) -> Result<String, String> {
+    let url = raw.trim();
+    if url.is_empty() {
+        return Err("empty".into());
+    }
+    if url.len() > EXTERNAL_URL_MAX {
+        return Err("too-long".into());
+    }
+    if url.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return Err("control-char".into());
+    }
+    let scheme_end = url.find(':').ok_or_else(|| "no-scheme".to_string())?;
+    let scheme = url[..scheme_end].to_ascii_lowercase();
+    if scheme != "http" && scheme != "https" {
+        return Err(format!("scheme {scheme}:"));
+    }
+    // 必须带 authority（`http://host`）：`https:///path` / `http:host` 这类形态
+    // 各浏览器解释不一，直接拒绝比"猜它想开什么"安全。
+    let rest = url[scheme_end + 1..]
+        .strip_prefix("//")
+        .ok_or_else(|| "no-authority".to_string())?;
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if authority.is_empty() {
+        return Err("empty-host".into());
+    }
+    if authority.contains('@') {
+        return Err("userinfo".into());
+    }
+    if authority.contains('\\') {
+        return Err("backslash".into());
+    }
+    Ok(url.to_string())
+}
+
+/// 会话日志里的 URL 只留 `scheme://host`：query 可能带一次性凭据，而日志是长期
+/// 留存的文件，不该成为凭据副本（拒绝原因另行记录）。
+fn url_origin(url: &str) -> String {
+    match url.find("://") {
+        Some(i) => {
+            let scheme = &url[..i];
+            let host = url[i + 3..].split(['/', '?', '#']).next().unwrap_or("");
+            format!("{scheme}://{host}")
+        }
+        None => "<invalid>".into(),
+    }
+}
+
+/// 用系统浏览器打开外链。调用方必须先过 `validate_external_url`。
+fn open_external_url(url: &str) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        // ShellExecuteW 直接吃 URL 字符串（不经 cmd.exe ⇒ 没有命令行拼装面）。
+        use windows::core::HSTRING;
+        use windows::Win32::UI::Shell::ShellExecuteW;
+        use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+        let op = HSTRING::from("open");
+        let file = HSTRING::from(url);
+        let rc = unsafe { ShellExecuteW(None, &op, &file, None, None, SW_SHOWNORMAL) };
+        // Win32 口径：返回值 > 32 才是成功（≤ 32 是错误码）。
+        let code = rc.0 as isize;
+        if code <= 32 {
+            return Err(format!("ShellExecuteW failed: {code}"));
+        }
+        Ok(())
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let res = Command::new("open").arg(url).status();
+        res.map(|_| ()).map_err(|e| format!("open url: {e}"))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let res = Command::new("xdg-open").arg(url).status();
+        res.map(|_| ()).map_err(|e| format!("open url: {e}"))
+    }
+}
+
+/// 打开外链（本地启动页走 IPC；远程 dsh 页走环回桥 `/shell/open-url`）。
+/// 双通道共用 `validate_external_url` —— 页面永远只交出 URL 字符串。
+#[tauri::command]
+fn open_url(app: AppHandle, url: String) -> Result<serde_json::Value, String> {
+    let data = app_data_dir(&app);
+    match validate_external_url(&url) {
+        Ok(target) => {
+            log_line(&data, &format!("open-url (ipc) -> {}", url_origin(&target)));
+            match open_external_url(&target) {
+                Ok(()) => Ok(serde_json::json!({ "ok": true })),
+                Err(e) => {
+                    log_line(&data, &format!("open-url (ipc) failed: {e}"));
+                    Err(e)
+                }
+            }
+        }
+        Err(reason) => {
+            log_line(&data, &format!("open-url (ipc) rejected: {reason}"));
+            Err(reason)
+        }
+    }
+}
+
 /// 打开最近一次 manager 故障的证据目录（无故障记录时打开 reports 根目录）。
 /// chrome 故障条幅的「打开证据目录」按钮走这里（IPC / 环回桥双通道）。
 #[tauri::command]
@@ -5076,6 +5285,7 @@ pub fn run() {
             resolve_pending_action,
             open_data_dir,
             open_evidence_dir,
+            open_url,
             quit_app,
             get_update_status,
             get_shell_update_status,
