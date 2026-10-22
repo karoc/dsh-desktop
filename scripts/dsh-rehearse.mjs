@@ -927,6 +927,9 @@ async function runBumpScenario() {
   }
 
   // ── 4. 在克隆里跑 dsh-adapt（不加 --dry-run）──────────────────────────────
+  // 克隆里的 Cargo.lock 可能落后于 Cargo.toml（release-please 漏改派生物）：dsh-adapt 第 7 步会像 CI 的
+  // test 作业那样**先 sync 再跑链**，所以 bump 在这里自动继承"门禁前的锁同步"——rehearse 自己不再重复跑
+  // （否则两处逻辑漂移，演练就不再等价于真实运行）。sync 的实际输出收进 JSON，作为"确实继承到了"的证据。
   {
     const s = now()
     const out = await bumpSpawn(process.execPath, [join(cloneDir, 'scripts/dsh-adapt.mjs'), '--version', target, '--runtime', runtimeDir], { cwd: cloneDir, label: 'adapt' })
@@ -935,6 +938,7 @@ async function runBumpScenario() {
     adaptResult = {
       code: out.code, signal: out.signal ?? null,
       gateLine: lines.filter((l) => /全量门禁/.test(l)).slice(-1)[0] ?? null,
+      syncLine: lines.filter((l) => /前置 sync Cargo\.lock/.test(l)).slice(-1)[0] ?? null,
       outputTail: lines.slice(-12),
       stderrTail: out.stderr.trim().split('\n').slice(-3).join(' | ').slice(0, 240),
     }

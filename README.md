@@ -452,7 +452,7 @@ MIT
   （等价 `npm run dsh:adapt -- --version <版本> …`）
   —— 依次做：地板两份 + 适配记录（写进注释块内部，`node --check` 校验，不过则回滚）→ README 地板数值 →
   patch 夹具重采 → 预装 peer 兼容 → 探针非 RED（YELLOW 需显式 `--allow-yellow`，探针**没产出报告**也算失败）→
-  全量门禁。**任一步失败立即停**；
+  全量门禁（**跑链前先 sync 派生的 `Cargo.lock`**，与 CI 的 `test` 作业一致）。**任一步失败立即停**；
   `--runtime` 缺省时会尝试 dev 实例的固定 runtime 路径，**路径不存在且未显式给出 ⇒ 直接 exit 2**（不发车）。
   第 7 步（全量门禁）按 `package.json` 的 `test` 链**逐条直接跑 `node`**（不经 npm，与 `npm test` 是同一条链），
   当前这条链 25 条里 24 条是 `node …` ⇒ 本机 24/24 真跑；剩下 1 条是条件式
@@ -460,8 +460,19 @@ MIT
   它不匹配 `^node`，因此本机会把它**跳过并逐条列出**（CI 上由 `npm test` 真跑）。
   将来链上若出现别的非 node 条目（如 cargo），处理方式相同：默认容忍这种覆盖缺口，
   `--strict-chain` 则把"跳过"也算失败（跳过 ≠ 通过）。
+  第 7 步在跑链**之前**先执行 `node scripts/sync-cargo-lock-version.mjs`（与 CI `test` 作业在 `npm test`
+  前的那一步一致）：把 `src-tauri/Cargo.lock` 里的派生版本对齐到 `Cargo.toml`。**它只修"派生物落后/超前于
+  真源"这一种漂移**：`package.json` / `tauri.conf.json` / `Cargo.toml` 三处若彼此不一致，sync 修不了，
+  `test-manifest-consistency` 照常判红（2026-10-23 负向对照实测：把 `Cargo.toml` 也改成 9.9.9 ⇒ 门禁仍红）——
+  所以它不是用来掩盖真不一致的。为什么需要这一步：干净 main 上这四处曾长期是 0.20.0 / 0.20.0 / 0.20.0 /
+  **0.19.0**，CI 靠 `npm test` 前的 sync 掩盖了它，本脚本不跑 sync 就在第 7 步**必红**、每次真实适配都被
+  误判成"适配失败"。sync 改动了 `Cargo.lock` 时明细会打印 `FIXED …` 并提示把该文件一起提交；sync 自身
+  失败（exit≠0）同样立即停在第 7 步。⚠️ 与 CI 相同的副作用：sync 真的改了 `Cargo.lock` 时，跑链期间工作树是
+  脏的 ⇒ `test-controls` 的三个「门禁可信度对照」会按既有规则 SKIP（它们只在干净树上跑；CI 在 sync 步骤之后
+  同理，属已知覆盖缺口，**跳过 ≠ 通过**）。
   `--dry-run` **只跳过写文件（地板/README/夹具那几步），只读门禁照样真跑**——插件门禁、探针、全量门禁
-  都会实际执行，探针判 RED 时仍然 exit 1；所以它不是"只打印计划"，而是"不落盘地走一遍真实门禁"
+  都会实际执行（第 7 步会为门禁**临时** sync `Cargo.lock`，跑完立即还原 ⇒ 净写入仍为零），探针判 RED 时
+  仍然 exit 1；所以它不是"只打印计划"，而是"不落盘地走一遍真实门禁"
   （2026-10-19 实测 `--version 0.2.1-rc.2 --runtime <dev runtime> --dry-run` ⇒ exit 0、当时 23 套通过，
   且运行前后 `git status --porcelain` 完全一致；此后链上新增了 `test-automation-gates` 与 parity 两条，
   数字相应变成 25）。⚠️ 也正因第 4 步（夹具重采）被跳过，**目标版本 ≠ 当前地板/夹具时它
