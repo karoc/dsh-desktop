@@ -218,10 +218,16 @@ T0 = `time[该壳版本随包地板]`（可能是预发布），终点 = 首个�
 4. 重采 patch 夹具（`test-patch-targets.mjs --update-fixture --runtime <dir>`）并核对采集版本；
 5. 预装插件 peer 兼容（`test-plugin-dsh-compat.mjs`；地板与四个 bundle 必须同批）；
 6. 探针非 RED（**没产出报告也算失败**；YELLOW 需显式 `--allow-yellow`）；
-7. 全量门禁（按 `package.json` 的 `test` 链逐条直接跑 `node`；当前 25 条里 24 条是 `node …` ⇒ 24/24 真跑，
+7. 全量门禁（**先跑 `node scripts/sync-cargo-lock-version.mjs`（与 CI `test` 作业在 `npm test` 前的那一步一致）**，
+   再按 `package.json` 的 `test` 链逐条直接跑 `node`；当前 25 条里 24 条是 `node …` ⇒ 24/24 真跑，
    另 1 条是 `[ -f scripts/test-version-compare-parity.mjs ]` 条件式（parity 套件未提供时只跳过自己），
    它不匹配 `^node` ⇒ 本机把它**跳过并逐条列出**，CI 上由 `npm test` 真跑。默认容忍这种覆盖缺口、
-   `--strict-chain` 把跳过也算失败；
+   `--strict-chain` 把跳过也算失败。sync 只把派生的 `Cargo.lock` 对齐到 `Cargo.toml`；`package.json` /
+   `tauri.conf.json` / `Cargo.toml` 三者彼此不一致时 sync **不修**、`test-manifest-consistency` 照样判红
+   （2026-10-23 负向对照：把 `Cargo.toml` 也改成 9.9.9 ⇒ 门禁仍红）。缺这一步的后果：干净 main 上锁文件
+   停在 0.19.0 而三处 manifest 已是 0.20.0，CI 靠 test 前的 sync 掩盖，而 `dsh-adapt` 第 7 步必红 ⇒
+   每次真实适配都被误判成"适配失败"；sync 真改了 `Cargo.lock` 时跑链期间工作树是脏的 ⇒ `test-controls` 的
+   三个可信度对照会 SKIP（它只在干净树上跑；CI 在 sync 后同理，已知覆盖缺口，跳过 ≠ 通过）；
 8. 汇总 + 打印剩余人工步骤（dev 实机验收 / PR / 发布 / 装机）；`--canary` 时在此读**两个日志**断言三个标记
    （session 日志：`client/log chrome ready`、`client-ready (http)`；`<runtime>/manager.log`：`preinstalled bundles:`），
    只认检查开始之后**新写入的行** ⇒ 前提是 dev 壳在检查期间**新启动**。
@@ -234,7 +240,8 @@ T0 = `time[该壳版本随包地板]`（可能是预发布），终点 = 首个�
   与新 dsh 对齐" —— **`dsh-adapt` 不做**；它只跑 `test-plugin-dsh-compat.mjs`（校验 peer 是否已兼容），
   同步由 `preinstalled-sync.yml`（§3.8）独立承担。
 - ❌ 第 6 步"生成 PR 正文 + 推分支" —— **没做**（刻意的：不建 PR、不推分支，避免脚本产生对外副作用）。
-- ⚠️ `--dry-run` 只跳过第 2/3/4 步（写文件那几步），**第 5/6/7 步照跑**；也正因第 4 步被跳过，
+- ⚠️ `--dry-run` 只跳过第 2/3/4 步（写文件那几步），**第 5/6/7 步照跑**（第 7 步的 Cargo.lock sync 在
+  dry-run 里会临时执行、跑完还原 ⇒ 净值零写入）；也正因第 4 步被跳过，
   **目标版本 ≠ 当前地板/夹具时它必然停在第 6 步探针**（`version-vs-*` RED）⇒ dry-run 只对"目标 == 现状"的
   幂等路径能全绿，**不能**用它演练一次版本变更（这是已知的演练能力缺口）。
 

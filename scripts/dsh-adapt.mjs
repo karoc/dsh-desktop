@@ -17,7 +17,14 @@
 //     为什么：dry-run 跳过第 2/4 步（写地板 / 重采夹具），而 `version-vs-floor` / `version-vs-fixture` 两条 RED
 //     只能靠那两步消掉 ⇒ 旧实现下 target≠floor 时"演练"必然停在第 6 步 —— 那是假演练（2026-10-19 审计定性）。
 //     非 dry-run **绝不**传这两个开关（绝不静默假设），演练结论也不代表真实一致。
-//   7 全量门禁（按 package.json 的 test 链逐条跑，等价 CI；本机 npm CLI 不可用，故直接跑 node）
+//   7 全量门禁（**先 sync 派生的 Cargo.lock**，再按 package.json 的 test 链逐条跑，等价 CI；
+//     本机 npm CLI 不可用，故直接跑 node）。为什么必须先 sync：Cargo.lock 是派生物，release-please
+//     对它的 extra-files 过滤式替换实测不生效（见 sync-cargo-lock-version.mjs 头注释），于是干净 main 上
+//     会出现 package.json / tauri.conf.json / Cargo.toml = 0.20.0 而 Cargo.lock = 0.19.0 的漂移。
+//     CI 的 test 作业在 `npm test` **之前**先跑 sync 掩盖了它；本脚本不跑 sync 就会在最后一步必红，
+//     每一次真实适配都被误判成"适配失败"（2026-10-23 实测确认）。sync 只改 Cargo.lock、只对齐到
+//     Cargo.toml —— **三处 manifest 彼此不一致时它不会去修**，后面的 test-manifest-consistency 照样红，
+//     所以这里**不是**用它掩盖真实不一致：它只修"派生物落后于真源"这一种漂移。
 //   8 汇总 + 剩余人工步骤（dev 实机验收 / PR / 发布 / 装机）
 //
 // --canary 的前提：它只认「脚本启动**之后**新写入的日志行」，所以 dev 壳必须在检查期间**新启动**
@@ -244,8 +251,44 @@ if (DRY) {
   note('6 探针', 'ok', `verdict=${verdict.toUpperCase()}${rehearsalNote}`)
 }
 
-// ── 7. 全量门禁（按 package.json 的 test 链逐条跑；npm CLI 本机不可用，故直接跑 node）──
+// ── 7. 全量门禁（先 sync Cargo.lock，再按 package.json 的 test 链逐条跑；npm CLI 本机不可用，故直接跑 node）──
 {
+  // 7.0 与 CI 的 test 作业对齐：`node scripts/sync-cargo-lock-version.mjs` → `npm test`。
+  // Cargo.lock 是 Cargo.toml 的派生物（dsh-desktop 那一段），release-please 漏改它 ⇒ manifest 门禁红。
+  // 这里只**复用**该脚本，不重写同步逻辑；它只改 Cargo.lock、只对齐到 Cargo.toml，修不了
+  // "package.json / tauri.conf.json / Cargo.toml 彼此不一致" —— 那种真不一致留给下面的
+  // test-manifest-consistency 判红（绝不以 sync 成功代替门禁结论）。
+  const lockFile = join(ROOT, 'src-tauri', 'Cargo.lock')
+  const lockBefore = existsSync(lockFile) ? readFileSync(lockFile, 'utf8') : null
+  const sync = spawnSync(process.execPath, [join(ROOT, 'scripts', 'sync-cargo-lock-version.mjs')], { encoding: 'utf8', cwd: ROOT })
+  const syncLine = (sync.stdout ?? '').trim().split('\n').filter(Boolean).slice(-1)[0] ?? ''
+  // dry-run 的契约是"不落盘"（README：运行前后 git status 一致）：为了把门禁跑在**与真实运行/CI 相同**
+  // 的状态上，这里临时同步；跑完（无论门禁成败）把原内容写回，并在明细里说清楚。真实运行则保留同步结果
+  //（那正是要一起提交的修复），并提示提交。
+  const restoreLock = () => {
+    if (!DRY || lockBefore === null) return false
+    const now = existsSync(lockFile) ? readFileSync(lockFile, 'utf8') : null
+    if (now === lockBefore) return false
+    writeFileSync(lockFile, lockBefore)
+    return true
+  }
+  if (sync.status !== 0) {
+    const restored = restoreLock()
+    abort('7 全量门禁', `跑门禁前 sync Cargo.lock 失败（exit=${sync.status}）：`
+      + `${(sync.stdout ?? '').trim().split('\n').slice(-2).join(' | ').slice(0, 200)} ${(sync.stderr ?? '').trim().split('\n')[0]?.slice(0, 160) ?? ''}`
+      + `${restored ? '；dry-run 已还原 Cargo.lock' : ''} —— sync 失败不等于门禁通过`)
+  }
+  if (syncLine) console.log(`      7 前置 sync Cargo.lock：${syncLine}`)
+  if (/^FIXED:/.test(syncLine) && !DRY) {
+    console.log('      ⚠ Cargo.lock 漂移已被修正（派生物对齐 Cargo.toml）：提交时把 src-tauri/Cargo.lock 一起带上')
+  }
+  if (/^FIXED:/.test(syncLine)) {
+    // 如实说出这条与 CI 相同的副作用：sync 真的改了文件 ⇒ 跑链期间工作树是脏的，test-controls 会按既有规则
+    // SKIP 三个可信度对照（它只在干净树上跑）。不能把"跳过"说成"通过"；CI 在 sync 步骤之后也是同样的脏树。
+    console.log(DRY
+      ? '      ⚠ dry-run：门禁跑在"已同步"状态（期间工作树是脏的）⇒ test-controls 的可信度对照会 SKIP；跑完立即还原 Cargo.lock'
+      : '      ⚠ 门禁期间工作树是脏的（Cargo.lock 已改）⇒ test-controls 的三个可信度对照会 SKIP（已知覆盖缺口；CI 的 sync 之后同理，跳过 ≠ 通过）')
+  }
   const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'))
   const entries = pkg.scripts.test.split(' && ').map((e) => e.trim())
   let failed = 0
@@ -270,9 +313,12 @@ if (DRY) {
     console.log(`      本机跳过 ${skipped.length} 项（非 node 命令，CI 覆盖）：`)
     for (const s of skipped) console.log(`        · ${s}`)
   }
-  if (failed > 0) abort('7 全量门禁', `${failed}/${ran} 套失败`)
-  if (skipped.length && STRICT_CHAIN) abort('7 全量门禁', `--strict-chain：${ran} 套通过，但有 ${skipped.length} 项被本机跳过（${skipped.join(' / ')}）—— 覆盖缺口不算通过`)
-  note('7 全量门禁', 'ok', `${ran} 套通过（CI 等价：直接跑 node，不经 npm）${skipped.length ? `；本机跳过 ${skipped.length} 项非 node 命令（CI 覆盖，已列在上面；--strict-chain 可把它们算失败）` : ''}`)
+  const restoredOnFail = () => (restoreLock() ? '；dry-run 已还原 Cargo.lock（临时同步仅供门禁使用）' : '')
+  if (failed > 0) abort('7 全量门禁', `${failed}/${ran} 套失败${restoredOnFail()}`)
+  if (skipped.length && STRICT_CHAIN) abort('7 全量门禁', `--strict-chain：${ran} 套通过，但有 ${skipped.length} 项被本机跳过（${skipped.join(' / ')}）—— 覆盖缺口不算通过${restoredOnFail()}`)
+  const restored = restoreLock()
+  note('7 全量门禁', 'ok', `先 sync Cargo.lock（${syncLine || '无输出'}${restored ? '；dry-run 已还原（临时同步只为让门禁跑在与 CI 相同的状态）' : ''}）；`
+    + `${ran} 套通过（CI 等价：直接跑 node，不经 npm）${skipped.length ? `；本机跳过 ${skipped.length} 项非 node 命令（CI 覆盖，已列在上面；--strict-chain 可把它们算失败）` : ''}`)
 }
 
 // ── 8. canary 验收（只读两个日志文件，不启动/不杀进程）─────────────────────
