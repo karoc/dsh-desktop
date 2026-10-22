@@ -14,6 +14,7 @@
 | 壳自身开发（顶栏/菜单/桥/开发版构建/验收） | [`../.dsh/skills/dsh-desktop-shell-dev/SKILL.md`](../.dsh/skills/dsh-desktop-shell-dev/SKILL.md) | 含 §4.8 用 `invoke`/CDP 验收、§4.9 dsh 0.2 CLI 差异、§4.10 本地验证三陷阱 |
 | 预装插件同步（版本审计 / 同步 / 验证 / 三处对齐） | [`../.dsh/skills/dsh-preinstalled-plugin-sync/SKILL.md`](../.dsh/skills/dsh-preinstalled-plugin-sync/SKILL.md) | 含 §4.5 CI 阻断门禁与三处对齐表 |
 | Windows 安装/启动排障 | [`../.dsh/skills/windows-desktop-shell-debugging/SKILL.md`](../.dsh/skills/windows-desktop-shell-debugging/SKILL.md) | 装不上/启动失败/卡死 |
+| 上游 dsh 发版 → 适配 → 发版（6h SLA 流水线） | [`../.dsh/skills/dsh-upstream-adaptation/SKILL.md`](../.dsh/skills/dsh-upstream-adaptation/SKILL.md) | 双心跳、6 个脚本的逐条命令（带实跑坐标）、症状→判据→处理排错表、已知覆盖缺口 |
 | 壳 UI 设计 token | [`2026-09-02-ui-design-tokens.md`](2026-09-02-ui-design-tokens.md) | 设计参考（活文档） |
 | 方案与决策记录（含 dsh 升级回归的全过程与当前契约） | [`2026-09-25-shell-improvement-plan.md`](2026-09-25-shell-improvement-plan.md) | **先读文件顶部的「当前状态摘要」**；§13/§15 是历史记录，配方真源在技能里 |
 | 上游缺陷内部记录·渲染成本（**不提交**） | [`reports/2026-10-05-upstream-web-gui-never-idles.md`](reports/2026-10-05-upstream-web-gui-never-idles.md) | 实测空闲仍 ~120 次/秒 style+layout 失效；长会话 + 大图下 GPU 可被拉满 |
