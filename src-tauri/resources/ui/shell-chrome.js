@@ -58,6 +58,49 @@
     }, authProbeDelayFor(authProbeTicks));
   }
 
+  // ── 外链判定（A2，2026-10-23）：纯函数，必须定义在 TEST_HOOK 之前 ────────
+  // 为什么需要：wry 在**没有** new-window handler 时对 NewWindowRequested 直接
+  // deny ⇒ 页面里 window.open / target=_blank 的 http(s) 链接点了没有任何反应
+  // （静默失效，用户连报错都看不到）。这里只做**判定**：真正的打开在 Rust
+  // （validate_external_url → 系统浏览器），页面永远拿不到 shell 执行能力。
+  // 口径（与 Rust 侧同一集合；门禁跨文件比对两边不许漂移）：
+  //   · 只放行 http: / https:；
+  //   · about:blank 原样交回原生 window.open（OAuth 类弹窗先开空窗再写 location；
+  //     wry 无 handler 时本来就开不出窗口，放行不增加能力面）；
+  //   · 其余 scheme（file: / javascript: / data: / ms-* / vbscript: …）一律拒绝并留痕；
+  //   · 拒绝控制字符与空白（换行可把额外参数走私给系统处理程序）、userinfo、反斜杠。
+  const EXTERNAL_URL_SCHEMES = ['http', 'https'];
+  const EXTERNAL_URL_MAX = 2048;
+  /**
+   * 外链判定（纯函数；契约门禁断言它的**返回值**，而不是对源码做字符串匹配）。
+   * @param {unknown} raw 页面交出的 URL 字符串
+   * @returns {{ok: boolean, url?: string, reason: string, passThrough?: boolean}}
+   *   ok=true 时 url 是**原样**的输入（不重新拼装）；passThrough=true 只用于 about:blank。
+   */
+  function externalUrlVerdict(raw) {
+    if (typeof raw !== 'string') return { ok: false, reason: 'not-a-string' };
+    const url = raw.trim();
+    if (!url) return { ok: false, reason: 'empty' };
+    if (url.length > EXTERNAL_URL_MAX) return { ok: false, reason: 'too-long' };
+    if (/[\u0000-\u0020\u007f]/.test(url)) return { ok: false, reason: 'control-char' };
+    const m = /^([a-z][a-z0-9+.-]*):/i.exec(url);
+    if (!m) return { ok: false, reason: 'no-scheme' };
+    const scheme = m[1].toLowerCase();
+    if (scheme === 'about' && /^about:blank(#.*)?$/i.test(url)) {
+      return { ok: false, passThrough: true, reason: 'about-blank' };
+    }
+    if (!EXTERNAL_URL_SCHEMES.includes(scheme)) return { ok: false, reason: `scheme ${scheme}:` };
+    // 必须带 authority（`http://host`）：`https:///path` / `http:host` 这类形态各浏览器
+    // 解释不一，直接拒绝比"猜它想开什么"安全（Rust 侧同一口径）。
+    const rest = url.slice(m[0].length);
+    if (!rest.startsWith('//')) return { ok: false, reason: 'no-authority' };
+    const authority = rest.slice(2).split(/[/?#]/, 1)[0];
+    if (!authority) return { ok: false, reason: 'empty-host' };
+    if (authority.includes('@')) return { ok: false, reason: 'userinfo' };
+    if (authority.includes('\\')) return { ok: false, reason: 'backslash' };
+    return { ok: true, url, reason: 'ok' };
+  }
+
   const TEST_HOOK = globalThis.__DSH_CHROME_TEST__;
 
   // 应用名/图标/版本/构建日期随构建身份注入（dev 版 = "DSH Smoothly Desktop Dev"）。
@@ -157,13 +200,19 @@
     'window-state': { ipc: 'window_control', args: { action: 'state' }, bridge: '/window/state', method: 'GET' },
     'shell-state': { ipc: 'get_shell_state', bridge: '/shell/state', method: 'GET' },
     'update-status': { ipc: 'get_update_status', bridge: '/update-status', method: 'GET' },
+    // 外链交系统浏览器（A2）：页面只交出 URL 字符串，scheme 白名单与真正的打开
+    // 都在 Rust（`validate_external_url` + ShellExecuteW/xdg-open）。不是危险动作
+    // ⇒ 不经确认窗，但拒绝原因会落进会话日志。
+    'open-url': { ipc: 'open_url', bridge: '/shell/open-url' },
   };
 
   if (TEST_HOOK) {
     // computeCaptionPlan 一并暴露：契约测试**断言它的返回值**（而不是对源码做
     // 字符串匹配）—— S8 的关键行为是"caption 模式不推挤 + 给客户端契约变量"。
+    // externalUrlVerdict 同理：A2 的安全边界是"哪些 scheme 能出去"，断言返回值。
     TEST_HOOK.config = {
-    authProbeDelayFor, errorBannerDelayFor, SHELL_MENUS, ACTIONS, computeCaptionPlan, WINDOWS_TITLEBAR_H, SHELL_BAR_H, misleadingAuthHint };
+    authProbeDelayFor, errorBannerDelayFor, SHELL_MENUS, ACTIONS, computeCaptionPlan, WINDOWS_TITLEBAR_H, SHELL_BAR_H, misleadingAuthHint,
+    externalUrlVerdict, EXTERNAL_URL_SCHEMES, EXTERNAL_URL_MAX };
     return;
   }
 
@@ -279,6 +328,63 @@
   function getUpdateStatus() {
     return call('update-status');
   }
+
+  // ── A2：外链 / 新窗口交系统浏览器（2026-10-23）──────────────────────
+  // 无 new-window handler 时 wry 对 NewWindowRequested 直接 deny ⇒ window.open /
+  // target=_blank 的 http(s) 链接点了没反应。这里把它们导到系统浏览器：
+  //   · window.open：http(s) → 桥；about:blank → 原样交回原生实现（OAuth 弹窗形态）；
+  //     其余 scheme 拒绝并留痕（页面被注入时 `javascript:` 等不许被当成页面动作）；
+  //   · 外链点击（target=_blank / 中键 / Ctrl-Cmd+点击）：**冒泡阶段**处理，且**不**
+  //     抢先 preventDefault —— 延后一拍再看 `defaultPrevented`：页面自己接管了
+  //     （dsh 的侧栏浏览器等）我们就不动，避免"系统浏览器 + 页面内面板"双开。
+  //     wry 本来就把新窗口拒成空操作，所以不需要靠 preventDefault 阻止导航。
+  //   · 同窗口内导航**不拦**（只处理"会开新窗口"的点击）：把同源/内网链接丢给系统
+  //     浏览器会打开带 token 的 dsh 页面本身，收益为负。
+  // 拒绝必须留痕（走 /log，tag=open-url），否则又是"静默失效"。
+  boot('external-links', () => {
+    const logReject = (reason, raw) => {
+      const sample = (typeof raw === 'string' ? raw : String(raw)).slice(0, 160);
+      bridge('/log', 'POST', { tag: 'open-url', detail: `rejected reason=${reason} url=${JSON.stringify(sample)}` });
+    };
+    const nativeOpen = typeof window.open === 'function' ? window.open : null;
+    window.open = function (url, target, features) {
+      const raw = url === undefined || url === null ? 'about:blank' : String(url);
+      const verdict = externalUrlVerdict(raw);
+      if (verdict.ok) { call('open-url', { url: verdict.url }); return null; }
+      if (verdict.passThrough) {
+        return nativeOpen ? nativeOpen.apply(window, [raw, target, features]) : null;
+      }
+      logReject(verdict.reason, raw);
+      return null;
+    };
+    // 只认**显式** http(s)（或协议相对 //host）：相对路径是同源导航，不归这里管。
+    const externalHrefOf = (a) => {
+      const raw = String(a.getAttribute('href') || '').trim();
+      if (!raw) return null;
+      if (raw.startsWith('//')) return (location.protocol || 'https:') + raw;
+      if (/^[a-z][a-z0-9+.-]*:/i.test(raw)) return raw;
+      return null;
+    };
+    const wantsNewWindow = (e, a) => {
+      if (e.button === 1 || e.ctrlKey || e.metaKey) return true;
+      return String(a.getAttribute('target') || '').toLowerCase() === '_blank';
+    };
+    const onLinkActivation = (e) => {
+      const t = e.target;
+      const a = t && typeof t.closest === 'function' ? t.closest('a[href]') : null;
+      if (!a || !wantsNewWindow(e, a)) return;
+      const href = externalHrefOf(a);
+      if (!href) return;
+      const verdict = externalUrlVerdict(href);
+      setTimeout(() => {
+        if (e.defaultPrevented) return; // 页面自己处理了 → 不动
+        if (verdict.ok) { call('open-url', { url: verdict.url }); return; }
+        logReject(verdict.reason, href);
+      }, 0);
+    };
+    window.addEventListener('click', onLinkActivation);
+    window.addEventListener('auxclick', onLinkActivation);
+  });
 
   // ── 状态 ──────────────────────────────────────────────────────────
   let devMode = false;
