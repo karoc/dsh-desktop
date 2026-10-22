@@ -1378,13 +1378,15 @@ let pendingTask = null
 // dsh web can EVENT-LOOP HANG (black page, refresh dead) without exiting, so
 // the supervisor's normal child-exit path never fires. Poll the reported URL:
 // after WATCHDOG_MISS_LIMIT silent misses the child gets a best-effort memory
-// dump and is killed + re-spawned (same recovery as the tray's 重启服务), so
-// the next hang recovers by itself AND leaves a dump for diagnosis. Evidence
-// lands in <runtime>/reports (same dir as node --report crash reports).
+// dump; then the URL is probed ONCE MORE — only a service that is still dead is
+// killed + re-spawned (same recovery as the tray's 重启服务). A dsh that already
+// recovered while the dump was being written (2026-10-23 05:54 incident) is left
+// alone. Evidence lands in <runtime>/reports (same dir as node --report reports).
 let watchdogUrl = null
 let watchdogArmed = false
 let watchdogArmedAt = 0
 let watchdogMisses = 0
+let watchdogFirstMissAt = 0
 let watchdogTimer = null
 let watchdogRecovering = false
 const WATCHDOG_MS = 3000
@@ -1414,33 +1416,75 @@ function watchdogStart() {
   watchdogTimer = setInterval(() => { void watchdogTick() }, WATCHDOG_MS)
   watchdogTimer.unref?.()
 }
-async function watchdogTick() {
-  if (!watchdogUrl || !watchdogArmed || watchdogRecovering) return
-  let ok = false
+/**
+ * 单次探活。判据（与壳侧 / 历史 watchdog 一致）：任何 2xx–4xx 都算"在听并应答"
+ * —— 401/404 是鉴权/路由响应，不是挂起；只有连接失败/超时才算 miss。
+ * 返回 { ok, status? , error? } 而不是布尔值，便于日志写清"看到了什么"。
+ */
+async function probeLiveness(url, timeoutMs = 1500) {
   try {
-    const res = await fetch(watchdogUrl, { signal: AbortSignal.timeout(1500) })
-    // 存活判定：任何 HTTP 状态（含 401/404 等鉴权/路由响应）都说明服务在
-    // 听并应答——只有连接失败/超时才算 miss。
-    ok = res.status >= 200 && res.status < 500
-  } catch { /* unresponsive */ }
-  if (ok) { watchdogMisses = 0; return }
+    const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) })
+    return { ok: res.status >= 200 && res.status < 500, status: res.status }
+  } catch (err) {
+    return { ok: false, error: err?.name ?? 'fetch-failed' }
+  }
+}
+
+/** 日志只保留 scheme://host:port：dsh web URL 带 ?token=…（启动凭据），不得落日志。 */
+function logSafeUrl(url) {
+  try { const u = new URL(url); return `${u.protocol}//${u.host}` } catch { return '(unparseable-url)' }
+}
+
+/**
+ * dump 之后、杀之前的**再探一次**（2026-10-23 05:54 事故）。
+ * dump 只证明"抓现场的那一刻"曾经无响应，不证明现在仍然无响应；旧实现在 dump
+ * 完成/等待超时后直接 kill+restart，把一次已自行恢复的短暂卡顿打断成 400MB dump
+ * + 重启级联。恢复判据与探活完全相同；真·无响应仍然 kill+restart（安全边界不堵）。
+ * hooks 用于自测注入（probe / waitDumpDone / dispatchDump / kill / log），生产路径不传。
+ */
+async function watchdogTick(hooks = {}) {
+  if (!watchdogUrl || !watchdogArmed || watchdogRecovering) return
+  const probe = hooks.probe ?? probeLiveness
+  const writeLog = hooks.log ?? log
+  const waitDump = hooks.waitDumpDone ?? (() => waitDumpDone(WATCHDOG_DUMP_WAIT_MS))
+  const dispatchDump = hooks.dispatchDump ?? emit
+  const killChild = hooks.kill ?? ((pid) => { restartRequested = true; killTree(pid) })
+  const first = await probe(watchdogUrl)
+  if (first.ok) { watchdogMisses = 0; watchdogFirstMissAt = 0; return }
   if (Date.now() - watchdogArmedAt < WATCHDOG_STARTUP_GRACE_MS) return
+  if (watchdogMisses === 0) watchdogFirstMissAt = Date.now()
   watchdogMisses += 1
-  log(`watchdog: dsh web miss ${watchdogMisses}/${WATCHDOG_MISS_LIMIT} (${watchdogUrl})`)
+  writeLog(`watchdog: dsh web miss ${watchdogMisses}/${WATCHDOG_MISS_LIMIT} (${logSafeUrl(watchdogUrl)})`)
   if (watchdogMisses >= WATCHDOG_MISS_LIMIT) {
     const stuckUrl = watchdogUrl
+    const missCount = watchdogMisses
+    const firstMissAt = watchdogFirstMissAt || Date.now()
     watchdogRecovering = true
     watchdogArmed = false
     watchdogUrl = null
     watchdogMisses = 0
     // 现场由壳负责：壳用 MiniDumpWriteDump 直接抓（旧的 rundll32 comsvcs 路径
     // 在本机 20s 超时且零产出，既没证据又把一次挂起拖成重启风暴，已移除）。
-    // 这里发一条 dump-web 协议行，等壳回 dump-done 再重启；壳不在则按上限继续。
-    log('watchdog: dsh web UNRESPONSIVE — asking the shell for a dump before restarting')
-    emit({ t: 'dump-web', pid: currentChildPid ?? 0, url: stuckUrl })
-    const dumped = await waitDumpDone(WATCHDOG_DUMP_WAIT_MS)
-    log(`watchdog: dump ${dumped ? 'ready' : 'not confirmed (shell unavailable?)'} — restarting dsh`)
-    if (currentChildPid) { restartRequested = true; killTree(currentChildPid) }
+    // 这里发一条 dump-web 协议行，等壳回 dump-done（或等待上限）后再做最终判定。
+    writeLog('watchdog: dsh web UNRESPONSIVE — asking the shell for a dump before restarting')
+    dispatchDump({ t: 'dump-web', pid: currentChildPid ?? 0, url: stuckUrl })
+    const dumped = await waitDump()
+    // 最终判定：再探一次。2xx–4xx ⇒ 已恢复，清零并重新 arm，不杀不重启。
+    const recheck = await probe(stuckUrl)
+    const elapsedMs = Date.now() - firstMissAt
+    if (recheck.ok) {
+      watchdogMisses = 0
+      watchdogFirstMissAt = 0
+      watchdogUrl = stuckUrl
+      watchdogArmed = true
+      // 重新给启动宽限：刚恢复的服务可能还在建索引，不能下一拍又判挂起。
+      watchdogArmedAt = Date.now()
+      writeLog(`watchdog: dsh web recovered after ${missCount} miss(es) (probe ${recheck.status}, ${elapsedMs}ms, dump ${dumped ? 'ready' : 'unconfirmed'}) — no restart`)
+    } else {
+      writeLog(`watchdog: dsh web still UNRESPONSIVE after dump (probe ${recheck.status ?? recheck.error}, ${elapsedMs}ms, dump ${dumped ? 'ready' : 'unconfirmed'}) — restarting dsh`)
+      if (currentChildPid) killChild(currentChildPid)
+    }
+    watchdogFirstMissAt = 0
     watchdogRecovering = false
   }
 }
@@ -1455,6 +1499,98 @@ function killTree(pid) {
       process.kill(pid, 'SIGTERM')
     }
   } catch { /* child already gone */ }
+}
+
+// ── watchdog self-test (--self-test-watchdog) ──────────────────────────────
+// 用桩把探活结果**按顺序**喂给同一个 watchdogTick（不是另写一份判定），覆盖两条
+// 负向对照：① 3 次 miss → dump 窗口内恢复 ⇒ 记 recovered、不得 kill/restart；
+// ② dump 后仍无响应 ⇒ 必须 kill + restart（安全边界没被堵死）。
+// 由 scripts/test-watchdog-recovery.mjs 调用，并对本文件做变异自证（见该脚本）。
+async function runWatchdogSelfTest() {
+  const saved = {
+    watchdogUrl, watchdogArmed, watchdogArmedAt, watchdogMisses, watchdogFirstMissAt,
+    watchdogRecovering, currentChildPid, restartRequested,
+  }
+  const scenarios = [
+    {
+      name: '3 次 miss → dump 窗口内恢复',
+      probes: [
+        { ok: false, error: 'TimeoutError' }, { ok: false, error: 'TimeoutError' },
+        { ok: false, error: 'TimeoutError' }, { ok: true, status: 200 },
+      ],
+      wantKills: 0,
+      wantLog: /watchdog: dsh web recovered after 3 miss\(es\)/,
+      wantRearmed: true,
+    },
+    {
+      name: 'dump 后仍无响应',
+      probes: [
+        { ok: false, error: 'TimeoutError' }, { ok: false, error: 'TimeoutError' },
+        { ok: false, error: 'TimeoutError' }, { ok: false, error: 'TimeoutError' },
+      ],
+      wantKills: 1,
+      wantLog: /watchdog: dsh web still UNRESPONSIVE after dump .* — restarting dsh/,
+      wantRearmed: false,
+    },
+  ]
+  let failed = 0
+  try {
+    for (const scenario of scenarios) {
+      const logs = []
+      const kills = []
+      const dumps = []
+      let turn = 0
+      const probe = async () => {
+        // 顺序返回；越界后重复最后一个结果，避免"没桩可喂"被静默当成恢复/失败。
+        const result = scenario.probes[Math.min(turn, scenario.probes.length - 1)]
+        turn += 1
+        return result
+      }
+      // 起点 = "第 1 次 miss 之前"：已 arm、已过启动宽限、无历史 miss。
+      watchdogUrl = 'http://127.0.0.1:12345/?token=SELF-TEST-SECRET'
+      watchdogArmed = true
+      watchdogArmedAt = 0
+      watchdogMisses = 0
+      watchdogFirstMissAt = 0
+      watchdogRecovering = false
+      currentChildPid = 4242
+      restartRequested = false
+      const hooks = {
+        probe,
+        log: (line) => logs.push(line),
+        waitDumpDone: async () => true,
+        dispatchDump: (event) => dumps.push(event),
+        kill: (pid) => { kills.push(pid); restartRequested = true },
+      }
+      console.log(`watchdog self-test: ${scenario.name}`)
+      for (let tick = 0; tick < WATCHDOG_MISS_LIMIT; tick++) await watchdogTick(hooks)
+      for (const line of logs) console.log(`  log: ${line}`)
+      const problems = []
+      if (kills.length !== scenario.wantKills) problems.push(`kill 次数 ${kills.length}，期望 ${scenario.wantKills}`)
+      if (!logs.some((line) => scenario.wantLog.test(line))) problems.push(`缺少期望日志 ${scenario.wantLog}`)
+      if (dumps.length !== 1) problems.push(`dump-web 应发 1 次，实际 ${dumps.length}`)
+      if (watchdogArmed !== scenario.wantRearmed) problems.push(`watchdogArmed=${watchdogArmed}，期望 ${scenario.wantRearmed}`)
+      if (logs.some((line) => line.includes('SELF-TEST-SECRET') || line.includes('token='))) {
+        problems.push('日志泄露了 token / 完整 URL')
+      }
+      if (problems.length) {
+        failed += 1
+        for (const problem of problems) console.error(`  FAIL ${problem}`)
+      } else {
+        console.log(`  PASS (kill=${kills.length}, dump=${dumps.length})`)
+      }
+    }
+  } finally {
+    watchdogUrl = saved.watchdogUrl
+    watchdogArmed = saved.watchdogArmed
+    watchdogArmedAt = saved.watchdogArmedAt
+    watchdogMisses = saved.watchdogMisses
+    watchdogFirstMissAt = saved.watchdogFirstMissAt
+    watchdogRecovering = saved.watchdogRecovering
+    currentChildPid = saved.currentChildPid
+    restartRequested = saved.restartRequested
+  }
+  return { failed, total: scenarios.length }
 }
 
 /** Ask the supervisor to re-spawn dsh (kill the current child if any). */
@@ -1892,7 +2028,23 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  log(`fatal: ${err.message}`)
-  process.exit(1)
-})
+if (process.argv.includes('--self-test-watchdog')) {
+  runWatchdogSelfTest()
+    .then(({ failed, total }) => {
+      if (failed) {
+        console.error(`watchdog self-test: ${total - failed}/${total} passed, ${failed} FAILED`)
+        process.exit(1)
+      }
+      console.log(`watchdog self-test: ${total}/${total} passed`)
+      process.exit(0)
+    })
+    .catch((err) => {
+      console.error(`watchdog self-test crashed: ${err?.stack ?? err}`)
+      process.exit(1)
+    })
+} else {
+  main().catch((err) => {
+    log(`fatal: ${err.message}`)
+    process.exit(1)
+  })
+}
