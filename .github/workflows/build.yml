@@ -56,7 +56,22 @@ jobs:
           if [ -n "$files" ] && [ -z "$rest" ]; then board_only=true; else board_only=false; fi
           echo "board_only=$board_only" >> "$GITHUB_OUTPUT"
           echo "event=${GITHUB_EVENT_NAME} files=(${files:-<none>}) ⇒ board_only=$board_only"
-      - run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      # 2026-10-24：apt 安装收口到 scripts/ci-apt.sh（缓存 + 有界重试）。
+      # 动因（实测）：同一条命令在 runner 上跨度 21s ~ 27m20s —— 下载源逐个包卡住，
+      # 而 apt 无总时长上限；PR 因此卡在 check=pending（run 40024960026 的 apt 步 27m20s）。
+      # 缓存命中时 apt 直接从本地 .deb 归档安装，慢源对已缓存版本不再有影响。
+      - name: Ubuntu 版本（apt 缓存 key 的一部分）
+        id: ubuntu
+        run: . /etc/os-release && echo "version=${VERSION_ID}" >> "$GITHUB_OUTPUT"
+      - name: 恢复 apt .deb 缓存
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/apt-archives
+          key: apt-${{ runner.os }}-${{ steps.ubuntu.outputs.version }}-tauri-${{ hashFiles('scripts/ci-apt.sh') }}
+          restore-keys: |
+            apt-${{ runner.os }}-${{ steps.ubuntu.outputs.version }}-tauri-
+      - name: 安装系统依赖（缓存 + --no-install-recommends + 有界重试）
+        run: sudo bash scripts/ci-apt.sh tauri "${RUNNER_TEMP}/apt-archives"
       # tauri-build validates bundle.resources at compile time, so materialize
       # the gitignored resources before checking.
       - run: node scripts/fetch-node.mjs
@@ -139,6 +154,7 @@ jobs:
         if: steps.changed.outputs.board_only != 'true'
         run: |
           node scripts/ci-choco-install.mjs --self-test
+          bash scripts/ci-apt.sh --self-test
           node scripts/test-ci-linux-smoke.mjs
       - name: 文档同步（改了壳/manager 行为文件 ⇒ 同 PR 必须改 README，除非打 docs-not-needed 标签）
         if: steps.changed.outputs.board_only != 'true'
@@ -174,7 +190,22 @@ jobs:
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@cargo-llvm-cov
-      - run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      # 2026-10-24：apt 安装收口到 scripts/ci-apt.sh（缓存 + 有界重试）。
+      # 动因（实测）：同一条命令在 runner 上跨度 21s ~ 27m20s —— 下载源逐个包卡住，
+      # 而 apt 无总时长上限；PR 因此卡在 check=pending（run 40024960026 的 apt 步 27m20s）。
+      # 缓存命中时 apt 直接从本地 .deb 归档安装，慢源对已缓存版本不再有影响。
+      - name: Ubuntu 版本（apt 缓存 key 的一部分）
+        id: ubuntu
+        run: . /etc/os-release && echo "version=${VERSION_ID}" >> "$GITHUB_OUTPUT"
+      - name: 恢复 apt .deb 缓存
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/apt-archives
+          key: apt-${{ runner.os }}-${{ steps.ubuntu.outputs.version }}-tauri-${{ hashFiles('scripts/ci-apt.sh') }}
+          restore-keys: |
+            apt-${{ runner.os }}-${{ steps.ubuntu.outputs.version }}-tauri-
+      - name: 安装系统依赖（缓存 + --no-install-recommends + 有界重试）
+        run: sudo bash scripts/ci-apt.sh tauri "${RUNNER_TEMP}/apt-archives"
       - run: node scripts/fetch-node.mjs
       - run: node scripts/sync-resources.mjs
       # 报告 lib.rs 等的行覆盖率汇总（--summary-only 直接打在日志里，便于抓取与对比）
@@ -385,7 +416,22 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-      - run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      # 2026-10-24：apt 安装收口到 scripts/ci-apt.sh（缓存 + 有界重试）。
+      # 动因（实测）：同一条命令在 runner 上跨度 21s ~ 27m20s —— 下载源逐个包卡住，
+      # 而 apt 无总时长上限；PR 因此卡在 check=pending（run 40024960026 的 apt 步 27m20s）。
+      # 缓存命中时 apt 直接从本地 .deb 归档安装，慢源对已缓存版本不再有影响。
+      - name: Ubuntu 版本（apt 缓存 key 的一部分）
+        id: ubuntu
+        run: . /etc/os-release && echo "version=${VERSION_ID}" >> "$GITHUB_OUTPUT"
+      - name: 恢复 apt .deb 缓存
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/apt-archives
+          key: apt-${{ runner.os }}-${{ steps.ubuntu.outputs.version }}-tauri-${{ hashFiles('scripts/ci-apt.sh') }}
+          restore-keys: |
+            apt-${{ runner.os }}-${{ steps.ubuntu.outputs.version }}-tauri-
+      - name: 安装系统依赖（缓存 + --no-install-recommends + 有界重试）
+        run: sudo bash scripts/ci-apt.sh tauri "${RUNNER_TEMP}/apt-archives"
       - run: npm ci
       - run: npm run bundle -- --bundles appimage deb
 
@@ -475,7 +521,21 @@ jobs:
         with:
           node-version: 22
       # dbus：给 GTK 一个 session bus（缺它时 accessibility/portal 探针表现为超时而非快失败）
-      - run: sudo apt-get update && sudo apt-get install -y xvfb dbus libwebkit2gtk-4.1-0 libappindicator3-1 librsvg2-2 libgtk-3-0
+      # 2026-10-24：同 check 的 apt 缓存 + 有界重试（run 40029539904 的这一步实测 17m03s）。
+      # smoke 档保留 recommends —— headless WebKit 依赖 xvfb 推荐的 mesa/portal 组件，
+      # 不拿真门禁做体积优化（理由写在 scripts/ci-apt.sh 的 profile 注释里）。
+      - name: Ubuntu 版本（apt 缓存 key 的一部分）
+        id: ubuntu
+        run: . /etc/os-release && echo "version=${VERSION_ID}" >> "$GITHUB_OUTPUT"
+      - name: 恢复 apt .deb 缓存
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/apt-archives
+          key: apt-${{ runner.os }}-${{ steps.ubuntu.outputs.version }}-smoke-${{ hashFiles('scripts/ci-apt.sh') }}
+          restore-keys: |
+            apt-${{ runner.os }}-${{ steps.ubuntu.outputs.version }}-smoke-
+      - name: 安装 smoke 运行依赖（缓存 + 有界重试）
+        run: sudo bash scripts/ci-apt.sh smoke "${RUNNER_TEMP}/apt-archives"
       - uses: actions/download-artifact@v4
         with:
           name: dsh-desktop-linux

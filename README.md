@@ -430,7 +430,7 @@ Electron 壳一致。切换后**必须刷新页面**（注入前缀只在页面�
 
 - **分支/合并**：功能走短分支 + PR，**squash merge** 进 main（一提交一功能）；main 有分支保护（需 PR + CI 快层通过）。
 - **提交规范**：Conventional Commits（`feat/fix/docs/ci/refactor/test/chore` + 中文描述），规范直接驱动版本发布。详见 `CONTRIBUTING.md`。
-- **CI 分层**：PR 只跑快层（check：`cargo check` + `clippy -D warnings` + `cargo test --lib`；test：`npm test` 全量，~5min）；main push / `v*` tag 跑全量（windows NSIS 打包 + 布局断言 + runtime smoke、linux 打包、linux-smoke canary）。
+- **CI 分层**：PR 只跑快层（check：`cargo check` + `clippy -D warnings` + `cargo test --lib`；test：`npm test` 全量，~5min）；main push / `v*` tag 跑全量（windows NSIS 打包 + 布局断言 + runtime smoke、linux 打包、linux-smoke canary）。Ubuntu 系统依赖统一走 `scripts/ci-apt.sh`（apt `.deb` 缓存 + 有界重试；缓存 key 含 Ubuntu 版本与脚本哈希），慢源不再把 PR 卡在 `check=pending`。
 - **发布**：release-please 自动 bump 三处版本（Cargo.toml / tauri.conf.json / package.json）→ CHANGELOG.md → release PR → admin 合并 → 打 tag + 建 Release → **在 tag 上派发一次 `build.yml` 才有安装包**（见下）。
 
 ## 发布（release-please 自动出包 + GitHub Release）
