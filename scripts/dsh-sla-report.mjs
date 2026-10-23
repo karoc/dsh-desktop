@@ -21,10 +21,12 @@
 //
 // ── 两段延迟（2026-10-22 加；这是报表现在的主读数）─────────────────────────────
 //   检测（detection）  = 上游发布 T0 → **首次为该版本开 issue** 的 createdAt。
-//                        数据源：`gh issue list --label dsh-upgrade` / `--label sla-breach --state all`
-//                        （标题里的版本号按 `dsh-watch.mjs` 的词边界规则解析，见 parseIssueVersion 注释）；
-//                        与 npm packument 里该版本的 `time` 相减。**找不到对应 issue ⇒ unknown，
-//                        表格里显式打印「未检测到」，绝不当 0**（"没有判断 = 没有验证"）。
+//                        数据源：`gh issue list --state all`（**不按 label**）后用与 `dsh-watch.mjs` 共用的
+//                        确定性键筛（`scripts/lib/issue-key.mjs`：标题前缀 `[dsh-watch]`/`[SLA 未达标]` +
+//                        版本号词边界 + `dsh <版本>` 锚点）；再与 npm packument 里该版本的 `time` 相减。
+//                        为什么不能用 label：PAT 缺 Issues:write 时 label 从未落地（事故里 16 条 issue 无
+//                        label），按 label 取数会把每一个版本的检测延迟都静默判成「未检测到」。
+//                        **找不到对应 issue ⇒ unknown，表格里显式打印「未检测到」，绝不当 0**。
 //   适配（adaptation） = 地板提交 → 我方发布 —— **沿用旧口径**，即 JSON 里原有的 `release` 字段
 //                        （旧报表把它印成"发布"，本轮只改列名，数值不变）。
 //   抬地板             = 上游发布 → 地板提交（JSON 原有 `adapt` 字段；旧报表印成"适配"，本轮改名）。
@@ -60,6 +62,9 @@ import { createHash } from 'node:crypto'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+// 跟踪单的确定性键：与 `dsh-watch.mjs` 共用同一份实现（标题前缀 + `dsh <版本>` 锚点 + 词边界）。
+// 这份模块存在的原因就是"报表按 label 取数、watch 按标题去重"那次漂移（事故 #201–#217）。
+import { earliestTrackingIssue, isTrackingIssue, parseIssueVersion, TRACKING_PREFIXES } from './lib/issue-key.mjs'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const argv = process.argv.slice(2)
@@ -193,64 +198,44 @@ const packument = npmPackument()
 const times = packument.time ?? {}
 const tags = packument['dist-tags'] ?? {}
 
-// ── 检测延迟的数据源：watch issue ─────────────────────────────────────────────
-// ⚠️ 任务书给的命令是 `--label dsh-upgrade --label sla-breach`，但 **gh 的重复 `--label` 是 AND 语义**
-// （本仓库实测：`--label sla-report` 1 条，加 `--label priority:high` 后 0 条），而 `dsh-watch.mjs` 对
-// 同一个 issue **只挂其中一个** label（`breached ? 'sla-breach' : 'dsh-upgrade'`）⇒ 那条命令**恒返回空**，
-// 会把所有版本的检测延迟静默变成 unknown（"没有判断"被伪装成"确实没有 issue"）。
-// 这里按 label 各查一次、按 issue number 合并（= OR 语义），口径仍是那两个 label + `--state all`。
-const WATCH_LABELS = ['dsh-upgrade', 'sla-breach']
-const ISSUE_LIMIT = 100
-function fetchWatchIssues() {
-  const byNumber = new Map()
-  for (const label of WATCH_LABELS) {
-    const raw = sh(GH, ['issue', 'list', '--label', label, '--state', 'all',
-      '--json', 'number,title,createdAt,closedAt', '--limit', String(ISSUE_LIMIT)])
-    let list
-    try { list = JSON.parse(raw) } catch (e) { throw new Error(`gh issue list --label ${label} 的返回值不是 JSON（前 200 字符）：${raw.slice(0, 200)}`) }
-    if (!Array.isArray(list)) throw new Error(`gh issue list --label ${label} 的返回值不是数组（前 200 字符）：${raw.slice(0, 200)}`)
-    // 命中 `--limit` 上限 ⇒ gh 返回的是**最新** 100 条，被截掉的恰是**最早**的 issue，而"首次开 issue"
-    // 要的正是最早那条 ⇒ 检测延迟只会偏大。宁可不出数，也不出一个可能偏大的数。
-    if (list.length >= ISSUE_LIMIT) {
-      throw new Error(`gh issue list --label ${label} 命中 --limit ${ISSUE_LIMIT} 上限（返回 ${list.length} 条）：`
-        + '被截掉的是最早的 issue ⇒ 检测延迟会偏大。拒绝出数（提高 --limit 或收窄 label 后重跑）。')
-    }
-    for (const i of list) if (i && i.number !== undefined && i.number !== null) byNumber.set(i.number, i)
+// ── 检测延迟的数据源：**跟踪 issue 的确定性键**（不按 label）──────────────────
+// 旧实现按 `--label dsh-upgrade` / `--label sla-breach` 各查一次（gh 的重复 `--label` 是 AND 语义，
+// 不能合成一条 —— 那会恒返回空）。但真正的事故在别处：PAT 缺 Issues:write 时 `issue create` 能过、
+// **label 从未落地**（事故 #201–#216 的 16 条 issue 都没有 label）⇒ 按 label 取数查到 0 条 ⇒ 每个版本的
+// 检测延迟都被静默判成「未检测到」，而 issue 明明开着（"没有判断"被伪装成"确实没有 issue"）。
+// 现在改用与 `dsh-watch.mjs` **同一套确定性键**（唯一实现 `scripts/lib/issue-key.mjs`）：
+//   ① 标题前缀 `[dsh-watch]` / `[SLA 未达标]`（人类手写的 issue 与报表自己的 `sla-report` issue 都不算）；
+//   ② 版本号按**词边界**解析，`dsh <版本>` 锚点优先（watch 标题里同时有 target 与"当时的地板"两个版本号）；
+//   ③ `--state all`：检测延迟取 `createdAt`，**关掉的单同样是历史证据**；不看 label / assignee / state ——
+//      三者都可能因权限或人工操作而缺失，而检测延迟问的是"这一版第一次被发现是什么时候"。
+const ISSUE_LIMIT = 1000
+function fetchTrackingIssues() {
+  const raw = sh(GH, ['issue', 'list', '--state', 'all', '--limit', String(ISSUE_LIMIT),
+    '--json', 'number,title,createdAt,closedAt,labels'])
+  let list
+  try { list = JSON.parse(raw) } catch (e) { throw new Error(`gh issue list 的返回值不是 JSON（前 200 字符）：${raw.slice(0, 200)}`) }
+  if (!Array.isArray(list)) throw new Error(`gh issue list 的返回值不是数组（前 200 字符）：${raw.slice(0, 200)}`)
+  // 命中 `--limit` 上限 ⇒ 被截掉的可能包含**最早**的 issue，而"首次开 issue"要的正是最早那条 ⇒
+  // 检测延迟只会偏大。宁可不出数，也不出一个可能偏大的数。
+  if (list.length >= ISSUE_LIMIT) {
+    throw new Error(`gh issue list 命中 --limit ${ISSUE_LIMIT} 上限（返回 ${list.length} 条）：`
+      + '被截掉的可能包含最早的 issue ⇒ 检测延迟会偏大。拒绝出数（提高 --limit 后重跑）。')
   }
-  return [...byNumber.values()]
+  return list.filter((i) => isTrackingIssue(i))
 }
 
-// 标题里的版本号解析：**照 `dsh-watch.mjs` 的词边界规则**（前后不能是 `[0-9A-Za-z.-]`，
-// 于是 `0.2.1` 既不匹配 `0.2.1-rc.2` 也不匹配 `0.2.10`），不另发明一套。
-// watch 生成的标题里通常有**两个**版本号（target + 当时的地板），例如：
-//   `[SLA 未达标] dsh 0.2.1 已发布 10.0h（门槛 6h），地板仍停在 0.2.1-rc.2`
-//   `[dsh-watch][best-effort 24h（预发布通道）] dsh 0.2.1-rc.2 比地板 0.2.0-rc.2 新`
-// ⇒ target 紧跟在 `dsh ` 之后，优先取它；没有这个锚点就只在"全文唯一版本号"时才敢用，多个 = 不猜。
-const VERSION_TOKEN = '\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.]+)*'
-const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-function parseIssueVersion(title) {
-  const text = String(title ?? '')
-  const all = [...text.matchAll(new RegExp(`(?<![0-9A-Za-z.-])(${VERSION_TOKEN})(?![0-9A-Za-z.-])`, 'g'))].map((m) => m[1])
-  const uniq = [...new Set(all)]
-  const anchored = new RegExp(`(?:^|[^0-9A-Za-z.-])dsh\\s+(${VERSION_TOKEN})(?![0-9A-Za-z.-])`).exec(text)
-  if (anchored) return { version: anchored[1], how: '`dsh <版本>` 锚点', candidates: uniq }
-  if (uniq.length === 1) return { version: uniq[0], how: '全文唯一版本号', candidates: uniq }
-  return {
-    version: null,
-    how: uniq.length === 0 ? '标题里没有版本号' : `标题里有 ${uniq.length} 个版本号且没有 \`dsh <版本>\` 锚点（有歧义，不猜）`,
-    candidates: uniq,
-  }
-}
-
-const watchIssues = fetchWatchIssues().map((i) => ({ ...i, parsed: parseIssueVersion(i.title) }))
-// 同一版本多条 issue（watch 改过标题/人工补开）⇒ **取最早**那条：检测延迟问的是"第一次被发现"。
+const watchIssues = fetchTrackingIssues().map((i) => ({ ...i, parsed: parseIssueVersion(i.title) }))
+// 同一版本多条 issue（watch 重复建单 / 人工补开 / 改过标题）⇒ **取最早创建**那条：检测延迟问的是
+// "这一版第一次被发现"，不是"最近一次建单"。同刻创建（gh 时间戳只到秒，事故里 #216/#217 撞在同一秒）
+// 按编号小的优先（编号单调 = 先开的单），结论与列表顺序无关。取到哪条会印在表格与"注意"里。
 const issueByVersion = new Map()
-for (const i of watchIssues) {
-  const v = i.parsed.version
-  if (!v) continue
-  const prev = issueByVersion.get(v)
-  if (!prev || new Date(i.createdAt) < new Date(prev.createdAt)) issueByVersion.set(v, i)
+for (const v of new Set(watchIssues.map((i) => i.parsed.version).filter(Boolean))) {
+  issueByVersion.set(v, earliestTrackingIssue(watchIssues, v).earliest)
 }
+// label 只当**信号**（不参与取数）：无 label 的跟踪单数量 = PAT 缺 Issues:write 留下的痕迹。
+const labelsOf = (i) => (i.labels ?? []).map((l) => (typeof l === 'string' ? l : l?.name)).filter(Boolean)
+const TRACKING_LABELS = ['dsh-upgrade', 'sla-breach']
+const unlabeled = watchIssues.filter((i) => !labelsOf(i).some((n) => TRACKING_LABELS.includes(n))).length
 
 const rel = sh(GH, ['api', `repos/${REPO}/releases?per_page=100`, '--jq', '.[] | [.tag_name, .published_at] | @tsv'])
   .split('\n').filter(Boolean).map((l) => l.split('\t'))
@@ -299,6 +284,8 @@ for (const r of allMeasured) {
   if (!prev || new Date(r.publishedAt) < new Date(prev.publishedAt)) byFloor.set(r.floor, r)
 }
 const measured = [...byFloor.values()].sort((a, b) => new Date(a.publishedAt) - new Date(b.publishedAt))
+// 已量出版本携带过的地板集合 —— "这个版本是否已被适配"的判据（下方 pending 段与注意段共用）。
+const measuredFloors = new Set(measured.map((r) => r.floor))
 const skipped = rows.filter((r) => r.skip)
 const totals = measured.map((r) => r.total).sort((a, b) => a - b)
 const median = totals.length ? totals[Math.floor(totals.length / 2)] : NaN
@@ -310,7 +297,8 @@ const COLS = [
   ['首个携带该地板的版本', (r) => r.shell],
   ['随包地板', (r) => `\`${r.floor}\``],
   ['上游发布 (UTC)', (r) => utcCell(r.t0)],
-  ['首次 issue (UTC)', (r) => utcCell(r.detectionIssueAt)],
+  // 印出**取到哪一条**（#编号）：同版本可能有多条 issue，取最早那条；只有时间没有编号时读者无法复核。
+  ['首次 issue (UTC)', (r) => (r.detectionIssueAt ? `#${r.detectionIssue} ${utcCell(r.detectionIssueAt)}` : '—')],
   ['地板提交 (UTC)', (r) => utcCell(r.floorCommitAt)],
   ['我方发布 (UTC)', (r) => utcCell(r.publishedAt)],
   ['抬地板', (r) => fmt(r.adapt)],
@@ -366,32 +354,63 @@ const headFloorAt = HEAD_FLOOR ? utc(times[HEAD_FLOOR]) : null
 const ahead = (HEAD_FLOOR && headFloorAt)
   ? channels.filter((c) => c.version && c.publishedAt && new Date(c.publishedAt) > new Date(headFloorAt))
   : []
+// ── 待适配版本的检测延迟（上游已发布 + 已有跟踪单，但还没有任何壳版本携带它）──────────
+// 这些版本配不到"我方发布"⇒ 不进上面的两段表；但**检测段照样可算**（上游发布 → 首次开单），
+// 而且这是"发版前唯一能看到检测段真实数字"的窗口（检测延迟本来就该在发版前被发现）。
+// 旧实现（按 label 取数）在这里恒为"未检测到"—— 事故里 16 条 issue 无 label，正是这个位置永远空白。
+const pending = [...issueByVersion.keys()]
+  .filter((v) => times[v] && !measuredFloors.has(v))
+  .map((v) => {
+    const issue = issueByVersion.get(v)
+    const detection = hours(times[v], issue.createdAt)
+    return {
+      version: v, upstreamAt: utc(times[v]),
+      issue: issue.number, issueAt: utc(issue.createdAt),
+      issueCount: watchIssues.filter((i) => i.parsed.version === v).length,
+      detection: Number.isFinite(detection) ? detection : null,
+    }
+  })
+  .sort((a, b) => new Date(a.upstreamAt) - new Date(b.upstreamAt))
+const pendingText = pending.length ? [
+  '### 待适配版本的检测延迟（上游已发布 + 已有跟踪单，但我方还没发版）',
+  '',
+  '这些版本配不到"我方发布"⇒ 不在上面的两段表里；检测延迟照样可算（上游发布 → 首次开单，同版本多条取最早）。',
+  '',
+  '| 版本 | 上游发布 (UTC) | 首次 issue (UTC) | 检测 |',
+  '|---|---|---|---|',
+  ...pending.map((p) => `| \`${p.version}\` | ${utcCell(p.upstreamAt)} | #${p.issue} ${utcCell(p.issueAt)}（共 ${p.issueCount} 条） | **${fmt(p.detection)}** |`),
+].join('\n') : ''
 const statusLines = []
 statusLines.push(`- **壳地板**（当前 HEAD 的 \`scripts/server-manager.mjs\`）：${HEAD_FLOOR ? `\`${HEAD_FLOOR}\`（上游发布 ${headFloorAt ? utcCell(headFloorAt) : '时间未知'}）` : '⚠️ 读不到 `MIN_DSH_VERSION` ⇒ 无法判断当前地板'}`)
 statusLines.push(`- **上游最新各通道**：${channels.map((c) => (c.version ? `${c.channel}=\`${c.version}\`（${c.publishedAt ? utcCell(c.publishedAt) : '发布时间未知'}）` : `${c.channel}=—`)).join('、')}`)
 statusLines.push(newestIssue
   ? `- **最新 watch issue**：#${newestIssue.number}「${newestIssue.title}」（开于 ${utcCell(utc(newestIssue.createdAt))}，距今 **${Number.isFinite(issueAgeH) ? `${issueAgeH.toFixed(2)}h` : '—'}**，${newestIssue.closedAt ? '已关闭' : '**未关闭**'}；标题版本 ${newestIssue.parsed.version ? `\`${newestIssue.parsed.version}\`` : `解析不出（${newestIssue.parsed.how}）`}）`
-  : `- **最新 watch issue**：**未检测到**（\`${WATCH_LABELS.join('`/`')}\` 两个 label 在 --state all 下一条都没有；不是"最近没有"，是"从来没有人开过单"）`)
+  : `- **最新 watch issue**：**未检测到**（标题前缀 ${TRACKING_PREFIXES.map((p) => `\`${p}\``).join(' / ')} 在 --state all 下一条都没有；不是"最近没有"，是"从来没有人开过单"）`)
 statusLines.push(`- **未关闭的跟踪 issue**：${openIssues.length ? `${openIssues.length} 条（${openIssues.map((i) => `#${i.number}`).join('、')}）` : '**无**'}`)
 if (!HEAD_FLOOR) statusLines.push('- **待适配判定**：⚠️ 壳地板读不到 ⇒ 无法判断（不猜）')
 else if (!headFloorAt) statusLines.push(`- **待适配判定**：⚠️ 壳地板 \`${HEAD_FLOOR}\` 在 npm packument 里没有发布时间 ⇒ 无法比较先后（不猜）`)
 else if (!ahead.length) statusLines.push('- **待适配判定**：各通道最新版本都不晚于壳地板（按发布时间比较）⇒ 当前没有待适配的上游版本')
 else statusLines.push(`- **待适配判定**：${ahead.map((c) => {
-  const open = openIssues.find((i) => i.parsed.version === c.version)
-  return `${c.channel}=\`${c.version}\` 晚于壳地板 ⇒ ${open ? `**已被发现**（未关闭 issue #${open.number}）` : '⚠️ **未发现**（没有任何未关闭 issue 提到它）'}`
+  // 与检测段同口径：**最早**那条未关闭 issue（不是列表里的第一条），这样这里点名的编号与「待适配版本」段一致。
+  const open = openIssues.filter((i) => i.parsed.version === c.version)
+    .sort((a, b) => (Date.parse(a.createdAt) || Infinity) - (Date.parse(b.createdAt) || Infinity) || ((a.number ?? Infinity) - (b.number ?? Infinity)))
+  return `${c.channel}=\`${c.version}\` 晚于壳地板 ⇒ ${open.length ? `**已被发现**（最早未关闭 #${open[0].number}，共 ${open.length} 条）` : '⚠️ **未发现**（没有任何未关闭 issue 提到它）'}`
 }).join('；')}`)
-statusLines.push(`- **issue 解析**：取到 ${watchIssues.length} 条（\`${WATCH_LABELS.join('`/`')}\`、--state all、上限 ${ISSUE_LIMIT}/label）；其中 ${watchIssues.filter((i) => i.parsed.version).length} 条解析出版本号`)
+statusLines.push(`- **issue 解析**：按标题前缀命中 **${watchIssues.length}** 条跟踪单（\`gh issue list --state all --limit ${ISSUE_LIMIT}\`，**不按 label**）；`
+  + `其中 ${watchIssues.filter((i) => i.parsed.version).length} 条解析出版本号；${unlabeled} 条没有 \`${TRACKING_LABELS.join('\`/\`')}\` label`
+  + `（不参与取数，仅作信号 —— 事故里 PAT 缺 Issues:write 就是这样）`)
 
 const warnLines = []
-const measuredFloors = new Set(measured.map((r) => r.floor))
 for (const i of watchIssues) {
   if (!i.parsed.version) { warnLines.push(`⚠️ issue #${i.number} 的标题里没有可识别的版本号（${i.parsed.how}）⇒ 检测延迟无法配对：${i.title}`); continue }
-  if (!times[i.parsed.version]) { warnLines.push(`⚠️ issue #${i.number} 标题版本 \`${i.parsed.version}\` 与 packument **不匹配**（npm 上没有该版本的发布时间）⇒ 检测延迟无法计算`); continue }
-  if (!measuredFloors.has(i.parsed.version)) warnLines.push(`ℹ️ issue #${i.number} 的版本 \`${i.parsed.version}\` 已开单，但没有任何已量出版本携带它作地板（未适配 / 未发布）`)
+  if (!times[i.parsed.version]) warnLines.push(`⚠️ issue #${i.number} 标题版本 \`${i.parsed.version}\` 与 packument **不匹配**（npm 上没有该版本的发布时间）⇒ 检测延迟无法计算`)
 }
+// "已开单但还没发版"按**版本**报一次（不是每条 issue 报一次）：事故后有 17 条同版本 issue，
+// 逐条报会把一条事实刷成 17 行噪音；条数已经写在括号里。
 for (const [v, issue] of issueByVersion) {
   const dup = watchIssues.filter((i) => i.parsed.version === v && i.number !== issue.number)
   if (dup.length) warnLines.push(`ℹ️ 版本 \`${v}\` 有多条 issue（${[issue.number, ...dup.map((d) => d.number)].join('、')}）⇒ 检测延迟取**最早**的 #${issue.number}`)
+  if (!measuredFloors.has(v) && times[v]) warnLines.push(`ℹ️ 版本 \`${v}\` 已开单（最早 #${issue.number}，共 ${dup.length + 1} 条）但还没有任何壳版本携带它作地板（未适配 / 未发布）⇒ 检测延迟见「待适配版本」段`)
 }
 for (const r of measured) if (r.detectionAnomaly) warnLines.push(`⚠️ ${r.shell}（地板 \`${r.floor}\`）：${r.detectionAnomaly}`)
 
@@ -410,6 +429,7 @@ const md = [
   '',
   ...stats, '',
   ...lines,
+  pendingText ? `\n${pendingText}` : '',
   warnLines.length ? `\n注意：${warnLines.join('\n')}` : '',
   skipped.length ? `\n跳过：${skipped.map((r) => `${r.tag}（${r.skip}）`).join('；')}` : '',
 ].join('\n')
@@ -437,7 +457,7 @@ if (OUT) {
     since: SINCE,
     timeFormat: 'UTC ISO 8601（toISOString；表格列头亦标 UTC）',
     segments: {
-      detection: '上游发布 → 首次为该版本开 issue（数据源 = gh issue list --label dsh-upgrade / --label sla-breach --state all）',
+      detection: '上游发布 → 首次为该版本开 issue（数据源 = gh issue list --state all，按 scripts/lib/issue-key.mjs 的确定性键筛选：标题前缀 + 版本号词边界 + `dsh <版本>` 锚点；不按 label）',
       floor: '上游发布 → 地板提交（旧报表印作"适配"；JSON 字段仍是 adapt）',
       adaptation: '地板提交 → 我方发布（旧报表印作"发布"；JSON 字段仍是 release）',
       total: '上游发布 → 我方发布（total；门禁判它，与旧实现逐位相同）',
@@ -446,8 +466,10 @@ if (OUT) {
     gateHistory: gateHistory.map((r) => r.shell),
     stats,
     detectionStats: {
-      source: `gh issue list --label {${WATCH_LABELS.join(',')}} --state all --limit ${ISSUE_LIMIT}（逐 label 查询后按 number 合并 = OR；gh 的重复 --label 是 AND）`,
+      source: `gh issue list --state all --limit ${ISSUE_LIMIT}（**不按 label**；筛选用 scripts/lib/issue-key.mjs 的确定性键：标题前缀 ${TRACKING_PREFIXES.join(' / ')} + 版本号词边界）`,
       measured: det.n, unknown: detUnknown, median: Number.isFinite(det.median) ? det.median : null, max: Number.isFinite(det.max) ? det.max : null,
+      // 还没发版的版本也有检测延迟（上游发布 → 首次开单）；这是发版前唯一能看到检测段的窗口。
+      pending: pending.map((p) => ({ version: p.version, upstreamAt: p.upstreamAt, issue: p.issue, issueAt: p.issueAt, issueCount: p.issueCount, detection: p.detection })),
       adaptation: { measured: ada.n, median: Number.isFinite(ada.median) ? ada.median : null, max: Number.isFinite(ada.max) ? ada.max : null },
       floorSegment: { measured: flo.n, median: Number.isFinite(flo.median) ? flo.median : null, max: Number.isFinite(flo.max) ? flo.max : null },
     },
@@ -462,6 +484,7 @@ if (OUT) {
       openWatchIssues: openIssues.map((i) => i.number),
       upstreamAhead: ahead.map((c) => ({ channel: c.channel, version: c.version, publishedAt: c.publishedAt, openIssue: openIssues.find((i) => i.parsed.version === c.version)?.number ?? null })),
       issuesFetched: watchIssues.length, issuesParsed: watchIssues.filter((i) => i.parsed.version).length,
+      issuesWithoutTrackingLabel: unlabeled, trackingLabels: TRACKING_LABELS,
     },
     warnings: warnLines,
     perVersion: measured,

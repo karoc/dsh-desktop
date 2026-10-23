@@ -83,6 +83,11 @@ import {
   renderBrokenEntry, renderHeartbeat, renderStillBroken, renderTransitionComment,
   resetStateFile, saveState, stateFilePath,
 } from './lib/backoff-state.mjs'
+// 跟踪单的身份（标题前缀 + `dsh <版本>` 锚点 + 词边界）唯一实现在这里 —— 与 `dsh-sla-report.mjs` 共用，
+// 避免"watch 按标题去重、报表按 label 取数"那种两份实现互相漂移（事故 #201–#217 的根因之一）。
+import {
+  findTrackingIssue, isTrackingIssue as isTracking, versionInTitle,
+} from './lib/issue-key.mjs'
 
 const SELF = fileURLToPath(import.meta.url)
 const ROOT = join(dirname(SELF), '..')
@@ -148,13 +153,7 @@ const UNDER_LOCK = process.env.DSH_WATCH_LOCK_HELD === '1'
 // ── 跟踪 issue 的身份（A6 的跃迁评论也用它定位落点）──────────────────────────
 // 只认本脚本自己写的两种标题前缀：`[dsh-watch][…] dsh <ver> 比地板 <floor> 新` / `[SLA 未达标] dsh <ver> …`。
 // 这样人类随手开的 "please upgrade to 0.2.1-rc.3" 不会被我们 edit 掉正文（那会改写别人的字）。
-const TRACKING_TITLE = /^(\[dsh-watch\]|\[SLA 未达标\])/
-/** 从我们自己的标题里取目标版本（`dsh <ver>` 锚点：`dsh-watch` 后无空格，不会误命中）。 */
-function versionInTitle(title) {
-  const m = /\bdsh\s+(\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?)/.exec(String(title ?? ''))
-  return m ? m[1] : null
-}
-const isTracking = (i) => TRACKING_TITLE.test(String(i?.title ?? ''))
+// 实现（含 `isTracking` / `versionInTitle`）在 `scripts/lib/issue-key.mjs`，与报表共用一份。
 
 // ── A6：三态健康机 + 指数退避 + 只在跃迁时通知（2026-10-24）──────────────────
 // 背景：定时器每 10 分钟一轮，失败时**每轮重印同一段完整错误** —— 没有新信息、掩盖"什么时候开始
@@ -547,11 +546,8 @@ const finish = (code) => {
 // ── 确定性键：版本号的词边界匹配 ────────────────────────────────────────────
 // 词边界 = 前后不能是 [0-9A-Za-z.-]，于是 `0.2.1` 不匹配 `0.2.1-rc.2`，也不匹配 `0.2.10`；
 // `0.2.1-rc.3` 不匹配 `0.2.1-rc.30`（这正是事故里"去重按 label 过滤"之外的第二处隐患）。
-const escRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-const versionRe = (v) => new RegExp(`(?:^|[^0-9A-Za-z.-])${escRe(v)}(?![0-9A-Za-z.-])`)
-// 只认本脚本自己写的两种标题前缀：`[dsh-watch][…] dsh <ver> 比地板 <floor> 新` / `[SLA 未达标] dsh <ver> …`。
-// 这样人类随手开的 "please upgrade to 0.2.1-rc.3" 不会被我们 edit 掉正文（那会改写别人的字）。
-// （定义在 A6 之前：退避跃迁也要认这两类 issue 才能把评论挂对地方。）
+// 正则、标题前缀与 `findTrackingIssue` 的唯一实现在 `scripts/lib/issue-key.mjs`：本脚本用它去重/对账，
+// `dsh-sla-report.mjs` 用同一个键取"这一版最早什么时候被发现" —— 一份实现，两处口径。
 
 // ── 读：open issue 列表（去重与对账共用一次查询）───────────────────────────
 // 不按 label 过滤（事故根因）。`--limit 1000` 覆盖本仓库规模；真到上限会显式告警"可能被截断"，
@@ -571,11 +567,8 @@ function readOpenIssues() {
   }
 }
 
-/** 找到这一版的跟踪单：本脚本标题前缀 + 版本号词边界命中。确定性、与写者/label 无关。 */
-function findTrackingIssue(issues, version) {
-  const re = versionRe(version)
-  return (issues ?? []).find((i) => isTracking(i) && re.test(String(i.title ?? ''))) ?? null
-}
+// 找到这一版的跟踪单（`findTrackingIssue`，见 `scripts/lib/issue-key.mjs`）：本脚本标题前缀 +
+// 版本号词边界命中。确定性、与写者/label 无关；报表侧用同一个键判断"哪一版、最早什么时候被发现"。
 
 /** 读回上次写进正文的状态标记；没有 = 这单是本改动之前建的（状态未知）。 */
 function parseState(text) {
