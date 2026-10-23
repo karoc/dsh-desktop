@@ -200,7 +200,7 @@ function appendDetail(line) {
   try {
     mkdirSync(dirname(DETAIL_FILE), { recursive: true })
     appendFileSync(DETAIL_FILE, line)
-    // 明细文件只服务本机排障、不参与 logrotate ⇒ 自带 64KiB 上限（只留尾部）。
+    // 明细文件只服务本机排障、不参与 logrotate ⇒ 自带上限（涨过 128KB 就只留尾部 400 行）。
     if (statSync(DETAIL_FILE).size > 128 * 1024) {
       const tail = readFileSync(DETAIL_FILE, 'utf8').split('\n').slice(-400).join('\n')
       writeFileSync(DETAIL_FILE, tail, { mode: 0o600 })
