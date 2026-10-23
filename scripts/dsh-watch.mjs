@@ -80,7 +80,7 @@ import { homedir, tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import {
   appendHeartbeat, backoffMinutes, decide, heartbeatFileFor, loadState, recordOutcome,
-  renderBrokenEntry, renderHeartbeat, renderRetriedFailure, renderStillBroken, renderTransitionComment,
+  renderBrokenEntry, renderHeartbeat, renderStillBroken, renderTransitionComment,
   resetStateFile, saveState, stateFilePath,
 } from './lib/backoff-state.mjs'
 
@@ -335,9 +335,9 @@ function fatal(errorMsg) {
         attempt: rec.state.consecutiveFailures, minutesLeft: backoffMinutes(rec.state.backoffRetries),
         error: errorMsg, threshold: FAILURE_THRESHOLD,
       })
-      : renderRetriedFailure({
+      : renderStillBroken({
         attempt: rec.state.consecutiveFailures, minutesLeft: backoffMinutes(rec.state.backoffRetries),
-        error: errorMsg, nowIso: NOW.toISOString(),
+        nowIso: NOW.toISOString(),
       }))
   }
   beat({ skipped: false, exit: 1 })
@@ -529,9 +529,9 @@ const finish = (code) => {
           attempt: state.consecutiveFailures, minutesLeft: backoffMinutes(state.backoffRetries),
           error: FAILURE, threshold: FAILURE_THRESHOLD,
         })
-        : renderRetriedFailure({
+        : renderStillBroken({
           attempt: state.consecutiveFailures, minutesLeft: backoffMinutes(state.backoffRetries),
-          error: FAILURE, nowIso: NOW.toISOString(),
+          nowIso: NOW.toISOString(),
         }))
     }
     if (transition?.notify) notifyTransition(transition, { error: code === 0 ? null : FAILURE, nextAttemptAt: state.nextAttemptAt })

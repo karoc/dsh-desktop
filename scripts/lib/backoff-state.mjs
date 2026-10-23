@@ -213,13 +213,6 @@ export function renderStillBroken({ attempt, minutesLeft, nowIso: at = nowIso(Da
   return `still broken (attempt ${attempt}, next retry in ${Math.max(1, asInt(minutesLeft, 1))}m) — heartbeat ${at}`
 }
 
-/** broken 但到达重试窗口、重试仍然失败时的一行摘要（完整错误进状态文件 / 明细文件）。 */
-export function renderRetriedFailure({ attempt, minutesLeft, error, nowIso: at = nowIso(Date.now()) }) {
-  const why = errorLine(error)
-  return `still broken (attempt ${attempt}, next retry in ${Math.max(1, asInt(minutesLeft, 1))}m) — heartbeat ${at}`
-    + (why ? ` — ${why}` : '')
-}
-
 /** 进入 broken 的那一轮：一行摘要（不是完整栈，也不是每轮重印）。 */
 export function renderBrokenEntry({ attempt, minutesLeft, error, threshold = DEFAULT_THRESHOLD }) {
   const why = errorLine(error)

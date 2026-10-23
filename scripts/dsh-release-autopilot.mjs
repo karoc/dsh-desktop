@@ -135,7 +135,7 @@ import { fileURLToPath } from 'node:url'
 import { homedir, tmpdir } from 'node:os'
 import {
   appendHeartbeat, backoffMinutes, decide, heartbeatFileFor, loadState, recordOutcome,
-  renderBrokenEntry, renderHeartbeat, renderRetriedFailure, renderStillBroken, renderTransitionComment,
+  renderBrokenEntry, renderHeartbeat, renderStillBroken, renderTransitionComment,
   resetStateFile, saveState,
 } from './lib/backoff-state.mjs'
 
@@ -382,7 +382,7 @@ function finishBackoff(exitCode) {
   backoffState = state
   if (exitCode !== 0 && state.state === 'broken') {
     log(wasBroken
-      ? renderRetriedFailure({ attempt: state.consecutiveFailures, minutesLeft: backoffMinutes(state.backoffRetries), error, nowIso: new Date().toISOString() })
+      ? renderStillBroken({ attempt: state.consecutiveFailures, minutesLeft: backoffMinutes(state.backoffRetries), nowIso: new Date().toISOString() })
       : renderBrokenEntry({ attempt: state.consecutiveFailures, minutesLeft: backoffMinutes(state.backoffRetries), error, threshold: FAILURE_THRESHOLD }))
   }
   if (transition?.notify) notifyTransition(transition, error)
