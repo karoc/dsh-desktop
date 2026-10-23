@@ -118,7 +118,7 @@ const OWNER_SOURCE = OWNER_RESOLVED ? '--assignee/DSH_ISSUE_ASSIGNEE' : `${REPO_
 // ⇒ 只新增这一个共享标记，不在每次运行里造一堆。label **不产生通知**，只用于 triage；
 // 真正叫醒人的是 assignee 与正文 @提及（见 README 维护者小节）。
 const PRIORITY_LABEL = 'priority:high'
-const GH = process.env.GH_BIN ?? 'gh'
+const GH = process.env.GH_BIN ?? (existsSync(join(ROOT, 'scripts', 'gh')) ? join(ROOT, 'scripts', 'gh') : 'gh')
 const SLA_HOURS = Number(arg('--sla-hours', '6'))
 const BEST_EFFORT_HOURS = Number(arg('--best-effort-hours', '24'))
 // 本机 npm CLI 不可用、直连 npmjs 会超时 ⇒ 演练必须能指向本地 stub registry（python http.server + 手写 packument）。
