@@ -130,13 +130,15 @@ node_modules 符号链接树、写迁移标记、绝不上移覆盖已有新数�
 ## 本地验证（Linux 可跑的部分）
 
 ```bash
-npm test                 # 全量 29 套（28 条 node 直接可跑 + 1 条条件式）：清单一致性 / overlay 目标行 / 升级标记 /
+npm test                 # 全量 30 套（29 条 node 直接可跑 + 1 条条件式）：清单一致性 / overlay 目标行 / 升级标记 /
                          #   通知插件 / 控制面 / 代理 / 代理e2e / 启动页设置 / 壳顶栏契约 / 壳不吞页面原生行为
                          #   （拖放与外链，见下）/ 壳引导桩（纯 Node，无浏览器）/ 启动器扫动 / 请求头预算 /
                          #   半截安装自愈 / 副本一致性 / 版本比较 parity /
                          #   **自动化链路门禁自证**（scripts/test-automation-gates.mjs，见「维护者」小节）
                          #   **挂起看护"dump 后再探一次"**（scripts/test-watchdog-recovery.mjs，含 3 个变异自证）
                          #   **gh 凭据纪律**（scripts/test-gh-bin-discipline.mjs：裸 gh 缺省扫描 + 消费者兜底 + unit 模板）
+                         #   **PAT 过期元数据**（scripts/test-token-meta.mjs：五级分级/退出码、缺失与损坏 ⇒ 未知且
+                         #   exit 0、meta 不含 token + 600、每日门控、跃迁式通知的 gh 桩，**含 3 条变异自证**）
                          #   条件式那条 = `[ -f scripts/test-version-compare-parity.mjs ]`：文件已提供就真跑，
                          #   尚未提供时打印 SKIP 并只跳过自己（不判红，也不掩盖它的失败 —— 失败码照传）
 npm run test:slow        # 安装卡死快速失败（~3 分钟，不进 PR 门禁；CI 的 linux job 会跑）
@@ -497,7 +499,7 @@ MIT
   全量门禁（**跑链前先 sync 派生的 `Cargo.lock`**，与 CI 的 `test` 作业一致）。**任一步失败立即停**；
   `--runtime` 缺省时会尝试 dev 实例的固定 runtime 路径，**路径不存在且未显式给出 ⇒ 直接 exit 2**（不发车）。
   第 7 步（全量门禁）按 `package.json` 的 `test` 链**逐条直接跑 `node`**（不经 npm，与 `npm test` 是同一条链），
-  当前这条链 29 条里 28 条是 `node …` ⇒ 本机 28/28 真跑；剩下 1 条是条件式
+  当前这条链 30 条里 29 条是 `node …` ⇒ 本机 29/29 真跑；剩下 1 条是条件式
   （`[ -f scripts/test-version-compare-parity.mjs ] && …`，parity 套件尚未提供时只跳过自己）——
   它不匹配 `^node`，因此本机会把它**跳过并逐条列出**（CI 上由 `npm test` 真跑）。
   将来链上若出现别的非 node 条目（如 cargo），处理方式相同：默认容忍这种覆盖缺口，
@@ -719,9 +721,10 @@ MIT
   k8s `SelfSubjectAccessReview` 的等价物不存在）⇒ 唯一可靠的判据是 canary 写。脚本对一条**专用 canary
   issue**（标题含 `[dsh-doctor] canary`；首次自动创建、之后只复用）做**可逆写**：改正文（写入探针行 +
   `last-ok=<ISO>` → 读回复核 → 还原，**净变化只有 last-ok**）→ 评论（有则 PATCH 同一条、无则只建一条）→
-  加 label（加 → 读回 → 移除）→ 关闭（关 → 读回 CLOSED → 重开 → 读回 OPEN），输出 **6 行矩阵**：读 issue
-  列表 / 建 canary / 改正文 / 评论 / 加 label / 关闭，每行 ✓/✗ + 实际错误（**错误信息里的 token 一律
-  打码**）。**fail-loud**：任一必需能力不可用 ⇒ exit 1 + 一句话结论 + 修复建议（"给 PAT 勾 Issues: Read and
+  加 label（加 → 读回 → 移除）→ 关闭（关 → 读回 CLOSED → 重开 → 读回 OPEN），输出 **7 行矩阵**：读 issue
+  列表 / 建 canary / 改正文 / 评论 / 加 label / 关闭 + **PAT 过期（本地 token.meta）**，每行 ✓/✗ + 实际错误
+  （**错误信息里的 token 一律打码**）。第 7 行的数据源是**本机文件**而不是 GitHub（见下一小节），
+  **不参与退出码**：没录入 ⇒ `· 未知（建议 set --expires）`，绝不会因此把 doctor 判红。**fail-loud**：任一必需能力不可用 ⇒ exit 1 + 一句话结论 + 修复建议（"给 PAT 勾 Issues: Read and
   write"）。**遇 403 立即停止后续写探测**（资源级权限是边界，继续试只会制造重复 403 与次级限流）；
   `--dry-run` 只读、**不写**心跳文件；`--json <out>` 出机器可读矩阵（`--json -` 打 stdout）。
   ⚠️ 当前实测（2026-10-24）：**建 issue 可用、改正文 403**（`Resource not accessible by personal access
@@ -739,12 +742,65 @@ MIT
   手段全部失败）；同一段停更期只发一条报警评论（`priority:high` 每次确保；`--repeat-hours` 默认 168h 兜
   "从未成功过"），避免每日刷屏。判据的负向对照在 `npm run test:doctor` 的内置 gh 桩里：`last-ok` 48h 前 ⇒
   必须报警（评论 + label）、5min 前 ⇒ 必须静默、canary 缺失 ⇒ 创建且不误报、403 注入 ⇒ 该项 ✗ 且
-  **后续零写调用**、错误里带 token ⇒ 必须被打码（53 条断言；另有两条变异自证确认它会红）。
+  **后续零写调用**、错误里带 token ⇒ 必须被打码（63 条断言；另有两条变异自证确认它会红）。
   ⚠️ 诚实边界：① **PAT 过期时间读不到**（个人 fine-grained PAT 没有 REST 查询端点，`GET /user` 不返回
-  `expires_at`）；② "issue 创建/评论是否真的叫醒人"取决于该账号 GitHub 通知设置，本机**不可验证**；
+  `expires_at`）⇒ 只能人工录一次，已由下一小节的本地元数据方案补上（工具能查、能提醒，**录入本身仍需人手**）；② "issue 创建/评论是否真的叫醒人"取决于该账号 GitHub 通知设置，本机**不可验证**；
   ③ "本机每天有人跑 doctor"**不由本仓库安装**（systemd unit 属用户资产，模板参见 autopilot 头注释）；
   ④ 在 PAT 拿到 Issues:write 之前 `last-ok` 永远写不进去 ⇒ 反向心跳会在 26h 后**如实报警**——这是设计要的
   信号，不是噪音；要么修 PAT，要么在排障期手动 disable 该 workflow。
+- **PAT 过期元数据（A4，2026-10-24）**：`node scripts/dsh-token-meta.mjs …`（等价 `npm run dsh:token-meta`）
+  —— 补的是"**这张 token 哪天过期**"这个 GitHub 不告诉你的问题。
+  ① **为什么只能人工录**：个人 fine-grained PAT 的过期时间**没有可读的 REST 端点**（`GET /user` 不返回
+     `expires_at`；classic token 能读 `X-OAuth-Scopes`，fine-grained PAT 连这个头都没有）⇒ 创建/轮换时
+     抄一次日期，之后由工具检查。
+  ② **录入**：`node scripts/dsh-token-meta.mjs set --expires 2027-04-01 [--note "创建于 2026-10-24"]`
+     → 写 `~/.dsh/token.meta.json`（**600、tmp+rename 原子写、只有 `expiresAt`/`note`/`recordedAt` 三个字段**，
+     **绝不含 token**）。`--note` 里出现 token 形状（`ghp_…` / `github_pat_…`）**直接拒绝写入**（exit 2）。
+  ③ **分级**（`expiresAt` 按"该 UTC 日**结束**前有效"，剩余天数取整）：`>14 天 ok` / `≤14 warn` /
+     `≤7 urgent` / `≤1 critical` / `已过期 expired`。**退出码只有 critical 与 expired 非零**（warn 也非零 ⇒
+     天天红 ⇒ 人开始忽略 ⇒ 告警失效）；**缺失/损坏 ⇒ 输出"未知"且 exit 0**（没启用功能不是故障）。
+     `--quiet` 只在非 ok 时输出、`--json` 出机器可读结果、`--now <iso>` 钉住"现在"（五级可确定性回放）。
+  ④ **每日检查 + 提醒**：`check --notify --if-due`（可选 `--quiet`）。`--if-due` 用
+     `~/.dsh/state/token-meta.json` 的 `lastCheckedDate`（UTC 日）做门控 —— 所以它**可以安全地挂在 10 分钟
+     循环上**，不必把检查塞进 `dsh-watch` 的主循环；今天已跑过就打印 `not due` 并 exit 0。
+     非 ok 时在跟踪单 `[automation] PAT 过期元数据（A4）`（全仓只允许一条）里**只在级别跃迁时**评论
+     （warn→urgent→critical→expired 各一条；回到 ok 评论"已解除"并关闭该单）。
+     **写权不足（403）⇒ 只打印提醒文本 + 一条可复制的建单命令，不重试**（issue 写权限缺着的时候，
+     不要把 cron 变成日志洪水）。
+  ⑤ **doctor 集成**：`npm run dsh:doctor` 的矩阵第 7 行读同一个文件；缺失显示
+     `· PAT 过期（本地 token.meta）—— 未录入 ⇒ 未知`，**不判红**（`required=false`，不进退出码）。
+  ⑥ **每日定时**（模板，**装不装是用户动作**；本仓库不动你的 systemd）：把下面两段存成
+     `~/.config/systemd/user/dsh-token-meta.{service,timer}`（`ExecStart` 的仓库路径换成你的绝对路径），
+     再 `systemctl --user enable --now dsh-token-meta.timer`：
+     ```ini
+     # ~/.config/systemd/user/dsh-token-meta.service
+     [Unit]
+     Description=PAT 过期元数据检查（A4）
+     [Service]
+     Type=oneshot
+     # 显式钉住项目专用凭据包装（systemd 下裸 gh 会落到全局 hosts.yml 的另一个 PAT）
+     Environment=GH_BIN=<仓库绝对路径>/scripts/gh
+     ExecStart=/usr/bin/env node <仓库绝对路径>/scripts/dsh-token-meta.mjs check --notify --if-due --quiet
+     # ~/.config/systemd/user/dsh-token-meta.timer
+     [Unit]
+     Description=每天 09:17 检查 PAT 过期元数据
+     [Timer]
+     OnCalendar=*-*-* 09:17:00
+     Persistent=true
+     Unit=dsh-token-meta.service
+     [Install]
+     WantedBy=timers.target
+     ```
+  ⑦ **验证**：`npm run test:token-meta`（POSIX 下 124 条断言；Windows 上「文件权限」与「gh 桩通知」两组
+     显式 SKIP —— 不是通过）—— 五级逐一实测（15/14/7/1/已过期）、缺失与损坏 ⇒
+     未知且 exit 0、meta 不含 token + 600、`--if-due` 同日不重判、`--notify` 的 gh 桩（建单唯一 / 跃迁才评论 /
+     403 只打印不重试 / 回到 ok 自动关闭），外加 **3 条变异自证**（改坏退出码表、14 天边界、未知的退出码
+     各 1 条，副本必须给出与真实实现不同的结论）。
+  ⑧ **诚实边界**：① 录入日靠人手抄 —— 换了 token 却忘了 `set` ⇒ 元数据是旧的（对策写进 CONTRIBUTING：
+     **轮换流程的最后一步就是 `set`**）；② 工具不读 token 文件、不联网（`--notify` 除外），也不校验
+     "这个日期是否真的是当前 token 的"（无可比对的来源）；③ 本仓库**不替你装 timer**；④ 过期当天的 token
+     在 UTC 日结束之后才开始失败，`expiresAt` 是**日期**不是时刻。
+
 - **三态 + 指数退避 + 只在跃迁时通知（2026-10-24，A6）**：本机三个 timer 都是"每 10 分钟一轮"，
   失败时旧行为是**每轮重印同一段完整错误**（并且 systemd 的 `Restart=on-failure` + `RestartSec=60`
   会把它变成热循环）。现在 `dsh-watch` / `dsh-release-autopilot` 共用 `scripts/lib/backoff-state.mjs`

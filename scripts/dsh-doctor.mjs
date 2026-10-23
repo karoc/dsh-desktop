@@ -18,8 +18,10 @@
 //                               [--heartbeat-file <path>] [--timeout <sec>]
 //      能力矩阵（默认模式）。用真实凭据对**专用 canary issue**（标题含 `[dsh-doctor] canary`，
 //      首次自动创建后复用）做可逆写：改正文（写入 → 读回 → 还原，净变化只有 `last-ok` 心跳字段）。
-//      输出 6 行矩阵：读 issue 列表 / 建 canary / 改 canary 正文 / 评论 / 加 label / 关闭。
-//      每行 ✓ / ✗ + 实际错误信息（**错误信息里的 token 一律打码**）。
+//      输出 7 行矩阵：读 issue 列表 / 建 canary / 改 canary 正文 / 评论 / 加 label / 关闭
+//      + **PAT 过期（本地 token.meta，A4）**。每行 ✓ / ✗ + 实际错误信息（**错误信息里的 token 一律打码**）。
+//      最后一行的数据源是**本机文件**（`~/.dsh/token.meta.json`），不是 GitHub：个人 fine-grained PAT 的
+//      过期时间没有 REST 端点可读 ⇒ 那一行永远不参与退出码（缺失 = "未知（建议 set）"，**不是失败**）。
 //      `--dry-run` 只读（不写、不写心跳文件）；`--json <out>` 把矩阵写成 JSON（`--json -` 打到 stdout）。
 //
 //   node scripts/dsh-doctor.mjs --heartbeat-check [--grace-hours 26] [--repeat-hours 168]
@@ -58,6 +60,7 @@ import { homedir, tmpdir } from 'node:os'
 import { dirname, isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomBytes } from 'node:crypto'
+import { LEVEL_LABEL as TOKEN_LEVEL_LABEL, evaluate as evaluateTokenMeta } from './lib/token-meta.mjs'
 
 const SELF = fileURLToPath(import.meta.url)
 const ROOT = join(dirname(SELF), '..')
@@ -112,6 +115,8 @@ const GH_RAW = process.env.GH_BIN ?? 'scripts/gh'
 const GH_BIN = (GH_RAW.includes('/') || GH_RAW.includes('\\')) && !isAbsolute(GH_RAW) ? join(ROOT, GH_RAW) : GH_RAW
 
 const HEARTBEAT_FILE = valOf('--heartbeat-file') || process.env.DSH_HEARTBEAT_FILE || join(homedir(), '.dsh/heartbeat.json')
+// PAT 过期元数据（A4）：**本地文件**，写入口是 `scripts/dsh-token-meta.mjs set`。缺失 = 未知，不判红。
+const TOKEN_META_FILE = valOf('--token-meta') || process.env.DSH_TOKEN_META || join(homedir(), '.dsh/token.meta.json')
 const CANARY_TITLE = '[dsh-doctor] canary — 凭据能力探测 / 反向心跳载体（自动化维护，勿删）'
 const CANARY_RE = /\[dsh-doctor\]\s+canary/i
 const PROBE_LINE_RE = /^<!-- dsh-doctor:probe nonce=[0-9a-z]+ -->$/m
@@ -222,8 +227,15 @@ bootstrap-at=${nowIso}
 const isWide = (ch) => /[\u1100-\u115F\u2E80-\uA4CF\uAC00-\uD7A3\uF900-\uFAFF\uFE30-\uFE6F\uFF00-\uFF60\uFFE0-\uFFE6]/.test(ch)
 const width = (s) => [...String(s)].reduce((n, ch) => n + (isWide(ch) ? 2 : 1), 0)
 const padEndW = (s, n) => s + ' '.repeat(Math.max(0, n - width(s)))
-const SYM = { ok: '✓', fail: '✗', skip: '⊘', dry: '⊘', pending: '·' }
-const VERDICT = { ok: '可用', fail: '不可用', skip: '未探测', dry: '未探测（dry-run）', pending: '未执行' }
+const SYM = {
+  ok: '✓', fail: '✗', skip: '⊘', dry: '⊘', pending: '·',
+  warn: '!', urgent: '!', critical: '✗', expired: '✗', unknown: '·',
+}
+const VERDICT = {
+  ok: '可用', fail: '不可用', skip: '未探测', dry: '未探测（dry-run）', pending: '未执行',
+  warn: '提醒（≤14 天）', urgent: '尽快轮换（≤7 天）', critical: '立即轮换（≤1 天）',
+  expired: '已过期', unknown: '未知（未录入）',
+}
 
 function printMatrix(rows) {
   const w = Math.max(...rows.map((r) => width(r.label))) + 2
@@ -265,6 +277,7 @@ function doctor() {
   console.log(`dsh-doctor —— 凭据能力探测（canary 写）`)
   console.log(`  仓库：${REPO}（来源：${REPO_SOURCE}）`)
   console.log(`  gh  ：${GH_BIN}（${ghVersion}）`)
+  console.log(`  PAT 过期元数据：${TOKEN_META_FILE}（本地文件；缺失 = 未知，**不判红**）`)
   if (DRY) console.log('  模式：--dry-run（只读；不写远端、不写心跳文件）')
 
   const rows = []
@@ -519,6 +532,25 @@ function doctor() {
     }
   }
 
+  // ⑧ PAT 过期（本地元数据，A4）：数据源是**本机文件**，不联网、不进 required。
+  //    缺失/损坏 ⇒ "未知（建议 set）"，**绝不**因为"还没录入"把 doctor 判红 —— 没启用功能不是故障。
+  const tokenRow = row('tokenExpiry', 'PAT 过期（本地 token.meta）', false)
+  const tokenMeta = evaluateTokenMeta({ file: TOKEN_META_FILE, nowMs: NOW.getTime() })
+  const TOKEN_STATUS = { ok: 'ok', warn: 'warn', urgent: 'urgent', critical: 'critical', expired: 'expired', unknown: 'unknown' }
+  const fmtLeft = (d) => (d == null ? '' : d < 0 ? `已过期 ${Math.abs(d)} 天` : `剩余 ${d} 天`)
+  if (tokenMeta.level === 'unknown') {
+    mark(tokenRow, 'unknown', tokenMeta.reason === 'missing'
+      ? '未录入 ⇒ 未知 —— 建议 set --expires 录一次（不判红）'
+      : `meta 损坏 ⇒ 未知（${tokenMeta.error ?? '原因不明'}）—— 建议重新 set（不判红）`)
+  } else {
+    const urgentTail = tokenMeta.level === 'critical' || tokenMeta.level === 'expired'
+      ? ` —— ${TOKEN_LEVEL_LABEL[tokenMeta.level]}`
+      : ''
+    mark(tokenRow, TOKEN_STATUS[tokenMeta.level] ?? 'unknown',
+      `${tokenMeta.expiresAt}（${fmtLeft(tokenMeta.daysLeft)}）${urgentTail}`,
+      null)
+  }
+
   // 结论 + 修复建议（fail-loud：必需能力缺一项就非零退出，且必须给出做得动的下一步）
   const required = rows.filter((r) => r.required)
   const missing = required.filter((r) => r.status !== 'ok' && !(DRY && r.status === 'dry'))
@@ -526,6 +558,16 @@ function doctor() {
 
   printMatrix(rows)
   if (duplicates.length) console.log(`  ⚠️ 另有 ${duplicates.length} 条重复 canary 未使用：#${duplicates.map((d) => d.number).join('、#')}（需人工关闭）`)
+
+  // PAT 过期一行**不参与退出码**（required=false）：缺失只提示，critical/expired 也只是"该动手了"。
+  if (tokenRow.status === 'unknown') {
+    console.log(`  · 录入 PAT 过期日（本地文件，不碰 GitHub；不录不影响退出码）：`)
+    console.log(`      node scripts/dsh-token-meta.mjs set --expires YYYY-MM-DD [--note "创建于…"]`)
+  } else if (tokenRow.status === 'critical' || tokenRow.status === 'expired') {
+    console.log(`  · PAT ${VERDICT[tokenRow.status]} —— 轮换后重新录入：`)
+    console.log(`      node scripts/dsh-token-meta.mjs set --expires YYYY-MM-DD`)
+    console.log(`      node scripts/dsh-token-meta.mjs check`)
+  }
 
   console.log('')
   if (exitCode === 0) {
@@ -584,6 +626,10 @@ function doctor() {
     canary: canaryNo == null ? null : { number: canaryNo, created, url: `https://github.com/${REPO}/issues/${canaryNo}` },
     duplicates: duplicates.map((d) => d.number),
     matrix: rows,
+    tokenMeta: {
+      file: TOKEN_META_FILE, metaState: tokenMeta.metaState, level: tokenMeta.level,
+      expiresAt: tokenMeta.expiresAt, daysLeft: tokenMeta.daysLeft, exitCode: tokenMeta.exitCode,
+    },
     heartbeatFile: HEARTBEAT_FILE,
     lastOkWritten,
     exitCode,
@@ -887,6 +933,7 @@ function selfTest() {
     else { failures.push(`${name}${detail ? `：${detail}` : ''}`); console.log(`  FAIL ${name}${detail ? ` —— ${detail}` : ''}`) }
   }
   const eq = (name, expected, actual) => check(name, String(expected) === String(actual), `期望 ${JSON.stringify(String(expected))}，实际 ${JSON.stringify(String(actual))}`)
+  const rowLine = (out, label) => String(out).split('\n').filter((l) => l.includes(label)).join('|') || '（没有这一行）'
   const statePath = join(TMP, 'state.json')
   const writeState = (s) => writeFileSync(statePath, JSON.stringify(s, null, 2))
   const readState = () => JSON.parse(readFileSync(statePath, 'utf8'))
@@ -894,7 +941,7 @@ function selfTest() {
   const run = (args, extraEnv = {}) => {
     const r = execFileSync(process.execPath, [SELF, ...args], {
       encoding: 'utf8',
-      env: { ...process.env, GH_BIN: BIN, STUB_STATE: statePath, HOME, GH_TOKEN: '', GITHUB_TOKEN: '', ...extraEnv },
+      env: { ...process.env, GH_BIN: BIN, STUB_STATE: statePath, HOME, GH_TOKEN: '', GITHUB_TOKEN: '', DSH_TOKEN_META: join(HOME, 'token.meta.json'), ...extraEnv },
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     return { status: 0, out: String(r ?? '') }
@@ -1018,6 +1065,27 @@ function selfTest() {
   eq('dry-run 不评论', 0, (readState().issues[0].comments || []).length)
   eq('dry-run 不加 label', 0, (readState().issues[0].labels || []).length)
 
+  console.log('\n[7] PAT 过期（本地 token.meta，A4）—— 缺失=未知不判红；过期只提示、不改退出码')
+  const TM = join(HOME, 'token.meta.json')
+  writeState(seed())
+  const t1 = runStatus(['--repo', 'o/r', '--heartbeat-file', HB, '--now', fixNow])
+  eq('未录入 ⇒ exit 0（没启用功能不是故障）', 0, t1.status)
+  check('未录入 ⇒ 那一行显示"未知"', /PAT 过期（本地 token\.meta）\s+—— 未录入 ⇒ 未知/.test(t1.out), rowLine(t1.out, 'PAT 过期'))
+  check('未录入 ⇒ 给出 set 提示', /dsh-token-meta\.mjs set --expires/.test(t1.out))
+  writeFileSync(TM, JSON.stringify({ expiresAt: '2026-10-23', note: null, recordedAt: fixNow }))
+  const t2 = runStatus(['--repo', 'o/r', '--heartbeat-file', HB, '--now', fixNow])
+  eq('已过期 ⇒ 仍 exit 0（非必需项不参与退出码）', 0, t2.status)
+  check('已过期 ⇒ 那一行 ✗（符号）+ 已过期 N 天', /✗ PAT 过期（本地 token\.meta）\s+—— 2026-10-23（已过期 1 天）/.test(t2.out), rowLine(t2.out, 'PAT 过期'))
+  check('已过期 ⇒ 提示轮换后重新录入', /set --expires YYYY-MM-DD/.test(t2.out))
+  writeFileSync(TM, '{ not json')
+  const t3 = runStatus(['--repo', 'o/r', '--heartbeat-file', HB, '--now', fixNow])
+  eq('meta 损坏 ⇒ exit 0（不判红）', 0, t3.status)
+  check('meta 损坏 ⇒ 明说损坏原因', /PAT 过期（本地 token\.meta）\s+—— meta 损坏 ⇒ 未知（不是合法 JSON/.test(t3.out), rowLine(t3.out, 'PAT 过期'))
+  writeFileSync(TM, JSON.stringify({ expiresAt: '2027-04-01', note: null, recordedAt: fixNow }))
+  const t4 = runStatus(['--repo', 'o/r', '--heartbeat-file', HB, '--now', fixNow])
+  check('正常 ⇒ 那一行 ✓ + 剩余天数', /✓ PAT 过期（本地 token\.meta）\s+—— 2027-04-01（剩余 159 天）/.test(t4.out), rowLine(t4.out, 'PAT 过期'))
+  eq('正常 ⇒ exit 0', 0, t4.status)
+
   const total = nPass + failures.length
   console.log(`\n自测结果：${nPass}/${total} 通过，${failures.length} 失败`)
   if (failures.length) {
@@ -1032,7 +1100,7 @@ function selfTest() {
 // ── 入口 ────────────────────────────────────────────────────────────────────
 const KNOWN_FLAGS = new Set([
   '--dry-run', '--heartbeat-check', '--self-test', '--json', '--repo', '--now', '--assignee',
-  '--grace-hours', '--repeat-hours', '--heartbeat-file', '--timeout', '--help', '-h',
+  '--grace-hours', '--repeat-hours', '--heartbeat-file', '--token-meta', '--timeout', '--help', '-h',
 ])
 const UNKNOWN = argv.find((a, i) => a.startsWith('--') && !KNOWN_FLAGS.has(a))
 if (UNKNOWN) {

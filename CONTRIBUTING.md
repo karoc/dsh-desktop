@@ -42,7 +42,7 @@
 > `cp scripts/git-hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit`
 > 为什么需要它：2026-09-27 与 2026-10-04 两次误直推 `main`（第二次发生在纪律写进技能之后）——靠自觉不够。
 
-npm test                          # 全量 29 套（28 条 node + 1 条 `[ -f … ]` 条件式；行为 + 契约 + 副本一致性 +
+npm test                          # 全量 30 套（29 条 node + 1 条 `[ -f … ]` 条件式；行为 + 契约 + 副本一致性 +
                                   #   清单/补丁目标门禁 + 升级标记 + 自动化链路门禁自证 + gh 凭据纪律）
 
 第 18 套 `scripts/test-silent-failures.mjs` 是**静默失效审计**：它扫描"销毁/写入类操作的结果被忽略"的站点（Rust `let _ = std::fs::remove|copy|write|rename|create_dir*`、`.ok()` 吞错、JS 空 catch），每个站点必须在本行或上一行带 `// fail-open-ok: <理由>`。它**先跑 4 个变异夹具自检再跑审计**（自检不过即失败），也可单独跑 `npm run audit:self-test` —— 恒真的门禁不算门禁。
@@ -140,6 +140,17 @@ gh CLI 默认读全局 `~/.config/gh/hosts.yml`。本项目使用**项目专用 
    脚本若走 `GH_BIN`，**缺省值必须指向 `./scripts/gh`，禁止默认裸 `gh`**（裸 gh 用全局 `hosts.yml`
    里的另一个 PAT，权限不同）；CI 里显式 `GH_BIN=gh` 是唯一例外。门禁：`node scripts/test-gh-bin-discipline.mjs`。
 3. git push 走 SSH，不受 token 影响；CI 用 `secrets.GITHUB_TOKEN`，与个人 token 无关。
+4. **过期纪律（A4）**：fine-grained PAT 的过期时间**没有 REST 端点可读**（`GET /user` 不返回
+   `expires_at`）⇒ **创建/轮换 token 的最后一步必须把日期录进去**，否则没人知道它哪天失效：
+   ```bash
+   node scripts/dsh-token-meta.mjs set --expires YYYY-MM-DD [--note "创建于 <日期>，<用途>"]
+   node scripts/dsh-token-meta.mjs check          # >14 天 ok / ≤14 warn / ≤7 urgent / ≤1 critical / 已过期
+   ```
+   录进 `~/.dsh/token.meta.json`（600、原子写、**只有 `expiresAt`/`note`/`recordedAt`，绝不含 token**；
+   `--note` 里粘 token 形状会被**拒绝写入**）。**未录入 = 未知**（`check` 与 `npm run dsh:doctor` 都显示
+   "未知"，**exit 0**）—— 这不是故障，但等于这一层防线没启用。每日检查用
+   `check --notify --if-due --quiet`（可安全挂在 10 分钟循环上；只在级别跃迁时评论，写权不足只打印）。
+   门禁：`npm run test:token-meta`（POSIX 下 124 条断言 + 3 条变异自证；Windows 上权限/gh 桩两组显式 SKIP）。
 
 ## 自动化链路的运维契约（A1 / A3 / A5 / A6 / A8 / A9）
 
@@ -150,7 +161,8 @@ gh CLI 默认读全局 `~/.config/gh/hosts.yml`。本项目使用**项目专用 
 | 层 | 现在的事实 | 自己怎么验 |
 |---|---|---|
 | **单写者（A1）** | `dsh-watch` 非 `--dry-run` 时整个进程包在 `flock -n -E 75 <state-dir>/locks/dsh-watch.lock`（默认 `~/.dsh/locks/`）；锁被占 ⇒ re-exec 的退出码 **75**，进程退出即释放（不会留"崩溃后永久死锁"）。`~/.dsh/PAUSE` 存在 ⇒ **跳过一切写**（只读探测 + 重复单报告照常，日志写明原因）。CI 的 `dsh-watch.yml` 是**设计上的第二个写者**，幂等靠"确定性去重键 + 每轮收敛对账"，**不是**靠锁 | 同时起两个：第二个 exit 75；`touch ~/.dsh/PAUSE` 后跑一轮 ⇒ 无写、日志带 PAUSE |
-| **canary 凭据探测（A3）** | `npm run dsh:doctor` 用**真实凭据**对专用 canary issue（标题含 `[dsh-doctor] canary`，全仓只允许一条）做**可逆写**，输出六行能力矩阵。必需能力缺失 ⇒ **exit 1**；`--dry-run` 只读（写能力**未验证**，也不写心跳）。`admin=true` 与 UI 上的权限**永远不是判据**（GitHub 没有"模拟写"接口） | `npm run dsh:doctor -- --dry-run`；`npm run dsh:doctor`（真写，会留 `last-ok` 心跳）。`npm run test:doctor` 是它的 53 条自测 |
+| **canary 凭据探测（A3）** | `npm run dsh:doctor` 用**真实凭据**对专用 canary issue（标题含 `[dsh-doctor] canary`，全仓只允许一条）做**可逆写**，输出七行能力矩阵（第 7 行是本地 PAT 过期元数据，**不参与退出码**）。必需能力缺失 ⇒ **exit 1**；`--dry-run` 只读（写能力**未验证**，也不写心跳）。`admin=true` 与 UI 上的权限**永远不是判据**（GitHub 没有"模拟写"接口） | `npm run dsh:doctor -- --dry-run`；`npm run dsh:doctor`（真写，会留 `last-ok` 心跳）。`npm run test:doctor` 是它的 63 条自测 |
+| **PAT 过期元数据（A4）** | 过期时间**读不到**（个人 fine-grained PAT 没有 REST 端点）⇒ 创建/轮换时 `set --expires` 手录一次到 `~/.dsh/token.meta.json`（600、原子写、**不含 token**，只有 `expiresAt`/`note`/`recordedAt`）。分级 `>14 ok / ≤14 warn / ≤7 urgent / ≤1 critical / 已过期 expired`；**退出码只有 critical/expired 非零**，**缺失或损坏 ⇒ "未知" + exit 0**（没启用功能不是故障）。`check --notify --if-due` 每日门控 + **只在跃迁时**在跟踪单 `[automation] PAT 过期元数据（A4）` 里评论（回到 ok 自动关闭；403 ⇒ 只打印不重试）；doctor 矩阵第 7 行读同一文件，**不参与退出码** | `node scripts/dsh-token-meta.mjs set --expires YYYY-MM-DD`；`node scripts/dsh-token-meta.mjs check`（`--now <iso>` 可回放五级）；`npm run test:token-meta` |
 | **反向心跳（A5）** | 每次**成功**的写运行后写 `~/.dsh/heartbeat.json`（`{lastOkAt, version, didWrite}`）并把 `last-ok=<ISO>` 写进 canary 正文 —— **失败运行不写**（不替坏链路作伪证）。`.github/workflows/dsh-heartbeat-check.yml`（每日 03:00 UTC）读该字段：>26h ⇒ 评论 `@owner` + `priority:high`、**exit 3**（3 = 已报警，设计内的失败）；canary 缺失 ⇒ 先建再判断（26h 宽限，不误报） | `cat ~/.dsh/heartbeat.json`；`./scripts/gh issue view <canary> --json body` 看 `last-ok` |
 | **三态退避（A6）** | `~/.dsh/state/<tool>.json` 记 `healthy`/`degraded`/`broken` + 退避 5→10→20→40→**封顶 60 分钟**；**只在跃迁时**发一条 issue 评论；broken 之后每轮 stdout 只有一行、**退出码 0**（否则与 systemd `Restart=on-failure` 叠成热循环）；403/404 这类不可重试错误**立即 broken**。`--reset-state` 只重置本地状态；`--no-backoff` 是负向对照 | `node scripts/dsh-watch.mjs --dry-run` 前先看状态文件；`node scripts/test-backoff-state.mjs`（`--no-backoff` 必须退回"每轮全量错误 + 0 条跃迁评论"） |
 | **保留（A8 / A9）** | 日志：模板 `scripts/logrotate.dsh.conf` + README 的用户级安装与 timer（**装不装是用户动作**，仓库不动你的 systemd）。hang dump：**最新 3 份 + 14 天 + 总量 ≤1GiB**（`src-tauri/src/retention.rs` 的 `HANG_DUMP_POLICY`，单测钉住这三个数；"**永不清空目录**"是硬边界）。`.detail.log` 自带 128KB 截断 | `systemctl --user list-timers | grep logrotate`；`du -sh <应用数据目录>/runtime/reports`；Rust 侧由 CI `check` job 的 `cargo test --lib` 覆盖 |

@@ -105,7 +105,7 @@ check(`② 已知 gh 消费者缺省值兜底到 scripts/gh（${GH_CONSUMERS.len
 })
 
 // ── 判据 ③：systemd unit 模板 ─────────────────────────────────────────────
-const GH_BIN_TEMPLATE_TARGET = /scripts[\\/](?:dsh-watch|dsh-release-autopilot|dsh-sla-report|dsh-doctor)\.mjs/
+const GH_BIN_TEMPLATE_TARGET = /scripts[\\/](?:dsh-watch|dsh-release-autopilot|dsh-sla-report|dsh-doctor|dsh-token-meta)\.mjs/
 const TEMPLATE_HEADER = /^\s*\[(Unit|Service|Install)\]/
 
 /** `//` 注释里连写的块（脚本头注释里的模板）。 */
