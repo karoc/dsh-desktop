@@ -59,6 +59,7 @@ tag vX.Y.Z → Release 无资产 → gh workflow run build.yml --ref vX.Y.Z → 
 | token 本身 | 等同 bearer 凭据：不得写进看板卡 / Note / 提交 / 对话，输出里整段打码 |
 | direnv | `.envrc` 只在交互 shell 生效；**Agent 的 bash 不加载 direnv**，必须显式 `./scripts/gh` |
 | 权限自证 | 别信 UI。用「故意非法目标」探针：建 PR 用不存在的 head ⇒ 有权限 422 / 无权限 403；dispatch 不存在的 workflow ⇒ 有权限 404 / 无权限 403 |
+| 能力自证（issue 写） | **只认 canary 写**：`npm run dsh:doctor`（采用清单 A3）用真实凭据对专用 canary issue 做一次**可逆写**，输出六行能力矩阵；必需能力缺失 ⇒ **exit 1**。`--dry-run` 只读（写能力**未验证**）。`admin=true`、`/repos` 的 `permissions`、UI 上的勾选**都不是判据**（GitHub 没有"模拟写"接口） |
 
 **写域纪律（agent 必读）**：执行 agent 只 push + 开 PR，**不许自己合并**；合并由 Lead 看过证据
 （真实 run id + job 级结论）后做。`git push` 目标只能是短分支或 `auto/dsh-*`，**任何路径都不对 main
@@ -329,6 +330,10 @@ git push -u origin <branch>
   `systemctl --user enable --now dsh-watch.timer`。③ `loginctl enable-linger karoc`（无登录会话也要跑）。
 - **盲区如实保留**：Windows 关机/睡眠期间两边都不跑。这段延迟必须由 SLA 的「检测段」量出来，
   不是假装没有 —— 也正因如此检测段常是 unknown（§3.7）。
+- **云端那一层（反向心跳 / A5）**：`dsh-heartbeat-check.yml` 每日 03:00 UTC 读 canary 正文的
+  `last-ok`：>26h ⇒ 评论 `@owner` + `priority:high`、**exit 3**。`3` = **已报警**（设计内的失败），
+  `1` 才是检查器自己坏了 —— 别用 `continue-on-error` 把 3 吞成绿。本机心跳与 canary `last-ok`
+  同时陈旧 ⇒ 先按上面①–③修本机 timer，再跑一次 `npm run dsh:doctor` 把 `last-ok` 推新。
 
 ### 6.3 issue 开了但没人知道（推送没生效）
 
@@ -417,6 +422,27 @@ git push -u origin <branch>
 - **处理**：确认是 `./scripts/gh pr merge <n> --squash --admin`，且当前目录的 `scripts/gh` 能读到
   `~/.config/gh-dsh-desktop/token`。`--admin` 只在前一步已确认 `MERGEABLE` + job 级全绿时用。
 
+### 6.12 issue 写不进：`Resource not accessible by personal access token`
+
+- **症状**：`dsh-watch` / autopilot 建了 issue 但 label / assignee / 评论 / 关闭失败；日志里
+  `updateIssue 403` / `addLabelsToLabelable 403`；`gh api repos/<repo> --jq .permissions` 却显示 `admin: true`。
+- **判据**：`npm run dsh:doctor`（A3）。矩阵里凡是 `✓` 以外的写能力都失败 ⇒ **PAT 缺 Issues:write**；
+  矩阵会如实区分「实测不可用」与「撞到 403 后按纪律停止探测（未验证）」，两者都让退出码非零。
+- **处理**：fine-grained PAT → Repository permissions → **Issues: Read and write**；改完重跑
+  `npm run dsh:doctor` 直到 `结论：PASS`。这不是脚本能修的（凭据在你手里）。
+  在此之前**不要**用「多开几次就好」绕过：重复 issue #201–#216 就是这么来的（去重键曾依赖 label）。
+
+### 6.13 退避卡在 `broken` / 想人工重置
+
+- **症状**：日志每轮只有一行 `still broken (attempt k, next retry in Xm)`，退出码 0；状态文件
+  `~/.dsh/state/<tool>.json` 里 `state=broken`。
+- **判据**：`cat ~/.dsh/state/<tool>.json` 看 `state` / `failures` / `nextAttemptAt`；
+  失败明细在 `<state>.detail.log`（128KB 截断）。**退出码 0 不是"好了"**——退避跳过轮故意返回 0，
+  避免与 systemd `Restart=on-failure` 叠成热循环。
+- **处理**：先把真故障修掉（代理端口 / 凭据 / 网络），再 `--reset-state`（只重置本地状态，不写 GitHub）；
+  下一轮成功会自己 reset 并只在跃迁时发一条恢复评论。**不要**删整个 `~/.dsh/state/` 来"图快"：
+  删状态 = 忘掉退避历史，但也会丢掉"已通知过谁"的上下文。
+
 ## 7. 纪律（硬规则，别绕过）
 
 1. **一律 `./scripts/gh`**（项目 PAT）；跑脚本显式 `GH_BIN=$PWD/scripts/gh`。禁止裸 `gh`。
@@ -430,6 +456,10 @@ git push -u origin <branch>
    脏了就 exit 3 —— 不许用「先 stash 一下」绕过指纹断言。
 7. **「没有判断 = 没有验证」**：空/null/截断/超时报错一律计失败并重跑，或显式登记为覆盖缺口。
    `--dry-run` 的探针假设值、`unknown` 的检测段都**不代表一致/达标**。
+8. **写能力只认 canary 写**（A3）：`npm run dsh:doctor` 没绿之前，任何 issue 写路径（label / assignee /
+   评论 / 关闭）都不算可用；`admin=true` 与 UI 上的勾选不作证据。
+9. **手动补 issue 前先刹车**（A1）：本机 `dsh-watch` 是 flock 单实例，CI 是第二个写者 —— 手动改 issue
+   前 `touch ~/.dsh/PAUSE`，干完 `rm ~/.dsh/PAUSE`，否则会和 10 分钟一轮的定时器抢同一批写。
 
 ## 8. 已知覆盖缺口（如实写，别当成已验证）
 
@@ -444,6 +474,7 @@ git push -u origin <branch>
 | **`--version` 不可注入** | manager 启动期目标恒 `max(地板, latest)` ⇒ 结构上装不到更高的预发布；`next`/alpha 不自动适配，只开 issue |
 | **版本 PR 合并 = 零人工审阅** | 替代审查只有「mergeable + 写域白名单 + 非失败 check」，不读 diff 语义。CONTRIBUTING 里那份人工清单（四处版本一致 / CHANGELOG 段 / `npm test` / `audit-preinstalled`）在自动路径上**不执行** |
 | **进度看板/归档文件的边界** | `KANBAN.json`、`.agents/notes/archive.json` 被 git 跟踪 ⇒ autopilot 提交时跳过、rebase 时 autostash；改动它们不算适配写域 |
+| **本机 `dsh-doctor` timer 未安装** | A3/A5 的每日 canary 写目前只能**手动**跑（`npm run dsh:doctor`）⇒ canary 正文的 `last-ok` 不会自动前进，超过 26h 后 `dsh-heartbeat-check` 会按设计报警（**这是正确行为，不是误报**）。装 timer 是用户动作 |
 
 ## 9. 本技能实测坐标（2026-10-23）
 

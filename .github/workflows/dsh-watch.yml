@@ -19,7 +19,12 @@
 #   · 本机侧另有 flock 单写者锁与 `~/.dsh/PAUSE` 刹车，CI 侧没有（这里只有一个 runner，且不共享本机状态）。
 # 退出码：0 = 正常/无事发生/对账失败但已出待人工清单；1 = 真故障（探测失败、读不到 issue 列表、
 # 跟踪单没开成或没更新成）。见 README「幂等 / 单写者 / 刹车 / 对账」与
-# docs/2026-10-24-alerting-and-idempotency-patterns.md 的 A1/A2/A10。
+# docs/2026-10-24-alerting-and-idempotency-patterns.md 的 A1/A2/A7/A10。
+#
+# ⏱ **这条 cron 不是 SLA 主时钟**（采用清单 A7）：GitHub 官方明确 `schedule` 不保证准时（可能延迟数小时，
+#   也可能丢触发），本仓实测抖动 2–5h。主心跳是本机 systemd user timer（每 10 分钟）；这里 `*/15` 的职责
+#   只有"**本机没在跑时的兜底覆盖**"。SLA 的检测段 T0 = 同版本**最早** issue 的 `createdAt`（与哪个写者
+#   建的无关），且检测延迟不进门禁 —— 谁在跑、跑得准不准是平台属性，不是适配能力。
 name: dsh-watch
 
 on:

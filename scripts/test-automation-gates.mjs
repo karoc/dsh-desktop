@@ -24,13 +24,15 @@
 //      目录，通过 PATH / GH_BIN / FAKE_* 环境变量注入），被测脚本与仓库文件一概不改（只读）。
 //   ② **断言分级**：CORRECT（正确性判据，红即套件红）与 KNOWN_GAP（已知仍不完美，**只打印、不判红**，
 //      避免用"跳过"掩盖假绿；行为一旦变化会以 `GAP?` 提醒把它升级成 CORRECT）。
-//   ③ **变异自证**：5 条"在临时副本（拷工作树 + node_modules 软链）上把判据改坏 ⇒ 本套件必须
+//   ③ **变异自证**：6 条"在临时副本（拷工作树 + node_modules 软链）上把判据改坏 ⇒ 本套件必须
 //      变红"的对照。副本里跑本套件时用 `--only <组> --fast --no-mutation`（否则会递归），
-//      且**绝不触碰仓库文件**。
+//      且**绝不触碰仓库文件**。其中 doctor 组（2026-10-24 起，采用清单 A11）把"凭据 canary 写失败
+//      必须让退出码非零"钉成可失败的判据 —— 它自己从不写真实仓库（`dsh-doctor --self-test` 用内置
+//      gh 桩）；坏掉这条判据会让整条自动化链路在"只能读不能写"的 PAT 上继续假装正常。
 //
 // 用法：
 //   node scripts/test-automation-gates.mjs                 # 全量（约 2 分钟）
-//   node scripts/test-automation-gates.mjs --only probe    # 只跑一组（probe|sla|watch|adapt|drift|mutation）
+//   node scripts/test-automation-gates.mjs --only probe    # 只跑一组（probe|sla|watch|doctor|adapt|drift|mutation）
 //   node scripts/test-automation-gates.mjs --fast          # 跳过慢用例（canary 等待等），用于变异自证子跑
 //   node scripts/test-automation-gates.mjs --no-mutation   # 跳过变异自证（仍打印"跳过了什么"）
 //   node scripts/test-automation-gates.mjs --keep          # 保留临时目录（排障）
@@ -55,7 +57,7 @@ const ONLY = valOf('--only')
 const FAST = has('--fast')
 const KEEP = has('--keep')
 const NO_MUTATION = has('--no-mutation') || process.env.DSH_GATES_CHILD === '1'
-const GROUPS = ['probe', 'sla', 'watch', 'adapt', 'drift', 'mutation']
+const GROUPS = ['probe', 'sla', 'watch', 'doctor', 'adapt', 'drift', 'mutation']
 if (ONLY && !GROUPS.includes(ONLY)) {
   console.error(`--only 只支持：${GROUPS.join(' | ')}`)
   process.exit(2)
@@ -718,6 +720,32 @@ function makeRepoCopy(dest) {
   return dest
 }
 
+function groupDoctor() {
+  console.log('\n── 3b. dsh-doctor canary：凭据能力探测自测必须绿（A3/A11）────────────')
+  // 为什么把 doctor 的自测拉进门禁：A3 的结论是"GitHub 没有模拟写接口，唯一判据是 canary 写"，
+  // 而"403 ⇒ 退出码非零"正是那条判据的**唯一出口**。它此前只有 `npm run test:doctor` 这一条
+  // 靠人记得跑的入口，且不在 `npm test` 链上 —— 判据坏了没人知道。
+  // Windows 上自测自己 SKIP（需要 shebang 可执行的 POSIX gh 桩）⇒ 这里如实登记为覆盖缺口。
+  const r = nodeAt(ROOT, 'scripts/dsh-doctor.mjs', ['--self-test'], { env: privateTmpEnv })
+  if (process.platform === 'win32') {
+    skip('doctor', 'dsh-doctor --self-test 全绿 + 403 ⇒ 非零退出', 'Windows 上该自测自身 SKIP（POSIX shebang 桩）—— 覆盖缺口，不是通过')
+    return
+  }
+  const m = /自测结果：(\d+)\/(\d+) 通过，(\d+) 失败/.exec(r.out)
+  const detail = r.out.split('\n').filter((l) => l.startsWith('  FAIL')).slice(0, 3).join(' | ') || r.out.split('\n').slice(-2).join(' | ')
+  check('doctor', '自测跑完并给出 通过/失败 计数（没有计数 = 没有判断）', 'true', String(Boolean(m)), { detail })
+  const pass = m ? Number(m[1]) : 0
+  const total = m ? Number(m[2]) : 0
+  const failed = m ? Number(m[3]) : -1
+  check('doctor', '自测 0 失败', '0', String(failed), { detail })
+  check('doctor', '断言数 ≥ 40 且 通过 == 总数（套件没被删空/没被跳过）', 'true', String(total >= 40 && pass === total))
+  // 断言的是"自测真的跑了 403 那一段"—— 自测对每条用例打印 `ok <用例名>`，用例名就是判据本身。
+  // （不要把"矩阵输出里的错误文案"当依据：那段只在失败时才打印 detail。）
+  check('doctor', '覆盖了 403 场景：既有"该项标 ✗"也有"403 之后没有任何写调用"', 'true',
+    String(/该项标 ✗/.test(r.out) && /如实打印 403 错误/.test(r.out) && /403 之后没有任何写调用/.test(r.out)))
+  check('doctor', '自测退出码 0（全绿）', '0', String(r.status), { detail })
+}
+
 function groupAdapt() {
   console.log('\n── 4. dsh-adapt：任一步失败立即停（含"探针没出报告"）──────────────')
   const R = ensureRuntimes()
@@ -971,6 +999,16 @@ const MUTATIONS = [
     to: 'if false; then',
     expect: '预装目录根本不存在 ⇒ exit 1',
   },
+  {
+    group: 'doctor',
+    // doctor 自测在 Windows 上自己 SKIP ⇒ 这条变异显式只在 POSIX 上跑（不是静默跳过）。
+    platform: 'posix',
+    name: 'dsh-doctor 在"必需能力缺失（403）"时仍以 0 退出（canary 判据不再阻断）',
+    file: 'scripts/dsh-doctor.mjs',
+    from: ': missing.length ? 1 : 0',
+    to: ': 0',
+    expect: 'exit 非零',
+  },
 ]
 
 function groupMutation() {
@@ -980,6 +1018,10 @@ function groupMutation() {
     return
   }
   MUTATIONS.forEach((m, i) => {
+    if (m.platform && !((m.platform === 'posix' && process.platform !== 'win32') || m.platform === process.platform)) {
+      skip('mutation', `${m.group}：${m.name}`, `该组在 ${process.platform} 上不可跑（仅 ${m.platform}）—— 覆盖缺口，不是通过`)
+      return
+    }
     const copy = makeRepoCopy(join(TMP, `mut-${i}`))
     const child = (label) => {
       const r = cmd(process.execPath, [join(copy, 'scripts/test-automation-gates.mjs'), '--only', m.group, '--fast', '--no-mutation'], {
@@ -1024,6 +1066,7 @@ try {
   if (wants('probe')) groupProbe()
   if (wants('sla')) groupSla()
   if (wants('watch')) groupWatch()
+  if (wants('doctor')) groupDoctor()
   if (wants('adapt')) groupAdapt()
   if (wants('drift')) groupDrift()
   if (wants('mutation')) groupMutation()

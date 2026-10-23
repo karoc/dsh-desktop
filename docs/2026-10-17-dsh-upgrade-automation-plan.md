@@ -376,7 +376,7 @@ push 前 `git ls-remote` 取期望值 + `git fetch` 建远端跟踪引用 + 显�
 （干净检出没有跟踪引用，裸 lease 会以 stale info 拒绝 ⇒ 旧实现第二次运行必失败、既有 PR 永不更新）；
 `workflow_dispatch` 输入一律经 env 进 bash。
 
-**3.8 三态 + 指数退避 + 只在跃迁时通知（A6）/ 日志与产物保留（A7）** —— **已落地（2026-10-24）**
+**3.8 三态 + 指数退避 + 只在跃迁时通知（A6）/ 日志与产物保留（A8 + A9）** —— **已落地（2026-10-24）**
 
 问题：三个本机 timer 都是"每 10 分钟一轮"，失败时**每轮重印同一段完整错误**；日志/产物也没有保留策略。
 理论依据见 [2026-10-24-alerting-and-idempotency-patterns.md](2026-10-24-alerting-and-idempotency-patterns.md)
@@ -419,11 +419,14 @@ push 前 `git ls-remote` 取期望值 + `git fetch` 建远端跟踪引用 + 显�
   「日志与状态文件在哪、怎么清理」。本机实测 `logrotate -d` 通过、`-f` 后原件截断为 0 且生成 `.1`。
 - journald：本机上限 ~100M 且会 vacuum（`AGENTS.md`）⇒ journal 不能当长期取证源，关键日志落文件。
 - 退避状态/心跳/锁/PAUSE：可安全删除（删状态 = 忘掉退避历史，职能不丢），正规入口 `--reset-state`。
-- hang dump：**实际策略在壳里**（`src-tauri/src/lib.rs:3990` 的 `HANG_DUMP_KEEP = 3` +
-  `web_dump::prune_dumps` 按文件名保留最新 3 份），**只有份数上限、没有时间/总量上限**；
-  `scripts/server-manager.mjs` **没有** dump 保留逻辑（`grep -n dump` 只命中看护协议行：请壳抓 dump /
-  等 dump-done / 重启）—— "manager 管 dump 保留"是误解。建议值 3 份 + 14 天 + 总量 ≤1GB 已写进 README，
-  实现要改 `src-tauri/**`，**不在本轮写域**（登记为后续卡）。
+- hang dump：**三档保留已在壳里落地**（采用清单 A9，2026-10-24）：策略单一定义在
+  `src-tauri/src/retention.rs` 的 `HANG_DUMP_POLICY` = **最新 3 份 + 14 天 + 总量 ≤1GiB**，
+  `web_dump::prune_dumps` 只是薄封装（每次 dump 与「清理缓存」各跑一次）。两条安全边界：
+  **永不清空目录**（策略再严也只删到剩最新一份）与 `mtime` 读不到 ⇒ 保留（没有判断不能删）。
+  验证：`retention.rs` 的 8 条单测（CI `check` job 的 `cargo test --lib`）+ 4 条变异对照
+  （关掉时间/份数/总量任一维度、删掉安全边界 ⇒ 单测必须变红）。
+  `scripts/server-manager.mjs` **仍然没有** dump 保留逻辑（`grep -n dump` 只命中看护协议行：请壳抓 dump /
+  等 dump-done / 重启）—— "manager 管 dump 保留"是误解，它只发协议。
 - 插件升级备份 `.plugin-backup` + `.plugin-backup.prev` 至多两份（`server-manager.mjs:763-774`），天然有界。
 
 ### P3 —— 可选/降级预案

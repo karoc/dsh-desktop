@@ -20,6 +20,7 @@ use tauri::{AppHandle, Emitter, Listener, Manager, State};
 
 mod job_object;
 mod manager_guard;
+mod retention;
 mod web_dump;
 use manager_guard::{MgrPhase, ManagerExit, ManagerGuard};
 
@@ -1184,7 +1185,7 @@ fn cleanup_legacy_install(app: AppHandle) -> serde_json::Value {
 /// 因此：
 ///   - `.pnpm-store` **保留**——暖 store 重建约 6s，删了要冷装（需联网、数分钟）；
 ///   - `reports` **保留**——它是崩溃/挂起取证目录，可能正是排障要的证据；
-///     仅清理其中**超过保留份数**的历史 dump（复用 web_dump::prune_dumps）；
+///     仅清理其中超过保留策略（3 份 / 14 天 / 总量 ≤1GiB，见 `retention`）的历史 dump；
 ///   - `dsh-home` **保留**——会话、设置、凭据；
 ///   - 只删 `node_modules`（可重建；删除后首次启动需联网重装，UI 必须事先告知）。
 ///
@@ -1210,9 +1211,15 @@ fn cache_cleanup_json(app: &AppHandle) -> serde_json::Value {
     let node_modules = runtime.join("node_modules");
     let reports = runtime.join("reports");
 
-    // 2) 历史 dump：只保留最新 HANG_DUMP_KEEP 份（prune_dumps 已按名字排序保留尾部）。
-    let pruned = web_dump::prune_dumps(&reports, "dshweb-hang-", HANG_DUMP_KEEP);
-    log(&format!("pruned {pruned} old hang dump(s)"));
+    // 2) 历史 dump：份数 / 时间 / 总量三档保留（策略见 retention::HANG_DUMP_POLICY）。
+    let pruned = web_dump::prune_dumps(&reports, "dshweb-hang-");
+    log(&format!(
+        "pruned {} old hang dump(s) ({} MiB freed); kept {} ({} MiB)",
+        pruned.removed,
+        pruned.freed_bytes / (1024 * 1024),
+        pruned.kept,
+        pruned.kept_bytes / (1024 * 1024)
+    ));
 
     // 3) node_modules：可重建。删除失败（被占用）如实上报，不假装成功。
     let mut removed_node_modules = false;
@@ -1232,7 +1239,9 @@ fn cache_cleanup_json(app: &AppHandle) -> serde_json::Value {
 
     serde_json::json!({
         "ok": blocked.is_empty(),
-        "prunedDumps": pruned,
+        // UI 按数量渲染（shell-chrome.js：`String(res.prunedDumps ?? 0) + ' 份'`）⇒
+        // 这里必须保持数字；字节数/保留数只进日志。
+        "prunedDumps": pruned.removed,
         "removedNodeModules": removed_node_modules,
         "blocked": blocked,
         // 明确告知调用方：清理后首次启动需要联网重装依赖。
@@ -3986,8 +3995,8 @@ const HANG_PROBE_SECS: u64 = 3;
 const HANG_MISS_LIMIT: u32 = 3;
 /// 新 URL 到达后的启动宽限（秒）：启动/重载期慢响应不算挂起（与 L3 风暴同类误判）。
 const HANG_STARTUP_GRACE_SECS: u64 = 30;
-/// 保留最近几份挂起 dump（全内存 dump 体积大）。
-const HANG_DUMP_KEEP: usize = 3;
+// 挂起 dump 的保留策略（份数 / 时间 / 总量）只有一处定义：`retention::HANG_DUMP_POLICY`
+// —— 数字改了要同步 README「dump / 备份」与 docs 的方案文档，`retention.rs` 的单测会钉住这三个数。
 
 /// dsh web 挂起看护：**只探测 + dump，不 kill、不重启**（决定 D1）。挂起是唯一
 /// 还能拿到内存现场的故障（被杀进程地址空间已销毁）。manager 的 watchdog 负责
@@ -4111,7 +4120,7 @@ fn dump_dsh_web(app: &AppHandle, url: &str) {
         "web-hang",
         serde_json::json!({ "pid": pid, "dump": path, "summary": summary }),
     );
-    web_dump::prune_dumps(&reports, "dshweb-hang-", HANG_DUMP_KEEP);
+    web_dump::prune_dumps(&reports, "dshweb-hang-");
     finish(app);
 }
 

@@ -12,8 +12,9 @@
 //! **Dump only** (decision D1): the shell never kills or restarts here. The
 //! manager's watchdog owns recovery, the shell owns the scene.
 
-use std::path::{Path, PathBuf};
-use std::time::Duration;
+use crate::retention;
+use std::path::Path;
+use std::time::{Duration, SystemTime};
 
 /// Probe the live dsh URL. Any HTTP status counts as alive (a 401/404 still
 /// proves the server's event loop answers); only connect failure, timeout or an
@@ -146,39 +147,18 @@ pub(crate) fn dump_process(_pid: u32, _path: &Path) -> Result<u64, String> {
     Err("process dump is windows-only".into())
 }
 
-/// Keep only the newest `keep` files in `dir` whose name starts with `prefix`
-/// (full-memory dumps are large; the newest few are enough for diagnosis).
-/// Returns how many were removed.
-pub(crate) fn prune_dumps(dir: &Path, prefix: &str, keep: usize) -> usize {
-    let Ok(rd) = std::fs::read_dir(dir) else {
-        return 0;
-    };
-    let mut files: Vec<PathBuf> = rd
-        .filter_map(Result::ok)
-        .map(|e| e.path())
-        .filter(|p| p.is_file())
-        .filter(|p| {
-            p.file_name()
-                .map(|n| n.to_string_lossy().starts_with(prefix))
-                .unwrap_or(false)
-        })
-        .collect();
-    files.sort();
-    if files.len() <= keep {
-        return 0;
-    }
-    let mut removed = 0;
-    for f in &files[..files.len() - keep] {
-        if std::fs::remove_file(f).is_ok() {
-            removed += 1;
-        }
-    }
-    removed
+/// 清理历史挂起 dump：**份数 + 时间 + 总量**三档保留（策略单一定义在 `retention`）。
+///
+/// 返回**实际**结果（删除失败不计 —— 不假成功），供调用方如实记日志。
+/// 目录读不到 ⇒ 全 0：保留策略是尽力而为的清理，它自己失败绝不能影响 dump 主流程。
+pub(crate) fn prune_dumps(dir: &Path, prefix: &str) -> retention::RetentionOutcome {
+    retention::prune(dir, prefix, &retention::HANG_DUMP_POLICY, SystemTime::now())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     fn tmp_base(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("dsh-web-dump-{}-{tag}", std::process::id()));
@@ -200,16 +180,19 @@ mod tests {
             std::fs::write(dir.join(format!("dshweb-hang-{i:02}.dmp")), b"x").unwrap();
         }
         std::fs::write(dir.join("report.keep.json"), b"{}").unwrap();
-        assert_eq!(prune_dumps(&dir, "dshweb-hang-", 2), 3);
+        // 策略 = 保留最新 3 份（份数维度）：01/02 被删，03/04/05 留下。
+        assert_eq!(prune_dumps(&dir, "dshweb-hang-").removed, 2);
         let left: Vec<String> = std::fs::read_dir(&dir)
             .unwrap()
             .filter_map(Result::ok)
             .map(|e| e.file_name().to_string_lossy().to_string())
             .collect();
+        assert!(left.contains(&"dshweb-hang-03.dmp".to_string()));
         assert!(left.contains(&"dshweb-hang-04.dmp".to_string()));
         assert!(left.contains(&"dshweb-hang-05.dmp".to_string()));
+        assert!(!left.contains(&"dshweb-hang-01.dmp".to_string()));
         assert!(left.contains(&"report.keep.json".to_string()));
-        assert_eq!(prune_dumps(&dir, "dshweb-hang-", 2), 0);
+        assert_eq!(prune_dumps(&dir, "dshweb-hang-").removed, 0);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
