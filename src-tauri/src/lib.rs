@@ -1239,7 +1239,9 @@ fn cache_cleanup_json(app: &AppHandle) -> serde_json::Value {
 
     serde_json::json!({
         "ok": blocked.is_empty(),
-        "prunedDumps": pruned,
+        // UI 按数量渲染（shell-chrome.js：`String(res.prunedDumps ?? 0) + ' 份'`）⇒
+        // 这里必须保持数字；字节数/保留数只进日志。
+        "prunedDumps": pruned.removed,
         "removedNodeModules": removed_node_modules,
         "blocked": blocked,
         // 明确告知调用方：清理后首次启动需要联网重装依赖。

@@ -13,7 +13,7 @@
 //! manager's watchdog owns recovery, the shell owns the scene.
 
 use crate::retention;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, SystemTime};
 
 /// Probe the live dsh URL. Any HTTP status counts as alive (a 401/404 still
@@ -158,6 +158,7 @@ pub(crate) fn prune_dumps(dir: &Path, prefix: &str) -> retention::RetentionOutco
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     fn tmp_base(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("dsh-web-dump-{}-{tag}", std::process::id()));
