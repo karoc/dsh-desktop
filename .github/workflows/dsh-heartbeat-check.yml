@@ -1,0 +1,52 @@
+# 反向心跳 / dead man's switch（方案 A5）—— "**没消息也报警**"。
+#
+# 为什么需要它（docs/2026-10-24-alerting-and-idempotency-patterns.md §2.3 / §0.4）：
+# 本机只做到「脚本失败 → systemd 重启」。机器关机、timer 被 disable、脚本每轮都失败但 systemd 只负责重启
+# 时，**没有任何人会收到"没有告警"的告警**。这一层补的就是"任务是否按时发生"，不是"任务失败时有没有报错"。
+#
+# 信号怎么过河：云端看不到本机文件（`~/.dsh/heartbeat.json`），所以本机 `scripts/dsh-doctor.mjs` 每次
+# **成功完成写操作**后，会把 `last-ok=<UTC ISO>` 写进专用 canary issue 的正文（canary 标题含
+# `[dsh-doctor] canary`，全仓只允许一条）。本 workflow 只读这个字段。
+#
+# 双向判据（缺一不可，见脚本头注释）：
+#   · 心跳新鲜（age ≤ 26h）      ⇒ **静默**，exit 0（不评论、不加 label）；
+#   · 心跳陈旧（age > 26h）      ⇒ 在 canary 评论 `@owner` + 加 `priority:high`，**exit 3**；
+#   · canary 不存在              ⇒ **先创建再判断**（正文带 `bootstrap-at` 进入 26h 宽限期）⇒ 本次静默，不误报。
+#
+# 退出码语义（重要，别把红当成"job 坏了"）：
+#   0 = 静默（新鲜 / 刚创建）；3 = **已报警**（陈旧，这是设计内的失败）；1 = 检查器自己坏了（读不到 issue 等）。
+#   Actions 里 0 和 3 都显示为 failure 的只有 1 和 3 —— 3 是"报警送达"的信号，别用 continue-on-error 吞掉。
+#
+# 阈值为什么是 26h：cron 每日一次（Actions 的 schedule 本身可能延迟数小时，见方案 §3），
+# 24h 周期 + 2h 宽限 = 26h。要改周期就同时改这里的 `--grace-hours`，不要只改 cron。
+#
+# 零 secret（只用 GITHUB_TOKEN 的 issues: write）；不改地板、不建 PR、不碰本机状态。
+name: dsh-heartbeat-check
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: dsh-heartbeat-check
+  cancel-in-progress: false
+
+jobs:
+  heartbeat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 读 canary 的 last-ok（陈旧 ⇒ 评论 + priority:high，exit 3）
+        # 逻辑全在脚本里（本文件是薄壳），这样"该报警/该静默"两条判据可以在本地用桩复跑：
+        #   node scripts/dsh-doctor.mjs --self-test
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_BIN: gh
+        run: node scripts/dsh-doctor.mjs --heartbeat-check --grace-hours 26

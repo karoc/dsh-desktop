@@ -701,14 +701,51 @@ MIT
   **验证**：`scripts/test-automation-gates.mjs` 的 watch 组用**有状态 gh 桩**钉住这四条 ——
   `run(); run()` ⇒ open 数量不增加；空状态冷启动只建 1 条；事故同构（label 从未落地 + edit 403）下仍不再建；
   真起两个进程 ⇒ 只有一个执行、另一个 `skipped by lock` 且零 gh 调用；PAUSE ⇒ 零写；对账 403 ⇒ 只剩待人工清单。
-- **另两个定时工作流**：`dsh-sla-report.yml`（每周一 01:00 UTC 出 SLA 报表；门禁是独立一步 `--check`，
+- **凭据能力探测（canary 写，A3，2026-10-24）**：`node scripts/dsh-doctor.mjs [--dry-run] [--json <out>]
+  [--repo <owner/name>] [--now <iso>] [--heartbeat-file <path>] [--timeout <sec>]`（等价 `npm run dsh:doctor`；
+  自测 `npm run test:doctor`）—— **回答"这张 token 到底能不能写 issue"**。必须真写一次的原因：`gh api
+  repos/<repo>` 的 `permissions.admin=true` 只是**仓库角色**，fine-grained PAT 的资源级权限不在里面
+  （2026-10-24 事故：admin=true 仍 `updateIssue` 403）；classic token 能从 `X-OAuth-Scopes` 头读 scope，
+  fine-grained PAT 连这个头都没有，而 GitHub **没有**"模拟写"接口（AWS `SimulatePrincipalPolicy` /
+  k8s `SelfSubjectAccessReview` 的等价物不存在）⇒ 唯一可靠的判据是 canary 写。脚本对一条**专用 canary
+  issue**（标题含 `[dsh-doctor] canary`；首次自动创建、之后只复用）做**可逆写**：改正文（写入探针行 +
+  `last-ok=<ISO>` → 读回复核 → 还原，**净变化只有 last-ok**）→ 评论（有则 PATCH 同一条、无则只建一条）→
+  加 label（加 → 读回 → 移除）→ 关闭（关 → 读回 CLOSED → 重开 → 读回 OPEN），输出 **6 行矩阵**：读 issue
+  列表 / 建 canary / 改正文 / 评论 / 加 label / 关闭，每行 ✓/✗ + 实际错误（**错误信息里的 token 一律
+  打码**）。**fail-loud**：任一必需能力不可用 ⇒ exit 1 + 一句话结论 + 修复建议（"给 PAT 勾 Issues: Read and
+  write"）。**遇 403 立即停止后续写探测**（资源级权限是边界，继续试只会制造重复 403 与次级限流）；
+  `--dry-run` 只读、**不写**心跳文件；`--json <out>` 出机器可读矩阵（`--json -` 打 stdout）。
+  ⚠️ 当前实测（2026-10-24）：**建 issue 可用、改正文 403**（`Resource not accessible by personal access
+  token (updateIssue)`）⇒ 1 ✓ / 1 ✗ / 3 ⊘、exit 1 —— 这就是"能读不能写"的现场证据；修权限前 `dsh-watch`
+  与 autopilot 的 issue 维护仍会失败。
+- **反向心跳（A5，"没消息也报警"，2026-10-24）**：本机侧 `dsh-doctor` 每次**成功**运行后写
+  `~/.dsh/heartbeat.json`（`{lastOkAt, version, didWrite}`；失败运行**不写** —— 不替坏链路作伪证），并把
+  `last-ok=<ISO>` 写进 canary 正文；云端侧 `.github/workflows/dsh-heartbeat-check.yml`（**每日一次**
+  03:00 UTC + `workflow_dispatch`）跑 `node scripts/dsh-doctor.mjs --heartbeat-check --grace-hours 26`
+  —— 云端**看不到**本机文件，唯一可见的信号就是 canary 正文那个字段。**双向判据**（缺一不可）：心跳新鲜
+  （age ≤ 26h）⇒ **静默** exit 0；心跳陈旧 ⇒ 在 canary 评论 `@owner` + 加 `priority:high` + **exit 3**；
+  canary 不存在 ⇒ **先创建再判断**（正文带 `bootstrap-at`，26h 宽限期）⇒ 本次静默、**不误报**。阈值 26h =
+  24h 周期 + 2h 宽限（Actions `schedule` 本身可能延迟数小时，见方案 §3）；改 cron 周期要同时改
+  `--grace-hours`。**exit 3 是"已报警"不是"job 坏了"**（exit 1 才是检查器自己坏了：读不到 issue / 报警
+  手段全部失败）；同一段停更期只发一条报警评论（`priority:high` 每次确保；`--repeat-hours` 默认 168h 兜
+  "从未成功过"），避免每日刷屏。判据的负向对照在 `npm run test:doctor` 的内置 gh 桩里：`last-ok` 48h 前 ⇒
+  必须报警（评论 + label）、5min 前 ⇒ 必须静默、canary 缺失 ⇒ 创建且不误报、403 注入 ⇒ 该项 ✗ 且
+  **后续零写调用**、错误里带 token ⇒ 必须被打码（53 条断言；另有两条变异自证确认它会红）。
+  ⚠️ 诚实边界：① **PAT 过期时间读不到**（个人 fine-grained PAT 没有 REST 查询端点，`GET /user` 不返回
+  `expires_at`）；② "issue 创建/评论是否真的叫醒人"取决于该账号 GitHub 通知设置，本机**不可验证**；
+  ③ "本机每天有人跑 doctor"**不由本仓库安装**（systemd unit 属用户资产，模板参见 autopilot 头注释）；
+  ④ 在 PAT 拿到 Issues:write 之前 `last-ok` 永远写不进去 ⇒ 反向心跳会在 26h 后**如实报警**——这是设计要的
+  信号，不是噪音；要么修 PAT，要么在排障期手动 disable 该 workflow。
+- **另三个定时工作流**：`dsh-sla-report.yml`（每周一 01:00 UTC 出 SLA 报表；门禁是独立一步 `--check`，
   只有它红才代表"有版本超 6h 或根本没量出来"）与 `preinstalled-sync.yml`（每周一 02:00 UTC 检测四个预装
   bundle 与 npm `dist-tags.latest` 的漂移，**有漂移才**同步 → 过 `copy-consistency` + `plugin-dsh-compat`
   两道门禁 → 开/更新 PR，PR 正文写明当前 dsh 地板；无漂移则静默 no-op）。漂移判定分**三态**：漂移（npm 更新
   ⇒ 同步）/ 本地领先（不动 —— 否则会用旧版覆盖已发布的 bundle）/ **查询失败**（逐个记账、跑完所有包，最后
-  判红；把失败折成 `?` 会制造假漂移，而 `set -e` 会在第一个坏查询就中断整批）。另外四处：同步后"无差异"
+  判红；把失败折成 `?` 会制造假漂移，而 `set -e` 会在第一个坏查询就中断整批）。漂移判定与心跳判据无关（心跳见上一条）。
+  另外四处：同步后"无差异"
   看 `git status --porcelain`（含未跟踪新文件，`git diff --quiet` 看不见）；push 前 `git ls-remote` 取期望值 +
   `git fetch` 建远端跟踪引用 + 显式 `--force-with-lease=refs/heads/<b>:<sha>`（干净检出没有跟踪引用，裸 lease
-  会以 stale info 拒绝 ⇒ 旧实现第二次运行必失败、既有 PR 永不更新）；四个自动化工作流
-  （`dsh-watch` / `dsh-sla-report` / `tag-dispatch` / `preinstalled-sync`）都加了 `timeout-minutes`，
+  会以 stale info 拒绝 ⇒ 旧实现第二次运行必失败、既有 PR 永不更新）；五个自动化工作流
+  （`dsh-watch` / `dsh-sla-report` / `tag-dispatch` / `preinstalled-sync` / `dsh-heartbeat-check`）都加了
+  `timeout-minutes`，
   `workflow_dispatch` 的输入一律经 env 进 bash（直接插进 `run:` 文本会让 `$(...)` 被执行且 step 仍绿）。
