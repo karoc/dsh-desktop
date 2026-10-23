@@ -34,9 +34,34 @@
 // 想演练比地板新的版本：把 `--registry` 指向 latest 更高的镜像（或等上游把 latest 挪上去），
 // 然后用 `--version <那个版本>` 表达期望。
 //
-// ── 两个场景 ───────────────────────────────────────────────────────────────
+// ── 三个场景 ───────────────────────────────────────────────────────────────
 //  install（默认）= 上面这条：空临时 runtime → manager 启动期自动安装 → 探针 → 只读自证。
-//  bump           = 「抬地板」全链路演练（本次新增）：
+//  upgrade        = 「旧版 → 新版」升级覆盖演练（本次新增）：
+//    1 建**真实布局**的临时 runtime（默认 Windows `Local\Temp`，与 .pnpm-store 同设备；
+//      跨设备会让 pnpm 退化成复制/变慢 ⇒ 候选目录设备不符就跳过，全都不符 ⇒ exit 3），
+//      先按 manager 的 ensureRuntimeDir / ensurePnpmWorkspace 写好 package.json / .npmrc /
+//      pnpm-workspace.yaml。**必须写**：只给空 node_modules 时 pnpm 会留下一份
+//      `allowBuilds: …: set this to true or false` 的提示桩，manager 的升级安装看到文件已存在
+//      就不会重写，于是 ERR_PNPM_IGNORED_BUILDS 让 pnpm 以 exit 1 收场（实测；见 §升级覆盖）。
+//    2 绕过 manager 装旧版（manager 的启动期目标恒为 max(地板, latest)，装不了旧版）：
+//      `pnpm add @deepseek-ai/dsh@<old> --store-dir <热 store> --node-linker=hoisted`
+//      —— **必须 hoisted**：默认 isolated 布局会让 manager 走 isolated→hoisted 重建分支
+//      （删光 node_modules 重装），那样"升级覆盖"和"无残留嵌套副本"两条断言就是假演练。
+//      断言落地 == 旧版、且基线嵌套计数 == 1。
+//    3 复用 install 场景（子进程 `--scenario install --runtime-dir <临时 runtime>`）让 manager
+//      走**自己的启动期兼容闸门**升到地板（真实窗口里老用户走的正是这段：已装 < 地板 ⇒
+//      `installDshUpdate({ version: MIN_DSH_VERSION })`）。
+//    4 四条断言（实际值全部打印）：① 落地 == 目标；② **无残留嵌套副本**：同一棵树上
+//      `find <runtime>/node_modules -path '*/node_modules/@deepseek-ai/dsh/package.json'` 计数 == 1，
+//      **并对真实 dev runtime 跑同一计数作对照**（值来自实测，不是硬编码的 1）；
+//      ③ `dsh-compat-probe --runtime <tmp>` ⇒ GREEN；④ 真实仓库非记录层 `git status` 前后一致
+//      + 真实 runtime 关键文件 sha256/mtime/size 未变。
+//    5 负向自证（不是"顺手加的"）：`--fault nested-copy` 在升级后的树里塞一份**同版本**嵌套
+//      副本（manager 的 stale 清理只删版本不一致的，所以它会留在树里）⇒ ②必须变红；
+//      `--upgrade-from` 指向 registry 不存在的版本 ⇒ 装旧版一步必须明确失败。两条都 exit 非 0。
+//  upgrade 的写域只有临时 runtime：真实仓库 / 真实 runtime 只读；`.pnpm-store` 与 install
+//  场景一样是软链共享的（pnpm 只往里追加内容寻址条目），已装树与 manager.log 有指纹自证。
+//  bump           = 「抬地板」全链路演练：
 //    1 clone 真实仓库到 /tmp（`git clone --local --shared`），要求克隆里 `git log` 可读；
 //      克隆**之前**确认真实仓库没有非记录层改动（记录层 = KANBAN.json / .agents/notes/archive.json /
 //      未跟踪的 .agents/notes/** 与 tools/）—— 有 ⇒ exit 3，绝不带脏状态演练。
@@ -56,6 +81,11 @@
 // bump 退出码沿用同一套：0 全绿；1 演练失败（任何断言/步骤不达标）；2 用法错误
 //  （含"目标 ≤ --from-floor"这种违反场景语义的参数组合：那是假演练，直接拒绝）；3 前置不满足
 //  （真实仓库脏 / 热 runtime 缺件 / 读不到地板）。
+//
+// upgrade 退出码：0 全绿；1 任一步/任一断言不达标（`--fault nested-copy` 下 ② 变红也是 1 ——
+//  那是负向对照**预期**的红，结论文本会明说，不会伪装成绿）；2 用法错误（旧版不低于地板 ⇒
+//  兼容闸门不会触发 = 假演练，直接拒绝）；3 前置不满足（热 runtime 缺件 / 没有同设备的临时目录 /
+//  读不到真实仓库 status）。
 //
 // 退出码：0 = 全绿；1 = 演练失败（安装/版本/探针/自证任一步不达标）；2 = 用法错误；
 //         3 = 前置不满足（热 runtime 不存在或缺 `.pnpm-store` / 随包 pnpm）。
@@ -78,6 +108,14 @@ const PATCH_FILE = join(RESOURCE_DIR, 'patch/dsh-desktop.patch.yml')
 const DSH_PKG = '@deepseek-ai/dsh'
 /** bump 场景在克隆里把地板降到这个版本（低于当前真实地板，且是上游真实存在的预发布版本）。 */
 const BUMP_DEFAULT_FROM_FLOOR = '0.2.1-alpha.5'
+const UPGRADE_GAPS = [
+  '升级覆盖只走 manager 的兼容闸门（已装 < 地板 ⇒ installDshUpdate({version: 地板})）；**不覆盖**壳自更新（Tauri 安装包），也不覆盖 registry latest > 地板时"更新检查 / 托盘立即更新"那条路径。',
+  '旧版是脚本用 pnpm 直接装的（manager 的启动期目标恒为 max(地板, latest)，装不了旧版）：只能靠"真实布局 + manager 同款 pnpm 参数"逼近生产现场，不能证明真实老用户机器上的每一处状态。',
+  '临时 runtime 与真实 runtime 共享 .pnpm-store（软链）：pnpm 会往里追加内容寻址条目（只增不删）；已装树 / manager.log 有 sha256+mtime+size 指纹自证。',
+  '探针只判结构/兼容性（版本三方一致、seam、peer）：**不验证升级后 dsh web 能否真起来**（脚本刻意在 launching dsh web 处终止），那一步仍靠真机验收。',
+]
+/** upgrade 场景先装的旧版本：上游真实存在、且**低于壳地板** ⇒ manager 的兼容闸门会真的升级。 */
+const UPGRADE_DEFAULT_FROM = '0.2.1-alpha.5'
 /** 记录层豁免：与看板同属会话记录，不算脏；每次运行都把豁免明细打印出来，不静默。
  *  注意：必须声明在场景分发**之前** —— bump 分支在模块顶部就被调用，`const` 有 TDZ。 */
 const BUMP_EXEMPT_EXACT = new Set(['KANBAN.json', '.agents/notes/archive.json'])
@@ -103,28 +141,39 @@ const DEFAULT_WARM_RUNTIME = '/mnt/c/Users/qqwto/AppData/Roaming/dsh.smoothly.de
 const POST_INSTALL_GRACE_MS = 2000
 const KILL_GRACE_MS = 4000
 
-const USAGE = `usage: node scripts/dsh-rehearse.mjs [--scenario install|bump] [--version <v>] [--from-floor <v>]
+const USAGE = `usage: node scripts/dsh-rehearse.mjs [--scenario install|bump|upgrade] [--version <v>]
+                                      [--from-floor <v>] [--upgrade-from <v>] [--temp-base <dir>]
                                       [--keep] [--json <out>] [--timeout <sec>]
                                       [--warm-store <dir>] [--registry <url>]
 
   --scenario <s>     install（默认）= 全新安装演练；bump = 在 /tmp 克隆里演练「抬地板」全链路
-                     （降地板 → 复用 install 装目标版本 → 克隆里跑 dsh-adapt → 五项断言）。
+                     （降地板 → 复用 install 装目标版本 → 克隆里跑 dsh-adapt → 五项断言）；
+                     upgrade = 旧版 → 新版「升级覆盖」演练（pnpm 装旧版 → manager 启动期兼容闸门
+                     升级到地板 → 版本 / 无残留嵌套副本 / 探针 / 真实仓库只读 四条断言）。
   --from-floor <v>   仅 bump：把克隆里的地板降到这个版本（默认 ${BUMP_DEFAULT_FROM_FLOOR}）。必须**低于**目标版本，
                      否则 exit 2（低于/持平会让 dsh-adapt 第 2/3 步静默 skip = 假演练）。
+  --upgrade-from <v> 仅 upgrade：先装哪个旧版本（默认 ${UPGRADE_DEFAULT_FROM}）。必须**低于**壳地板，
+                     否则 manager 的兼容闸门不会触发（"升级"根本不发生 = 假演练）⇒ exit 2。
+  --temp-base <dir>  仅 upgrade：临时 runtime 的父目录（默认从热 runtime 推导 Windows Local\\Temp）。
+                     必须与 .pnpm-store **同设备**（跨设备 pnpm 会退化/变慢）⇒ 不符即 exit 3，不静默降级。
   --version <v>      期望落地的 dsh 版本（默认 = 壳地板 MIN_DSH_VERSION）。不等于"指定安装版本"：
-                     启动期路径的目标 = max(壳地板, registry latest)，不一致时如实报 MISMATCH。
+                     install 的启动期目标 = max(壳地板, registry latest)；upgrade 的兼容闸门目标 = 壳地板。
+                     不一致时如实报 MISMATCH。
   --keep             保留临时 runtime（默认成功即清理；失败一律保留现场）
   --json <out>       结构化结果写入 <out>
   --timeout <sec>    安装段超时（默认 300）
   --warm-store <dir> 热 runtime 目录（内含 .pnpm-store 与 node_modules/pnpm），也可直接给
                      .pnpm-store 目录本身。默认 ${DEFAULT_WARM_RUNTIME}
-  --registry <url>   透传给 manager 的 --registry（默认取 DSH_DESKTOP_REGISTRY，再退官方源）
+  --registry <url>   透传给 manager / pnpm 的 --registry（默认取 DSH_DESKTOP_REGISTRY，再退官方源）
+  --fault <name>     仅 upgrade：故障注入，当前只有 nested-copy（升级后往树里塞一份同版本嵌套
+                     @deepseek-ai/dsh 副本）——专门用来证明「无残留嵌套副本」这条断言会红。
+  --runtime-dir <d>  内部参数（install 场景）：在调用方给的已有 runtime 上跑，不新建也不清理。
   --help             本帮助
 `
 
 // ── 参数 ───────────────────────────────────────────────────────────────────
 function parseArgs(argv) {
-  const out = { scenario: 'install', version: null, fromFloor: null, keep: false, json: null, timeoutSec: 300, warmStore: null, registry: null, help: false }
+  const out = { scenario: 'install', version: null, fromFloor: null, upgradeFrom: null, keep: false, json: null, timeoutSec: 300, warmStore: null, registry: null, tempBase: null, fault: null, runtimeDir: null, help: false }
   const val = (i, name) => {
     const v = argv[i + 1]
     if (v === undefined || v.startsWith('--')) throw new Error(`${name} 需要值`)
@@ -139,16 +188,25 @@ function parseArgs(argv) {
     else if (a === '--help' || a === '-h') out.help = true
     else if (a === '--scenario' || eq === '--scenario') out.scenario = take()
     else if (a === '--from-floor' || eq === '--from-floor') out.fromFloor = take()
+    else if (a === '--upgrade-from' || eq === '--upgrade-from') out.upgradeFrom = take()
     else if (a === '--version' || eq === '--version') out.version = take()
     else if (a === '--json' || eq === '--json') out.json = resolve(take())
     else if (a === '--timeout' || eq === '--timeout') out.timeoutSec = Number(take())
     else if (a === '--warm-store' || eq === '--warm-store') out.warmStore = take()
     else if (a === '--registry' || eq === '--registry') out.registry = take()
+    else if (a === '--temp-base' || eq === '--temp-base') out.tempBase = take()
+    else if (a === '--fault' || eq === '--fault') out.fault = take()
+    else if (a === '--runtime-dir' || eq === '--runtime-dir') out.runtimeDir = take()
     else throw new Error(`未知参数 ${a}`)
   }
   if (!Number.isFinite(out.timeoutSec) || out.timeoutSec <= 0) throw new Error('--timeout 必须是正数（秒）')
-  if (!['install', 'bump'].includes(out.scenario)) throw new Error(`--scenario 只支持 install | bump（收到 ${out.scenario}）`)
+  if (!['install', 'bump', 'upgrade'].includes(out.scenario)) throw new Error(`--scenario 只支持 install | bump | upgrade（收到 ${out.scenario}）`)
   if (out.fromFloor && out.scenario !== 'bump') throw new Error('--from-floor 只对 --scenario bump 有意义（install 场景安装目标 = max(壳地板, registry latest)）')
+  if (out.upgradeFrom && out.scenario !== 'upgrade') throw new Error('--upgrade-from 只对 --scenario upgrade 有意义')
+  if (out.tempBase && out.scenario !== 'upgrade') throw new Error('--temp-base 只对 --scenario upgrade 有意义')
+  if (out.fault && out.scenario !== 'upgrade') throw new Error('--fault 只对 --scenario upgrade 有意义（当前只有 nested-copy）')
+  if (out.fault && out.fault !== 'nested-copy') throw new Error(`--fault 只支持 nested-copy（收到 ${out.fault}）`)
+  if (out.runtimeDir && out.scenario !== 'install') throw new Error('--runtime-dir 是 install 场景的内部参数（供 upgrade 复用）')
   return out
 }
 
@@ -226,6 +284,9 @@ function readJson(file) {
 if (opts.scenario === 'bump') {
   process.exit(await runBumpScenario())
 }
+if (opts.scenario === 'upgrade') {
+  process.exit(await runUpgradeScenario())
+}
 
 // ── 前置：读壳地板 + 解析热 runtime + 快照（只读） ─────────────────────────
 console.log('dsh:rehearse —— 在临时 runtime 里演练「装候选版本」（真实 runtime 只读）')
@@ -299,14 +360,34 @@ let killInfo = { stopReason: null, exit: null, dshWebStarted: false }
 const preflightMs = now() - t0
 step('preflight', 'ok', preflightMs, `地板 ${floor}；真实 runtime 指纹 ${warmBefore.filter((f) => f.exists).length}/${warmProbeFiles.length} 已记录`)
 
-tmp = mkdtempSync(join(tmpdir(), 'dsh-rehearse-'))
-{
-  const s = now()
-  mkdirSync(join(tmp, 'node_modules'), { recursive: true })
-  const linkType = process.platform === 'win32' ? 'junction' : 'dir'
-  symlinkSync(warmStore, join(tmp, '.pnpm-store'), linkType)
-  symlinkSync(join(warmRuntime, 'node_modules/pnpm'), join(tmp, 'node_modules/pnpm'), linkType)
-  step('temp-runtime', 'ok', now() - s, `${tmp}（空目录 + 2 条软链）`)
+// --runtime-dir：upgrade 场景复用 install 的积木时，runtime 由调用方建好并装好旧版。
+// 校验后**原样使用**：不建软链、不清理（清理权归调用方）。
+const providedRuntime = opts.runtimeDir ? resolve(opts.runtimeDir) : null
+if (providedRuntime) {
+  if (!existsSync(providedRuntime) || !statSync(providedRuntime).isDirectory()) {
+    preflightFail(`--runtime-dir 不存在或不是目录：${providedRuntime}`)
+  }
+  if (providedRuntime === resolve(warmRuntime)) {
+    preflightFail('--runtime-dir 不能指向热 runtime（本脚本只读真实 runtime，绝不写它）')
+  }
+  if (!existsSync(join(providedRuntime, 'node_modules'))) {
+    preflightFail(`--runtime-dir 里没有 node_modules（调用方应先装好旧版）：${providedRuntime}`)
+  }
+  tmp = providedRuntime
+  gaps[0] = '本次跑在**已有 runtime**（--runtime-dir，upgrade 场景复用）：走 manager 的兼容闸门升级分支；' +
+    '全新安装、isolated→hoisted 布局迁移分支没走到。'
+  gaps[2] = 'upgrade 走的是兼容闸门，安装目标恒为壳地板 MIN_DSH_VERSION；--version 只是"期望值"，不一致即 MISMATCH。'
+  step('temp-runtime', 'ok', 0, `${tmp}（--runtime-dir：调用方提供，校验后原样使用，不清理）`)
+} else {
+  tmp = mkdtempSync(join(tmpdir(), 'dsh-rehearse-'))
+  {
+    const s = now()
+    mkdirSync(join(tmp, 'node_modules'), { recursive: true })
+    const linkType = process.platform === 'win32' ? 'junction' : 'dir'
+    symlinkSync(warmStore, join(tmp, '.pnpm-store'), linkType)
+    symlinkSync(join(warmRuntime, 'node_modules/pnpm'), join(tmp, 'node_modules/pnpm'), linkType)
+    step('temp-runtime', 'ok', now() - s, `${tmp}（空目录 + 2 条软链）`)
+  }
 }
 console.log(`      临时 runtime ${tmp}`)
 
@@ -518,11 +599,12 @@ step('no-leftover-procs', leftovers === null ? 'skip' : (leftovers.length === 0 
 
 // ── 清理 ───────────────────────────────────────────────────────────────────
 const failed = steps.some((s) => s.status === 'fail')
-tmpKept = opts.keep || failed
+tmpKept = opts.keep || failed || providedRuntime !== null
 {
   const s = now()
   if (tmpKept) {
-    step('cleanup', 'skip', 0, `${opts.keep ? '--keep' : '失败保留现场'}：${tmp}`)
+    const why = providedRuntime !== null ? '--runtime-dir（调用方所有，永不清理）' : (opts.keep ? '--keep' : '失败保留现场')
+    step('cleanup', 'skip', 0, `${why}：${tmp}`)
   } else {
     rmSync(tmp, { recursive: true, force: true }) // 只删临时目录；两条软链被 unlink，不跟随
     step('cleanup', existsSync(tmp) ? 'fail' : 'ok', now() - s, '临时目录已删（软链只删链、不跟随）')
@@ -714,9 +796,17 @@ function bumpSpawn(cmd, args, spawnOpts = {}) {
         carry += text
         const lines = carry.split('\n')
         carry = lines.pop() ?? ''
-        for (const l of lines) if (l.trim()) console.log(`      ${label}| ${l.slice(0, 220)}`)
+        for (const l of lines) {
+          if (!l.trim()) continue
+          if (spawnOpts.filter && !spawnOpts.filter.test(l)) continue
+          console.log(`      ${label}| ${l.slice(0, 220)}`)
+        }
       })
-      stream.on('end', () => { if (label && carry.trim()) console.log(`      ${label}| ${carry.slice(0, 220)}`) })
+      stream.on('end', () => {
+        if (label && carry.trim() && (!spawnOpts.filter || spawnOpts.filter.test(carry))) {
+          console.log(`      ${label}| ${carry.slice(0, 220)}`)
+        }
+      })
     }
     child.on('error', (err) => done({ code: -1, signal: null, error: err.message, stdout: captured.stdout, stderr: captured.stderr }))
     child.on('close', (code, signal) => done({ code: code ?? -1, signal, error: null, stdout: captured.stdout, stderr: captured.stderr }))
@@ -1051,6 +1141,468 @@ async function runBumpScenario() {
     timing.cleanupMs = now() - s
   }
   const allGreen = !steps.some((s) => s.status === 'fail') && adaptResult.code === 0
+  return emit(allGreen ? 0 : 1, allGreen ? 'GREEN' : 'FAILED')
+}
+
+// ══ 场景 upgrade：旧版 → 新版「升级覆盖」══════════════════════════════════════
+// 步骤 / 四条断言 / 两条负向自证见文件头。三条纪律：
+//   1) 旧版必须**绕过 manager** 装（manager 启动期目标恒为 max(地板, latest)），且必须 hoisted：
+//      默认 isolated 布局会让 manager 走"删光重建"分支，升级覆盖与嵌套副本两条断言就失去意义。
+//   2) 临时 runtime 必须与 .pnpm-store 同设备（跨设备 pnpm 会退化）；不静默降级。
+//   3) 真实仓库 / 真实 runtime 只读：跑前跑后各取一次非记录层 git status 与关键文件指纹。
+
+/** 临时目录候选（顺序即优先级）。跨设备不静默降级：设备不符的候选直接跳过，全不符 ⇒ exit 3。 */
+function upgradeTempBaseCandidates(warmStore) {
+  const out = []
+  if (opts.tempBase) out.push({ dir: resolve(opts.tempBase), source: '--temp-base' })
+  if (process.env.DSH_REHEARSE_TEMP_BASE) out.push({ dir: resolve(process.env.DSH_REHEARSE_TEMP_BASE), source: 'DSH_REHEARSE_TEMP_BASE' })
+  // Windows 上热 runtime 在 %APPDATA%\<app>\runtime，临时目录应在 %LOCALAPPDATA%\Temp（与 C: 同设备）。
+  const appData = /^(.*?[/\\]AppData)[/\\](?:Roaming|Local)[/\\]/.exec(warmStore)
+  if (appData) out.push({ dir: join(appData[1], 'Local', 'Temp'), source: '由热 runtime 推导（Windows Local\\Temp）' })
+  out.push({ dir: tmpdir(), source: 'os.tmpdir()（兜底）' })
+  return out
+}
+function statDevice(p) {
+  try { return statSync(p).dev } catch { return null }
+}
+
+/** 实测计数：`find <runtime>/node_modules -path "…@deepseek-ai/dsh/package.json"`。
+ *  **不硬编码基线**：真实 dev runtime 用同一条命令再跑一次作对照，两个数都进报告。
+ *  find 不可用时退化为 JS 遍历（同一判据、同样不跟随软链），报告里写明用的哪种。 */
+function countDshPackageJson(runtimeDir) {
+  const root = join(runtimeDir, 'node_modules')
+  const pattern = '*/node_modules/@deepseek-ai/dsh/package.json'
+  try {
+    const out = execFileSync('find', [root, '-path', pattern], {
+      encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'],
+    })
+    const paths = out.split('\n').map((l) => l.trim()).filter(Boolean)
+    return { count: paths.length, method: 'find', paths, root, pattern }
+  } catch (err) {
+    const paths = []
+    const suffix = /node_modules[\\/]@deepseek-ai[\\/]dsh[\\/]package\.json$/
+    const walk = (dir) => {
+      let entries
+      try { entries = readdirSync(dir, { withFileTypes: true }) } catch { return }
+      for (const e of entries) {
+        const p = join(dir, e.name)
+        if (e.isSymbolicLink()) continue // 与 find 默认一致：不跟随软链
+        if (e.isDirectory()) walk(p)
+        else if (e.isFile() && suffix.test(p)) paths.push(p)
+      }
+    }
+    walk(root)
+    return { count: paths.length, method: 'js-walk', paths, root, pattern, findError: String(err.message ?? err).slice(0, 160) }
+  }
+}
+
+/** 只删自己建的升级临时目录：父目录 == tempBase 且名字带前缀（防 rm -rf 误伤）。 */
+function upgradeOwnsTempDir(dir, tempBase) {
+  if (!dir || !tempBase) return false
+  const abs = resolve(dir)
+  return dirname(abs) === resolve(tempBase) && basename(abs).startsWith('dsh-rehearse-upgrade-')
+}
+
+/** 负向自证注入点：升级后的树里塞一份**同版本**嵌套副本。
+ *  版本与父包一致 ⇒ manager 的 stale 清理（只删版本不一致的）不会捡走它，计数必然 > 1。
+ *  这是给断言 ② 做变异自证：如果塞了它断言还绿，说明该断言恒真。 */
+function injectNestedCopy(runtimeDir) {
+  const scope = join(runtimeDir, 'node_modules', '@deepseek-ai')
+  if (!existsSync(scope)) return { ok: false, error: `没有 ${scope}` }
+  const parent = readdirSync(scope).find((name) => name !== 'dsh' && existsSync(join(scope, name, 'package.json')))
+  if (!parent) return { ok: false, error: '找不到可注入的父包（@deepseek-ai/* 除 dsh 外至少需要一个）' }
+  const parentVersion = readJson(join(scope, parent, 'package.json'))?.version ?? null
+  if (!parentVersion) return { ok: false, error: `读不到父包版本：${parent}` }
+  const dest = join(scope, parent, 'node_modules', '@deepseek-ai', 'dsh')
+  mkdirSync(dest, { recursive: true })
+  writeFileSync(join(dest, 'package.json'), JSON.stringify({ name: DSH_PKG, version: parentVersion, private: true }, null, 2) + '\n')
+  return { ok: true, parent, version: parentVersion, dest }
+}
+
+async function runUpgradeScenario() {
+  steps.length = 0
+  const tUp = now()
+  const timing = { preflightMs: 0, seedMs: 0, oldInstallMs: 0, upgradeMs: 0, probeMs: 0, assertMs: 0, cleanupMs: 0, totalMs: 0 }
+  const versionRe = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/
+  const from = opts.upgradeFrom ?? UPGRADE_DEFAULT_FROM
+  const managerText = readFileSync(MANAGER, 'utf8')
+  const realFloor = /MIN_DSH_VERSION\s*=\s*'([^']+)'/.exec(managerText)?.[1] ?? null
+  const target = opts.version ?? realFloor
+  let status = 'PREFLIGHT'
+  let errorMsg = null
+  let tmp = null
+  let tempBase = null
+  let installJsonPath = null
+  let oldInfo = null
+  let upgradeChild = null
+  let upgradeChildExit = null
+  let counts = null
+  let faultInfo = null
+  let kept = false
+  let repoBefore = null
+  let repoAfter = null
+  const probe = { verdict: null, exitCode: null, counts: null, blocking: [], stdoutTail: [] }
+  const asserts = {}
+  const realFingerprints = {}
+
+  const emit = (code, st) => {
+    status = st
+    timing.totalMs = now() - tUp
+    const failedSteps = steps.filter((s) => s.status === 'fail')
+    const faultProven = opts.fault === 'nested-copy' && asserts.nested?.ok === false && counts?.temp?.count === 2
+    const result = {
+      tool: 'dsh-rehearse', scenario: 'upgrade', ok: code === 0, status, error: errorMsg,
+      repo: ROOT, startedAt: new Date(t0).toISOString(), finishedAt: new Date().toISOString(),
+      floorVersion: realFloor, targetVersion: target,
+      targetSource: opts.version ? '--version' : 'MIN_DSH_VERSION',
+      upgradeFrom: from, upgradeFromSource: opts.upgradeFrom ? '--upgrade-from' : `默认 ${UPGRADE_DEFAULT_FROM}`,
+      fault: opts.fault,
+      tmpDir: tmp, tempBase, kept,
+      installedOld: oldInfo,
+      upgradeChild: upgradeChild
+        ? {
+          exitCode: upgradeChildExit, status: upgradeChild.status,
+          installedVersion: upgradeChild.installedVersion, floorVersion: upgradeChild.floorVersion,
+          probe: upgradeChild.probe, tmpDir: upgradeChild.tmpDir, kept: upgradeChild.kept,
+        }
+        : null,
+      nestedCounts: counts, faultInfo,
+      asserts, probe,
+      repoStatusBefore: repoBefore, repoStatusAfter: repoAfter,
+      realFingerprints,
+      steps, timings: timing, gaps: UPGRADE_GAPS,
+    }
+    writeJson(opts.json, result)
+    console.log('')
+    if (code === 0) {
+      console.log(`  结论: GREEN — ${from} → ${target} 升级覆盖走通：落地 == 目标、无残留嵌套副本` +
+        `（临时 ${counts?.temp?.count} / 真实 runtime 对照 ${counts?.control?.count}）、探针 GREEN、真实仓库与真实 runtime 未被改动`)
+    } else if (faultProven) {
+      console.log(`  结论: 负向对照按预期变红 — --fault nested-copy 注入后「无残留嵌套副本」计数 ${counts?.temp?.count} ≠ 1，` +
+        `断言 ② 红、exit 1。这证明该断言会失败，不是恒真门禁；正常演练（不带 --fault）必须回到 1。`)
+    } else {
+      console.log(`  结论: ${status} — ${errorMsg ?? failedSteps.map((s) => `${s.name}(${s.detail})`).join('；')}`)
+    }
+    for (const g of UPGRADE_GAPS) console.log(`  ⚠ ${g}`)
+    if (kept && tmp) console.log(`  现场保留：${tmp}${installJsonPath ? `（install JSON：${installJsonPath}）` : ''}`)
+    return code
+  }
+
+  console.log('dsh:rehearse --scenario upgrade —— 旧版 → 新版「升级覆盖」演练（真实仓库 / 真实 runtime 只读）')
+  console.log(`  目标版本     ${target}${opts.version ? '（--version）' : '（真实仓库地板 MIN_DSH_VERSION）'}`)
+  console.log(`  旧版本       ${from}${opts.upgradeFrom ? '（--upgrade-from）' : `（默认 ${UPGRADE_DEFAULT_FROM}）`}`)
+  if (opts.fault) console.log(`  故障注入     ${opts.fault}（负向自证：断言 ② 必须变红）`)
+  console.log('')
+
+  // ── 语义前置（exit 2）：旧版必须低于地板，否则兼容闸门不会触发 ─────────────
+  const usageErr = (msg) => console.error(`\ndsh-rehearse --scenario upgrade: ${msg}\n\n${USAGE}`)
+  if (!realFloor) {
+    errorMsg = '读不到真实仓库地板 MIN_DSH_VERSION'
+    console.error(`\ndsh-rehearse --scenario upgrade: ${errorMsg}（${MANAGER}）`)
+    return emit(3, 'PREFLIGHT')
+  }
+  if (!versionRe.test(target)) { errorMsg = `--version 不是合法版本号：${target}`; usageErr(errorMsg); return emit(2, 'USAGE') }
+  if (!versionRe.test(from)) { errorMsg = `--upgrade-from 不是合法版本号：${from}`; usageErr(errorMsg); return emit(2, 'USAGE') }
+  if (bumpCmpVer(target, from) <= 0) {
+    errorMsg = `目标 ${target} 不高于旧版 ${from}`
+    usageErr(`${errorMsg} —— 升级演练要求"旧 → 新"；目标不高于旧版 = 假演练，拒绝执行。`)
+    return emit(2, 'USAGE')
+  }
+  if (bumpCmpVer(realFloor, from) <= 0) {
+    errorMsg = `旧版 ${from} 不低于壳地板 ${realFloor}`
+    usageErr(`${errorMsg} —— manager 的兼容闸门只在「已装版本 < 地板」时才升级；旧版 >= 地板时启动期不会发生升级（= 假演练）。\n  请给更低的 --upgrade-from（默认 ${UPGRADE_DEFAULT_FROM}）。`)
+    return emit(2, 'USAGE')
+  }
+
+  // ── 前置：热 runtime + 仓库资源（exit 3）──────────────────────────────────
+  const warmArg = opts.warmStore ?? DEFAULT_WARM_RUNTIME
+  let warmRuntime = resolve(warmArg)
+  if (basename(warmRuntime) === '.pnpm-store') warmRuntime = dirname(warmRuntime)
+  const warmStore = join(warmRuntime, '.pnpm-store')
+  const warmPnpm = join(warmRuntime, 'node_modules/pnpm/bin/pnpm.cjs')
+  const warmMissing = [
+    [warmRuntime, '热 runtime 不存在'],
+    [warmStore, '缺 .pnpm-store（不是热 store）'],
+    [warmPnpm, '缺随包 pnpm'],
+  ].filter(([p]) => !existsSync(p))
+  if (warmMissing.length) {
+    errorMsg = '热 runtime 前置不满足'
+    console.error(`\ndsh-rehearse --scenario upgrade: ${errorMsg} —— ${warmMissing.map(([p, w]) => `${w}：${p}`).join('；')}\n  用 --warm-store <dir> 指向本机真实的 dsh runtime。`)
+    return emit(3, 'PREFLIGHT')
+  }
+  for (const f of [MANAGER, PROBE, PATCH_FILE, join(RESOURCE_DIR, 'plugin/@dsh-desktop')]) {
+    if (!existsSync(f)) { errorMsg = `仓库资源缺失：${f}`; console.error(`\ndsh-rehearse --scenario upgrade: ${errorMsg}`); return emit(3, 'PREFLIGHT') }
+  }
+
+  // 原生构建放行名单**从 manager 派生**（不抄第二份）：空 runtime 直接 pnpm add 会让 pnpm 留下
+  // `allowBuilds: … set this to true or false` 提示桩；manager 的升级安装见文件已存在不会重写，
+  // 于是 ERR_PNPM_IGNORED_BUILDS 让 pnpm exit 1（本机 pnpm 11.24 实测）。真实 runtime 在升级前
+  // 本来就有 manager 写的这两份文件 ⇒ 先按同样写法铺好，才是"与真实窗口一致"。
+  const nativeBlock = /const NATIVE_BUILD_PKGS\s*=\s*\[([\s\S]*?)\]/.exec(managerText)
+  const nativePkgs = nativeBlock ? [...nativeBlock[1].matchAll(/'([^']+)'/g)].map((m) => m[1]) : []
+  if (!nativePkgs.length) {
+    errorMsg = '无法从 manager 的 NATIVE_BUILD_PKGS 解析原生构建放行名单'
+    console.error(`\ndsh-rehearse --scenario upgrade: ${errorMsg}（${MANAGER}）—— 解析不到就不铺 .npmrc/pnpm-workspace.yaml，拒绝继续。`)
+    return emit(3, 'PREFLIGHT')
+  }
+
+  // ── 前置：临时目录与 .pnpm-store 同设备（exit 3，不静默降级）──────────────
+  const storeDev = statDevice(warmStore)
+  const candidates = upgradeTempBaseCandidates(warmStore)
+  const rejected = []
+  let picked = null
+  for (const c of candidates) {
+    if (!existsSync(c.dir)) {
+      try { mkdirSync(c.dir, { recursive: true }) } catch (err) { rejected.push(`${c.dir}（${c.source}）创建失败：${err.message}`); continue }
+    }
+    const dev = statDevice(c.dir)
+    if (dev === null) { rejected.push(`${c.dir}（${c.source}）stat 失败`); continue }
+    if (storeDev !== null && dev !== storeDev) {
+      rejected.push(`${c.dir}（${c.source}）设备 ${dev} ≠ .pnpm-store 设备 ${storeDev}（跨设备会让 pnpm 退化/变慢）`)
+      continue
+    }
+    picked = { dir: c.dir, source: c.source, dev }
+    break
+  }
+  if (!picked) {
+    errorMsg = '没有与 .pnpm-store 同设备的临时目录'
+    console.error(`\ndsh-rehearse --scenario upgrade: ${errorMsg} —— 候选全部不可用：\n${rejected.map((r) => `  - ${r}`).join('\n')}\n  用 --temp-base <dir> 指定一个与热 runtime 的 .pnpm-store 同设备的目录。`)
+    return emit(3, 'PREFLIGHT')
+  }
+  if (opts.tempBase && picked.source !== '--temp-base') {
+    errorMsg = `--temp-base 不可用：${opts.tempBase}`
+    console.error(`\ndsh-rehearse --scenario upgrade: ${errorMsg} —— ${rejected.filter((r) => r.startsWith(resolve(opts.tempBase))).join('；') || '与 .pnpm-store 不同设备'}。\n  显式给了 --temp-base 就绝不偷偷换成别的目录。`)
+    return emit(3, 'PREFLIGHT')
+  }
+  tempBase = picked.dir
+
+  // ── 前置：真实仓库 status + 真实 runtime / 仓库关键文件指纹（只读快照）──────
+  for (const [name, file] of Object.entries(BUMP_REAL_FILES)) realFingerprints[name] = { before: fingerprint(file) }
+  const realRuntimeFiles = [
+    join(warmRuntime, `node_modules/${DSH_PKG}/package.json`),
+    join(warmRuntime, `node_modules/${DSH_PKG}/lib/bin.js`),
+    join(warmRuntime, 'package.json'),
+    join(warmRuntime, 'manager.log'),
+  ]
+  const realRuntimeBefore = realRuntimeFiles.map(fingerprint)
+  try {
+    repoBefore = bumpRepoStatus()
+  } catch (err) {
+    errorMsg = `git status 读不到：${err.message}`
+    console.error(`\ndsh-rehearse --scenario upgrade: ${errorMsg}（${ROOT} 是 git 仓库吗？）`)
+    return emit(3, 'PREFLIGHT')
+  }
+  timing.preflightMs = now() - tUp
+  step('upgrade-preflight', 'ok', timing.preflightMs,
+    `旧版 ${from} < 地板 ${realFloor}（兼容闸门会触发）；临时目录 ${tempBase}（${picked.source}，设备 ${picked.dev} == store ${storeDev}）；` +
+    `真实仓库非记录层改动 ${repoBefore.dirty.length} 条（前后必须一致）；原生构建放行 ${nativePkgs.length} 个（从 manager 派生）`)
+
+  // ── 1. 建临时 runtime（真实布局：manager 的两份配置 + 软链）─────────────────
+  {
+    const s = now()
+    tmp = mkdtempSync(join(tempBase, 'dsh-rehearse-upgrade-'))
+    mkdirSync(join(tmp, 'node_modules'), { recursive: true })
+    const linkType = process.platform === 'win32' ? 'junction' : 'dir'
+    symlinkSync(warmStore, join(tmp, '.pnpm-store'), linkType)
+    symlinkSync(join(warmRuntime, 'node_modules/pnpm'), join(tmp, 'node_modules/pnpm'), linkType)
+    writeFileSync(join(tmp, 'package.json'), JSON.stringify({ name: 'dsh-runtime', private: true, version: '0.0.0' }, null, 2) + '\n')
+    // 与 manager 的 ensureRuntimeDir / ensurePnpmWorkspace 逐字同形（含 JSON.stringify 的引号）。
+    writeFileSync(join(tmp, '.npmrc'), nativePkgs.map((p) => `allow-scripts[]=${p}`).join('\n') + '\n')
+    writeFileSync(join(tmp, 'pnpm-workspace.yaml'), 'allowBuilds:\n' + nativePkgs.map((p) => `  ${JSON.stringify(p)}: true`).join('\n') + '\n')
+    timing.seedMs = now() - s
+    step('seed-runtime', 'ok', timing.seedMs,
+      `${tmp}（package.json + .npmrc + pnpm-workspace.yaml 按 manager 两处写法生成；.pnpm-store / node_modules/pnpm 软链）`)
+  }
+
+  // ── 2. 绕过 manager 装旧版（hoisted，与生产布局一致）────────────────────────
+  {
+    const s = now()
+    const pnpmArgs = [warmPnpm, 'add', `${DSH_PKG}@${from}`, '--store-dir', warmStore, '--reporter=append-only', '--node-linker=hoisted']
+    if (opts.registry) pnpmArgs.push('--registry', opts.registry)
+    const out = await bumpSpawn(process.execPath, pnpmArgs, { cwd: tmp, label: 'pnpm-add', filter: /ERR_|Done in|postinstall|deprecated|WARN/ })
+    timing.oldInstallMs = now() - s
+    const landed = readJson(join(tmp, `node_modules/${DSH_PKG}/package.json`))?.version ?? null
+    const entryOk = existsSync(join(tmp, `node_modules/${DSH_PKG}/lib/bin.js`))
+    oldInfo = {
+      exitCode: out.code, signal: out.signal ?? null, landed, entryOk,
+      seconds: Math.round(timing.oldInstallMs / 1000),
+      stdoutTail: out.stdout.trim().split('\n').slice(-6),
+      stderrTail: out.stderr.trim().split('\n').slice(-6),
+    }
+    const ok = out.code === 0 && landed === from && entryOk
+    step('install-old', ok ? 'ok' : 'fail', timing.oldInstallMs,
+      `pnpm add ${DSH_PKG}@${from}（hoisted）→ rc=${out.code}，落地 ${landed ?? '(未装上)'}${entryOk ? '' : (landed ? '；缺 lib/bin.js（半装）' : '；未落地')}，${oldInfo.seconds}s`)
+    if (!ok) {
+      errorMsg = `旧版没装成：pnpm rc=${out.code}，落地 ${landed ?? '(未装上)'}（期望 ${from}）`
+      console.error(`\ndsh-rehearse --scenario upgrade: ${errorMsg}`)
+      if (out.stderr.trim()) console.error(`  pnpm stderr 尾部：${out.stderr.trim().split('\n').slice(-4).join(' | ').slice(0, 500)}`)
+      if (out.stdout.trim()) console.error(`  pnpm stdout 尾部：${out.stdout.trim().split('\n').slice(-4).join(' | ').slice(0, 500)}`)
+      kept = true
+      return emit(1, 'FAILED')
+    }
+  }
+
+  // ── 3. 基线：旧版树自己的嵌套计数必须 == 1（否则后续断言不可信）─────────────
+  {
+    const s = now()
+    const c = countDshPackageJson(tmp)
+    asserts.baseline = { ok: c.count === 1, count: c.count, method: c.method, paths: c.paths.map((p) => p.replace(tmp, '<tmp>')) }
+    step('baseline-nested', asserts.baseline.ok ? 'ok' : 'fail', now() - s,
+      `装旧版后同一 find 计数 ${c.count}（${c.method}）：${asserts.baseline.paths.join(', ') || '(无)'}`)
+    if (!asserts.baseline.ok) {
+      errorMsg = `装旧版后基线计数 ${c.count} ≠ 1（旧版树本身就不干净，后续断言不可信）`
+      kept = true
+      return emit(1, 'FAILED')
+    }
+  }
+
+  // ── 4. 复用 install 场景：manager 启动期兼容闸门升到地板 ────────────────────
+  {
+    const s = now()
+    installJsonPath = join(tmp, 'rehearse-install.json')
+    const selfArgs = [
+      fileURLToPath(import.meta.url), '--scenario', 'install', '--runtime-dir', tmp,
+      '--version', target, '--keep', '--json', installJsonPath, '--timeout', String(opts.timeoutSec),
+    ]
+    if (opts.warmStore) selfArgs.push('--warm-store', opts.warmStore)
+    if (opts.registry) selfArgs.push('--registry', opts.registry)
+    const out = await bumpSpawn(process.execPath, selfArgs, { label: 'upgrade' })
+    upgradeChildExit = out.code
+    upgradeChild = readJson(installJsonPath)
+    timing.upgradeMs = now() - s
+    const landed = upgradeChild?.installedVersion ?? null
+    const ok = out.code === 0 && upgradeChild !== null && landed === target
+    step('upgrade-install', ok ? 'ok' : 'fail', timing.upgradeMs,
+      `复用 install 场景（manager 启动期兼容闸门）exit=${out.code}，落地 ${landed ?? '(读不到)'}，探针 ${String(upgradeChild?.probe?.verdict ?? '?').toUpperCase()}`)
+    if (!ok) {
+      errorMsg = upgradeChild === null
+        ? `install 子场景没有写出 JSON（exit=${out.code}）`
+        : `升级没落到目标：落地 ${landed ?? '(无)'}，期望 ${target}（install exit=${out.code}，status=${upgradeChild.status}）`
+      kept = true
+      return emit(1, 'FAILED')
+    }
+  }
+
+  // ── 5. 断言 ①：落地版本（父进程独立复读，不采信子场景的自报）────────────────
+  {
+    const s = now()
+    const landed = readJson(join(tmp, `node_modules/${DSH_PKG}/package.json`))?.version ?? null
+    asserts.version = { ok: landed === target, landed, target, childReported: upgradeChild?.installedVersion ?? null }
+    step('assert-1-version', asserts.version.ok ? 'ok' : 'fail', now() - s,
+      `落地 ${landed ?? '(读不到)'} vs 目标 ${target}（父进程独立复读 package.json；子场景报告 ${upgradeChild?.installedVersion ?? '?'}）`)
+  }
+
+  // ── 5b. 负向自证注入（只在 --fault nested-copy 时）：让断言 ② 必须红 ─────────
+  if (opts.fault === 'nested-copy') {
+    const s = now()
+    faultInfo = injectNestedCopy(tmp)
+    step('fault-inject', faultInfo.ok ? 'ok' : 'fail', now() - s,
+      faultInfo.ok
+        ? `已注入 ${faultInfo.dest.replace(tmp, '<tmp>')}（version=${faultInfo.version}，与父包 ${faultInfo.parent} 同版本 ⇒ manager 的 stale 清理不会捡走）`
+        : `注入失败：${faultInfo.error}`)
+  }
+
+  // ── 5c. 断言 ②：无残留嵌套副本（同一命令 + 真实 runtime 对照）──────────────
+  {
+    const s = now()
+    counts = { temp: countDshPackageJson(tmp), control: countDshPackageJson(warmRuntime) }
+    const tempOk = counts.temp.count === 1
+    const controlOk = Number.isInteger(counts.control.count)
+    const ok = tempOk && controlOk
+    asserts.nested = {
+      ok, tempCount: counts.temp.count, controlCount: counts.control.count,
+      tempMethod: counts.temp.method, controlMethod: counts.control.method,
+      controlBaselineIsOne: counts.control.count === 1,
+      tempPaths: counts.temp.paths.map((p) => p.replace(tmp, '<tmp>')),
+      controlPaths: counts.control.paths.map((p) => p.replace(warmRuntime, '<warm>')),
+    }
+    step('assert-2-no-nested', ok ? 'ok' : 'fail', now() - s,
+      `临时 runtime 计数 ${counts.temp.count}（${counts.temp.method}）${opts.fault === 'nested-copy' ? ' ← 故障注入' : ''}；` +
+      `对照：真实 dev runtime 计数 ${counts.control.count}（同一命令，实测基线，不是硬编码的 1）`)
+  }
+
+  // ── 5d. 断言 ③：探针 GREEN（父进程独立跑，不采信子场景）────────────────────
+  {
+    const s = now()
+    const probeJson = join(tmp, 'upgrade-probe.json')
+    let exitCode = 0
+    let wrote = false
+    try {
+      const out = execFileSync(process.execPath, [PROBE, '--runtime', tmp, '--json', probeJson],
+        { encoding: 'utf8', timeout: Math.max(300_000, opts.timeoutSec * 1000), maxBuffer: 64 * 1024 * 1024 })
+      probe.stdoutTail = out.trim().split('\n').slice(-14)
+      wrote = true
+    } catch (err) {
+      exitCode = typeof err.status === 'number' ? err.status : -1
+      const out = `${err.stdout ?? ''}`
+      probe.stdoutTail = out.trim() ? out.trim().split('\n').slice(-14) : [`(探针无 stdout；${err.message}）`.slice(0, 200)]
+      wrote = existsSync(probeJson)
+    }
+    const report = readJson(probeJson)
+    probe.exitCode = exitCode
+    probe.verdict = report?.verdict ?? (/verdict = (\w+)/.exec(probe.stdoutTail.join('\n'))?.[1]?.toLowerCase() ?? null)
+    probe.counts = report?.counts ?? null
+    probe.blocking = (report?.findings ?? []).filter((f) => f.sev !== 'info').map((f) => ({ sev: f.sev, id: f.id, msg: f.msg }))
+    timing.probeMs = now() - s
+    asserts.probe = { ok: exitCode === 0 && probe.verdict === 'green', exitCode, verdict: probe.verdict, wrote }
+    step('assert-3-probe', asserts.probe.ok ? 'ok' : 'fail', timing.probeMs,
+      `dsh-compat-probe --runtime <tmp> ⇒ verdict=${(probe.verdict ?? '?').toUpperCase()} exit=${exitCode}`)
+    for (const f of probe.blocking) console.log(`        [${f.sev.toUpperCase()}] ${f.id}: ${f.msg}`)
+  }
+
+  // ── 5e. 断言 ④：真实仓库 status 前后一致 + 真实 runtime 指纹未变 ───────────
+  {
+    const s = now()
+    const realRuntimeAfter = realRuntimeFiles.map(fingerprint)
+    const runtimeUnchanged = realRuntimeBefore.every((b, i) => {
+      const a = realRuntimeAfter[i]
+      return b.exists === a.exists && b.sha256 === a.sha256 && b.mtimeMs === a.mtimeMs && b.size === a.size
+    })
+    let filesUnchanged = 0
+    const changedFiles = []
+    for (const [name, file] of Object.entries(BUMP_REAL_FILES)) {
+      const after = fingerprint(file)
+      realFingerprints[name].after = after
+      const before = realFingerprints[name].before
+      if (before.exists === after.exists && before.sha256 === after.sha256 && before.mtimeMs === after.mtimeMs && before.size === after.size) filesUnchanged += 1
+      else changedFiles.push(name)
+    }
+    let statusError = null
+    try { repoAfter = bumpRepoStatus() } catch (err) { statusError = err.message }
+    const sameStatus = repoAfter !== null && JSON.stringify(repoBefore.entries) === JSON.stringify(repoAfter.entries)
+    const ok = sameStatus && runtimeUnchanged && filesUnchanged === Object.keys(BUMP_REAL_FILES).length
+    asserts.realRepo = {
+      ok, sameStatus, statusError,
+      dirtyBefore: repoBefore.dirty, dirtyAfter: repoAfter?.dirty ?? null,
+      exemptBefore: repoBefore.exempt, exemptAfter: repoAfter?.exempt ?? [],
+      entriesBefore: repoBefore.entries.length, entriesAfter: repoAfter?.entries.length ?? null,
+      filesUnchanged, filesTotal: Object.keys(BUMP_REAL_FILES).length, changedFiles,
+      runtimeUnchanged,
+      runtimeFingerprints: realRuntimeFiles.map((f, i) => ({ path: f, before: realRuntimeBefore[i], after: realRuntimeAfter[i] })),
+    }
+    timing.assertMs = now() - s
+    step('assert-4-real-unchanged', ok ? 'ok' : 'fail', now() - s,
+      `真实仓库非记录层 status 前后${sameStatus ? '一致' : '不一致'}（${repoBefore.dirty.length} → ${repoAfter?.dirty.length ?? '读不到'} 条；条目 ${repoBefore.entries.length} → ${repoAfter?.entries.length ?? '?'}）；` +
+      `真实 runtime ${runtimeUnchanged ? `${realRuntimeFiles.length} 处指纹未变` : '指纹变了'}；仓库关键文件 ${filesUnchanged}/${Object.keys(BUMP_REAL_FILES).length} 未变`)
+  }
+
+  // ── 6. 清理（成功才删自己建的临时 runtime；失败 / --keep 保留现场）──────────
+  {
+    const s = now()
+    const anyFail = steps.some((x) => x.status === 'fail')
+    kept = opts.keep || anyFail
+    if (kept) {
+      step('cleanup', 'skip', 0, `${opts.keep ? '--keep' : '失败保留现场'}：${tmp}`)
+    } else if (!upgradeOwnsTempDir(tmp, tempBase)) {
+      step('cleanup', 'fail', 0, `拒绝删除非本脚本创建的路径：${tmp}`)
+    } else {
+      rmSync(tmp, { recursive: true, force: true })
+      step('cleanup', existsSync(tmp) ? 'fail' : 'ok', now() - s, '临时 runtime 已删（软链只删链、不跟随）')
+    }
+    timing.cleanupMs = now() - s
+  }
+
+  const allGreen = !steps.some((x) => x.status === 'fail') && upgradeChildExit === 0
   return emit(allGreen ? 0 : 1, allGreen ? 'GREEN' : 'FAILED')
 }
 
