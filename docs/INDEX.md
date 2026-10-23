@@ -18,6 +18,7 @@
 | 壳 UI 设计 token | [`2026-09-02-ui-design-tokens.md`](2026-09-02-ui-design-tokens.md) | 设计参考（活文档） |
 | 方案与决策记录（含 dsh 升级回归的全过程与当前契约） | [`2026-09-25-shell-improvement-plan.md`](2026-09-25-shell-improvement-plan.md) | **先读文件顶部的「当前状态摘要」**；§13/§15 是历史记录，配方真源在技能里 |
 | 官方桌面客户端对照与采用清单（0.2.1-rc.2） | [`2026-10-23-official-client-adoption-review.md`](2026-10-23-official-client-adoption-review.md) | 一次性调研；外部事实带 `文件:行` 坐标，`[假设]` 不进采用清单；§3 是后续 5 条实施项的真源 |
+| 自动化发版/告警链路防错清单（幂等 · 告警 · 定时 · 凭据 · 保留 · 退避） | [`2026-10-24-alerting-and-idempotency-patterns.md`](2026-10-24-alerting-and-idempotency-patterns.md) | 一次性调研；每条结论带官方文档/源码坐标；§7 是采用清单（11 条，S=7/M=4），§8 是不采用，§9 是 `[假设]`（不进采用清单） |
 | 上游缺陷内部记录·渲染成本（**不提交**） | [`reports/2026-10-05-upstream-web-gui-never-idles.md`](reports/2026-10-05-upstream-web-gui-never-idles.md) | 实测空闲仍 ~120 次/秒 style+layout 失效；长会话 + 大图下 GPU 可被拉满 |
 | dsh 日常升级自动化方案（目标：官方发布后 6 小时内出稳定版） | [`2026-10-17-dsh-upgrade-automation-plan.md`](2026-10-17-dsh-upgrade-automation-plan.md) | **implemented（P0/P1/P2 已落地并在 main 运行，P3 可选未做）**；§1 的基线是 2026-10-17 快照；§3.x 里**未实现**的条目已就地标注「设计稿（未实现）」并写明实际实现（SLA 定义/四批实施/probe · watch · tag 补派发 · dsh:adapt · canary 验收 · SLA 报表 · 预装同步）| 
 | 上游缺陷内部记录（**不提交**，2026-10-05 决定） | [`reports/2026-10-05-upstream-403-misclassified-as-auth.md`](reports/2026-10-05-upstream-403-misclassified-as-auth.md) | 403+`server_error` 被归类 AUTH 且不在可重试白名单（GUI 报「API 密钥无效」）；**决定不提交，作为内部记录** |
