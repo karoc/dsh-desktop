@@ -7,6 +7,12 @@
 //                                   [--since 2026-10-19] [--registry <url>] [--repo <owner/name>] [--assignee <login>]
 //                                   [--now <iso>]（演练：钉住"现在"，只影响"距今多久"）
 //
+// ── 为什么**不**接入 A6 的三态/退避状态机（2026-10-24 决定）───────────────────────
+//   它是**每周**一趟的报表 job（`.github/workflows/dsh-sla-report.yml`，周一 01:00 UTC），且 issue
+//   upsert 已用正文里的 `dsh-sla-report-state` digest 去重（版本集合/达标状态没变时连 edit 都跳过）
+//   ⇒ 不存在"每 10 分钟重印同一段错误"的路径，接入只会多一个要维护的状态文件。
+//   同样的理由见 `docs/2026-10-17-dsh-upgrade-automation-plan.md` §3.8.1 的"未做"清单。
+//
 // 口径（方案 §1.1a，与人工基线一致）：
 //   起点 T0   = npm `time[<该版本随包地板>]`（上游发布时间）
 //   地板提交  = `git log -G"MIN_DSH_VERSION = '<v>'" -1 <tag>`（我们开始承诺该地板的提交）

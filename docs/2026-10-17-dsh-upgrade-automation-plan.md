@@ -1,6 +1,6 @@
 # dsh 日常升级自动化方案（目标：官方发布后 6 小时内出稳定版）
 
-Status: implemented（P0/P1/P2 已落地并在 main 运行；P3 可选，未做；2026-10-24 新增 A3 凭据能力探测 + A5 反向心跳）
+Status: implemented（P0/P1/P2 已落地并在 main 运行；P3 可选，未做；2026-10-24 新增 A3 凭据能力探测 + A5 反向心跳 + A6 三态退避 + A7 日志与产物保留）
 Date: 2026-10-17（实施状态最后更新 2026-10-24）
 相关：`CONTRIBUTING.md`、`.dsh/skills/dsh-desktop-shell-dev/SKILL.md`、`.dsh/skills/dsh-preinstalled-plugin-sync/SKILL.md`、
 `scripts/server-manager.mjs` 的 `MIN_DSH_VERSION` 注释（历次适配的现场记录）、
@@ -363,6 +363,55 @@ T0 = `time[该壳版本随包地板]`（可能是预发布），终点 = 首个�
 push 前 `git ls-remote` 取期望值 + `git fetch` 建远端跟踪引用 + 显式 `--force-with-lease=refs/heads/<b>:<sha>`
 （干净检出没有跟踪引用，裸 lease 会以 stale info 拒绝 ⇒ 旧实现第二次运行必失败、既有 PR 永不更新）；
 `workflow_dispatch` 输入一律经 env 进 bash。
+
+**3.8 三态 + 指数退避 + 只在跃迁时通知（A6）/ 日志与产物保留（A7）** —— **已落地（2026-10-24）**
+
+问题：三个本机 timer 都是"每 10 分钟一轮"，失败时**每轮重印同一段完整错误**；日志/产物也没有保留策略。
+理论依据见 [2026-10-24-alerting-and-idempotency-patterns.md](2026-10-24-alerting-and-idempotency-patterns.md)
+（PR #219）§5（保留）与 §6（退避/状态机）的采用清单 A6 / A8 / A9。落地范围与**未做**的部分：
+
+**3.8.1 退避状态机**（`scripts/lib/backoff-state.mjs`；接入 `dsh-watch` 与 `dsh-release-autopilot`）
+
+- 状态：`healthy`（最近一次成功）/ `degraded`（连续失败 1..N-1，默认 N=3）/ `broken`（≥N，或在
+  不可重试错误上立即 broken）。状态文件 `~/.dsh/state/<tool>.json`（`--state-dir`/`--state-file` 覆盖、
+  `DSH_STATE_DIR` 环境变量、原子写 tmp+rename、schema 校验；**损坏 ⇒ 备份 `*.corrupt-<ts>` 后重建
+  healthy**，fail-open）。
+- 退避：5 → 10 → 20 → 40 → **封顶 60 分钟**。broken 期间每轮 stdout **只有一行**
+  `still broken (attempt k, next retry in Xm)`，未到 `nextAttemptAt` **跳过实际工作**；失败明细进
+  `<state>.detail.log`（128KB 触发、只留尾部 400 行）；**每轮**写一行心跳 `<state>.heartbeat`
+  （`skipped=yes/no`）供反向心跳区分"在退避"与"进程死了"。
+- 通知：**只在跃迁时**发一条 issue 评论 —— healthy→degraded、degraded→broken（或首次即 broken）、
+  broken→healthy；degraded→healthy **静默**（还没通知过任何人）。评论带
+  `<!-- <tool>-backoff: state=<to> … digest=<sha> -->`，digest 由 `<tool>|<from>|<to>|<enteredStateAt>`
+  派生 ⇒ 补发/并发幂等，恢复后再次坏掉仍是新的一条。写失败进 `pendingNotification`，下一轮补发。
+- 退出码：degraded/broken 的**重试轮** 1；**退避跳过轮 0**（没干活、也不是新故障 —— 0 是为了不与
+  systemd `Restart=on-failure`+`RestartSec=60` 叠成热循环）。健康判据 = 状态文件 + 跃迁评论。
+- **CI 特例（有意）**：Actions runner 文件系统临时 ⇒ 状态每轮从 healthy 开始；脚本在
+  `GITHUB_ACTIONS=true` 且未显式给 `--state-dir/--state-file/DSH_STATE_DIR` 时**只记账、不发**
+  跃迁评论（否则每轮一条 degraded 评论，比现状更吵）。"任务没跑"那一层归 A5 dead man's switch。
+- 人工：`--reset-state`（只重置本地状态、**不写 GitHub**）；`--no-backoff` 仅供演练/负向对照。
+- **未做（明确登记）**：`dsh-sla-report.mjs` **不接入** —— 它是**每周**一趟的报表 job（`dsh-sla-report.yml`
+  周一 01:00 UTC），且 issue upsert 已用 `dsh-sla-report-state` digest 去重，不存在"每 10 分钟重复错误"
+  的路径；接入只会多一个要维护的状态文件。本机 systemd 单元的 `RestartSteps=4` +
+  `RestartMaxDelaySec=3600` 只在 README 给模板（**不改用户机器**，unit 不在仓库里）；
+  `dsh-watch.service` 改 unit + `daemon-reload` 属**用户动作**。
+- 门禁：`scripts/test-backoff-state.mjs`（`npm test` 链上；纯函数单测 + 8 轮实测 + 负向对照
+  `--no-backoff` 必须退回"8 轮全量错误 + 0 条跃迁评论"，另外覆盖 autopilot 的同一闸门）。
+
+**3.8.2 日志与产物保留**
+
+- `~/.dsh/logs/*.log`：systemd `append:` **没有轮转**（§5.1）。模板 [scripts/logrotate.dsh.conf](../scripts/logrotate.dsh.conf)
+  （`daily` + `maxsize 20M` + `rotate 7` + `compress` + `delaycompress` + `copytruncate` + `missingok`
+  + `notifempty`）；用户级安装 + `logrotate -d` 干跑 + systemd user timer 模板写在 README
+  「日志与状态文件在哪、怎么清理」。本机实测 `logrotate -d` 通过、`-f` 后原件截断为 0 且生成 `.1`。
+- journald：本机上限 ~100M 且会 vacuum（`AGENTS.md`）⇒ journal 不能当长期取证源，关键日志落文件。
+- 退避状态/心跳/锁/PAUSE：可安全删除（删状态 = 忘掉退避历史，职能不丢），正规入口 `--reset-state`。
+- hang dump：**实际策略在壳里**（`src-tauri/src/lib.rs:3990` 的 `HANG_DUMP_KEEP = 3` +
+  `web_dump::prune_dumps` 按文件名保留最新 3 份），**只有份数上限、没有时间/总量上限**；
+  `scripts/server-manager.mjs` **没有** dump 保留逻辑（`grep -n dump` 只命中看护协议行：请壳抓 dump /
+  等 dump-done / 重启）—— "manager 管 dump 保留"是误解。建议值 3 份 + 14 天 + 总量 ≤1GB 已写进 README，
+  实现要改 `src-tauri/**`，**不在本轮写域**（登记为后续卡）。
+- 插件升级备份 `.plugin-backup` + `.plugin-backup.prev` 至多两份（`server-manager.mjs:763-774`），天然有界。
 
 ### P3 —— 可选/降级预案
 

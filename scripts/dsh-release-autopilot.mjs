@@ -79,6 +79,16 @@
 //   DSH_AUTOPILOT_WATCH_JSON=<f>   跳过 dsh-watch，直接读一份探测 JSON（回放 target 用）
 //   GH_REPO=<o/r>                  同 --repo
 //
+// ── A6：退避 + 三态（2026-10-24，与 dsh-watch 共用 scripts/lib/backoff-state.mjs）────
+//   定时器每 10–30 分钟一轮（本机 unit 是 10 分钟），旧行为是失败时**每轮重跑整条流水线 + 重印整段错误**。现在连续失败 3 次进入
+//   broken，按 5→10→20→40（封顶 60）分钟退避：退避期内**只输出一行** `still broken (attempt k, next
+//   retry in Xm)`、不 clone / 不 push / 不调 gh 写接口；心跳每轮写 `~/.dsh/state/dsh-release-autopilot.heartbeat`。
+//   通知只在跃迁时回帖一次（healthy→degraded / →broken / →healthy），带 `state=<to>` 标记 + digest。
+//   状态文件 `~/.dsh/state/dsh-release-autopilot.json`（`--state-dir`/`--state-file` 覆盖）；
+//   `--reset-state` 人工恢复（不写 GitHub）；`--no-backoff` 只给演练/负向对照。
+//   退出码补充：退避跳过轮 0（不干活、也不是新故障）；2（用法）/130（中断）不记账。
+//   详细口径与"为什么 CI 里只记账不发评论"见 dsh-watch 头注释同名段。
+//
 // ── systemd user timer 模板（本仓库**不**改你机器上的 systemd；只给模板）──────
 //   ~/.config/systemd/user/dsh-release-autopilot.service
 //     [Unit]
@@ -122,7 +132,12 @@ import {
 } from 'node:fs'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
+import {
+  appendHeartbeat, backoffMinutes, decide, heartbeatFileFor, loadState, recordOutcome,
+  renderBrokenEntry, renderHeartbeat, renderRetriedFailure, renderStillBroken, renderTransitionComment,
+  resetStateFile, saveState,
+} from './lib/backoff-state.mjs'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const T0 = Date.now()
@@ -150,6 +165,11 @@ const USAGE = `usage: node scripts/dsh-release-autopilot.mjs [--dry-run] [--stag
   --assignee <login> 新 issue 的 assignee（缺省=仓库 owner）
   --canary-timeout s 透传 dsh-adapt（默认 180）
   --dev-log/--manager-log  --require-canary 用的真实 dev 壳日志路径
+  --state-dir <dir>  退避状态目录（默认 ~/.dsh；状态文件 = <dir>/state/dsh-release-autopilot.json）
+  --state-file <p>   直接指定退避状态文件
+  --failure-threshold <n>  连续失败几次进入 broken（默认 3）
+  --reset-state      重置本地退避状态为 healthy（不写 GitHub）后退出
+  --no-backoff       禁用退避/状态记录（只给演练与负向对照）
 
 退出码：0 完成 / 1 失败 / 2 用法 / 3 前置不满足。详见脚本头注释。`
 
@@ -161,6 +181,7 @@ function parseArgs(argv) {
     json: false, jsonFile: null, waitMinutes: 40, pollSeconds: 20,
     runtime: null, repo: null, assignee: null, canaryTimeout: 180,
     devLog: null, managerLog: null, help: false,
+    stateDir: null, stateFile: null, failureThreshold: 3, resetState: false, noBackoff: false,
   }
   const val = (i, name) => {
     const v = argv[i + 1]
@@ -201,6 +222,15 @@ function parseArgs(argv) {
       o.canaryTimeout = n
     } else if (a === '--dev-log' || eq === '--dev-log') o.devLog = resolve(take('--dev-log'))
     else if (a === '--manager-log' || eq === '--manager-log') o.managerLog = resolve(take('--manager-log'))
+    else if (a === '--state-dir' || eq === '--state-dir') o.stateDir = resolve(take('--state-dir'))
+    else if (a === '--state-file' || eq === '--state-file') o.stateFile = resolve(take('--state-file'))
+    else if (a === '--reset-state') o.resetState = true
+    else if (a === '--no-backoff') o.noBackoff = true
+    else if (a === '--failure-threshold' || eq === '--failure-threshold') {
+      const n = Number(take('--failure-threshold'))
+      if (!Number.isInteger(n) || n < 1) throw new UsageError('--failure-threshold 必须是正整数')
+      o.failureThreshold = n
+    }
     else throw new UsageError(`未知参数 ${a}`)
   }
   if (o.repo && !/^[^/\s]+\/[^/\s]+$/.test(o.repo)) throw new UsageError(`--repo 必须是 owner/name（收到 ${o.repo}）`)
@@ -268,6 +298,125 @@ const STATE = {
   runtimeCreated: false,
   workDir: null,
   releasePrNoCheckException: false,
+}
+
+// ── A6：三态 + 指数退避 + 只在跃迁时通知（与 dsh-watch 同一个模块）───────────
+// 定时器每 10 分钟一轮；旧行为是失败时**每轮重跑整条流水线并重印整段错误**。现在连续失败 3 次进入
+// broken、按 5→10→20→40（封顶 60）分钟退避；退避期内**只输出一行心跳行**、不 clone / 不 push /
+// 不调 gh 写接口。通知只在跃迁时回帖一次（healthy→degraded / →broken / broken→healthy），
+// 评论带 `state=<to>` 机器标记 + digest（补发/并发幂等）。人工恢复：`--reset-state`。
+// 展开说明见 scripts/lib/backoff-state.mjs 与 scripts/dsh-watch.mjs 的同名段。
+const TOOL = 'dsh-release-autopilot'
+const STATE_DIR = resolve(opts.stateDir ?? process.env.DSH_STATE_DIR ?? join(homedir(), '.dsh'))
+const STATE_FILE = resolve(opts.stateFile ?? join(STATE_DIR, 'state', `${TOOL}.json`))
+const HEARTBEAT_FILE = heartbeatFileFor(STATE_FILE)
+const STATE_WRITES_OK = !opts.dryRun
+const PERSISTENT_STATE = Boolean(opts.stateDir || opts.stateFile || process.env.DSH_STATE_DIR)
+const NOTIFY_TRANSITIONS = !(process.env.GITHUB_ACTIONS === 'true' && !PERSISTENT_STATE)
+const FAILURE_THRESHOLD = opts.failureThreshold
+let backoff = null
+let backoffState = null
+
+function persistBackoff() {
+  if (!backoff || !STATE_WRITES_OK) return
+  try { saveState(STATE_FILE, backoffState) } catch (err) {
+    log(`[warn] 写不出退避状态 ${STATE_FILE}：${short(err.message, 200)} —— 本轮结果未记账（下一轮重新判断）`)
+  }
+}
+function beat(exit) {
+  if (!backoff || !STATE_WRITES_OK) return
+  appendHeartbeat(HEARTBEAT_FILE, renderHeartbeat({
+    tool: TOOL, state: backoffState?.state ?? 'unknown', nowIso: new Date().toISOString(),
+    attempt: backoffState?.consecutiveFailures ?? 0, skipped: false, exit,
+  }))
+}
+/** 同一场故障（同 enteredStateAt + 同 from→to）摘要稳定 ⇒ 补发不重复；恢复后再坏是新的一条。 */
+const transitionDigest = (t) => createHash('sha256')
+  .update(`${TOOL}|${t.from}|${t.to}|${backoffState?.enteredStateAt ?? ''}`).digest('hex').slice(0, 16)
+function notifyTransition(transition, error) {
+  if (!transition?.notify) return
+  const digest = transitionDigest(transition)
+  if (backoffState.notified[digest]) return
+  const { body } = renderTransitionComment({
+    tool: TOOL, transition, error, threshold: FAILURE_THRESHOLD, nextAttemptAt: backoffState.nextAttemptAt,
+    digestToken: digest, nowIso: new Date().toISOString(),
+  })
+  if (!NOTIFY_TRANSITIONS) {
+    log(`[info] 状态跃迁 ${transition.from}→${transition.to}（CI 临时文件系统：只记账、不发评论）`)
+    backoffState.notified[digest] = new Date().toISOString()
+    return
+  }
+  const pending = { from: transition.from, to: transition.to, digest, body, at: new Date().toISOString() }
+  if (!STATE.issue?.number) {
+    backoffState.pendingNotification = pending
+    log(`[info] 状态跃迁 ${transition.from}→${transition.to}：本轮还没有 issue 可回帖，已记进状态文件（下一轮补发）`)
+    return
+  }
+  if (commentIssue(body)) {
+    backoffState.notified[digest] = new Date().toISOString()
+    log(`[info] 状态跃迁 ${transition.from}→${transition.to}：已回帖 issue #${STATE.issue.number}`)
+  } else {
+    backoffState.pendingNotification = pending
+    log('[warn] 跃迁回帖失败：已记进状态文件（下一轮补发）')
+  }
+}
+/** flow 里解析出 issue 之后调用：把上一轮没发出去的跃迁评论补上（至少一次）。 */
+function flushPendingNotification() {
+  const p = backoffState?.pendingNotification
+  if (!p || !NOTIFY_TRANSITIONS || !STATE.issue?.number) return
+  if (!commentIssue(p.body)) return
+  backoffState.notified[p.digest] = new Date().toISOString()
+  backoffState.pendingNotification = null
+  log(`[info] 补发跃迁回帖 #${STATE.issue.number}（${p.from}→${p.to}）`)
+  persistBackoff()
+}
+/** 收尾记账：0 成功 / 1 失败 / 3 前置不满足算失败；2 用法、130 中断不记（不是工具坏了）。 */
+function finishBackoff(exitCode) {
+  if (!backoff) return
+  if (!STATE_WRITES_OK || (exitCode !== 0 && exitCode !== 1 && exitCode !== 3)) { beat(exitCode); return }
+  const wasBroken = backoffState.state === 'broken'
+  const error = exitCode === 0 ? null : (STATE.error?.message ?? `exit ${exitCode}`)
+  const { state, transition } = recordOutcome(backoffState, {
+    ok: exitCode === 0, error, nowMs: Date.now(), threshold: FAILURE_THRESHOLD,
+  })
+  backoffState = state
+  if (exitCode !== 0 && state.state === 'broken') {
+    log(wasBroken
+      ? renderRetriedFailure({ attempt: state.consecutiveFailures, minutesLeft: backoffMinutes(state.backoffRetries), error, nowIso: new Date().toISOString() })
+      : renderBrokenEntry({ attempt: state.consecutiveFailures, minutesLeft: backoffMinutes(state.backoffRetries), error, threshold: FAILURE_THRESHOLD }))
+  }
+  if (transition?.notify) notifyTransition(transition, error)
+  persistBackoff()
+  beat(exitCode)
+}
+
+if (opts.noBackoff) {
+  log('[warn] 退避/状态记录已禁用（--no-backoff）：仅用于演练与负向对照，生产轮次不要带它')
+} else {
+  backoff = { file: STATE_FILE, tool: TOOL }
+  const loaded = loadState(STATE_FILE, { tool: TOOL, nowMs: Date.now(), stamp: new Date().toISOString() })
+  backoffState = loaded.state
+  if (opts.resetState) {
+    resetStateFile(STATE_FILE, { tool: TOOL, nowMs: Date.now() })
+    log(`退避状态已重置：${STATE_FILE}（healthy，不写 GitHub）—— 人工恢复用；下一轮会重新判断`)
+    process.exit(0)
+  }
+  if (STATE_WRITES_OK && loaded.corrupt) {
+    log(`[warn] 退避状态文件损坏（${loaded.corrupt.reason}）⇒ 已备份并重建为 healthy（fail-open：坏状态不该让流水线永远静默）`)
+    persistBackoff()
+  }
+  if (STATE_WRITES_OK) {
+    const d = decide(backoffState, Date.now())
+    if (d.skip) {
+      backoffState.lastRunAt = new Date().toISOString()
+      persistBackoff()
+      beat(0)
+      STATE.stage = 'skipped-backoff'
+      log(renderStillBroken({ attempt: backoffState.consecutiveFailures, minutesLeft: d.minutesLeft, nowIso: new Date().toISOString() }))
+      emitJson(0)
+      process.exit(0)
+    }
+  }
 }
 function step(name, status, ms, detail = '') {
   STATE.steps.push({ name, status, ms, detail })
@@ -1173,6 +1322,7 @@ async function flow() {
 
   beginStage('issue')
   STATE.issue = resolveIssue(probe.target, probe.floor)
+  flushPendingNotification()
   endStage('issue', `#${STATE.issue.number}（${STATE.issue.source}）`)
 
   // 既有 PR（幂等）
@@ -1369,6 +1519,7 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig, () => {
     log(`\n收到 ${sig}：中断。已 push 的 auto/ 分支与 PR 保留；若中断在 ⑤（合并适配 PR）之前，重跑同一 target 会复用；`
       + '若中断在 ⑤ 之后（或用了 --stage1），地板已等于 target、dsh-watch 不会再报它，release-please 版本 PR 留在 open，需人工合并/派发。未对 main 做任何写操作。')
+    beat(130)
     cleanupAndExit(130, { hard: true })
   })
 }
@@ -1394,4 +1545,5 @@ try {
   printSummary(exitCode)
   emitJson(exitCode)
 }
+finishBackoff(exitCode)
 cleanupAndExit(exitCode)
