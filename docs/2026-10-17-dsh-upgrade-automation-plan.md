@@ -376,8 +376,9 @@ push 前 `git ls-remote` 取期望值 + `git fetch` 建远端跟踪引用 + 显�
   不可重试错误上立即 broken）。状态文件 `~/.dsh/state/<tool>.json`（`--state-dir`/`--state-file` 覆盖、
   `DSH_STATE_DIR` 环境变量、原子写 tmp+rename、schema 校验；**损坏 ⇒ 备份 `*.corrupt-<ts>` 后重建
   healthy**，fail-open）。
-- 退避：5 → 10 → 20 → 40 → **封顶 60 分钟**。broken 期间每轮 stdout **只有一行**
-  `still broken (attempt k, next retry in Xm)`，未到 `nextAttemptAt` **跳过实际工作**；失败明细进
+- 退避：5 → 10 → 20 → 40 → **封顶 60 分钟**。broken 之后每轮 stdout **只有一行**
+  `still broken (attempt k, next retry in Xm)`（进入 broken 的那一轮另有「连续 N 次失败」一行摘要 + 跃迁评论），
+  未到 `nextAttemptAt` **跳过实际工作**；失败明细进
   `<state>.detail.log`（128KB 触发、只留尾部 400 行）；**每轮**写一行心跳 `<state>.heartbeat`
   （`skipped=yes/no`）供反向心跳区分"在退避"与"进程死了"。
 - 通知：**只在跃迁时**发一条 issue 评论 —— healthy→degraded、degraded→broken（或首次即 broken）、

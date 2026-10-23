@@ -743,7 +743,8 @@ MIT
   ① **healthy → degraded**（连续失败 1–2 次）：仍打印完整错误（还在诊断窗口），**只发一次**跃迁评论；
   ② **degraded → broken**（第 3 次连续失败；403/404/凭据这类**不可重试**错误第一次就 broken）：
      **只发一次**跃迁评论，进入退避；
-  ③ **broken 期间**：每轮 stdout **只有一行** `still broken (attempt k, next retry in Xm)`，到
+  ③ **broken 之后**：每轮 stdout **只有一行** `still broken (attempt k, next retry in Xm)`（进入 broken 的那一轮
+     另外给一行「连续 N 次失败」摘要 + 一条跃迁评论），到
      `nextAttemptAt` 之前**跳过实际工作**（不探 npm / 不 clone / 不 push / 不写 issue）；失败明细进
      `<state>.detail.log`，心跳每轮一行写 `<state>.heartbeat`（`skipped=yes/no` —— 反向心跳据此区分
      "进程还在、只是退避中"与"进程死了"）；退避 **5 → 10 → 20 → 40 → 封顶 60 分钟**；
