@@ -70,7 +70,7 @@ node scripts/test-chrome-bootstrap.mjs  # 壳"真实初始化路径"（纯 Node�
 # 格式靠自律——禁止提交全仓格式化 diff（会淹没真实改动）。
 ```
 
-CI 分层：PR 只跑快层（check + test，~5min，含两套 CI 辅助脚本自检）；main/tag 跑全量（windows 打包+冒烟、linux 打包、**阻断式** linux-smoke）。
+CI 分层：PR 只跑快层（check + test，~5min，含三套 CI 辅助脚本自检）；main/tag 跑全量（windows 打包+冒烟、linux 打包、**阻断式** linux-smoke）。
 
 **外部网络访问必须走 npm / curl 的传输，不要用裸 `fetch`**：Node 的 `fetch` 不读 npm 的
 `.npmrc` 代理配置，且代理变量与 `NODE_USE_ENV_PROXY` 在进程启动时就被采样（脚本内再设无效），
@@ -168,6 +168,32 @@ app 提前退出即失败；超时打印进程/GL/日志诊断。历史教训写
 时 NSIS 布局断言会静默失效）。自检：`node scripts/ci-choco-install.mjs --self-test`
 （2 失败后成功 ⇒ 绿；3 次全失败 ⇒ 红；已装 ⇒ 0 次调用；首次成功 ⇒ 只跑 1 次）。
 两条自检都挂在 build.yml 的 `test` 作业上，所以"把门禁改成永真"的回归会在 PR 阶段被挡住。
+
+## CI 的 Ubuntu 系统依赖（2026-10-24）
+
+四个作业（`check` / `rust-coverage` / `linux` / `linux-smoke`）的 apt 安装统一走
+`scripts/ci-apt.sh <tauri|smoke>`，workflow 里不再内联 `apt-get`。动因是实测出来的极端抖动：
+同一条 `apt-get install` 在 runner 上从 **21s** 到 **27m20s**（run 40024960026 的 `check`）、
+`linux-smoke` 17m03s（run 40029539904）——下载源逐个包卡住，而 apt 没有总时长上限，PR 于是
+卡在 `check=pending`，发布日的 6h 预算也被慢步吃掉。
+
+脚本做三件事：
+
+- **缓存**：workflow 用 `actions/cache` 持久化 `$RUNNER_TEMP/apt-archives`；脚本在安装前把缓存
+  里的 `.deb` 放进 apt 归档目录、安装后回写（只留本次实际用到的版本，缓存不随版本膨胀）。缓存 key
+  含 **Ubuntu `VERSION_ID`**、profile 与 `hashFiles('scripts/ci-apt.sh')` ⇒ 改包列表/换 Ubuntu 版本
+  会自动 miss 一次，不会拿旧包装新环境；命中时 apt 直接本地安装，**慢源对已缓存版本不再有影响**。
+- **`--no-install-recommends`**（`tauri` 档）：Ubuntu 24.04 上实测少装 52 个推荐包（与编译无关）。
+  `smoke` 档**故意保留 recommends**：headless WebKit 依赖 xvfb 推荐的 mesa/GL 与 portal 组件，
+  它是阻断式真门禁，不拿它做体积优化。
+- **有界重试**：默认 3 次（`DSH_APT_ATTEMPTS` 可调），每次打印失败原因；预算耗尽仍 exit 1 ——
+  没有 `|| true` / skip / continue-on-error。
+
+自检（不联网、不需 root，CI 快层会跑）：`bash scripts/ci-apt.sh --self-test` —— 首次成功、瞬时故障
+恢复、预算耗尽必须红、缓存命中先导入后回写共 4 个用例。
+
+**改系统依赖的入口**：编辑 `scripts/ci-apt.sh` 里对应 profile 的包列表，不要回到 build.yml 写裸
+`apt-get`（否则那一步会绕过缓存与重试，慢源问题原样复现）。
 
 ## 门禁自身的验证（2026-10-07 起，硬规则）
 
