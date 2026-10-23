@@ -10,6 +10,16 @@
 # 还会直接造成语法错误。现在 FORCE_TARGET / DRY_RUN 走 env，bash 里用 "$FORCE_TARGET"。
 #
 # 零 secret（只用 GITHUB_TOKEN 的 issues: write）；不改地板、不建 PR。
+#
+# ⚠️ 本 workflow 是 `dsh-watch` 的**第二个写者**（另一个是本机 systemd user timer，10 分钟一次）。
+# 双写者是**设计事实**，不是可以消除的巧合 —— 所以脚本里的所有写操作必须**收敛式（幂等）**：
+#   · 去重键 =「标题里的版本号（词边界）+ 本脚本的标题前缀」，**不看 label**（label 是创建之后的第二次写，
+#     2026-10-24 的事故里 16 条 issue 的 label/assignee 从未落地 ⇒ 按 label 过滤查到 0 条 ⇒ 每 10 分钟再建一条）；
+#   · 每轮末尾做**收敛对账**（同版本多条 ⇒ 留规范单、其余评论后关闭）；
+#   · 本机侧另有 flock 单写者锁与 `~/.dsh/PAUSE` 刹车，CI 侧没有（这里只有一个 runner，且不共享本机状态）。
+# 退出码：0 = 正常/无事发生/对账失败但已出待人工清单；1 = 真故障（探测失败、读不到 issue 列表、
+# 跟踪单没开成或没更新成）。见 README「幂等 / 单写者 / 刹车 / 对账」与
+# docs/2026-10-24-alerting-and-idempotency-patterns.md 的 A1/A2/A10。
 name: dsh-watch
 
 on:

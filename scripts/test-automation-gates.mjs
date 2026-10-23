@@ -10,7 +10,9 @@
 //   2. sla     `scripts/dsh-sla-report.mjs --check`：最近 N 个超 6h 判红、窗口外不判红、**没有数据判红**
 //              （旧实现在 perVersion 缺失/为空时 0/0 ⇒ exit 0，是假绿）。
 //   3. watch   `scripts/dsh-watch.mjs`：违约判定在门槛前后（5.998h/6.002h）、未来时间戳、坏输入、
-//              取不到 npm 发布时间戳时是否 fail-closed（旧实现三处静默判"未违约"）。
+//              取不到 npm 发布时间戳时是否 fail-closed（旧实现三处静默判"未违约"）；
+//              **2026-10-24 事故 #201–#217 的回归面**：确定性去重（不依赖 label）的幂等性、
+//              冷启动、并发 flock 单写者、`~/.dsh/PAUSE` 零写、对账失败只出清单不报假成功。
 //   4. adapt   `scripts/dsh-adapt.mjs`：runtime 不符 / 门禁崩 / 探针 RED / **探针没产出报告** /
 //              canary 三标记 —— 任一步必须立即停（旧实现把"探针没出报告"判成 ok ⇒ 全链路假绿）。
 //   5. drift   `.github/workflows/preinstalled-sync.yml` 的"检测漂移"段（**逐字抽取后在临时目录里跑**）：
@@ -36,7 +38,7 @@
 // exit：任何 CORRECT 断言失败、或变异自证未按期变红 ⇒ 1；否则 0（KNOWN_GAP 不影响退出码）。
 
 import { spawn, spawnSync } from 'node:child_process'
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -176,6 +178,73 @@ if (args[0] === 'issue' && args[1] === 'list') {
 if (args[0] === 'issue' && args[1] === 'create') { process.stdout.write('https://github.com/karoc/dsh-desktop/issues/999\\n'); process.exit(0) }
 if (args[0] === 'issue' && args[1] === 'comment') process.exit(0)
 if (args[0] === 'api') { process.stdout.write(process.env.FAKE_GH_API ?? ''); process.exit(0) }
+process.exit(0)
+`)
+
+// 有状态 gh 桩：list 读状态文件、create/edit/comment/close 真改状态。
+// 幂等断言（run(); run() ⇒ open 数量不增加）必须用它 —— 回放固定列表的桩永远看不到第二次运行
+// 是否又 create 了一条（那样断言会恒真）。失败注入：FAKE_GH_FAIL=create,edit,comment,close；
+// FAKE_GH_DROP_LABELS=1 复刻事故（label/assignee 静默丢失）；FAKE_GH_SLEEP_MS 放大并发窗口。
+const GH_STATE_STUB = mkStub('gh-stateful', `#!/usr/bin/env node
+const { readFileSync, writeFileSync, existsSync, appendFileSync } = require('node:fs')
+const args = process.argv.slice(2)
+const STATE = process.env.FAKE_GH_STATE || ''
+if (process.env.GH_CALLS) appendFileSync(process.env.GH_CALLS, args.join(' ') + '\\n')
+const sleepFor = Number(process.env.FAKE_GH_SLEEP_MS || 0)
+if (sleepFor > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, sleepFor)
+const load = () => ((STATE && existsSync(STATE)) ? JSON.parse(readFileSync(STATE, 'utf8')) : [])
+const save = (x) => { if (STATE) writeFileSync(STATE, JSON.stringify(x, null, 2)) }
+const fail = (op) => (process.env.FAKE_GH_FAIL || '').split(',').filter(Boolean).includes(op)
+const die = (op) => { process.stderr.write('GraphQL: Resource not accessible by personal access token (' + op + ')\\n'); process.exit(1) }
+const opt = (name) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : null }
+const opts = (name) => args.reduce((acc, a, i) => (a === name ? acc.concat(args[i + 1]) : acc), [])
+if (args[0] === 'label') process.exit(0)
+if (args[0] === 'issue' && args[1] === 'list') {
+  const want = opt('--state') || 'open'
+  process.stdout.write(JSON.stringify(load().filter((i) => want === 'all' || i.state === 'open')))
+  process.exit(0)
+}
+if (args[0] === 'issue' && args[1] === 'view') {
+  const it = load().find((i) => i.number === Number(args[2]))
+  if (!it) { process.stderr.write('issue not found\\n'); process.exit(1) }
+  process.stdout.write(JSON.stringify(it)); process.exit(0)
+}
+if (args[0] === 'issue' && args[1] === 'create') {
+  if (fail('create')) die('createIssue')
+  const list = load()
+  const n = (list.reduce((m, i) => Math.max(m, i.number), 0) || 200) + 1
+  const drop = process.env.FAKE_GH_DROP_LABELS === '1'
+  list.push({ number: n, title: opt('--title'), body: readFileSync(opt('--body-file'), 'utf8'),
+    labels: drop ? [] : opts('--label').map((name) => ({ name })),
+    assignees: drop ? [] : opts('--assignee').map((login) => ({ login })),
+    createdAt: new Date().toISOString(), state: 'open', comments: [] })
+  save(list); process.stdout.write('https://github.com/karoc/dsh-desktop/issues/' + n + '\\n'); process.exit(0)
+}
+if (args[0] === 'issue' && args[1] === 'edit') {
+  if (fail('edit')) die('updateIssue')
+  const list = load(); const it = list.find((i) => i.number === Number(args[2]))
+  if (!it) die('updateIssue')
+  const t = opt('--title'); if (t) it.title = t
+  const bf = opt('--body-file'); if (bf) it.body = readFileSync(bf, 'utf8')
+  for (const l of opts('--add-label')) if (!(it.labels || []).some((x) => x.name === l)) (it.labels = it.labels || []).push({ name: l })
+  for (const a of opts('--add-assignee')) if (!(it.assignees || []).some((x) => x.login === a)) (it.assignees = it.assignees || []).push({ login: a })
+  save(list); process.exit(0)
+}
+if (args[0] === 'issue' && args[1] === 'comment') {
+  if (fail('comment')) die('addComment')
+  const list = load(); const it = list.find((i) => i.number === Number(args[2]))
+  if (!it) die('addComment')
+  it.comments = it.comments || []
+  it.comments.push({ body: opt('--body') })
+  save(list); process.exit(0)
+}
+if (args[0] === 'issue' && args[1] === 'close') {
+  if (fail('close')) die('closeIssue')
+  const list = load(); const it = list.find((i) => i.number === Number(args[2]))
+  if (!it) die('closeIssue')
+  it.state = 'closed'; save(list); process.exit(0)
+}
+if (args[0] === 'api') { process.stdout.write(process.env.FAKE_GH_API || ''); process.exit(0) }
 process.exit(0)
 `)
 
@@ -396,7 +465,10 @@ function groupWatch() {
   }
   const watch = ({ pack, args, out = true, env = {} }) => {
     const o = join(W, `w-${++seq}.json`)
-    const r = cmd(process.execPath, [join(ROOT, 'scripts/dsh-watch.mjs'), ...(out ? ['--dry-run', '--json', o] : []), ...args], {
+    // 每次运行一个独立 --state-dir：脚本默认用 ~/.dsh（真实锁/PAUSE 所在），
+    // 测试绝不能去碰真实目录（否则可能被本机 timer 的锁挤掉，或在真实 PAUSE 存在时静默零写）。
+    const sd = join(W, 'sd', `run-${seq}`)
+    const r = cmd(process.execPath, [join(ROOT, 'scripts/dsh-watch.mjs'), ...(out ? ['--dry-run', '--json', o] : []), '--state-dir', sd, ...args], {
       env: { PATH_WITH_STUBS: undefined, ...privateTmpEnv, PATH: PATH_WITH_STUBS, FAKE_PACKUMENT: pack, GH_BIN: GH_STUB, ...env },
     })
     return { ...r, report: jsonOf(o), outPath: o }
@@ -473,6 +545,154 @@ function groupWatch() {
   r = runIssue(breachPkg, [...TARGET, '--force-published', '2026-10-18T12:00:00Z'], [{ number: 7, title: '[dsh-watch] dsh 0.2.1-rc.2 比地板新' }])
   check('watch', '去重按版本词边界：target=0.2.1 不匹配已存在的 0.2.1-rc.2 issue ⇒ 新建（旧实现 contains() 会误合并）', 'true',
     String(r.calls.includes('issue create')))
+
+  // ══ 2026-10-24 事故 #201–#217 的回归面 ════════════════════════════════════
+  // A1 确定性去重（不依赖 label）：run(); run() ⇒ open 数量不增加；冷启动只建 1 条；
+  //   事故同构（label 从未落地 + edit 403）下仍不许再建。
+  // A2 单写者（flock 真并发）/ PAUSE 零写。 A10 对账：收敛成功、失败只出清单不报假成功。
+  // 这些断言用**有状态** gh 桩（GH_STATE_STUB）+ 独立 state-dir；回放固定列表会变成恒真断言。
+  const S = join(W, 'idem')
+  mkdirSync(S, { recursive: true })
+  let idemSeq = 0
+  const sleepFor = (ms) => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) }
+  const waitFor = (fn, timeoutMs) => { const end = Date.now() + timeoutMs; while (Date.now() < end) { if (fn()) return true; sleepFor(25) } return false }
+  const callsFor = (stateFile) => stateFile.replace(/\.json$/, '.calls')
+  const seedIssue = (number, { title, body = '', labels = [], assignees = [], createdAt = null } = {}) => ({
+    number, title, body,
+    labels: labels.map((name) => ({ name })),
+    assignees: assignees.map((login) => ({ login })),
+    createdAt: createdAt ?? new Date(Date.UTC(2026, 9, 23, 8, 0, number - 200)).toISOString(),
+    state: 'open', comments: [],
+  })
+  const mkState = (name, issues = []) => {
+    const p = join(S, `${name}-${++idemSeq}.json`)
+    writeFileSync(p, JSON.stringify(issues, null, 2))
+    writeFileSync(callsFor(p), '')
+    return p
+  }
+  const readCalls = (stateFile) => readFileSync(callsFor(stateFile), 'utf8')
+  const countCalls = (stateFile, re) => readCalls(stateFile).split('\n').filter((l) => re.test(l)).length
+  const openCount = (stateFile) => JSON.parse(readFileSync(stateFile, 'utf8')).filter((i) => i.state === 'open').length
+  const PACK_IDEM = packument({ latest: '0.2.1-rc.3' }, { '0.2.1-rc.3': '2026-10-23T08:00:00Z' })
+  const idemArgs = (stateDir, extra = []) => [join(ROOT, 'scripts/dsh-watch.mjs'),
+    '--floor', '0.2.1-rc.2', '--force-target', '0.2.1-rc.3', '--force-published', '2026-10-23T08:00:00Z',
+    '--now', '2026-10-24T00:00:00Z', '--state-dir', stateDir, ...extra]
+  const idemEnv = (stateFile, extra = {}) => ({
+    PATH_WITH_STUBS: undefined, ...privateTmpEnv, PATH: PATH_WITH_STUBS, FAKE_PACKUMENT: PACK_IDEM,
+    GH_BIN: GH_STATE_STUB, FAKE_GH_STATE: stateFile, GH_CALLS: callsFor(stateFile), ...extra,
+  })
+  const runIdem = (stateFile, { env = {}, extra = [], json = false, stateDir = null } = {}) => {
+    const sd = stateDir ?? join(S, `sd-${++idemSeq}`)
+    const o = json ? join(W, `idem-${++seq}.json`) : null
+    const r = cmd(process.execPath, idemArgs(sd, [...(o ? ['--json', o] : []), ...extra]), { env: idemEnv(stateFile, env) })
+    return { ...r, report: o ? jsonOf(o) : null, sid: sd }
+  }
+
+  // ① 空状态冷启动：没有任何 open issue、也没有 label ⇒ 只创建 1 条
+  let st = mkState('cold')
+  let ri = runIdem(st)
+  check('watch', '幂等①冷启动：桩里没有任何 issue / 没有 label ⇒ 只创建 1 条', '1|1|0',
+    `${countCalls(st, /^issue create/)}|${openCount(st)}|${ri.status}`)
+
+  // ② 幂等性质（核心）：run(); run() ⇒ open issue 数量不增加 —— 第二次必须按标题命中同一条
+  ri = runIdem(st)
+  check('watch', '幂等②run(); run() ⇒ open issue 数量不增加（第二次按标题命中同一条、只 edit、不新建）', '1|1|0|true',
+    `${countCalls(st, /^issue create/)}|${openCount(st)}|${ri.status}|${!ri.stdout.includes('⇒ 新建') && ri.stdout.includes('已静默更新')}`)
+
+  // ③ 事故同构：create 成功但 label/assignee 从未落地（且 edit/comment 403）
+  //    旧实现：去重按 label 过滤 ⇒ 查到 0 条 ⇒ 每 10 分钟再建一条（#201–#216 共 16 条）。
+  st = mkState('incident')
+  ri = runIdem(st, { env: { FAKE_GH_DROP_LABELS: '1', FAKE_GH_FAIL: 'edit,comment' } })
+  check('watch', '幂等③事故同构：第一轮 create（label/assignee 丢失、写后复核失败）', 'true|true',
+    `${ri.stdout.includes('写后复核失败')}|${ri.stdout.includes('gh issue edit')}`)
+  ri = runIdem(st, { env: { FAKE_GH_DROP_LABELS: '1', FAKE_GH_FAIL: 'edit,comment' } })
+  check('watch', '  第二轮仍按标题命中同一条 ⇒ 累计只 create 1 次、open 仍是 1（旧实现累计 2 条）', '1|1|1',
+    `${countCalls(st, /^issue create/)}|${openCount(st)}|${ri.status}`)
+
+  // ④ 并发：真起两个进程 ⇒ flock 保证只有一个执行，另一个 skipped by lock 且零 gh 调用
+  st = mkState('concurrent')
+  const sdConc = join(S, 'sd-conc')
+  const outA = join(S, 'conc-A.out')
+  const callsA = join(S, 'conc-A.calls')
+  const callsB = join(S, 'conc-B.calls')
+  writeFileSync(outA, ''); writeFileSync(callsA, ''); writeFileSync(callsB, '')
+  // 主线程用 Atomics.wait 同步等待时**不会**处理 'exit' 事件 ⇒ child.exitCode 永远是 null。
+  // 所以用一个极小的 wrapper 进程把退出码落到文件里，测试只等文件出现（不依赖事件循环）。
+  const wrapper = join(S, 'run-and-mark.mjs')
+  writeFileSync(wrapper, "import { spawnSync } from 'node:child_process'\nimport { writeFileSync } from 'node:fs'\n"
+    + "const [marker, ...rest] = process.argv.slice(2)\n"
+    + "const r = spawnSync(process.execPath, rest, { stdio: 'inherit' })\n"
+    + 'writeFileSync(marker, String(r.status))\n')
+  const markerA = join(S, 'conc-A.exit')
+  const fdA = openSync(outA, 'a')
+  const childA = spawn(process.execPath, [wrapper, markerA, ...idemArgs(sdConc)], {
+    cwd: ROOT,
+    stdio: ['ignore', fdA, fdA],
+    env: { ...process.env, ...idemEnv(st, { FAKE_GH_SLEEP_MS: '300' }), GH_CALLS: callsA },
+  })
+  const gotLock = waitFor(() => readFileSync(outA, 'utf8').includes('已获取本机独占锁'), 15000)
+  const rB = cmd(process.execPath, idemArgs(sdConc), { env: idemEnv(st, { GH_CALLS: callsB }) })
+  const aDone = waitFor(() => existsSync(markerA), 30000)
+  if (!aDone) childA.kill('SIGKILL')
+  closeSync(fdA)
+  const aExit = aDone ? Number(readFileSync(markerA, 'utf8')) : null
+  const outAtext = readFileSync(outA, 'utf8')
+  check('watch', '并发①两个进程同时跑 ⇒ 先拿到 flock 的执行；另一个打印 skipped by lock 且零 gh 调用', 'true|true|true|true',
+    `${gotLock}|${rB.stdout.includes('skipped by lock')}|${rB.status === 0}|${readFileSync(callsB, 'utf8').trim() === ''}`)
+  check('watch', '并发②两个进程合计只创建 1 条（open = 1），持锁进程正常走完（exit 0）', '1|1|true',
+    `${readFileSync(callsA, 'utf8').split('\n').filter((l) => l.startsWith('issue create')).length}|${openCount(st)}|${outAtext.includes('已获取本机独占锁') && aExit === 0}`)
+
+  // ⑤ PAUSE：已有一条需要更新的 open issue ⇒ 没有 PAUSE 必然有 edit；有 PAUSE 必须零写
+  st = mkState('paused', [seedIssue(42, {
+    title: '[SLA 未达标] dsh 0.2.1-rc.3 已发布 10.0h（门槛 6h），地板仍停在 0.2.1-rc.2',
+    body: '@karoc（负责人）\n\n<!-- dsh-watch-state: target=0.2.1-rc.3 breached=false -->',
+  })])
+  const sdPause = join(S, 'sd-pause')
+  mkdirSync(sdPause, { recursive: true })
+  writeFileSync(join(sdPause, 'PAUSE'), '')
+  ri = runIdem(st, { stateDir: sdPause })
+  check('watch', 'PAUSE：~/.dsh/PAUSE 存在 ⇒ 零写操作（create/edit/comment/close 全 0）、状态不变、日志写明 paused by',
+    '0|1|0|true', `${countCalls(st, /^issue (create|edit|comment|close)/)}|${openCount(st)}|${ri.status}|${ri.stdout.includes('paused by')}`)
+  check('watch', '  ⇒ 且只读探测继续、明说"本应更新 #42"（没有把 PAUSE 当成故障）', 'true',
+    String(ri.stdout.includes('[paused]') && ri.stdout.includes('更新 #42')))
+
+  // ⑥ 对账（A10）：同版本 3 条 ⇒ 保留带 label/assignee 的规范单、其余评论后关闭
+  const dupTitle = '[dsh-watch][best-effort 24h（预发布通道）] dsh 0.2.1-rc.3 比地板 0.2.1-rc.2 新'
+  const dupBody = '@karoc（负责人）\n\n<!-- dsh-watch-state: target=0.2.1-rc.3 breached=false -->'
+  st = mkState('dup-ok', [
+    seedIssue(201, { title: dupTitle, body: dupBody }),
+    seedIssue(202, { title: dupTitle, body: dupBody }),
+    seedIssue(203, { title: dupTitle, body: dupBody, labels: ['dsh-upgrade'], assignees: ['karoc'] }),
+  ])
+  ri = runIdem(st, { env: { FAKE_GH_FAIL: 'edit' } })
+  check('watch', '对账①同版本 3 条 ⇒ 保留 #203（唯一带 label/assignee 的规范单），其余评论后关闭', 'true|true|2|1',
+    `${ri.stdout.includes('保留 #203')}|${/issue comment 201 --body 重复于 #203（同版本跟踪单），由 autopilot 对账关闭/.test(readCalls(st))}|${countCalls(st, /^issue close/)}|${openCount(st)}`)
+  check('watch', '  ⇒ 关掉的重复单带统一评论、且 after-对账列表只剩 1 条', 'true|true',
+    `${JSON.parse(readFileSync(st, 'utf8')).find((i) => i.number === 201).state === 'closed'}|${ri.stdout.includes('对账完成')}`)
+
+  // ⑦ 对账失败（权限 403）：只出"待人工关闭"清单，**不报假成功**
+  st = mkState('dup-fail', [
+    seedIssue(201, { title: dupTitle, body: dupBody }),
+    seedIssue(202, { title: dupTitle, body: dupBody }),
+    seedIssue(203, { title: dupTitle, body: dupBody, labels: ['dsh-upgrade'], assignees: ['karoc'] }),
+  ])
+  ri = runIdem(st, { env: { FAKE_GH_FAIL: 'close,comment,edit' } })
+  check('watch', '对账②close/comment 403 ⇒ 明确报"仍有 1 组重复" + 待人工清单（含可复制命令），不打印"对账完成"',
+    'true|true|true|true', `${ri.out.includes('对账后仍有 1 组重复')}|${ri.out.includes('待人工关闭')}`
+    + `|${ri.out.includes('issue close 201 --reason')}|${!ri.out.includes('对账完成')}`)
+  check('watch', '  ⇒ 三条 issue 仍全部 open（没有假装关掉），且本进程以非零退出如实报错', '3|1',
+    `${openCount(st)}|${ri.status}`)
+
+  // ⑧ --dry-run 的只读对账报告（真实仓库上跑之前先在这里钉住）：17 条重复 ⇒ 保留 #217 + 16 条命令、零写入
+  st = mkState('dry', Array.from({ length: 17 }, (_, k) => seedIssue(201 + k, {
+    title: dupTitle, body: dupBody,
+    labels: k === 16 ? ['dsh-upgrade', 'priority:high'] : [], assignees: k === 16 ? ['karoc'] : [],
+  })))
+  ri = runIdem(st, { extra: ['--dry-run'], json: true })
+  check('watch', '对账③--dry-run：17 条重复 ⇒ 保留 #217、输出 16 条关闭命令，零写入且 issue 数不变', 'true|true|0|17',
+    `${ri.stdout.includes('保留 #217')}|${ri.stdout.includes('issue close 201 --reason')}|${countCalls(st, /^issue (create|edit|comment|close)/)}|${openCount(st)}`)
+  check('watch', '  ⇒ 去重判定也落在规范单上（命中 #217，而不是即将被关掉的 #201）', '217|true',
+    `${ri.report?.dedupe?.matched}|${ri.report?.reconcile?.plans?.length === 1}`)
 }
 
 // ══ 4. adapt ═══════════════════════════════════════════════════════════════

@@ -164,8 +164,18 @@ T0 = `time[该壳版本随包地板]`（可能是预发布），终点 = 首个�
 - 需要适配 ⇒ 开/更新 **`dsh-upgrade`** issue（正文含门槛倒计时 `${threshold}h 截止` 与八步适配清单 +
   `dsh-adapt` 一键命令）；**门槛已过而地板没动** ⇒ 开/更新 **`sla-breach`** issue（正文 = §0 合法失败出口的
   两件事：写清 blocker + ETA、同时发一个保持旧地板的稳定版）；
-- 去重：按 issue **标题里版本号的词边界**匹配（`gh issue list --json title,number --limit 100` 取回后在 node
-  里过滤）—— `contains("0.2.1")` 会命中 `0.2.1-rc.2` 的单子，必须词边界；
+- 去重：按 issue **标题里版本号的词边界**匹配 —— `contains("0.2.1")` 会命中 `0.2.1-rc.2` 的单子，必须词边界；
+  **2026-10-24 修订（事故 #201–#217 之后）**：查询面从「`--label` 过滤 + `--limit 100`」改为
+  「`state=open` + `--limit 1000`（到上限会告警可能被截断）」，**不再依赖 label** —— 事故里 16 条 issue 的
+  label/assignee 从未落地（create 成功、`addLabelsToLabelable` 403），按 label 过滤查到 0 条 ⇒ 每 10 分钟
+  再建一条。现在只用「本脚本的两种标题前缀 + 版本号词边界」这个**与写者无关的确定性键**；
+  正文 `<!-- dsh-watch-state: target=… breached=… -->` 只决定"要不要评论"，不是去重键。
+  同一轮还加了三样（详见 README「幂等 / 单写者 / 刹车 / 对账」）：本机 `flock` 单写者
+  （`~/.dsh/locks/dsh-watch.lock`，拿不到锁打印 `skipped by lock` 后 exit 0）、`~/.dsh/PAUSE` 刹车
+  （存在即跳过一切写操作）、以及每轮末尾的**收敛对账**（同版本多条 ⇒ 保留带 label/assignee 的规范单、
+  其余评论「重复于 #N（同版本跟踪单），由 autopilot 对账关闭」后关闭；失败只出待人工清单，不报假成功）。
+  **双写者（本机 timer + Actions cron）是设计事实**，所以写操作必须是收敛式的，不能假设自己独占；
+  flock 只保本机，跨写者的 TOCTOU 由下一轮对账收敛；
 - **告警如何送达（2026-10-20）**：issue 由 bot（`GITHUB_TOKEN`）创建，而 GitHub 的推送默认只覆盖
   「参与中 / 被 @ 提及 / 被赋值」的线程 ⇒ 只开 issue **不会**叫醒属主。现在 `gh issue create --assignee <owner>`
   （owner 解析：`--assignee` → `--repo` → `GH_REPO` → `GITHUB_REPOSITORY` → `git remote origin`，取不到
