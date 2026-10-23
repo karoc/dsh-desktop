@@ -576,7 +576,8 @@ MIT
   **临时副本**上把判据改坏 ⇒ 本套件必须变红；绝不改仓库文件），已知仍不完美的判据标 `KNOWN_GAP`
   —— 只逐条打印、**不判红**（既不用"跳过"掩盖假绿，也不会因为别的 agent 正在修它而把链判红；
   行为一旦变化会打 `GAP?` 提醒把它升级成正确性断言）。
-- **两个定时工作流**（零 secret，只用 `GITHUB_TOKEN`）：`dsh-watch.yml` 每 15 分钟探测 npm dist-tags，
+- **两个定时工作流**（零 secret，只用 `GITHUB_TOKEN`）：`dsh-watch.yml` 每 15 分钟探测 npm dist-tags
+  （它是 `dsh-watch` 的**第二个写者**，与下方本机 timer 并行 —— 见「幂等 / 单写者 / 刹车 / 对账」），
   比地板新就开/更新 `dsh-upgrade` issue（含门槛倒计时与适配清单）——门槛文案按**实际门槛**打印
   `${threshold}h 截止`：`latest` 通道默认 6h（硬指标）、预发布通道默认 24h（best-effort），
   可用 `--sla-hours` / `--best-effort-hours` 覆盖（2026-10-19 前这里写死 "6h"，预发布单上照印 6h）；
@@ -595,9 +596,9 @@ MIT
   ③ 高优先级 label：`dsh-upgrade` / `sla-breach`
   之外再加 `priority:high`（先 `gh label list` 查过，仓库原有 label 里没有任何优先级标记，所以只新增这一个；
   `sla-report` 是周报，不挂 high）。**label 本身不产生通知**，只用于 triage。
-  更新路径也保证可达：先 `gh issue edit`（静默刷新正文/补齐 label 与 assignee），只有**目标版本变化**或
-  **状态跨级**（跟踪中 → SLA 未达标）时才追加一条短 `comment`（comment 会通知 assignee / 订阅者）——
-  同一版本 cron 重复运行**不会重复评论**；SLA 周报靠正文里的 `dsh-sla-report-state` digest 判断
+  更新路径也保证可达：先 `gh issue edit`（静默刷新正文/标题/补齐 label 与 assignee；**写后读回复核**，
+  见下一条），只有**目标版本变化**或**状态跨级**（跟踪中 → SLA 未达标）时才追加一条短 `comment`
+  （comment 会通知 assignee / 订阅者）—— 同一版本 cron 重复运行**不会重复评论**；SLA 周报靠正文里的 `dsh-sla-report-state` digest 判断
   「量到的版本集合 + 达标状态」是否真的变了，没变时连 edit 都跳过。⚠️ 本机无法验证"推送是否真的到达手机"
   （取决于该账号的 GitHub 通知设置）；**可验证**的是命令确实带上了 assignee / 提及 / label（门禁用 gh 桩断言）。
 
@@ -636,8 +637,9 @@ MIT
   "npm 给 `Z`、`git log --format=%cI` 给本地偏移、截断后两者都看不出时区后缀"的混排；要看绝对时间以 `--json` 原值为准。
 - **探测逻辑脚本**：`node scripts/dsh-watch.mjs [--dry-run] [--json <out>] [--force-target <v>]
   [--force-published <iso>] [--force-pre] [--now <iso>] [--sla-hours <n>] [--best-effort-hours <n>]
-  [--registry <url>] [--floor <ver>]`（`dsh-watch.yml` 只是薄壳；退出码恒 0 —— 红色只代表 job 坏了，
-  只有取不到 npm packument 才非零退出）
+  [--registry <url>] [--floor <ver>] [--state-dir <dir>] [--lock-file <path>] [--pause-file <path>]`
+  （`dsh-watch.yml` 只是薄壳）。**退出码**：0 = 正常（含"今天没有新版本"与"对账失败但已输出待人工清单"）；
+  1 = 真故障（取不到 npm packument / 读不到 open issue 列表 / 跟踪单没开成或没更新成）；2 = 用法或属主解析失败。
   —— 提取成脚本是为了让「建 issue 那条路径」可本地演练。`--registry` / `--floor` / `--now` / `--force-*`
   都是**演练注入点**（本机 npm CLI 不可用、直连 npmjs 会超时 ⇒ 演练指向本地 stub registry 的 packument）。
   **演练路径（零副作用）**：`--force-target X --force-published <ISO> --dry-run` 会走完"门槛已过而地板没动"
@@ -646,8 +648,42 @@ MIT
 - **SLA 未达标自动开 blocker issue**：`dsh-watch.mjs` 在「门槛已过而地板没动」时自动开/更新 `sla-breach`
   issue（门槛随通道：`latest` 6h / 预发布 24h，可用 `--sla-hours` / `--best-effort-hours` 覆盖；issue 标题与
   正文都印**实际门槛**，退出码不变）。**取不到该版本的上游发布时间时 fail-closed 记为未达标**（JSON 里的
-  `pubUnknown`；"量不出来"不等于"达标"）。幂等靠 issue **标题里版本号的词边界匹配**
-  （`gh issue list --limit 100` 取回后在 node 里过滤）：`contains("0.2.1")` 会把评论挂到 `0.2.1-rc.2` 的单子上。
+  `pubUnknown`；"量不出来"不等于"达标"）。幂等与去重的完整口径见下一条（**确定性键 + 单写者 + 对账**）：
+  只按标题里版本号的**词边界**匹配（`contains("0.2.1")` 会把评论挂到 `0.2.1-rc.2` 的单子上），
+  **不再按 label 过滤**。
+
+- **幂等 / 单写者 / 刹车 / 对账（2026-10-24 起；事故 #201–#217 的止血）**：**双写者是设计事实** ——
+  本机 systemd user timer（`~/.config/systemd/user/dsh-watch.timer`，10 分钟）与 Actions
+  `dsh-watch.yml`（cron `*/15`）各跑一份**同一个脚本**。所以**所有写操作必须是收敛式（幂等）**：
+  只依赖「对象身份 + 正文状态」，**不能假设自己独占**。四件事：
+  ① **确定性去重键（与写者无关）**：查全部 `state=open` 的 issue（`--limit 1000`，到上限会告警"可能被截断"），
+  用**词边界**匹配标题里的版本号（`0.2.1-rc.3` 不命中 `0.2.1-rc.30`、也不命中 `0.2.1-rc.2`；且只认本脚本
+  自己的两种标题前缀 `[dsh-watch]` / `[SLA 未达标]`，不会去改写人类开的 issue），命中即 `edit` 复用、
+  未命中才 `create`。**不依赖 label** —— 事故里 16 条 issue（本机 PAT 创建）的 label/assignee 从未落地
+  （create 成功、`addLabelsToLabelable` 403），旧实现按 `--label` 过滤查到 0 条 ⇒ 每 10 分钟再建一条。
+  正文里的 `<!-- dsh-watch-state: target=… breached=… -->` 只用于判断**要不要评论**（目标版本变化 /
+  状态跨级才评论），**不是**去重键（body 的 edit 同样可能失败）。写后**读回复核** label/assignee，
+  缺了先尝试一次幂等修复（`edit --add-label/--add-assignee`），仍失败就打印可复制的人工命令（不会因此再建一条）。
+  ② **本机单写者（flock）**：非 `--dry-run` 时整个进程包在 `flock -n ~/.dsh/locks/dsh-watch.lock` 里
+  （util-linux flock；进程退出即释放，不会留"崩溃后永久死锁"）。拿不到锁 ⇒ 打印 `skipped by lock` 后 exit 0
+  （另一轮正在写，本轮无事可做）。`flock` 缺失（如 Windows 侧直接跑）⇒ 明确告警后继续：写仍是收敛式的，
+  只是失去本机互斥。**它只保本机**：跨写者的 TOCTOU（两边同时查到 0 条再各建一条）无法在客户端根除 ——
+  那正是下一层对账存在的理由。
+  ③ **刹车 `~/.dsh/PAUSE`**：文件存在 ⇒ **跳过一切写操作**（只读探测、去重判定、重复单报告照常），
+  日志写 `paused by <路径>`。排障 / 上游事故期间用它停写，不需要改 systemd。`--state-dir <dir>`
+  （或 `DSH_STATE_DIR`）可把锁与 PAUSE 挪到别处（演练/测试用）。
+  ④ **收敛对账（自愈）**：每轮末尾（**含"今天没有新版本"的轮次**）按版本分组扫一遍 open issue；同一版本
+  >1 条就保留一条、其余 `close` 后评论 `重复于 #N（同版本跟踪单），由 autopilot 对账关闭`。保留规则**明确**：
+  带 `dsh-upgrade`/`sla-breach` label 的优先 → 其次带 assignee → 同优先级取最早创建（`createdAt`，等价最小编号）。
+  事故里 #217（唯一带 label/assignee）因此被保留、#201–#216 被关掉。**失败不重试、不报假成功**：任何
+  close/comment 被 403 ⇒ 本轮停写，输出"待人工关闭"清单（issue 号 + 可复制的 `./scripts/gh issue close …` 命令）；
+  对账后还会**再读一次列表复核**，读不到就明说"无法复核"，绝不打印"对账完成"。
+  **退出码口径**：跟踪单没开成/没更新成 ⇒ 1（CI 真红）；对账失败只出清单 ⇒ 0 —— 否则本机 PAT 缺
+  Issues:write 时每次运行都非零退出，systemd 的 `Restart=on-failure` 会 60s 一次热循环（那是 A6 要改 unit
+  的 `RestartSec`/`RestartSteps`，不该在这里放大噪音）。
+  **验证**：`scripts/test-automation-gates.mjs` 的 watch 组用**有状态 gh 桩**钉住这四条 ——
+  `run(); run()` ⇒ open 数量不增加；空状态冷启动只建 1 条；事故同构（label 从未落地 + edit 403）下仍不再建；
+  真起两个进程 ⇒ 只有一个执行、另一个 `skipped by lock` 且零 gh 调用；PAUSE ⇒ 零写；对账 403 ⇒ 只剩待人工清单。
 - **另两个定时工作流**：`dsh-sla-report.yml`（每周一 01:00 UTC 出 SLA 报表；门禁是独立一步 `--check`，
   只有它红才代表"有版本超 6h 或根本没量出来"）与 `preinstalled-sync.yml`（每周一 02:00 UTC 检测四个预装
   bundle 与 npm `dist-tags.latest` 的漂移，**有漂移才**同步 → 过 `copy-consistency` + `plugin-dsh-compat`
