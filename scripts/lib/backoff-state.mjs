@@ -123,10 +123,21 @@ export function normalizeState(raw, tool, nowMs = Date.now()) {
   if (raw.notified && typeof raw.notified === 'object' && !Array.isArray(raw.notified)) {
     for (const [k, v] of Object.entries(raw.notified)) if (typeof v === 'string') out.notified[k] = v
   }
-  // 一致性修正：healthy 不该带退避；broken 必须有 nextAttemptAt（丢了就按当前时刻立即允许重试，
-  // 而不是让进程永远跳过 —— "跳过"是一种主动状态，不能因为字段丢失而变成静默停机）。
-  if (out.state !== 'broken') { out.nextAttemptAt = null; if (out.state === 'healthy') out.consecutiveFailures = out.consecutiveFailures && out.lastError ? out.consecutiveFailures : 0 }
-  if (out.state === 'broken' && !out.nextAttemptAt) out.nextAttemptAt = nowIso(nowMs)
+  // 一致性修正：
+  //   · healthy 必须"零失败、无退避"（否则一份脏状态会让健康探针带着旧计数继续跑）；
+  //   · degraded 保留连续失败次数（那是它的语义），但不能带 nextAttemptAt（只有 broken 才有）；
+  //   · broken 必须有 nextAttemptAt —— 丢了就按当前时刻立即允许重试，而不是让进程永远跳过：
+  //     "跳过"必须是主动状态，不能因为字段丢失变成静默停机。
+  if (out.state === 'healthy') {
+    out.consecutiveFailures = 0
+    out.backoffRetries = 0
+    out.nextAttemptAt = null
+  } else if (out.state === 'degraded') {
+    out.backoffRetries = 0
+    out.nextAttemptAt = null
+  } else if (!out.nextAttemptAt) {
+    out.nextAttemptAt = nowIso(nowMs)
+  }
   return out
 }
 
