@@ -152,7 +152,7 @@ gh CLI 默认读全局 `~/.config/gh/hosts.yml`。本项目使用**项目专用 
    `check --notify --if-due --quiet`（可安全挂在 10 分钟循环上；只在级别跃迁时评论，写权不足只打印）。
    门禁：`npm run test:token-meta`（POSIX 下 124 条断言 + 3 条变异自证；Windows 上权限/gh 桩两组显式 SKIP）。
 
-## 自动化链路的运维契约（A1 / A3 / A5 / A6 / A8 / A9）
+## 自动化链路的运维契约（A1 / A3 / A4 / A5 / A6 / A8 / A9）
 
 依据 `docs/2026-10-24-alerting-and-idempotency-patterns.md` 的采用清单。这一节只写**判据和命令**
 （"现在的事实 + 自己怎么验"）；为什么这样设计、放弃了什么，见该文档与
@@ -168,7 +168,7 @@ gh CLI 默认读全局 `~/.config/gh/hosts.yml`。本项目使用**项目专用 
 | **保留（A8 / A9）** | 日志：模板 `scripts/logrotate.dsh.conf` + README 的用户级安装与 timer（**装不装是用户动作**，仓库不动你的 systemd）。hang dump：**最新 3 份 + 14 天 + 总量 ≤1GiB**（`src-tauri/src/retention.rs` 的 `HANG_DUMP_POLICY`，单测钉住这三个数；"**永不清空目录**"是硬边界）。`.detail.log` 自带 128KB 截断 | `systemctl --user list-timers | grep logrotate`；`du -sh <应用数据目录>/runtime/reports`；Rust 侧由 CI `check` job 的 `cargo test --lib` 覆盖 |
 | **Actions `schedule` 不是时钟（A7）** | 官方明确 `schedule` 不保证准时（可延迟数小时，也可能丢弃）。`dsh-watch.yml` 的 `*/15` 是"本机没在跑时的兜底覆盖"，**不是 SLA 主时钟**；SLA 的检测段 T0 取同版本**最早** issue 的 `createdAt`（与哪个写者建的无关），检测延迟**不进门禁** | `./scripts/gh run list --workflow dsh-watch.yml --json createdAt,startedAt` 与本机 timer 日志时间对比 |
 
-**门禁侧的对应要求**：这六层里凡是"能失败"的判据都必须带负向对照。`scripts/test-automation-gates.mjs`
+**门禁侧的对应要求**：这七层里凡是"能失败"的判据都必须带负向对照。`scripts/test-automation-gates.mjs`
 新增的 **doctor 组**跑 `dsh-doctor --self-test`（内置 gh 桩，不碰真实仓库），并用 1 条变异对照证明
 「必需能力缺失（403）⇒ 退出码非零」这条出口真的在判 —— 把它改坏，整条套件变红。
 
