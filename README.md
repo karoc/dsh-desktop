@@ -130,7 +130,7 @@ node_modules 符号链接树、写迁移标记、绝不上移覆盖已有新数�
 ## 本地验证（Linux 可跑的部分）
 
 ```bash
-npm test                 # 全量 27 套（26 条 node 直接可跑 + 1 条条件式）：清单一致性 / overlay 目标行 / 升级标记 /
+npm test                 # 全量 28 套（27 条 node 直接可跑 + 1 条条件式）：清单一致性 / overlay 目标行 / 升级标记 /
                          #   通知插件 / 控制面 / 代理 / 代理e2e / 启动页设置 / 壳顶栏契约 / 壳不吞页面原生行为
                          #   （拖放与外链，见下）/ 壳引导桩（纯 Node，无浏览器）/ 启动器扫动 / 请求头预算 /
                          #   半截安装自愈 / 副本一致性 / 版本比较 parity /
@@ -736,6 +736,88 @@ MIT
   ③ "本机每天有人跑 doctor"**不由本仓库安装**（systemd unit 属用户资产，模板参见 autopilot 头注释）；
   ④ 在 PAT 拿到 Issues:write 之前 `last-ok` 永远写不进去 ⇒ 反向心跳会在 26h 后**如实报警**——这是设计要的
   信号，不是噪音；要么修 PAT，要么在排障期手动 disable 该 workflow。
+- **三态 + 指数退避 + 只在跃迁时通知（2026-10-24，A6）**：本机三个 timer 都是"每 10 分钟一轮"，
+  失败时旧行为是**每轮重印同一段完整错误**（并且 systemd 的 `Restart=on-failure` + `RestartSec=60`
+  会把它变成热循环）。现在 `dsh-watch` / `dsh-release-autopilot` 共用 `scripts/lib/backoff-state.mjs`
+  （纯函数状态机；`scripts/test-backoff-state.mjs` 含 8 轮实测与负向对照）：
+  ① **healthy → degraded**（连续失败 1–2 次）：仍打印完整错误（还在诊断窗口），**只发一次**跃迁评论；
+  ② **degraded → broken**（第 3 次连续失败；403/404/凭据这类**不可重试**错误第一次就 broken）：
+     **只发一次**跃迁评论，进入退避；
+  ③ **broken 之后**：每轮 stdout **只有一行** `still broken (attempt k, next retry in Xm)`（进入 broken 的那一轮
+     另外给一行「连续 N 次失败」摘要 + 一条跃迁评论），到
+     `nextAttemptAt` 之前**跳过实际工作**（不探 npm / 不 clone / 不 push / 不写 issue）；失败明细进
+     `<state>.detail.log`，心跳每轮一行写 `<state>.heartbeat`（`skipped=yes/no` —— 反向心跳据此区分
+     "进程还在、只是退避中"与"进程死了"）；退避 **5 → 10 → 20 → 40 → 封顶 60 分钟**；
+  ④ **broken → healthy**（任一次成功）：**只发一次**恢复评论，计数清零（成功即 Forget）。
+  **通知只在跃迁时发生**：评论带机器标记 `<!-- dsh-watch-backoff: state=broken … digest=<sha> -->`，
+  digest 幂等（补发不重复；恢复后再次坏掉是新的一条），写失败会记进状态文件、下一轮补发。
+  **退出码**：degraded / broken 的**重试轮**仍是 1（CI 该红就红）；**退避跳过轮是 0**（它没干活、
+  也不是新故障 —— 0 是为了不与 systemd 的 restart 叠成热循环；健康判据是状态文件的 `state` + 跃迁评论）。
+  **状态文件**：`~/.dsh/state/dsh-watch.json` 与 `~/.dsh/state/dsh-release-autopilot.json`
+  （`--state-dir`/`--state-file` 覆盖；原子写 tmp+rename；损坏时备份成 `*.corrupt-<ts>` 并**重建为
+  healthy** —— fail-open，坏状态不该让告警永远静默）。**人工恢复**：`--reset-state`（只重置本地状态、
+  **不写 GitHub**）；排障时可加 `--no-backoff` 看"没有状态机时"的行为（门禁的负向对照就用它）。
+  **CI 特例**：Actions runner 的文件系统是临时的 ⇒ 状态每轮从 healthy 开始，脚本在 CI 里**只记账、
+  不发**跃迁评论（显式给 `--state-dir`/`--state-file`/`DSH_STATE_DIR` 才算持久化环境），
+  "任务根本没跑"那一层仍归 A5 的 dead man's switch。
+  **systemd 单元的推荐值**（本仓库不改你机器上的 systemd）：在 `[Service]` 里加
+  `RestartSteps=4` + `RestartMaxDelaySec=3600`（systemd 254+ 的指数重启：60s→120s→240s→480s→960s，
+  封顶 1h，与脚本内 60 分钟退避同尺度）—— 只加 `RestartSec=60` 时，不可重试错误会一直热循环。
+  **验证**：`node scripts/test-backoff-state.mjs` —— 8 轮实测断言"第 1–2 轮完整错误 / 第 3 轮 broken /
+  评论只有 2 条 / 第 4–8 轮每轮一行 / 恢复只多 1 条 / `--reset-state` 回 healthy"，
+  外加一条**负向对照**（`--no-backoff` 时同一串失败必须退回"8 轮全量错误 + 0 条跃迁评论"。
+- **日志与状态文件在哪、怎么清理（2026-10-24，A7）**：三个 timer 的 service 都用
+  `StandardOutput=append:` / `StandardError=append:` 指向 `~/.dsh/logs/*.log` —— systemd 的 `append:`
+  **只保证不截断，不保证不涨破磁盘**（man page 里没有任何 rotate/maxsize 选项），轮转必须外部做。
+  - **重复日志**（`~/.dsh/logs/`，2026-10-24 实测）：`dsh-watch-timer.log` ≈ 976KB / 1.7 万行
+    （约 4 天）、`dsh-autopilot.log` ≈ 229KB、`dsh-tagdispatch.log` ≈ 12KB。按这个节奏一年几十 MB：
+    不致命，但**没有上限**。
+  - **轮转模板**：[scripts/logrotate.dsh.conf](scripts/logrotate.dsh.conf)（`daily` + `maxsize 20M` +
+    `rotate 7` + `compress` + `delaycompress` + `copytruncate` + `missingok` + `notifempty`；
+    `copytruncate` 是必须的：systemd 一直持有 append 模式的 fd，不能通知它 reopen，复制后原地截断是标准解，
+    代价是"复制 → 截断"之间极小的丢数据窗口）。安装与干跑（**用户级，不需要 root**）：
+    `sed "s|@HOME@|$HOME|g" scripts/logrotate.dsh.conf > ~/.dsh/logrotate.dsh.conf`，
+    `/usr/sbin/logrotate -d ~/.dsh/logrotate.dsh.conf`（只检查语法/匹配，不动文件），
+    再 `/usr/sbin/logrotate -s ~/.dsh/logrotate.status ~/.dsh/logrotate.dsh.conf` 真跑一次。
+    定时用 systemd **user** timer（模板，别装到 `/etc/systemd/system`）：
+    ```ini
+    # ~/.config/systemd/user/dsh-logrotate.service
+    [Unit]
+    Description=dsh 自动化日志轮转（logrotate，用户级）
+    [Service]
+    Type=oneshot
+    ExecStart=/usr/sbin/logrotate -s %h/.dsh/logrotate.status %h/.dsh/logrotate.dsh.conf
+    # ~/.config/systemd/user/dsh-logrotate.timer
+    [Unit]
+    Description=每天 04:17 轮转 dsh 日志
+    [Timer]
+    OnCalendar=*-*-* 04:17:00
+    Persistent=true
+    Unit=dsh-logrotate.service
+    [Install]
+    WantedBy=timers.target
+    ```
+    （`systemctl --user enable --now dsh-logrotate.timer`。也可以装到 `/etc/logrotate.d/dsh` 交给系统
+    每天那趟 —— 二选一，别同时装：两份配置会互相抢文件。模板头注释里写了 `--dsh` 版本要补 `su <user>`。）
+  - **journald**：本机 journal 上限只有 ~100M（`AGENTS.md` 记录）且会 vacuum 旧日志 ⇒ **不要把 journal
+    当长期取证源**；关键日志落在 `~/.dsh/logs/` 并交给上面的轮转。
+  - **退避状态与心跳**：`~/.dsh/state/dsh-watch.json` / `dsh-release-autopilot.json`
+    （+ 同名 `.heartbeat`、`.detail.log`；`~/.dsh/locks/*.lock`、`~/.dsh/PAUSE`）。
+    都可以安全删除：**删状态文件 = 忘掉退避历史**（下一轮从 healthy 重新数，不丢功能）；正规做法是
+    `--reset-state`。`.detail.log` 自带 128KB 触发 / 只留尾部 400 行的自截断，不参与 logrotate。
+  - **dump / 备份**：hang dump 落在 `<应用数据目录>/runtime/reports/dshweb-hang-<pid>-<ts>.dmp`
+    （全内存 dump 单个可达数百 MB）。**真实保留策略在壳里**：`src-tauri/src/lib.rs` 的
+    `HANG_DUMP_KEEP = 3` + `web_dump::prune_dumps`（按文件名排序保留**最新 3 份**，随每次 dump 与
+    "清理缓存"执行）。⚠️ **两个已知缺口，如实记在这里**：① 只有份数上限，**没有时间/总量上限**
+    （长期不产生新 dump 时旧的会一直占着；建议 3 份 + 14 天 + 总量 ≤1GB，改的是 `src-tauri/**`，
+    不在本轮写域）；② `scripts/server-manager.mjs` **没有任何 dump 保留逻辑**（`grep -n dump` 只命中
+    看护协议行：请壳抓 dump / 等 dump-done / 重启），所以"manager 管 dump"是误解 —— 它只发协议。
+    插件升级备份 `.plugin-backup` + `.plugin-backup.prev` 至多两份（`server-manager.mjs:763-774`），
+    天然有界，无需清理。
+  - **清理命令速查**：`rm -rf ~/.dsh/logs/*.log.*`（只删轮转出来的旧档）、
+    `du -sh ~/.dsh/logs ~/.dsh/state <应用数据目录>/runtime/reports`（先看谁在长）、
+    `find <应用数据目录>/runtime/reports -name 'dshweb-hang-*.dmp' -mtime +14 -print`（**先 print 再 -delete**，
+    删除取证文件前确认真的是旧档）。
 - **另三个定时工作流**：`dsh-sla-report.yml`（每周一 01:00 UTC 出 SLA 报表；门禁是独立一步 `--check`，
   只有它红才代表"有版本超 6h 或根本没量出来"）与 `preinstalled-sync.yml`（每周一 02:00 UTC 检测四个预装
   bundle 与 npm `dist-tags.latest` 的漂移，**有漂移才**同步 → 过 `copy-consistency` + `plugin-dsh-compat`

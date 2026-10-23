@@ -7,6 +7,29 @@
 //                              [--registry <url>] [--floor <version>] [--now <iso>] [--force-published <iso>]
 //                              [--repo <owner/name>] [--assignee <login>]
 //                              [--state-dir <dir>] [--lock-file <path>] [--pause-file <path>]
+//                              [--state-file <path>] [--failure-threshold <n>] [--reset-state] [--no-backoff]
+//
+// 退避 / 三态（A6，`scripts/lib/backoff-state.mjs`）：
+//   状态文件 `<state-dir>/state/dsh-watch.json`（默认 `~/.dsh/state/dsh-watch.json`；`--state-file` 直接指定）。
+//   失败 1..N-1 次 = degraded（仍打印完整错误，只发一次跃迁评论）；第 N 次（默认 3）= broken（进入退避，
+//   发一次跃迁评论）；broken 期间每轮**只输出一行** `still broken (attempt k, next retry in Xm)`，到
+//   `nextAttemptAt` 之前**跳过实际工作**，失败明细进 `<state>.detail.log`；任一次成功 = healthy（发一次恢复
+//   评论）。退避 5 → 10 → 20 → 40 → 封顶 60 分钟。心跳每轮一行写入 `<state>.heartbeat`
+//   （`skipped=yes/no` —— 反向心跳据此区分"在退避"与"进程死了"）。
+//   人工恢复：`--reset-state`（只重置本地状态文件、**不写 GitHub**；随后正常一轮会重新判断）。
+//   `--no-backoff` 只给演练/负向对照（门禁 `scripts/test-backoff-state.mjs` 用它证明断言能失败）。
+//   `--now` 同时钉住状态机时钟（演练可确定性回放"连续 8 轮失败"）。
+//   **CI 特例**：Actions runner 的文件系统是临时的 ⇒ 状态每轮从 healthy 开始，只记账、**不发**跃迁评论
+//   （显式给 `--state-dir`/`--state-file`/`DSH_STATE_DIR` 才算持久化环境）。CI 侧的"没跑/没发出来"
+//   由 dead man's switch（A5）负责，不靠这里刷评论。
+//   退出码补充：degraded/broken 的**重试轮**仍是 1；**退避跳过轮是 0**（它没干活、也不是新故障，
+//   0 是为了不与 systemd 的 `Restart=on-failure` + 60s 叠成热循环）。健康判据 = 状态文件的 `state`
+//   + 跃迁评论，不是 timer 的退出码。
+//   systemd 单元模板（本仓库**不**改你机器上的 systemd；推荐值，配合 `Restart=on-failure`）：
+//     [Service]
+//     RestartSec=60              # 首轮失败后 60s 内重启一次（本轮会被退避跳过，随后停下）
+//     RestartSteps=4             # systemd 254+：60s → 120s → 240s → 480s → 960s 的指数重启
+//     RestartMaxDelaySec=3600    # 封顶 1h；与脚本内的 60 分钟退避同尺度
 //
 // 演练参数（--registry / --floor / --now / --force-published）只为本地回放：本机 npm CLI 不可用、
 // 直连 npmjs 会超时，所以演练要用本地 stub registry（python http.server + 手写 packument）指向。
@@ -50,10 +73,16 @@
 //  存在的理由（下一轮收敛）。所以**不要**把这里的"先查后建"当成原子的唯一性约束。
 
 import { execFileSync, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
+import {
+  appendHeartbeat, backoffMinutes, decide, heartbeatFileFor, loadState, recordOutcome,
+  renderBrokenEntry, renderHeartbeat, renderStillBroken, renderTransitionComment,
+  resetStateFile, saveState, stateFilePath,
+} from './lib/backoff-state.mjs'
 
 const SELF = fileURLToPath(import.meta.url)
 const ROOT = join(dirname(SELF), '..')
@@ -100,14 +129,251 @@ const NOW_ARG = arg('--now')
 const NOW = NOW_ARG ? new Date(NOW_ARG) : new Date()
 const FORCE_PUBLISHED = arg('--force-published')
 
+// `--now` 必须在这里就校验：它同时是退避状态机的时钟（演练要能钉住"现在"）。
+if (Number.isNaN(NOW.getTime())) {
+  console.error(`--now 不是合法时间：${NOW_ARG}（要 ISO 8601，例如 2026-10-19T12:00:00Z）—— 拒绝用坏时间戳静默判"未违约"`)
+  process.exit(2)
+}
+
 // ── A2：状态目录 / 互斥锁 / 刹车文件 ────────────────────────────────────────
-// --state-dir（或 DSH_STATE_DIR）把三样东西收在一处：锁文件、PAUSE 刹车、将来可能的状态文件。
-// 默认 `~/.dsh` 与既有约定一致（systemd user 单元、日志、dump 都在这里）。
+// --state-dir（或 DSH_STATE_DIR）把三样东西收在一处：锁文件、PAUSE 刹车、**退避状态文件**
+// （`<state-dir>/state/dsh-watch.json`，见下面的 A6）。默认 `~/.dsh` 与既有约定一致
+// （systemd user 单元、日志、dump 都在这里）。
 const STATE_DIR = resolve(arg('--state-dir') ?? process.env.DSH_STATE_DIR ?? join(homedir(), '.dsh'))
 const LOCK_FILE = resolve(arg('--lock-file') ?? join(STATE_DIR, 'locks/dsh-watch.lock'))
 const PAUSE_FILE = resolve(arg('--pause-file') ?? join(STATE_DIR, 'PAUSE'))
 const PAUSED = existsSync(PAUSE_FILE)
 const UNDER_LOCK = process.env.DSH_WATCH_LOCK_HELD === '1'
+
+// ── 跟踪 issue 的身份（A6 的跃迁评论也用它定位落点）──────────────────────────
+// 只认本脚本自己写的两种标题前缀：`[dsh-watch][…] dsh <ver> 比地板 <floor> 新` / `[SLA 未达标] dsh <ver> …`。
+// 这样人类随手开的 "please upgrade to 0.2.1-rc.3" 不会被我们 edit 掉正文（那会改写别人的字）。
+const TRACKING_TITLE = /^(\[dsh-watch\]|\[SLA 未达标\])/
+/** 从我们自己的标题里取目标版本（`dsh <ver>` 锚点：`dsh-watch` 后无空格，不会误命中）。 */
+function versionInTitle(title) {
+  const m = /\bdsh\s+(\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?)/.exec(String(title ?? ''))
+  return m ? m[1] : null
+}
+const isTracking = (i) => TRACKING_TITLE.test(String(i?.title ?? ''))
+
+// ── A6：三态健康机 + 指数退避 + 只在跃迁时通知（2026-10-24）──────────────────
+// 背景：定时器每 10 分钟一轮，失败时**每轮重印同一段完整错误** —— 没有新信息、掩盖"什么时候开始
+// 坏的 / 中间有没有恢复过"，还会让 systemd 的 `Restart=on-failure` + `RestartSec=60` 变成热循环。
+// 状态机把"最近一次结果 + 连续失败次数"落盘（`~/.dsh/state/dsh-watch.json`，原子写），由状态驱动
+// 输出与通知，而不是由"这一次是否抛异常"驱动（同 Argo CD 的 health / client-go 的按 key 退避 + Forget）：
+//   ① healthy --连续失败 1..N-1--> degraded：**仍打印完整错误**（还在诊断窗口里），只发一次跃迁评论；
+//   ② degraded --第 N 次连续失败--> broken：**只发一次**跃迁评论，进入退避；
+//   ③ broken 期间每轮**只输出一行** `still broken (attempt k, next retry in Xm)`，到 nextAttemptAt
+//      之前**跳过实际工作**（不探 npm、不写 issue），但每轮都写一行心跳（`<state>.heartbeat`）——
+//      反向心跳据此区分"进程还在、只是退避中"与"进程死了"；失败明细进 `<state>.detail.log`；
+//   ④ broken --任一次成功--> healthy：**只发一次**恢复评论，计数清零；
+//   ⑤ 不可重试错误（403/404/凭据/权限）**第一次就 broken**（重试不会好，只会把 403 再印一遍）。
+// 通知只在跃迁时发生，评论带机器标记 `<!-- dsh-watch-backoff: state=broken … -->` + digest（补发/并发
+// 幂等）。退避序列 5 → 10 → 20 → 40 分钟、封顶 60（`scripts/lib/backoff-state.mjs` 的纯函数）。
+// 退出码：degraded / broken 的**重试轮**仍是 1（CI 该红就红）；**退避跳过轮是 0** —— 它没干活、也不是
+// 新故障，0 是为了不与 systemd 的 restart 叠成热循环；健康判据是状态文件里的 `state` 与跃迁评论。
+const TOOL = 'dsh-watch'
+const BACKOFF_OFF = argv.includes('--no-backoff')
+const RESET_STATE = argv.includes('--reset-state')
+const STATE_FILE = resolve(arg('--state-file') ?? process.env.DSH_WATCH_STATE_FILE
+  ?? stateFilePath({ tool: TOOL, stateDir: STATE_DIR }))
+const HEARTBEAT_FILE = heartbeatFileFor(STATE_FILE)
+const DETAIL_FILE = `${STATE_FILE}.detail.log`
+const FAILURE_THRESHOLD = Math.max(1, Number(arg('--failure-threshold', '3')) || 3)
+// --dry-run / PAUSE 都是"只读轮"：不读写退避状态（演练不该污染真实退避；PAUSE 期间人工接管）。
+const STATE_WRITES_OK = !DRY && !PAUSED
+// 环境判定（显式）：GitHub Actions 的 runner 文件系统是临时的 ⇒ 状态每轮都从 healthy 开始，通知只会
+// 变成"每轮一条 healthy→degraded"（比现状更吵）。所以 CI 里**只记账、不发**跃迁评论（下面的
+// `--state-dir` 显式给了才算持久化环境，本机 timer/演练/测试都属于这一类）。
+const PERSISTENT_STATE = Boolean(arg('--state-file') || arg('--state-dir') || process.env.DSH_STATE_DIR)
+const NOTIFY_TRANSITIONS = !(process.env.GITHUB_ACTIONS === 'true' && !PERSISTENT_STATE)
+
+let backoff = null
+let backoffState = null
+let FAILURE = null
+// 本轮 target（拿到之后赋值）：跃迁评论优先挂到**这一版**的跟踪单上，而不是随便最新一条。
+let CURRENT_TARGET = null
+
+/** broken 期间的失败细节只进明细文件 —— stdout 保持**一行**（"不再每轮重印完整错误"）。 */
+const quiet = () => Boolean(backoff && STATE_WRITES_OK && backoffState?.state === 'broken')
+function appendDetail(line) {
+  try {
+    mkdirSync(dirname(DETAIL_FILE), { recursive: true })
+    appendFileSync(DETAIL_FILE, line)
+    // 明细文件只服务本机排障、不参与 logrotate ⇒ 自带上限（涨过 128KB 就只留尾部 400 行）。
+    if (statSync(DETAIL_FILE).size > 128 * 1024) {
+      const tail = readFileSync(DETAIL_FILE, 'utf8').split('\n').slice(-400).join('\n')
+      writeFileSync(DETAIL_FILE, tail, { mode: 0o600 })
+    }
+  } catch { /* 明细丢失不该改变退出码 */ }
+}
+/** 失败细节的唯一出口：degraded 时进 stderr（照旧），broken 时进明细文件（stdout 只留一行摘要）。 */
+function failErr(...args) {
+  FAILURE = args.join(' ')
+  const line = `${NOW.toISOString()} ${FAILURE}\n`
+  if (quiet()) { appendDetail(line); return }
+  process.stderr.write(line)
+}
+function persistBackoff() {
+  if (!backoff || !STATE_WRITES_OK) return
+  try { saveState(STATE_FILE, backoffState) } catch (e) {
+    failErr(`!! 写不出退避状态 ${STATE_FILE}：${e.message} —— 本轮结果未记账（下一轮重新判断，不会因此停摆）`)
+  }
+}
+/**
+ * 心跳：**每一轮都要落一行**（含 broken 的跳过轮与重试轮）。反向心跳用它区分
+ * "进程还在、只是退避中"（state=broken, skipped=yes）与"进程根本没跑"（文件不动）。
+ */
+function beat({ skipped = false, exit = 0 } = {}) {
+  if (!backoff || !STATE_WRITES_OK) return
+  appendHeartbeat(HEARTBEAT_FILE, renderHeartbeat({
+    tool: TOOL, state: backoffState?.state ?? 'unknown', nowIso: NOW.toISOString(),
+    attempt: backoffState?.consecutiveFailures ?? 0, skipped, exit,
+  }))
+}
+/**
+ * 跃迁的稳定摘要：同一场故障（同 enteredStateAt + 同 from→to）跨轮次稳定 ⇒ 补发不会重复评论；
+ * 恢复后再次坏掉时 enteredStateAt 变了 ⇒ 仍然是新的一条评论。
+ */
+const transitionDigest = (transition) => createHash('sha256')
+  .update(`${TOOL}|${transition.from}|${transition.to}|${backoffState?.enteredStateAt ?? ''}`).digest('hex').slice(0, 16)
+
+/** 跃迁通知的落点：本脚本自己的跟踪 issue（优先本轮 target 那一条，其次最新一条）。找不到就**不新建**。 */
+function resolveNotifyIssue() {
+  const got = readOpenIssues()
+  if (!got.ok) return { ok: false, why: '读不到 open issue 列表' }
+  const tracking = got.issues.filter(isTracking)
+  if (!tracking.length) return { ok: false, why: '没有本脚本的 open 跟踪 issue（不为退避通知另开一种 issue 通道）' }
+  const forTarget = CURRENT_TARGET ? tracking.find((i) => versionInTitle(i.title) === CURRENT_TARGET) : null
+  const sorted = [...tracking].sort((a, b) => (Date.parse(b.createdAt ?? '') || 0) - (Date.parse(a.createdAt ?? '') || 0)
+    || (b.number ?? 0) - (a.number ?? 0))
+  return { ok: true, number: (forTarget ?? sorted[0]).number }
+}
+function alreadyCommented(number, digest) {
+  try {
+    const out = execFileSync(GH, ['issue', 'view', String(number), '--json', 'comments'], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 })
+    return (JSON.parse(out).comments ?? []).some((c) => String(c?.body ?? '').includes(`dsh-watch-backoff-digest: ${digest}`))
+  } catch { return false }   // 读不到评论列表就照发：不因查询失败丢掉告警
+}
+function postComment(number, body, digest) {
+  try {
+    execFileSync(GH, ['issue', 'comment', String(number), '--body', `${body}\n\n<!-- dsh-watch-backoff-digest: ${digest} -->`], { encoding: 'utf8' })
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, err: String(e?.stderr || e?.message || e).trim().split('\n').filter(Boolean).slice(-1)[0] ?? 'unknown' }
+  }
+}
+/**
+ * 只在跃迁时发一条评论（带 `state=<to>` 标记 + digest）。写失败 ⇒ 记进状态文件的
+ * pendingNotification、**下一轮补发**（至少一次）；成功 ⇒ 记进 notified（digest 幂等）。
+ */
+function notifyTransition(transition, { error = null, nextAttemptAt = null } = {}) {
+  if (!transition?.notify) return { posted: false }
+  const digest = transitionDigest(transition)
+  const { body } = renderTransitionComment({
+    tool: TOOL, transition, error, threshold: FAILURE_THRESHOLD, nextAttemptAt, digestToken: digest, nowIso: NOW.toISOString(),
+  })
+  if (!NOTIFY_TRANSITIONS) {
+    console.log(`状态跃迁 ${transition.from}→${transition.to}（CI 临时文件系统：只记账、不发评论）`)
+    backoffState.notified[digest] = NOW.toISOString()
+    return { posted: false, ci: true }
+  }
+  if (backoffState.notified[digest]) return { posted: false, duplicate: true }
+  const target = resolveNotifyIssue()
+  if (!target.ok) {
+    backoffState.pendingNotification = { from: transition.from, to: transition.to, digest, body, at: NOW.toISOString() }
+    console.log(`（跃迁通知暂缓：${target.why}；已记入状态文件，下一轮补发）`)
+    return { posted: false, pending: true }
+  }
+  if (alreadyCommented(target.number, digest)) {
+    backoffState.notified[digest] = NOW.toISOString()
+    return { posted: false, duplicate: true }
+  }
+  const r = postComment(target.number, body, digest)
+  if (!r.ok) {
+    backoffState.pendingNotification = { from: transition.from, to: transition.to, digest, body, at: NOW.toISOString() }
+    console.log(`（跃迁评论失败：${r.err}；已记入状态文件，下一轮补发）`)
+    return { posted: false, pending: true, error: r.err }
+  }
+  backoffState.notified[digest] = NOW.toISOString()
+  console.log(`状态跃迁 ${transition.from}→${transition.to}：已评论 #${target.number}（同一状态不再重复评论）`)
+  return { posted: true, number: target.number }
+}
+function flushPendingNotification() {
+  const p = backoffState?.pendingNotification
+  if (!p || !NOTIFY_TRANSITIONS) return
+  const target = resolveNotifyIssue()
+  if (!target.ok) return
+  if (alreadyCommented(target.number, p.digest)) { backoffState.pendingNotification = null; persistBackoff(); return }
+  const r = postComment(target.number, p.body, p.digest)
+  if (!r.ok) return
+  backoffState.notified[p.digest] = NOW.toISOString()
+  backoffState.pendingNotification = null
+  console.log(`补发跃迁评论 #${target.number}（${p.from}→${p.to}）`)
+  persistBackoff()
+}
+/** 记一轮失败（供"工作第一步就失败"的路径在 finish 之外使用）。 */
+function recordFailureNow(errorMsg) {
+  if (!backoff || !STATE_WRITES_OK) return null
+  const { state, transition } = recordOutcome(backoffState, {
+    ok: false, error: errorMsg, nowMs: NOW.getTime(), threshold: FAILURE_THRESHOLD,
+  })
+  backoffState = state
+  if (transition?.notify) notifyTransition(transition, { error: errorMsg, nextAttemptAt: state.nextAttemptAt })
+  persistBackoff()
+  return { state, transition }
+}
+/** 工作第一步就失败（拿不到 packument 等）：记账 → 按状态决定输出多少 → exit 1。 */
+function fatal(errorMsg) {
+  failErr(errorMsg)
+  const wasBroken = backoffState?.state === 'broken'
+  const rec = recordFailureNow(errorMsg)
+  if (rec?.state.state === 'broken') {
+    // 进入 broken 的那一轮给"连续 N 次失败"；之后的重试轮只报"仍是 broken"（都是一行）。
+    console.log(!wasBroken
+      ? renderBrokenEntry({
+        attempt: rec.state.consecutiveFailures, minutesLeft: backoffMinutes(rec.state.backoffRetries),
+        error: errorMsg, threshold: FAILURE_THRESHOLD,
+      })
+      : renderStillBroken({
+        attempt: rec.state.consecutiveFailures, minutesLeft: backoffMinutes(rec.state.backoffRetries),
+        nowIso: NOW.toISOString(),
+      }))
+  }
+  beat({ skipped: false, exit: 1 })
+  process.exit(1)
+}
+
+if (!BACKOFF_OFF) {
+  backoff = { file: STATE_FILE, tool: TOOL }
+  const loaded = loadState(STATE_FILE, { tool: TOOL, nowMs: NOW.getTime(), stamp: NOW.toISOString() })
+  backoffState = loaded.state
+  if (loaded.corrupt) {
+    console.error(`!! 退避状态文件损坏（${loaded.corrupt.reason}）⇒ 已备份到 ${loaded.corrupt.backupPath || '（备份也失败）'}、重建为 healthy`
+      + '（fail-open：坏状态不该让探针永远静默）')
+  }
+  if (RESET_STATE) {
+    resetStateFile(STATE_FILE, { tool: TOOL, nowMs: NOW.getTime() })
+    console.log(`退避状态已重置：${STATE_FILE}（healthy，不写 GitHub）—— 人工恢复用；下一轮会重新判断`)
+    process.exit(0)
+  }
+  if (STATE_WRITES_OK) {
+    if (loaded.corrupt) persistBackoff()
+    flushPendingNotification()
+    const d = decide(backoffState, NOW.getTime())
+    if (d.skip) {
+      backoffState.lastRunAt = NOW.toISOString()
+      persistBackoff()
+      beat({ skipped: true, exit: 0 })
+      console.log(renderStillBroken({ attempt: backoffState.consecutiveFailures, minutesLeft: d.minutesLeft, nowIso: NOW.toISOString() }))
+      process.exit(0)
+    }
+  } else {
+    console.log(`（只读轮${DRY ? ' --dry-run' : ''}${PAUSED ? ' / PAUSE' : ''}：不做退避判定、不写状态文件 ${STATE_FILE}）`)
+  }
+} else {
+  console.error('退避/状态记录已禁用（--no-backoff）：仅用于演练与负向对照，生产轮次不要带它')
+}
 
 // 锁必须在**任何写操作之前**拿到，而且要靠"进程退出自动释放"的 flock ——
 // 用 `open('wx')` 那种锁文件，崩溃后会留下永久死锁（下一次告警就再也不会发出）。
@@ -137,13 +403,8 @@ if (!DRY && !PAUSED && !UNDER_LOCK) {
     process.exit(r.status)
   }
 }
-if (UNDER_LOCK) console.log(`已获取本机独占锁（flock ${LOCK_FILE}）`)
+if (UNDER_LOCK && !quiet()) console.log(`已获取本机独占锁（flock ${LOCK_FILE}）`)
 if (PAUSED) console.log(`paused by ${PAUSE_FILE} —— 本轮跳过一切写操作（只读探测、去重判定、重复单报告继续）`)
-
-if (Number.isNaN(NOW.getTime())) {
-  console.error(`--now 不是合法时间：${NOW_ARG}（要 ISO 8601，例如 2026-10-19T12:00:00Z）—— 拒绝用坏时间戳静默判"未违约"`)
-  process.exit(2)
-}
 
 const bare = (v) => (v ?? '').split('-')[0].split('.').map(Number)
 // 无预发布必须返回**空数组**：`'0.2.1'.split('-')[1]` 是 undefined，旧写法 `?? ''` 再 split('.')
@@ -174,8 +435,8 @@ function npmPackument() {
   for (const extra of attempts) {
     try { return JSON.parse(execFileSync('curl', [...extra, '--max-time', '40', url], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })) } catch (e) { /* next */ }
   }
-  console.error(`拿不到 npm packument（${url}；直连与代理都失败）—— 这是**真故障**，故非零退出`)
-  process.exit(1)
+  // 走 fatal()：记账（degraded/broken）+ 按状态决定输出多少（broken 时只留一行摘要，明细进 .detail.log）。
+  fatal(`拿不到 npm packument（${url}；直连与代理都失败）—— 这是**真故障**，故非零退出`)
 }
 
 // 地板默认读真源（scripts/server-manager.mjs）；--floor 只为演练/回放（把地板钉在某个版本，
@@ -205,6 +466,8 @@ if (FORCE) {
   kind = `best-effort ${BEST_EFFORT_HOURS}h（预发布通道）`
   threshold = BEST_EFFORT_HOURS
 }
+// 拿到 target 后再赋值（A6 的跃迁评论优先挂到这一版的跟踪单上）。
+CURRENT_TARGET = target
 let pubUnknown = false
 if (target && threshold !== null) {
   const pub = FORCE_PUBLISHED ?? time[target]
@@ -240,9 +503,41 @@ const report = {
   registry: REGISTRY, generatedAt: new Date().toISOString(),
   dryRun: DRY, paused: PAUSED, pauseFile: PAUSED ? PAUSE_FILE : null,
   lock: UNDER_LOCK ? LOCK_FILE : null,
-  dedupe: null, reconcile: null,
+  dedupe: null, reconcile: null, backoff: null,
 }
 const finish = (code) => {
+  // A6：记账（只读轮次不记；code 2 = 用法/属主配置错误，不当作"探针坏了" —— 否则打错一次
+  // --assignee 就会退避一小时）。正常轮（0）会显式清零，**成功即 Forget**（client-go 的语义）。
+  if (backoff && STATE_WRITES_OK && (code === 0 || code === 1)) {
+    const wasBroken = backoffState.state === 'broken'
+    const { state, transition } = recordOutcome(backoffState, {
+      ok: code === 0,
+      error: code === 0 ? null : (FAILURE ?? 'exit 1'),
+      nowMs: NOW.getTime(),
+      threshold: FAILURE_THRESHOLD,
+    })
+    backoffState = state
+    report.backoff = {
+      state: state.state, consecutiveFailures: state.consecutiveFailures, backoffRetries: state.backoffRetries,
+      nextAttemptAt: state.nextAttemptAt, lastSuccessAt: state.lastSuccessAt, lastError: state.lastError,
+      transition: transition ? { from: transition.from, to: transition.to, notify: transition.notify } : null,
+    }
+    if (code === 1 && state.state === 'broken') {
+      // broken 期间 stdout 只留一行：入口给"连续 N 次失败"的摘要，之后的重试只报"仍是 broken"。
+      console.log(!wasBroken
+        ? renderBrokenEntry({
+          attempt: state.consecutiveFailures, minutesLeft: backoffMinutes(state.backoffRetries),
+          error: FAILURE, threshold: FAILURE_THRESHOLD,
+        })
+        : renderStillBroken({
+          attempt: state.consecutiveFailures, minutesLeft: backoffMinutes(state.backoffRetries),
+          nowIso: NOW.toISOString(),
+        }))
+    }
+    if (transition?.notify) notifyTransition(transition, { error: code === 0 ? null : FAILURE, nextAttemptAt: state.nextAttemptAt })
+    persistBackoff()
+  }
+  beat({ skipped: false, exit: code })
   if (OUT) {
     try { writeFileSync(OUT, JSON.stringify(report, null, 2)) } catch (e) { console.error(`!! 写不出 --json 报告 ${OUT}：${e.message}`) }
   }
@@ -256,13 +551,7 @@ const escRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 const versionRe = (v) => new RegExp(`(?:^|[^0-9A-Za-z.-])${escRe(v)}(?![0-9A-Za-z.-])`)
 // 只认本脚本自己写的两种标题前缀：`[dsh-watch][…] dsh <ver> 比地板 <floor> 新` / `[SLA 未达标] dsh <ver> …`。
 // 这样人类随手开的 "please upgrade to 0.2.1-rc.3" 不会被我们 edit 掉正文（那会改写别人的字）。
-const TRACKING_TITLE = /^(\[dsh-watch\]|\[SLA 未达标\])/
-/** 从我们自己的标题里取目标版本（`dsh <ver>` 锚点：`dsh-watch` 后无空格，不会误命中）。 */
-function versionInTitle(title) {
-  const m = /\bdsh\s+(\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?)/.exec(String(title ?? ''))
-  return m ? m[1] : null
-}
-const isTracking = (i) => TRACKING_TITLE.test(String(i?.title ?? ''))
+// （定义在 A6 之前：退避跃迁也要认这两类 issue 才能把评论挂对地方。）
 
 // ── 读：open issue 列表（去重与对账共用一次查询）───────────────────────────
 // 不按 label 过滤（事故根因）。`--limit 1000` 覆盖本仓库规模；真到上限会显式告警"可能被截断"，
@@ -277,7 +566,7 @@ function readOpenIssues() {
     return { ok: true, issues: arr }
   } catch (e) {
     const msg = String(e?.stderr || e?.message || e).trim().split('\n').filter(Boolean).slice(-1)[0] ?? 'unknown'
-    console.error(`!! 读不到 open issue 列表（${msg}）—— "查不到"不等于"没有重复"，本轮不做去重判定`)
+    failErr(`!! 读不到 open issue 列表（${msg}）—— "查不到"不等于"没有重复"，本轮不做去重判定`)
     return { ok: false, issues: [], error: msg }
   }
 }
@@ -359,10 +648,10 @@ function runWrite(what, fn) {
   }
   try { return { ok: true, out: fn() } } catch (e) {
     const msg = String(e?.stderr || e?.message || e).trim().split('\n').filter(Boolean).slice(-1)[0] ?? 'unknown'
-    console.error(`!! 写操作失败「${what}」：${msg}`)
+    failErr(`!! 写操作失败「${what}」：${msg}`)
     if (blockedReason(msg)) {
       writeBlocked = msg
-      console.error('!! 权限/目标不可用 ⇒ 本轮停止一切写操作（不硬试，避免噪音与 429）；失败项见日志与 --json 报告')
+      failErr('!! 权限/目标不可用 ⇒ 本轮停止一切写操作（不硬试，避免噪音与 429）；失败项见日志与 --json 报告')
     }
     return { ok: false, err: msg }
   }
@@ -438,7 +727,7 @@ if (!target) {
     applied: null,
   }
   if (!got.ok) {
-    console.error('!! 本轮不做对账（读不到 open issue 列表）—— 这是故障，不是"没有重复"')
+    failErr('!! 本轮不做对账（读不到 open issue 列表）—— 这是故障，不是"没有重复"')
     finish(1)
   }
   if (plans.length) {
@@ -454,9 +743,9 @@ if (!target) {
       const left = after.ok ? planReconcile(after.issues) : null
       report.reconcile.remaining = left ? left.length : null
       if (left === null) {
-        console.error('!! 对账后无法复核（读不到列表）—— 不报"已收敛"')
+        failErr('!! 对账后无法复核（读不到列表）—— 不报"已收敛"')
       } else if (left.length) {
-        console.error(`!! 对账后仍有 ${left.length} 组重复（失败/未完成）`)
+        failErr(`!! 对账后仍有 ${left.length} 组重复（失败/未完成）`)
         console.log(manualText(left, applied.failed.length ? `对账失败：${applied.failed[0].error}` : '自动对账未完成'))
         report.reconcile.manual = manualCommands(left)
       } else {
@@ -600,7 +889,7 @@ if (PAUSED) {
 }
 
 if (!got.ok) {
-  console.error('!! 拒绝新建/更新：读不到 open issue 列表时无法做去重判定，此时开单只会再造一条重复')
+  failErr('!! 拒绝新建/更新：读不到 open issue 列表时无法做去重判定，此时开单只会再造一条重复')
   finish(1)
 }
 
@@ -623,10 +912,10 @@ if (reconcilePlans.length) {
   const left = after.ok ? planReconcile(after.issues) : null
   report.reconcile.remaining = left ? left.length : null
   if (left === null) {
-    console.error('!! 对账后无法复核（读不到列表）—— 不报"已收敛"；本轮也不再开/改单（宁可下一轮再来）')
+    failErr('!! 对账后无法复核（读不到列表）—— 不报"已收敛"；本轮也不再开/改单（宁可下一轮再来）')
     finish(1)
   } else if (left.length) {
-    console.error(`!! 对账后仍有 ${left.length} 组重复（被 403 挡住或写入失败）`)
+    failErr(`!! 对账后仍有 ${left.length} 组重复（被 403 挡住或写入失败）`)
     console.log(manualText(left, applied.failed.length ? `对账失败：${applied.failed[0].error}` : '自动对账未完成'))
     report.reconcile.manual = manualCommands(left)
   } else {
@@ -667,7 +956,7 @@ if (match) {
       console.log(`${breached ? 'SLA 未达标' : '跟踪'} issue 已静默更新：#${match.number}（目标与状态均未变，不刷评论）`)
     }
   } else {
-    console.error(`!! 复用已有跟踪单 #${match.number} 失败 —— **不新建**（新建只会再造一条重复）`)
+    failErr(`!! 复用已有跟踪单 #${match.number} 失败 —— **不新建**（新建只会再造一条重复）`)
     report.dedupe.error = r.err
   }
 } else {
