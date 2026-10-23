@@ -229,7 +229,7 @@ T0 = `time[该壳版本随包地板]`（可能是预发布），终点 = 首个�
 5. 预装插件 peer 兼容（`test-plugin-dsh-compat.mjs`；地板与四个 bundle 必须同批）；
 6. 探针非 RED（**没产出报告也算失败**；YELLOW 需显式 `--allow-yellow`）；
 7. 全量门禁（**先跑 `node scripts/sync-cargo-lock-version.mjs`（与 CI `test` 作业在 `npm test` 前的那一步一致）**，
-   再按 `package.json` 的 `test` 链逐条直接跑 `node`；当前 27 条里 26 条是 `node …` ⇒ 26/26 真跑，
+   再按 `package.json` 的 `test` 链逐条直接跑 `node`；当前 29 条里 28 条是 `node …` ⇒ 28/28 真跑，
    另 1 条是 `[ -f scripts/test-version-compare-parity.mjs ]` 条件式（parity 套件未提供时只跳过自己），
    它不匹配 `^node` ⇒ 本机把它**跳过并逐条列出**，CI 上由 `npm test` 真跑。默认容忍这种覆盖缺口、
    `--strict-chain` 把跳过也算失败。sync 只把派生的 `Cargo.lock` 对齐到 `Cargo.toml`；`package.json` /

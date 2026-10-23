@@ -42,8 +42,8 @@
 > `cp scripts/git-hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit`
 > 为什么需要它：2026-09-27 与 2026-10-04 两次误直推 `main`（第二次发生在纪律写进技能之后）——靠自觉不够。
 
-npm test                          # 全量 28 套（27 条 node + 1 条 `[ -f … ]` 条件式；行为 + 契约 + 副本一致性 +
-                                  #   清单/补丁目标门禁 + 升级标记 + 自动化链路门禁自证）
+npm test                          # 全量 29 套（28 条 node + 1 条 `[ -f … ]` 条件式；行为 + 契约 + 副本一致性 +
+                                  #   清单/补丁目标门禁 + 升级标记 + 自动化链路门禁自证 + gh 凭据纪律）
 
 第 18 套 `scripts/test-silent-failures.mjs` 是**静默失效审计**：它扫描"销毁/写入类操作的结果被忽略"的站点（Rust `let _ = std::fs::remove|copy|write|rename|create_dir*`、`.ok()` 吞错、JS 空 catch），每个站点必须在本行或上一行带 `// fail-open-ok: <理由>`。它**先跑 4 个变异夹具自检再跑审计**（自检不过即失败），也可单独跑 `npm run audit:self-test` —— 恒真的门禁不算门禁。
 第 22 套 `scripts/test-bake-bridge-port.mjs` 守**"就地改写别人的源码"**这条路径：manager 把桥端口烘进插件 `client.js` 前，必须先用 `node:vm` 的 `Script` 编译候选（**与浏览器 `<script src>` 同语义**；`new Function` 与 `node --check` 都会放过脚本里非法的顶层 `return` —— 两个都实测过），编译不过就**保留原文件** + 留一行 `bridge port bake ABORTED`。同族的静态门禁在 `scripts/test-launcher-settings.mjs` 末尾：启动页 JS 里 `getElementById` 的每个 id 都必须在对应 HTML 里存在 —— 那个套件的 DOM 桩会**按需自动建元素**，所以光靠它测不出"HTML 里少了一个 id"（生产后果是 `null.addEventListener` 打死该页后续脚本，与顶栏事故同族）。
@@ -137,6 +137,8 @@ gh CLI 默认读全局 `~/.config/gh/hosts.yml`。本项目使用**项目专用 
 1. 创建 token 后粘贴到 `~/.config/gh-dsh-desktop/token`（权限 600；`#` 注释行自动忽略）。
 2. 进入项目目录时 direnv 自动 `export GH_TOKEN`（`.envrc`，已 gitignore，首次需 `direnv allow`）；
    或显式用包装命令 `./scripts/gh <args>`（不依赖 direnv）。
+   脚本若走 `GH_BIN`，**缺省值必须指向 `./scripts/gh`，禁止默认裸 `gh`**（裸 gh 用全局 `hosts.yml`
+   里的另一个 PAT，权限不同）；CI 里显式 `GH_BIN=gh` 是唯一例外。门禁：`node scripts/test-gh-bin-discipline.mjs`。
 3. git push 走 SSH，不受 token 影响；CI 用 `secrets.GITHUB_TOKEN`，与个人 token 无关。
 
 ## 知识沉淀

@@ -130,12 +130,13 @@ node_modules 符号链接树、写迁移标记、绝不上移覆盖已有新数�
 ## 本地验证（Linux 可跑的部分）
 
 ```bash
-npm test                 # 全量 28 套（27 条 node 直接可跑 + 1 条条件式）：清单一致性 / overlay 目标行 / 升级标记 /
+npm test                 # 全量 29 套（28 条 node 直接可跑 + 1 条条件式）：清单一致性 / overlay 目标行 / 升级标记 /
                          #   通知插件 / 控制面 / 代理 / 代理e2e / 启动页设置 / 壳顶栏契约 / 壳不吞页面原生行为
                          #   （拖放与外链，见下）/ 壳引导桩（纯 Node，无浏览器）/ 启动器扫动 / 请求头预算 /
                          #   半截安装自愈 / 副本一致性 / 版本比较 parity /
                          #   **自动化链路门禁自证**（scripts/test-automation-gates.mjs，见「维护者」小节）
                          #   **挂起看护"dump 后再探一次"**（scripts/test-watchdog-recovery.mjs，含 3 个变异自证）
+                         #   **gh 凭据纪律**（scripts/test-gh-bin-discipline.mjs：裸 gh 缺省扫描 + 消费者兜底 + unit 模板）
                          #   条件式那条 = `[ -f scripts/test-version-compare-parity.mjs ]`：文件已提供就真跑，
                          #   尚未提供时打印 SKIP 并只跳过自己（不判红，也不掩盖它的失败 —— 失败码照传）
 npm run test:slow        # 安装卡死快速失败（~3 分钟，不进 PR 门禁；CI 的 linux job 会跑）
@@ -496,7 +497,7 @@ MIT
   全量门禁（**跑链前先 sync 派生的 `Cargo.lock`**，与 CI 的 `test` 作业一致）。**任一步失败立即停**；
   `--runtime` 缺省时会尝试 dev 实例的固定 runtime 路径，**路径不存在且未显式给出 ⇒ 直接 exit 2**（不发车）。
   第 7 步（全量门禁）按 `package.json` 的 `test` 链**逐条直接跑 `node`**（不经 npm，与 `npm test` 是同一条链），
-  当前这条链 27 条里 26 条是 `node …` ⇒ 本机 26/26 真跑；剩下 1 条是条件式
+  当前这条链 29 条里 28 条是 `node …` ⇒ 本机 28/28 真跑；剩下 1 条是条件式
   （`[ -f scripts/test-version-compare-parity.mjs ] && …`，parity 套件尚未提供时只跳过自己）——
   它不匹配 `^node`，因此本机会把它**跳过并逐条列出**（CI 上由 `npm test` 真跑）。
   将来链上若出现别的非 node 条目（如 cargo），处理方式相同：默认容忍这种覆盖缺口，
@@ -579,8 +580,10 @@ MIT
   版本 PR 自动合并 =
   **零人工审阅**（只靠变更范围白名单 + mergeable 兜底）；资产 <3（如 windows job flake）就停在 ⑦、不自动重试；
   `next`/alpha 通道按决策 ③C **不自动适配**（安装路径只装 max(地板, latest)）；合并/建 issue 依赖本机项目
-  PAT（`GH_BIN` 缺省自动指向 `scripts/gh`；CI 的 `GITHUB_TOKEN` 不能 `--admin`）；systemd 运行环境需能读
-  SSH key（`git push` 走 SSH）与网络。演练/测试注入点：`GH_BIN` / `GIT_BIN` / `NODE_BIN` 与
+  PAT（`GH_BIN` 缺省自动指向 `scripts/gh`；CI 的 `GITHUB_TOKEN` 不能 `--admin`）。**凭据纪律：脚本若走
+  `GH_BIN`，必须默认指向 `scripts/gh`，禁止默认裸 `gh`（裸 gh 落到全局 `hosts.yml` 里的另一个 PAT，
+  权限不同；CI 里显式 `GH_BIN=gh` 是唯一例外），门禁 `scripts/test-gh-bin-discipline.mjs` 守这条。
+  systemd 运行环境需能读 SSH key（`git push` 走 SSH）与网络。演练/测试注入点：`GH_BIN` / `GIT_BIN` / `NODE_BIN` 与
   `DSH_AUTOPILOT_WATCH_JSON`（见脚本头注释）。
 - **门禁自证**（`node scripts/test-automation-gates.mjs`，`npm test` 链上的一员，约 60s）：它覆盖的是
   **"自动化链路判据的可失败性"** —— 把 2026-10-19「假门禁猎手」审计的 49 条注入断言落成可重复运行的一道门禁：

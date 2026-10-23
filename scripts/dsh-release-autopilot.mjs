@@ -99,7 +99,8 @@
 //     [Service]
 //     Type=oneshot
 //     WorkingDirectory=%h/dsh-desktop
-//     # 合并必须用项目 PAT 包装（CI 的 GITHUB_TOKEN 不能 --admin）；仓库脚本本应显式设置 GH_BIN。
+//     # 合并必须用项目 PAT 包装（CI 的 GITHUB_TOKEN 不能 --admin）；仓库脚本缺省已解析到 scripts/gh，
+//     # 这里显式写死是为了 systemd 下不依赖实现细节（演练仍可用 GH_BIN 指向桩）。
 //     Environment=GH_BIN=%h/dsh-desktop/scripts/gh
 //     ExecStart=/usr/bin/node %h/dsh-desktop/scripts/dsh-release-autopilot.mjs
 //     TimeoutStartSec=2h
