@@ -141,6 +141,25 @@ gh CLI 默认读全局 `~/.config/gh/hosts.yml`。本项目使用**项目专用 
    里的另一个 PAT，权限不同）；CI 里显式 `GH_BIN=gh` 是唯一例外。门禁：`node scripts/test-gh-bin-discipline.mjs`。
 3. git push 走 SSH，不受 token 影响；CI 用 `secrets.GITHUB_TOKEN`，与个人 token 无关。
 
+## 自动化链路的运维契约（A1 / A3 / A5 / A6 / A8 / A9）
+
+依据 `docs/2026-10-24-alerting-and-idempotency-patterns.md` 的采用清单。这一节只写**判据和命令**
+（"现在的事实 + 自己怎么验"）；为什么这样设计、放弃了什么，见该文档与
+`.agents/notes/implemented/architecture/` 下的 Note。
+
+| 层 | 现在的事实 | 自己怎么验 |
+|---|---|---|
+| **单写者（A1）** | `dsh-watch` 非 `--dry-run` 时整个进程包在 `flock -n -E 75 <state-dir>/locks/dsh-watch.lock`（默认 `~/.dsh/locks/`）；锁被占 ⇒ re-exec 的退出码 **75**，进程退出即释放（不会留"崩溃后永久死锁"）。`~/.dsh/PAUSE` 存在 ⇒ **跳过一切写**（只读探测 + 重复单报告照常，日志写明原因）。CI 的 `dsh-watch.yml` 是**设计上的第二个写者**，幂等靠"确定性去重键 + 每轮收敛对账"，**不是**靠锁 | 同时起两个：第二个 exit 75；`touch ~/.dsh/PAUSE` 后跑一轮 ⇒ 无写、日志带 PAUSE |
+| **canary 凭据探测（A3）** | `npm run dsh:doctor` 用**真实凭据**对专用 canary issue（标题含 `[dsh-doctor] canary`，全仓只允许一条）做**可逆写**，输出六行能力矩阵。必需能力缺失 ⇒ **exit 1**；`--dry-run` 只读（写能力**未验证**，也不写心跳）。`admin=true` 与 UI 上的权限**永远不是判据**（GitHub 没有"模拟写"接口） | `npm run dsh:doctor -- --dry-run`；`npm run dsh:doctor`（真写，会留 `last-ok` 心跳）。`npm run test:doctor` 是它的 53 条自测 |
+| **反向心跳（A5）** | 每次**成功**的写运行后写 `~/.dsh/heartbeat.json`（`{lastOkAt, version, didWrite}`）并把 `last-ok=<ISO>` 写进 canary 正文 —— **失败运行不写**（不替坏链路作伪证）。`.github/workflows/dsh-heartbeat-check.yml`（每日 03:00 UTC）读该字段：>26h ⇒ 评论 `@owner` + `priority:high`、**exit 3**（3 = 已报警，设计内的失败）；canary 缺失 ⇒ 先建再判断（26h 宽限，不误报） | `cat ~/.dsh/heartbeat.json`；`./scripts/gh issue view <canary> --json body` 看 `last-ok` |
+| **三态退避（A6）** | `~/.dsh/state/<tool>.json` 记 `healthy`/`degraded`/`broken` + 退避 5→10→20→40→**封顶 60 分钟**；**只在跃迁时**发一条 issue 评论；broken 之后每轮 stdout 只有一行、**退出码 0**（否则与 systemd `Restart=on-failure` 叠成热循环）；403/404 这类不可重试错误**立即 broken**。`--reset-state` 只重置本地状态；`--no-backoff` 是负向对照 | `node scripts/dsh-watch.mjs --dry-run` 前先看状态文件；`node scripts/test-backoff-state.mjs`（`--no-backoff` 必须退回"每轮全量错误 + 0 条跃迁评论"） |
+| **保留（A8 / A9）** | 日志：模板 `scripts/logrotate.dsh.conf` + README 的用户级安装与 timer（**装不装是用户动作**，仓库不动你的 systemd）。hang dump：**最新 3 份 + 14 天 + 总量 ≤1GiB**（`src-tauri/src/retention.rs` 的 `HANG_DUMP_POLICY`，单测钉住这三个数；"**永不清空目录**"是硬边界）。`.detail.log` 自带 128KB 截断 | `systemctl --user list-timers | grep logrotate`；`du -sh <应用数据目录>/runtime/reports`；Rust 侧由 CI `check` job 的 `cargo test --lib` 覆盖 |
+| **Actions `schedule` 不是时钟（A7）** | 官方明确 `schedule` 不保证准时（可延迟数小时，也可能丢弃）。`dsh-watch.yml` 的 `*/15` 是"本机没在跑时的兜底覆盖"，**不是 SLA 主时钟**；SLA 的检测段 T0 取同版本**最早** issue 的 `createdAt`（与哪个写者建的无关），检测延迟**不进门禁** | `./scripts/gh run list --workflow dsh-watch.yml --json createdAt,startedAt` 与本机 timer 日志时间对比 |
+
+**门禁侧的对应要求**：这六层里凡是"能失败"的判据都必须带负向对照。`scripts/test-automation-gates.mjs`
+新增的 **doctor 组**跑 `dsh-doctor --self-test`（内置 gh 桩，不碰真实仓库），并用 1 条变异对照证明
+「必需能力缺失（403）⇒ 退出码非零」这条出口真的在判 —— 把它改坏，整条套件变红。
+
 ## 知识沉淀
 
 - 改壳功能/新踩坑 → 更新 `.dsh/skills/dsh-desktop-shell-dev/SKILL.md`（加菜单、桥端点同步契约测试）
@@ -201,7 +220,7 @@ app 提前退出即失败；超时打印进程/GL/日志诊断。历史教训写
 
 **任何新增的门禁/断言，必须在同一个 PR 里带一个"注入对应缺陷 ⇒ 必须变红"的夹具**，否则视为未验证（恒真的门禁比没有门禁更糟：它给出虚假的安心）。本仓已有先例：`scripts/test-silent-failures.mjs` 的 4 个变异夹具、`test-shell-chrome.mjs` 的变异对照。反面教材（2026-10-07）：静默失效审计脚本的前两版试图"自动跳过 `#[cfg(test)]` 区域"，两次都判错 —— 一次**漏检生产代码**（假阴性），一次把 20 条测试区命中当生产报出；是夹具把这两次都钉了出来。
 
-**本条已被 `scripts/test-automation-gates.mjs` 遵守**（2026-10-19 起，`npm test` 链上的一员）：它是"自动化链路判据的可失败性"自证套件，自带 **5 条变异对照** —— 在**工作树临时副本**（`tar` 排除 `.git`/`node_modules` 等）上分别把「探针的 seam 判据」「`dsh:adapt` 第 6 步"探针 RED 却继续"」「`dsh:adapt` 第 6 步"探针没出报告"的放行分支」「SLA `--check` 的"没有数据即红"」「漂移检测的"目录不存在"守卫」改坏，断言**本套件在副本上变红**，且每条都配一个"未注入时该组必须是绿的"对照（同一份副本）。它**绝不修改仓库文件**（副本 + `--only <组> --fast --no-mutation` 子跑）；已知仍不完美的判据标 `KNOWN_GAP`（只逐条打印、不判红，既不掩盖假绿、也不因为别的 PR 正在修它而把链判红）。用法见 `README.md` 的「维护者：dsh 升级自动化」小节。
+**本条已被 `scripts/test-automation-gates.mjs` 遵守**（2026-10-19 起，`npm test` 链上的一员）：它是"自动化链路判据的可失败性"自证套件，自带 **6 条变异对照** —— 在**工作树临时副本**（`tar` 排除 `.git`/`node_modules` 等）上分别把「探针的 seam 判据」「`dsh:adapt` 第 6 步"探针 RED 却继续"」「`dsh:adapt` 第 6 步"探针没出报告"的放行分支」「SLA `--check` 的"没有数据即红"」「漂移检测的"目录不存在"守卫」「`dsh-doctor` 的"必需能力缺失（403）仍以 0 退出"」改坏，断言**本套件在副本上变红**，且每条都配一个"未注入时该组必须是绿的"对照（同一份副本）。它**绝不修改仓库文件**（副本 + `--only <组> --fast --no-mutation` 子跑）；已知仍不完美的判据标 `KNOWN_GAP`（只逐条打印、不判红，既不掩盖假绿、也不因为别的 PR 正在修它而把链判红）。用法见 `README.md` 的「维护者：dsh 升级自动化」小节。
 
 **行为改动必须同步文档（这道门禁是活的）**：`.github/workflows/build.yml` 的 `test` job 里有一条步骤
 **「文档同步」**（只在 `pull_request` 事件、且非"板卡专属 PR"时跑）：本 PR 的变更文件里出现

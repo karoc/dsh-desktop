@@ -591,8 +591,8 @@ MIT
   断言上探针 / `--check` / `dsh-watch` / `dsh:adapt` / preinstalled-sync 漂移检测这些判据**该失败时会失败**
   （该 RED 就 RED + exit 1、该 FATAL 就 exit 2、该停在第 N 步就停在第 N 步、"没有数据"就判红）。
   **为什么存在**：恒真的门禁比没有门禁更糟 —— 那份 harness 原本只在 `/tmp`，CI 从不跑它，判据回归没人拦。
-  单跑：`node scripts/test-automation-gates.mjs`（`--only probe|sla|watch|adapt|drift|mutation` 只跑一组、
-  `--fast` 跳过等待型用例、`--keep` 保留临时目录排障）。它自带 **5 条变异自证**（在**工作树临时副本**上
+  单跑：`node scripts/test-automation-gates.mjs`（`--only probe|sla|watch|doctor|adapt|drift|mutation` 只跑一组、
+  `--fast` 跳过等待型用例、`--keep` 保留临时目录排障）。它自带 **6 条变异自证**（其中 doctor 组证明「凭据 canary 写失败 ⇒ 退出码非零」真的在阻断；在**工作树临时副本**上
   **临时副本**上把判据改坏 ⇒ 本套件必须变红；绝不改仓库文件），已知仍不完美的判据标 `KNOWN_GAP`
   —— 只逐条打印、**不判红**（既不用"跳过"掩盖假绿，也不会因为别的 agent 正在修它而把链判红；
   行为一旦变化会打 `GAP?` 提醒把它升级成正确性断言）。
@@ -815,11 +815,10 @@ MIT
     都可以安全删除：**删状态文件 = 忘掉退避历史**（下一轮从 healthy 重新数，不丢功能）；正规做法是
     `--reset-state`。`.detail.log` 自带 128KB 触发 / 只留尾部 400 行的自截断，不参与 logrotate。
   - **dump / 备份**：hang dump 落在 `<应用数据目录>/runtime/reports/dshweb-hang-<pid>-<ts>.dmp`
-    （全内存 dump 单个可达数百 MB）。**真实保留策略在壳里**：`src-tauri/src/lib.rs` 的
-    `HANG_DUMP_KEEP = 3` + `web_dump::prune_dumps`（按文件名排序保留**最新 3 份**，随每次 dump 与
-    "清理缓存"执行）。⚠️ **两个已知缺口，如实记在这里**：① 只有份数上限，**没有时间/总量上限**
-    （长期不产生新 dump 时旧的会一直占着；建议 3 份 + 14 天 + 总量 ≤1GB，改的是 `src-tauri/**`，
-    不在本轮写域）；② `scripts/server-manager.mjs` **没有任何 dump 保留逻辑**（`grep -n dump` 只命中
+    （全内存 dump 单个可达数百 MB）。**真实保留策略在壳里且是三维的**（采用清单 A9，2026-10-24）：
+    `src-tauri/src/retention.rs` 的 `HANG_DUMP_POLICY` = **最新 3 份 + 14 天 + 总量 ≤1GiB**，
+    由 `web_dump::prune_dumps` 在每次 dump 与「清理缓存」时执行（`cargo test --lib` 覆盖，
+    "**永不清空目录**"是硬边界：策略再严也只删到剩最新一份）。**另一个仍然存在的边界**：`scripts/server-manager.mjs` **没有任何 dump 保留逻辑**（`grep -n dump` 只命中
     看护协议行：请壳抓 dump / 等 dump-done / 重启），所以"manager 管 dump"是误解 —— 它只发协议。
     插件升级备份 `.plugin-backup` + `.plugin-backup.prev` 至多两份（`server-manager.mjs:763-774`），
     天然有界，无需清理。

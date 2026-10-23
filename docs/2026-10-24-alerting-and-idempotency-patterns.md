@@ -674,6 +674,25 @@ App 级别取“最差子资源”：
 5. **A6 + A7**（退避/状态机 + CI 降级）
 6. **A8 + A9 + A4 + A11**（保留与文档，收尾）
 
+### 7.2 落地状态（2026-10-24 收口；逐条对代码核对，不是照计划抄）
+
+| # | 状态 | 落点 / 未落地的原因 |
+|---|---|---|
+| A1 / A2 | ✅ 已落地 | PR #220：确定性去重键（标题版本 + 正文 marker，**不看 label**）+ `flock` 单写者 + `~/.dsh/PAUSE` + 每轮收敛对账；CI 是**设计上的第二写者**，幂等靠上两条而不是锁 |
+| A3 / A5 | ✅ 已落地 | PR #222：`scripts/dsh-doctor.mjs`（真实凭据对专用 canary 做可逆写 + 六行能力矩阵）+ `~/.dsh/heartbeat.json` + `.github/workflows/dsh-heartbeat-check.yml`（26h 宽限，exit 3 = 已报警） |
+| A4 | ⏳ 未落地 | token 过期元数据的每日检查；由并行的另一个 PR 承担（本清单其余项不依赖它），本轮不做以免两个 PR 改同一批文件 |
+| A6 | ✅ 已落地 | PR #223：`scripts/lib/backoff-state.mjs` 三态（healthy/degraded/broken）+ 5→10→20→40→60min 封顶 + 只在跃迁时通知；不可重试错误（403/404）直接 broken |
+| A7 | ✅ 已落地（**口径修正**） | `dsh-watch.yml` 头注释写明 `schedule` 不保证准时、`*/15` 只是"本机没在跑时的兜底"，**不是 SLA 主时钟**。原文写「SLA 计时只看本机 timer 的首次运行时间」——在双写者下不成立（CI 也可能先发现），实际实现取**同版本最早 issue 的 `createdAt`**（与写者无关），且检测延迟不进门禁 |
+| A8 | ✅ 已落地（日志）／❌ 不采用（journald 半边） | 日志：`scripts/logrotate.dsh.conf` + README 用户级安装 + 本机 `logrotate -d` / `-f` 实测（PR #223）。journald 半边见本节末尾"不采用" |
+| A9 | ✅ 已落地 | `src-tauri/src/retention.rs` 的 `HANG_DUMP_POLICY` = **最新 3 份 + 14 天 + 总量 ≤1GiB**，`web_dump::prune_dumps` 薄封装；8 条单测（CI `cargo test --lib`）+ 4 条变异对照。总量取 **1GiB** 而不是本节表的 2G：README 与看板早先已定 ≤1GB，同一策略不留两个数 |
+| A10 | ⏳ 部分落地（**卡在用户动作**） | 收敛对账已随 PR #220 上线并每轮执行；**实际关闭 #201–#216 需要 PAT 具备 Issues: write**（当前 `updateIssue` 403）⇒ 只能人工执行，脚本不假装完成 |
+| A11 | ✅ 已落地 | `CONTRIBUTING.md` 新增「自动化链路的运维契约（A1/A3/A5/A6/A8/A9）」；技能 `dsh-upstream-adaptation` 补 §2 能力自证行 / §6.2 云端心跳 / §6.12 403 排错 / §6.13 退避重置 / §7 纪律 8–9 / §8 缺口；`scripts/test-automation-gates.mjs` 新增 **doctor 组** + 1 条变异对照（"必需能力缺失仍以 0 退出 ⇒ 套件必须变红"） |
+
+**本条清单内的"不采用"（附理由）**：A8 的 journald 半边（`SystemMaxUse=200M` / `MaxRetentionSec=14day`）——
+关键日志已落 `~/.dsh/logs/*.log` 并由 logrotate 轮转，journal 只作近端调试；改系统级上限属用户动作，
+收益（多留几天 journal）远低于成本（改 /etc 配置 + 可能触发 vacuum 行为变化）。本机 journald 上限
+~100M 且会 vacuum 这一点已在 `AGENTS.md` 登记，取证必须落文件。
+
 ---
 
 ## 8. 不采用（明确排除）

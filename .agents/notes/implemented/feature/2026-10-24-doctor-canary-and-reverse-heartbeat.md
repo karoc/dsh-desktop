@@ -15,6 +15,8 @@ Status: implemented
 
 **A5 —— 心跳要"能过河"：把时间戳写进云端看得见的对象。** 本机文件云端看不到，所以每次成功运行既写 `~/.dsh/heartbeat.json`（`{lastOkAt, version, didWrite}`），也把 `last-ok=<UTC ISO>` 写进 canary 正文；`.github/workflows/dsh-heartbeat-check.yml`（每日 03:00 UTC + `workflow_dispatch`）只是薄壳，逻辑在 `dsh-doctor.mjs --heartbeat-check`，这样判据能本地复跑。双向判据：`last-ok` ≤ 26h ⇒ 静默 exit 0；> 26h ⇒ 评论 `@owner` + 加 `priority:high` + **exit 3**；canary 不存在 ⇒ 先建（写 `bootstrap-at`）再判断 ⇒ 本次静默。阈值 26h = 24h 周期 + 2h 宽限（Actions `schedule` 官方不保证准时）。`exit 3 = 已报警`、`exit 1 = 检查器坏了` 必须分开，否则红色不可判读。失败运行**不写**本地心跳 —— 否则反向心跳会替坏掉的写路径作伪证。
 
+
+**A11（2026-10-24）—— 判据从「靠人记得跑」变成常驻门禁。** `npm run test:doctor` 仍在，但自测现在同时是 `scripts/test-automation-gates.mjs` 的 **doctor 组**（`--only doctor`，5 条断言：有 通过/失败 计数、0 失败、断言数 ≥40 且 通过==总数、覆盖到 403 那一段（「该项标 ✗」+「403 之后没有任何写调用」）、自测退出码 0），并配 1 条变异对照：把 `missing.length ? 1 : 0` 改成恒 `0`（「必需能力缺失也判通过」）后，doctor 组**必须变红**。Windows 上该组显式 SKIP 并计入 skipped（不是通过），那条变异也带 `platform: 'posix'`；这样「canary 失败必须阻断」这条出口本身是可失败的，而不是只有一遍绿。
 ## Alternatives considered
 
 - **用 issue 的 `updated_at` 当心跳**（`docs/2026-10-24-alerting-and-idempotency-patterns.md` A1 的原稿）：任何评论/label/编辑都会刷新它，**包括报警评论自己** ⇒ 报警即自愈、永远陈旧不了。必须用显式的 `last-ok=` 字段，且该字段只能由成功写操作的路径更新。
@@ -27,6 +29,6 @@ Status: implemented
 
 ## Consequences
 
-买到的是：写能力有了**真实**判据（不是 `admin=true` 的推断）；"任务没按时发生"有了独立于 `Restart=on-failure` 的检测通道；两条判据都能在本地用内置 gh 桩跑 53 条断言（另有两条变异自证证明断言会红）。
+买到的是：写能力有了**真实**判据（不是 `admin=true` 的推断）；"任务没按时发生"有了独立于 `Restart=on-failure` 的检测通道；两条判据都能在本地用内置 gh 桩跑 53 条断言（另有两条变异自证证明断言会红）；2026-10-24（A11）起还常驻 `test-automation-gates` 的 doctor 组（5 条断言 + 1 条变异对照），不再只靠 `npm run test:doctor` 记得跑。
 
 代价与未完成项：canary issue 变成长期资产（需人别删；脚本发现缺失会重建、发现多条只用最小编号并提示人工关闭）；**本机 timer 不由本仓库安装**，在用户把 `dsh-doctor` 挂进 timer 之前，云端的 `last-ok` 会停在最后一次手工运行 ⇒ 26h 后如实报警；**当前 PAT 缺 Issues:write ⇒ `last-ok` 写不进去**，合并后该 workflow 会在 26h 后开始每日报警 —— 这是设计内的信号（"写路径坏了"），修 PAT 或临时 disable workflow 二者之一；`评论` / `加 label` / `关闭` 三行在真实凭据上从未被探测到（403 后按纪律停止），"矩阵 6 项全绿"尚未在真实 PAT 上出现过一次；PAT 过期时间仍不可读（个人 fine-grained PAT 无 REST 端点）；"issue/评论是否真的叫醒人"取决于账号通知设置，本机不可验证。相关：[研究清单](../process/2026-10-24-alerting-idempotency-research.md)、[双心跳架构](../architecture/2026-10-21-dsh-upgrade-heartbeat-dual.md)、[watch 单写者](../architecture/2026-10-24-watch-idempotency-single-writer.md)。
