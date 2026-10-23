@@ -524,6 +524,23 @@ MIT
   （可 `--manager-log` 覆盖，是随包 manager 的 `log()` 落盘处）出 `preinstalled bundles:`。**只认检查开始之后
   新写入的行** ⇒ 前提是 dev 壳必须在检查期间**新启动**（早就开着且空闲的壳不产生新标记行）；缺哪个标记会
   指名它来自哪个文件。只读，不启动也不杀进程。装版本、发版、装机刻意不做（汇总里会打印剩余人工步骤）。
+- **三种演练场景（install / bump / upgrade）**：`node scripts/dsh-rehearse.mjs --scenario install|bump|upgrade`
+  —— 三个场景都**复用产品自身路径**，脚本只读真实仓库与真实 runtime（写操作全在临时目录）：
+  - `install`（默认）：空临时 runtime → manager 启动期自动安装 → 断言落地版本 → 探针；
+  - `bump`：`/tmp` 克隆里降地板 → 复用 `install` 装目标版本 → 克隆里跑 `dsh-adapt` → 五项断言；
+  - `upgrade`（2026-10-24 加，补上"已有 dsh 的**升级覆盖**分支"这一覆盖缺口）：建 Windows `Local\Temp`
+    下的临时 runtime（必须与 `.pnpm-store` **同设备**，跨设备 exit 3）→ 用
+    `pnpm add @deepseek-ai/dsh@<old> --node-linker=hoisted` **绕过 manager 装旧版**（manager 的启动期目标
+    恒为 max(地板, latest)，装不了旧版；hoisted 是生产布局，用默认 isolated 会让 manager 走
+    "删光重建"分支 ⇒ 升级覆盖断言就成了假演练）→ 复用 `install` 让 manager 走**兼容闸门**
+    （已装 < 地板 ⇒ 升到地板）→ 四条断言：① 落地 == 目标；② **无残留嵌套副本**
+    （`find <runtime>/node_modules -path …@deepseek-ai/dsh/package.json` 计数 == 1，**并对真实 dev runtime
+    跑同一命令作对照**，基线是实测值不是硬编码的 1）；③ `dsh-compat-probe --runtime <tmp>` ⇒ GREEN；
+    ④ 真实仓库非记录层 `git status` 前后一致 + 真实 runtime 关键文件 sha256/mtime/size 未变。
+    两条负向自证（**必须能红**）：`--upgrade-from` 指 registry 里不存在的版本 ⇒ 装旧版一步明确失败；
+    `--fault nested-copy` 在升级后的树里塞一份同版本嵌套副本 ⇒ 断言 ② 必须变红。
+    退出码：0 全绿 / 1 任一步或断言不达标 / 2 用法错误（旧版不低于地板 = 假演练，直接拒绝）/
+    3 前置不满足（热 runtime 缺件、没有同设备临时目录、读不到真实仓库 status）。
 - **全自动流水线（autopilot，2026-10-20）**：`node scripts/dsh-release-autopilot.mjs`（等价
   `npm run dsh:autopilot`）—— 把「探测 → 适配 → 开 PR → 合并 → 发版 → 核验资产」收成一条可装进
   systemd user timer 的命令（unit 模板在脚本头注释，本仓库不改你机器上的 systemd）：

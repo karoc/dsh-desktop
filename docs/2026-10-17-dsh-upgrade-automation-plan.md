@@ -560,3 +560,40 @@ best-effort（可 `--sla-hours` / `--best-effort-hours` 覆盖，标题与正文
 本仓库**不**改你机器上的 systemd；模板在 `scripts/dsh-release-autopilot.mjs` 头注释（service + timer）。
 要点：`Type=oneshot`、`OnUnitInactiveSec=30min`（不会重入）、`Environment=GH_BIN=%h/dsh-desktop/scripts/gh`、
 `TimeoutStartSec=2h`。启用由用户执行 `systemctl --user daemon-reload && systemctl --user enable --now dsh-release-autopilot.timer`。
+
+## 演练覆盖：install / bump / upgrade（2026-10-24 补 upgrade）
+
+**背景（为什么现在补）**：`scripts/dsh-rehearse.mjs` 原来只有 `install`（空 runtime → 全新安装）与 `bump`
+（克隆里抬地板）两个场景，**已有 dsh 的「升级覆盖」分支没有任何演练** —— 而老用户每天走的正是它
+（manager 启动期兼容闸门：已装 < 地板 ⇒ `installDshUpdate({ version: MIN_DSH_VERSION })`）。全新安装
+通过不代表覆盖安装通过：pnpm 的 hoisted 安装**不会清理上一版留下的嵌套目录**，而 Node 解析嵌套副本优先，
+旧内部包会让 dsh 启动即 `ERR_PACKAGE_PATH_NOT_EXPORTED`（黑屏）。所以这次补的是"升级后树干不干净"，
+不是再装一遍。
+
+**命令**：`node scripts/dsh-rehearse.mjs --scenario upgrade [--upgrade-from <old>] [--version <target>]
+[--temp-base <dir>] [--fault nested-copy] [--keep] [--json <out>] [--warm-store <dir>] [--registry <url>]`
+（`--upgrade-from` 默认 `0.2.1-alpha.5`；`--version` 默认壳地板）。步骤：
+① 建 Windows `Local\Temp` 下的临时 runtime（与 `.pnpm-store` **同设备**，跨设备 exit 3；不静默降级）；
+② 用随包 pnpm 绕过 manager 装旧版（`--node-linker=hoisted`，生产布局）；
+③ 复用 `install` 场景（子进程 `--scenario install --runtime-dir <tmp>`）让 manager 走兼容闸门升到地板；
+④ 四条断言：落地版本 == 目标；`find <tmp>/node_modules -path '*/node_modules/@deepseek-ai/dsh/package.json'`
+计数 == 1 **且对真实 dev runtime 跑同一命令作对照**；探针 GREEN；真实仓库非记录层 `git status` 前后一致
++ 真实 runtime 关键文件指纹未变。
+⑤ 负向自证：`--upgrade-from` 指 registry 里不存在的版本 ⇒ 装旧版一步明确失败；`--fault nested-copy`
+在升级后的树里塞一份**同版本**嵌套副本（manager 的 stale 清理只删版本不一致的，所以它会留下）⇒ 断言 ②
+必须红。两条都 exit 非 0；"没跑成"不会被报成通过。
+
+**两条环境事实（2026-10-24 本机实测 pnpm 11.24；照配方跑之前必须知道）**：
+1. 在**空 `node_modules`** 上直接 `pnpm add @deepseek-ai/dsh@<old> --store-dir <热 store>` 会因
+   `ERR_PNPM_IGNORED_BUILDS` 以 **exit 1** 收场（版本仍然落地、`find` 计数 1）—— 即"pnpm add exit 0"这条
+   配方事实在本机不成立。判成功必须看**落地版本 + `lib/bin.js`**，不能只看退出码（否则会把"装成了"报成失败）。
+2. 同一次 `pnpm add` 会在 runtime 根目录生成 `pnpm-workspace.yaml`，内容是
+   `allowBuilds: …: set this to true or false` 的提示桩；manager 的 `ensurePnpmWorkspace` 见文件已存在就
+   不重写 ⇒ 随后 manager 的**升级安装**同样以 `ERR_PNPM_IGNORED_BUILDS` + exit 1 结束（树其实已到目标
+   版本，但 `install-status error` 会让演练判红）。所以 upgrade 在装旧版**之前**按 manager 的
+   `ensureRuntimeDir` / `ensurePnpmWorkspace` 写好 `.npmrc` / `pnpm-workspace.yaml`（放行名单**从 manager 的
+   `NATIVE_BUILD_PKGS` 派生**，不抄第二份）—— 这同时更贴近真实 runtime（升级前本来就有这两份文件）。
+
+**覆盖缺口（诚实清单）**：只走兼容闸门，不覆盖壳自更新与"registry latest > 地板"的更新检查路径；
+旧版由脚本直接装，不能证明真实老用户机器上的每一处状态；与真实 runtime 共享 `.pnpm-store`（pnpm 只追加
+内容寻址条目）；探针只判结构/兼容性，**不验证升级后 dsh web 能否真起来**（仍靠真机验收）。
