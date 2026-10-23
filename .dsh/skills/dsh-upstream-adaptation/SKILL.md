@@ -59,7 +59,46 @@ tag vX.Y.Z → Release 无资产 → gh workflow run build.yml --ref vX.Y.Z → 
 | token 本身 | 等同 bearer 凭据：不得写进看板卡 / Note / 提交 / 对话，输出里整段打码 |
 | direnv | `.envrc` 只在交互 shell 生效；**Agent 的 bash 不加载 direnv**，必须显式 `./scripts/gh` |
 | 权限自证 | 别信 UI。用「故意非法目标」探针：建 PR 用不存在的 head ⇒ 有权限 422 / 无权限 403；dispatch 不存在的 workflow ⇒ 有权限 404 / 无权限 403 |
-| 能力自证（issue 写） | **只认 canary 写**：`npm run dsh:doctor`（采用清单 A3）用真实凭据对专用 canary issue 做一次**可逆写**，输出六行能力矩阵；必需能力缺失 ⇒ **exit 1**。`--dry-run` 只读（写能力**未验证**）。`admin=true`、`/repos` 的 `permissions`、UI 上的勾选**都不是判据**（GitHub 没有"模拟写"接口） |
+| 能力自证（issue 写） | **只认 canary 写**：`npm run dsh:doctor`（采用清单 A3）用真实凭据对专用 canary issue 做一次**可逆写**，输出七行能力矩阵（第 7 行是本地 PAT 过期元数据，**不参与退出码**）；必需能力缺失 ⇒ **exit 1**。`--dry-run` 只读（写能力**未验证**）。`admin=true`、`/repos` 的 `permissions`、UI 上的勾选**都不是判据**（GitHub 没有"模拟写"接口） |
+| 过期（A4） | 过期时间**读不到**（`GET /user` 不返回 `expires_at`）⇒ 轮换 token 的**最后一步**必须 `node scripts/dsh-token-meta.mjs set --expires YYYY-MM-DD`。检查：`node scripts/dsh-token-meta.mjs check`（>14 ok / ≤14 warn / ≤7 urgent / ≤1 critical / 已过期；**只有后两级非零**）。未录入 = 未知（exit 0，不是故障）。详见下方「凭据过期：录一次，之后由工具查」 |
+
+### 凭据过期：录一次，之后由工具查（A4）
+
+fine-grained PAT 的**过期时间没有可读的 REST 端点**（`GET /user` 只返回身份字段；classic token 能读
+`X-OAuth-Scopes`，fine-grained PAT 连这个头都没有）⇒ "这张 token 哪天失效"机器拿不到，只能在**创建/轮换时
+人工录一次**，之后由工具检查。**不录 = 未知**（不是"永不过期"，只是没人知道）。
+
+```bash
+# ① 创建/轮换 token 后立刻录（这是轮换流程的一部分，不是可选步骤）
+node scripts/dsh-token-meta.mjs set --expires 2027-04-01 --note "创建于 2026-10-24，PR+Actions"
+#   ⇒ ~/.dsh/token.meta.json（600、原子写、只有 expiresAt/note/recordedAt，**绝不含 token**）
+
+# ② 随时查（--now 可回放五级；--json 给机器读）
+node scripts/dsh-token-meta.mjs check
+node scripts/dsh-token-meta.mjs check --now 2026-11-07T00:00:00Z --json
+
+# ③ 每日提醒（--if-due 让它可以挂在 10 分钟循环上：今天已跑过就打印 not due 并 exit 0）
+node scripts/dsh-token-meta.mjs check --notify --if-due --quiet
+
+# ④ 能力矩阵里的那一行（缺失显示"未知"，**不判红**）
+npm run dsh:doctor -- --dry-run
+```
+
+判读规则（**别自己发明口径**）：
+
+| 剩余天数 | 级别 | `check` 退出码 | 该做什么 |
+|---|---|---|---|
+| > 14 | ok | 0 | 什么都不用做 |
+| 8–14 | warn | **0** | 排进本周轮换 |
+| 2–7 | urgent | **0** | 尽快换 |
+| 0–1 | critical | **1** | 今天就换 |
+| < 0 | expired | **1** | 已经失效：issue 写会 403/401，先换再谈别的 |
+| 读不到 / 读坏了 | unknown | **0** | 跑一次 `set --expires`（**不是**故障，别把它当红处理） |
+
+**warn/urgent 退 0 是刻意的**：天天红会让人开始忽略告警（也会和 systemd 的 `Restart=on-failure` 叠成热循环）。
+`--notify` 只在**级别跃迁**时往跟踪单 `[automation] PAT 过期元数据（A4）`（全仓一条）评论，回到 ok 时自动
+评论"已解除"并关闭；**写权不足（403）只打印提醒文本 + 建单命令，不重试**。
+排错：过期后 `./scripts/gh` 会报 401/403 且**看起来像权限问题** —— 先 `check` 看是不是过期了，再怀疑权限。
 
 **写域纪律（agent 必读）**：执行 agent 只 push + 开 PR，**不许自己合并**；合并由 Lead 看过证据
 （真实 run id + job 级结论）后做。`git push` 目标只能是短分支或 `auto/dsh-*`，**任何路径都不对 main
