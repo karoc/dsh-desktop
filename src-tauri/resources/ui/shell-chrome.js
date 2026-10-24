@@ -101,6 +101,41 @@
     return { ok: true, url, reason: 'ok' };
   }
 
+  /**
+   * 点击/中键激活的**意图判定**（纯函数；门禁断言它的返回值，而不是源码字符串）。
+   *
+   * 2026-10-25 回归修复：`auxclick` **只**认中键（button===1）。右键（button===2）
+   * 同样会触发 auxclick，但那是页面/WebView 要弹自己的右键菜单的时刻 —— A2 绝不能
+   * 在这里抢跑。旧实现只按 target=_blank / Ctrl-Cmd 判定，右键点在新窗口链接上就
+   * "菜单还没出现，系统浏览器已经开了"。右键**一律不归这里**，也不监听 contextmenu。
+   *
+   * @param {'click'|'auxclick'} kind 事件类型
+   * @param {{button?: number, ctrlKey?: boolean, metaKey?: boolean}} ev 事件对象
+   * @param {unknown} hrefAttr a[href] 的原始属性
+   * @param {unknown} targetAttr a[target] 的原始属性
+   * @param {string} protocol 当前页协议（协议相对 //host 用；测试可显式传入）
+   * @returns {{handle: boolean, href?: string, verdict?: {ok: boolean, url?: string, reason: string, passThrough?: boolean}}}
+   */
+  function linkActivationIntent(kind, ev, hrefAttr, targetAttr, protocol) {
+    // 只处理这两类事件：未知类型（例如 contextmenu）绝不当作 click 处理。
+    if (kind !== 'click' && kind !== 'auxclick') return { handle: false };
+    const button = ev && typeof ev.button === 'number' ? ev.button : -1;
+    // 关键口径：click 只认主键（0）；auxclick 只认中键（1）。右键（2）与其余键一律不处理。
+    if (kind === 'auxclick' ? button !== 1 : button !== 0) return { handle: false };
+    const target = String(targetAttr || '').toLowerCase();
+    const wantsNewWindow =
+      kind === 'auxclick' || !!(ev && (ev.ctrlKey || ev.metaKey)) || target === '_blank';
+    if (!wantsNewWindow) return { handle: false };
+    // 只认**显式** http(s)（或协议相对 //host）：相对路径是同源导航，不归这里管。
+    const raw = String(hrefAttr || '').trim();
+    if (!raw) return { handle: false };
+    let href = null;
+    if (raw.startsWith('//')) href = String(protocol || 'https:') + raw;
+    else if (/^[a-z][a-z0-9+.-]*:/i.test(raw)) href = raw;
+    if (!href) return { handle: false };
+    return { handle: true, href, verdict: externalUrlVerdict(href) };
+  }
+
   const TEST_HOOK = globalThis.__DSH_CHROME_TEST__;
 
   // 应用名/图标/版本/构建日期随构建身份注入（dev 版 = "DSH Smoothly Desktop Dev"）。
@@ -212,7 +247,7 @@
     // externalUrlVerdict 同理：A2 的安全边界是"哪些 scheme 能出去"，断言返回值。
     TEST_HOOK.config = {
     authProbeDelayFor, errorBannerDelayFor, SHELL_MENUS, ACTIONS, computeCaptionPlan, WINDOWS_TITLEBAR_H, SHELL_BAR_H, misleadingAuthHint,
-    externalUrlVerdict, EXTERNAL_URL_SCHEMES, EXTERNAL_URL_MAX };
+    externalUrlVerdict, EXTERNAL_URL_SCHEMES, EXTERNAL_URL_MAX, linkActivationIntent };
     return;
   }
 
@@ -329,15 +364,18 @@
     return call('update-status');
   }
 
-  // ── A2：外链 / 新窗口交系统浏览器（2026-10-23）──────────────────────
+  // ── A2：外链 / 新窗口交系统浏览器（2026-10-23，2026-10-25 右键回归修复）──────
   // 无 new-window handler 时 wry 对 NewWindowRequested 直接 deny ⇒ window.open /
   // target=_blank 的 http(s) 链接点了没反应。这里把它们导到系统浏览器：
   //   · window.open：http(s) → 桥；about:blank → 原样交回原生实现（OAuth 弹窗形态）；
   //     其余 scheme 拒绝并留痕（页面被注入时 `javascript:` 等不许被当成页面动作）；
-  //   · 外链点击（target=_blank / 中键 / Ctrl-Cmd+点击）：**冒泡阶段**处理，且**不**
+  //   · 外链点击（target=_blank 左键 / 中键 / Ctrl-Cmd+点击）：**冒泡阶段**处理，且**不**
   //     抢先 preventDefault —— 延后一拍再看 `defaultPrevented`：页面自己接管了
   //     （dsh 的侧栏浏览器等）我们就不动，避免"系统浏览器 + 页面内面板"双开。
   //     wry 本来就把新窗口拒成空操作，所以不需要靠 preventDefault 阻止导航。
+  //   · **右键不拦**：auxclick(button=2) 由 linkActivationIntent 直接忽略，也不监听
+  //     contextmenu —— 页面/WebView 自己的右键菜单原样出现（含"复制链接"等菜单项）。
+  //     右键同时会触发 auxclick，若把它当成"激活"就会在菜单弹出前抢先打开外链。
   //   · 同窗口内导航**不拦**（只处理"会开新窗口"的点击）：把同源/内网链接丢给系统
   //     浏览器会打开带 token 的 dsh 页面本身，收益为负。
   // 拒绝必须留痕（走 /log，tag=open-url），否则又是"静默失效"。
@@ -357,33 +395,25 @@
       logReject(verdict.reason, raw);
       return null;
     };
-    // 只认**显式** http(s)（或协议相对 //host）：相对路径是同源导航，不归这里管。
-    const externalHrefOf = (a) => {
-      const raw = String(a.getAttribute('href') || '').trim();
-      if (!raw) return null;
-      if (raw.startsWith('//')) return (location.protocol || 'https:') + raw;
-      if (/^[a-z][a-z0-9+.-]*:/i.test(raw)) return raw;
-      return null;
-    };
-    const wantsNewWindow = (e, a) => {
-      if (e.button === 1 || e.ctrlKey || e.metaKey) return true;
-      return String(a.getAttribute('target') || '').toLowerCase() === '_blank';
-    };
-    const onLinkActivation = (e) => {
+    const onLinkActivation = (kind, e) => {
       const t = e.target;
       const a = t && typeof t.closest === 'function' ? t.closest('a[href]') : null;
-      if (!a || !wantsNewWindow(e, a)) return;
-      const href = externalHrefOf(a);
-      if (!href) return;
-      const verdict = externalUrlVerdict(href);
+      if (!a) return;
+      const intent = linkActivationIntent(
+        kind, e, a.getAttribute('href'), a.getAttribute('target'), location.protocol || 'https:'
+      );
+      if (!intent.handle) return;
+      const { href, verdict } = intent;
       setTimeout(() => {
         if (e.defaultPrevented) return; // 页面自己处理了 → 不动
         if (verdict.ok) { call('open-url', { url: verdict.url }); return; }
         logReject(verdict.reason, href);
       }, 0);
     };
-    window.addEventListener('click', onLinkActivation);
-    window.addEventListener('auxclick', onLinkActivation);
+    // 右键不注册任何处理器：auxclick 的事件类型由 linkActivationIntent 把 button≠1 挡掉，
+    // 且**不监听** contextmenu（监听/防默认都会抢页面自己的菜单）。
+    window.addEventListener('click', (e) => onLinkActivation('click', e));
+    window.addEventListener('auxclick', (e) => onLinkActivation('auxclick', e));
   });
 
   // ── 状态 ──────────────────────────────────────────────────────────
