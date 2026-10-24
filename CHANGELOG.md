@@ -21,6 +21,32 @@
 >
 > 详情见 `.agents/notes/implemented/bug-fix/2026-09-08-legacy-uninstaller-name-kill.md`。
 
+## [0.21.0](https://github.com/karoc/dsh-desktop/compare/v0.20.0...v0.21.0) (2026-10-24)
+
+
+### Features
+
+* **automation:** dump 三维保留(A9) + 运维契约(A11) + schedule 口径(A7) ([#226](https://github.com/karoc/dsh-desktop/issues/226)) ([0b435f3](https://github.com/karoc/dsh-desktop/commit/0b435f38ce5560981d7115a9b1e32f7273dbc46e))
+* **automation:** PAT 过期元数据与五级提醒（A4）([#228](https://github.com/karoc/dsh-desktop/issues/228)) ([db71e9d](https://github.com/karoc/dsh-desktop/commit/db71e9d2dfa930b9eb9c7f1bed033120c5a472be))
+* **automation:** SLA 报表拆成检测/适配两段延迟 + 当前状态 ([#192](https://github.com/karoc/dsh-desktop/issues/192)) ([ef20752](https://github.com/karoc/dsh-desktop/commit/ef2075279e6d0b208c8d15855e2a2509c62c2803))
+* **automation:** 三态退避状态机 + 日志与产物保留 ([#223](https://github.com/karoc/dsh-desktop/issues/223)) ([53eec52](https://github.com/karoc/dsh-desktop/commit/53eec525f5e1f6edfcdac08d9d163d498c5a0972))
+* **automation:** 全自动发版流水线 autopilot + 告警可达性 ([#188](https://github.com/karoc/dsh-desktop/issues/188)) ([f7d1873](https://github.com/karoc/dsh-desktop/commit/f7d1873ea44b6bb5e681cc13be789daee3a94c11))
+* **automation:** 凭据能力探测（c ([#222](https://github.com/karoc/dsh-desktop/issues/222)) ([a3b1f2e](https://github.com/karoc/dsh-desktop/commit/a3b1f2e5b8ae1059daac01f937808e8f360ff7f2))
+* **rehearse:** --scenario upgrade（旧�� ([#218](https://github.com/karoc/dsh-desktop/issues/218)) ([85e304b](https://github.com/karoc/dsh-desktop/commit/85e304b1d613f5d09a69e04606a43acc22d68ec4))
+* **shell:** 恢复页面内文件拖放 + 外 ([#197](https://github.com/karoc/dsh-desktop/issues/197)) ([8933a56](https://github.com/karoc/dsh-desktop/commit/8933a56bc743efb88e99b0da68e53486e3e2b667))
+
+
+### Bug Fixes
+
+* **automation:** dsh-adapt/rehearse 门禁前先 sync Cargo.lock（与 CI 同序）([#195](https://github.com/karoc/dsh-desktop/issues/195)) ([4196247](https://github.com/karoc/dsh-desktop/commit/41962478741143540c308f85204537abd2e69162))
+* **automation:** dsh-watch 确定性去重 ([#220](https://github.com/karoc/dsh-desktop/issues/220)) ([5fcfbf1](https://github.com/karoc/dsh-desktop/commit/5fcfbf14611e8c0fd8766a402e20891f35d80f49))
+* **automation:** GH_BIN 缺省解析�� ([#227](https://github.com/karoc/dsh-desktop/issues/227)) ([8a40254](https://github.com/karoc/dsh-desktop/commit/8a40254b0f72e20f31d6f35a069122ee8f72ef28))
+* **ci:** linux-smoke 有界等待并去� ([#191](https://github.com/karoc/dsh-desktop/issues/191)) ([a116a63](https://github.com/karoc/dsh-desktop/commit/a116a63192dc9b7194dd9e5880c13094a8c5918c))
+* **doctor:** last-ok 只在全流程成功后写（失败运行不得伪造心跳）([#231](https://github.com/karoc/dsh-desktop/issues/231)) ([e44c501](https://github.com/karoc/dsh-desktop/commit/e44c501bd695fb4dba3ad0fa89b17577633adca9))
+* **doctor:** 评论探测改用 REST 数字 id，修复二次运行 PATCH 404 ([#229](https://github.com/karoc/dsh-desktop/issues/229)) ([9cdbd17](https://github.com/karoc/dsh-desktop/commit/9cdbd174cf0eb84156facef5c8ddf113868e91cc))
+* **forensics:** watchdog dump 后再探一�� ([#198](https://github.com/karoc/dsh-desktop/issues/198)) ([9e8f0d1](https://github.com/karoc/dsh-desktop/commit/9e8f0d11f53192f6f5ab8147d205c89f6ff200db))
+* **sla:** 检测延迟改用与 dsh-watc ([#224](https://github.com/karoc/dsh-desktop/issues/224)) ([fe28aab](https://github.com/karoc/dsh-desktop/commit/fe28aab69acb9c7a1bfabe2921d07f5878fdc5f0))
+
 ## [0.20.0](https://github.com/karoc/dsh-desktop/compare/v0.19.0...v0.20.0) (2026-10-19)
 
 
