@@ -30,5 +30,5 @@ dsh-doctor 的评论探测从 `gh issue view <n> --json comments` 取已存在�
 
 收益：真实环境第二次起的 404 消失，心跳恢复刷新；自测从"结构上不可能失败"变成可失败（两次变异均红：PATCH 换成 `existing.node_id`、id 来源退回 `viewIssue('comments')`）。
 
-遗留：本 PR 的 CI 在合入前会因既有的自测时间炸弹而红（doctor 组 + mutation baseline 4 条，与 `db71e9d` 基线 62/63 同一条失败），须先合桩时钟修复再 rebase；合并后 CONTRIBUTING 的自测条数应为 72（本 PR 基线 70 + 时钟 PR 的 2 条）。`CONTRIBUTING.md` 的条数已同步为 70（单独合入时正确）。
+遗留：本 PR 在 #230 之前原本会因既有的自测时间炸弹而红（doctor 组 + mutation baseline 4 条，与 `db71e9d` 基线 62/63 同一条失败）；已 rebase 到含桩时钟修复的 `95c7441`，自测实跑 **72/72**，`CONTRIBUTING.md` / `README.md` / 方案文档里的自测条数统一为 **72**（时间炸弹那条遗留已由 #230 关闭）。
 

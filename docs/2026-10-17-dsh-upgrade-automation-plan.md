@@ -463,7 +463,7 @@ push 前 `git ls-remote` 取期望值 + `git fetch` 建远端跟踪引用 + 显�
 | §3.5 canary 验收 | ⚠️ 未做（`scripts/canary-accept.ps1` 不存在）。已做的等价验证：`dsh:adapt --canary` 对**空闲的** dev 实例必须红，且错误信息指名"哪个标记来自哪个文件"（实测两个日志路径都解析到、新增字节数 session 0 / manager 0 ⇒ 红） |
 | §3.7 SLA 报表 | ✅ 用历史配对数据回算，与手工核算（本方案 §1）一致（实测 7 个版本、合计中位 47.62h）；门禁侧：`perVersion: []` ⇒ exit 1（无数据即红）、只有历史欠账 ⇒ exit 0 并列出欠账、`since` 之后新首发的超时版本 ⇒ exit 1。**两段延迟（2026-10-22）**：合成 git 仓库 + 合成 packument + gh 桩跑了 4 条负向对照（26 条断言全过）—— ① 有 issue 且时间可算 ⇒ 检测 6.00h / 3.50h（标题里同时有 target 与地板两个版本号时，`dsh <版本>` 锚点取对）；② 无 issue ⇒ `detection=null` + 表格印「未检测到」（不是 0）；③ issue 标题版本 `7.7.7` 不在 packument ⇒ 明说"不匹配"且不参与任何一行；④ 同一版本多条 issue（跨两个 label）⇒ 取最早那条并打印取哪条。另断言：`--check` 在同样数据上只看 `total`（输出里不出现"检测"）、`--now` 垃圾 ⇒ exit 2、`--json` 旧字段与改造前逐值相同。**2026-10-24 追加（去 label 化 + 共享键）**：真实仓库实跑 ⇒ `0.2.1-rc.3` 检测 **0.10h**（#201，`07:54Z → 08:00Z`，17 条同版本 issue 全部无 label 也照样命中）；同一批夹具上新旧实现 A/B ⇒ ① 无 label ⇒ 新 0.10h / 旧「未检测到」；② `rc.30` 不匹配 `rc.3`（`versionRe`=false）；③ 3 条同版本 ⇒ 新取最早 #10（0.26h）/ 旧只看得到带 label 的 #11（1.09h），且**已关闭**的 #10 必须算。`test-automation-gates` watch 组 32 条断言全绿（行为未变） |
 | §3.8 preinstalled-sync | ✅ 坏输入夹具：查询失败/返回值不是版本号 ⇒ 判红且不再造出假漂移；"本地领先"不再被降级同步 |
-| A3 凭据能力探测（2026-10-24） | ✅ 真实仓库 + 项目 PAT：`建 canary` ✓（#221）、`改正文` ✗（`updateIssue` 403）⇒ 矩阵 1 ✓/1 ✗/3 ⊘、exit 1 —— 正是"能读不能写"的现场证据；紧接着再跑 ⇒ `复用 #221`、canary 计数不变（幂等）。内置 gh 桩（`npm run test:doctor`，65 条断言）：403 注入到"改正文" ⇒ 该项 ✗、exit 1、**PATCH 调用数 1**、其后**零写调用**；错误里塞假 token ⇒ 输出不出现原文且出现 `<redacted>`。变异自证：删掉"403 后阻断后续写" ⇒ 自测变红（期望 0 实际 6） |
+| A3 凭据能力探测（2026-10-24） | ✅ 真实仓库 + 项目 PAT：`建 canary` ✓（#221）、`改正文` ✗（`updateIssue` 403）⇒ 矩阵 1 ✓/1 ✗/3 ⊘、exit 1 —— 正是"能读不能写"的现场证据；紧接着再跑 ⇒ `复用 #221`、canary 计数不变（幂等）。内置 gh 桩（`npm run test:doctor`，72 条断言）：403 注入到"改正文" ⇒ 该项 ✗、exit 1、**PATCH 调用数 1**、其后**零写调用**；错误里塞假 token ⇒ 输出不出现原文且出现 `<redacted>`。变异自证：删掉"403 后阻断后续写" ⇒ 自测变红（期望 0 实际 6） |
 | A5 反向心跳（2026-10-24） | ✅ 真实 canary #221（PAT 写不进 `last-ok`）+ `bootstrap-at` 距今 0.02h ⇒ **静默** exit 0；`--now` 推到 +51.4h ⇒ 判定陈旧、dry-run 打印"会评论 @karoc + 加 `priority:high`"。桩：`last-ok` 48h 前 ⇒ exit 3 + 评论 1 条 + label 已加 + 再跑不重复评论；5min 前 ⇒ exit 0 + 零评论 + 零 label；canary 缺失 ⇒ 创建 1 条且 exit 0；dry-run 零写。变异自证：把"新鲜"判据改成恒真 ⇒ 自测在"陈旧必须报警"处变红（期望 3 实际 0） |
 
 ## 7. 里程碑
@@ -705,7 +705,7 @@ best-effort（可 `--sla-hours` / `--best-effort-hours` 覆盖，标题与正文
   https://github.com/karoc/dsh-desktop/issues/221: GraphQL: Resource not accessible by personal access token
   (updateIssue)`）⇒ **1 ✓ / 1 ✗ / 3 ⊘、exit 1**。与 §0.3 的日志一致 ⇒ "能读不能写"被复现。
 - 幂等：紧接着再跑一次 ⇒ `复用 #221（已存在，未新建）`；`gh issue list` 统计 canary 数量仍为 **1**。
-- 负向（内置 gh 桩，`npm run test:doctor`，65 条断言）：403 注入到"改正文"⇒ 该项 ✗、exit 1、**改正文 PATCH
+- 负向（内置 gh 桩，`npm run test:doctor`，72 条断言）：403 注入到"改正文"⇒ 该项 ✗、exit 1、**改正文 PATCH
   调用数 = 1**、其后**零写调用**；错误里塞假 token ⇒ 输出**不出现**原文且出现 `<redacted>`。
 - 变异自证（证明断言不是恒真）：① 删掉"403 后阻断后续写"⇒ 自测在 `403 之后没有任何写调用` 变红
   （期望 0 实际 6）；② 把"心跳新鲜"改成恒真 ⇒ 自测在 `陈旧 ⇒ exit 3` 变红（期望 3 实际 0）。
