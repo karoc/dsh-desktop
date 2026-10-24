@@ -4,9 +4,10 @@
 # 本机只做到「脚本失败 → systemd 重启」。机器关机、timer 被 disable、脚本每轮都失败但 systemd 只负责重启
 # 时，**没有任何人会收到"没有告警"的告警**。这一层补的就是"任务是否按时发生"，不是"任务失败时有没有报错"。
 #
-# 信号怎么过河：云端看不到本机文件（`~/.dsh/heartbeat.json`），所以本机 `scripts/dsh-doctor.mjs` 每次
-# **成功完成写操作**后，会把 `last-ok=<UTC ISO>` 写进专用 canary issue 的正文（canary 标题含
-# `[dsh-doctor] canary`，全仓只允许一条）。本 workflow 只读这个字段。
+# 信号怎么过河：云端看不到本机文件（`~/.dsh/heartbeat.json`），所以本机 `scripts/dsh-doctor.mjs` 只有在
+# **全部必需能力探测通过之后**（末尾一步），才把 `last-ok=<UTC ISO>` 写进专用 canary issue 的正文
+# （canary 标题含 `[dsh-doctor] canary`，全仓只允许一条）；**任一步失败 ⇒ 不写**（失败运行不得伪造心跳新鲜）。
+# 本 workflow **只读 `last-ok`** 这个字段。
 #
 # 双向判据（缺一不可，见脚本头注释）：
 #   · 心跳新鲜（age ≤ 26h）      ⇒ **静默**，exit 0（不评论、不加 label）；

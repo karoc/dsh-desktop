@@ -463,8 +463,8 @@ push 前 `git ls-remote` 取期望值 + `git fetch` 建远端跟踪引用 + 显�
 | §3.5 canary 验收 | ⚠️ 未做（`scripts/canary-accept.ps1` 不存在）。已做的等价验证：`dsh:adapt --canary` 对**空闲的** dev 实例必须红，且错误信息指名"哪个标记来自哪个文件"（实测两个日志路径都解析到、新增字节数 session 0 / manager 0 ⇒ 红） |
 | §3.7 SLA 报表 | ✅ 用历史配对数据回算，与手工核算（本方案 §1）一致（实测 7 个版本、合计中位 47.62h）；门禁侧：`perVersion: []` ⇒ exit 1（无数据即红）、只有历史欠账 ⇒ exit 0 并列出欠账、`since` 之后新首发的超时版本 ⇒ exit 1。**两段延迟（2026-10-22）**：合成 git 仓库 + 合成 packument + gh 桩跑了 4 条负向对照（26 条断言全过）—— ① 有 issue 且时间可算 ⇒ 检测 6.00h / 3.50h（标题里同时有 target 与地板两个版本号时，`dsh <版本>` 锚点取对）；② 无 issue ⇒ `detection=null` + 表格印「未检测到」（不是 0）；③ issue 标题版本 `7.7.7` 不在 packument ⇒ 明说"不匹配"且不参与任何一行；④ 同一版本多条 issue（跨两个 label）⇒ 取最早那条并打印取哪条。另断言：`--check` 在同样数据上只看 `total`（输出里不出现"检测"）、`--now` 垃圾 ⇒ exit 2、`--json` 旧字段与改造前逐值相同。**2026-10-24 追加（去 label 化 + 共享键）**：真实仓库实跑 ⇒ `0.2.1-rc.3` 检测 **0.10h**（#201，`07:54Z → 08:00Z`，17 条同版本 issue 全部无 label 也照样命中）；同一批夹具上新旧实现 A/B ⇒ ① 无 label ⇒ 新 0.10h / 旧「未检测到」；② `rc.30` 不匹配 `rc.3`（`versionRe`=false）；③ 3 条同版本 ⇒ 新取最早 #10（0.26h）/ 旧只看得到带 label 的 #11（1.09h），且**已关闭**的 #10 必须算。`test-automation-gates` watch 组 32 条断言全绿（行为未变） |
 | §3.8 preinstalled-sync | ✅ 坏输入夹具：查询失败/返回值不是版本号 ⇒ 判红且不再造出假漂移；"本地领先"不再被降级同步 |
-| A3 凭据能力探测（2026-10-24） | ✅ 真实仓库 + 项目 PAT：`建 canary` ✓（#221）、`改正文` ✗（`updateIssue` 403）⇒ 矩阵 1 ✓/1 ✗/3 ⊘、exit 1 —— 正是"能读不能写"的现场证据；紧接着再跑 ⇒ `复用 #221`、canary 计数不变（幂等）。内置 gh 桩（`npm run test:doctor`，72 条断言）：403 注入到"改正文" ⇒ 该项 ✗、exit 1、**PATCH 调用数 1**、其后**零写调用**；错误里塞假 token ⇒ 输出不出现原文且出现 `<redacted>`。变异自证：删掉"403 后阻断后续写" ⇒ 自测变红（期望 0 实际 6） |
-| A5 反向心跳（2026-10-24） | ✅ 真实 canary #221（PAT 写不进 `last-ok`）+ `bootstrap-at` 距今 0.02h ⇒ **静默** exit 0；`--now` 推到 +51.4h ⇒ 判定陈旧、dry-run 打印"会评论 @karoc + 加 `priority:high`"。桩：`last-ok` 48h 前 ⇒ exit 3 + 评论 1 条 + label 已加 + 再跑不重复评论；5min 前 ⇒ exit 0 + 零评论 + 零 label；canary 缺失 ⇒ 创建 1 条且 exit 0；dry-run 零写。变异自证：把"新鲜"判据改成恒真 ⇒ 自测在"陈旧必须报警"处变红（期望 3 实际 0） |
+| A3 凭据能力探测（2026-10-24） | ✅ 真实仓库 + 项目 PAT：`建 canary` ✓（#221）、`改正文` ✗（`updateIssue` 403）⇒ 矩阵 1 ✓/1 ✗/3 ⊘、exit 1 —— 正是"能读不能写"的现场证据；紧接着再跑 ⇒ `复用 #221`、canary 计数不变（幂等）。**`last-ok` 只在全部必需能力通过后的末尾一步写**（失败运行不写）。内置 gh 桩（`npm run test:doctor`，**82 条断言**）：403 注入到"改正文" ⇒ 该项 ✗、exit 1、**PATCH 调用数 1**、其后**零写调用**；评论 403（改正文已成功）⇒ `last-ok` 不前进、心跳判据仍判陈旧；错误里塞假 token ⇒ 输出不出现原文且出现 `<redacted>`。变异自证：① 删掉"403 后阻断后续写" ⇒ 自测变红（期望 0 实际 6）；② 把 `last-ok` 挪回"改正文"处 ⇒ 自测在"失败运行不推进 last-ok"等 3 条变红（已固化进 gates 的 doctor 变异） |
+| A5 反向心跳（2026-10-24） | ✅ 真实 canary #221（PAT 写不进 `last-ok`）+ `bootstrap-at` 距今 0.02h ⇒ **静默** exit 0；`--now` 推到 +51.4h ⇒ 判定陈旧、dry-run 打印"会评论 @karoc + 加 `priority:high`"。**只有全流程成功才写 `last-ok`**；失败运行后 `last-ok` 不前进 ⇒ 心跳判据按真实陈旧度报警（不许被伪造新鲜）。桩：`last-ok` 48h 前 ⇒ exit 3 + 评论 1 条 + label 已加 + 再跑不重复评论；5min 前 ⇒ exit 0 + 零评论 + 零 label；canary 缺失 ⇒ 创建 1 条且 exit 0；dry-run 零写；评论 403 的失败运行 ⇒ `last-ok` 不前进、`--heartbeat-check` 仍 exit 3。变异自证：把"新鲜"判据改成恒真 ⇒ 自测在"陈旧必须报警"处变红（期望 3 实际 0） |
 
 ## 7. 里程碑
 
@@ -683,19 +683,22 @@ best-effort（可 `--sla-hours` / `--best-effort-hours` 覆盖，标题与正文
 
 **实现**：`scripts/dsh-doctor.mjs`（`npm run dsh:doctor`；自测 `npm run test:doctor`）。canary 标题含
 `[dsh-doctor] canary`，**首次自动创建、之后只复用**（全仓只允许一条；发现多条只用最小编号并提示人工关闭）。
-矩阵六行都是**真实写**（不是 API 文档推断）：
+矩阵前七行都是**真实探测**（不是 API 文档推断）：
 
 | 行 | 怎么证明 | 可逆性 |
 |---|---|---|
 | 读 issue 列表 | `gh issue list --state all --limit 100`；命中上限会显式告警"可能截断" | 只读 |
 | 建 canary | `gh issue create`（不存在时；已存在则复用，不重复建） | 建完即长期复用 |
-| 改 canary 正文 | PATCH 正文（探针行 + `last-ok=<ISO>`）→ 读回复核 → PATCH 还原 | **净变化只有 `last-ok` 一个心跳字段**；探针行不残留（残留时下轮自愈） |
+| 改 canary 正文 | PATCH 正文（**只加探针行**）→ 读回复核 → PATCH 还原 | **净变化 0**；探针行不残留（残留时下轮自愈）。**这一步不动 `last-ok`** |
 | 评论 | 已有探测评论 ⇒ `gh api PATCH .../issues/comments/<id>`；没有 ⇒ 建一条 | 全仓只维护一条，不刷屏 |
 | 加 label | `label create --force` → `--add-label` → 读回 → `--remove-label` | 加完删掉 |
 | 关闭 | `close` → 读回 CLOSED → `reopen` → 读回 OPEN | 关完重开；若卡在 CLOSED，下轮开跑先自愈重开 |
+| 写心跳 `last-ok` | 以上**全部通过后**，末尾单独 PATCH 正文 `last-ok=<UTC ISO>` → 读回复核 | 任一步失败 ⇒ **不写**；写后读回失败 ⇒ 尝试回滚旧值（失败运行绝不伪造心跳新鲜） |
 
 **纪律（都是写在脚本注释里的负面保证）**：任一写操作失败 ⇒ **立即停止后续写探测**（资源级权限是边界，
 继续试只会重复 403 与次级限流），矩阵把后续行标 ⊘ 并写明原因；退出码非零 + 一句话结论 + 修复建议。
+`last-ok` **只在全部必需能力通过之后的末尾一步写**，失败运行不推进它；诊断信息（`--json` 的 `lastFailAt` /
+`lastFailReason`）与心跳判据分离，云端 `--heartbeat-check` **只读 `last-ok`**。
 错误信息里的 token 一律打码（已知值按值替换 + token 形状兜底）。`--dry-run` 只读、**不写远端也不写心跳
 文件**（写能力"未验证"，不能说成通过）；`--json <out>` 出机器可读矩阵（`--json -` 打 stdout）。仓库级
 `permissions` 照常打印，但**只作对照**，不作判据。
@@ -704,14 +707,22 @@ best-effort（可 `--sla-hours` / `--best-effort-hours` 覆盖，标题与正文
 - 正向/负向同一次运行：`建 canary` ✓（**#221**）、`改正文` ✗（`failed to update
   https://github.com/karoc/dsh-desktop/issues/221: GraphQL: Resource not accessible by personal access token
   (updateIssue)`）⇒ **1 ✓ / 1 ✗ / 3 ⊘、exit 1**。与 §0.3 的日志一致 ⇒ "能读不能写"被复现。
+- **2026-10-24 09:12Z / 09:13Z 复测（PAT 补上 Issues:write 后）**：真实仓库连续两次运行 ⇒ 7 项必需能力全 ✓、
+  exit 0，`~/.dsh/heartbeat.json` 的 `lastOkAt` 与 canary 的 `last-ok` 两次都前进；随后用临时 gh 包装把
+  "写评论"打成 403（**未改真实凭据**）⇒ 评论 ✗、exit 1，`last-ok` 保持 `09:13:39.262Z` 不动、本地
+  heartbeat.json 不写；`--heartbeat-check --now <last-ok+27h>` 判"心跳陈旧（27.0h > 26h）"。
 - 幂等：紧接着再跑一次 ⇒ `复用 #221（已存在，未新建）`；`gh issue list` 统计 canary 数量仍为 **1**。
-- 负向（内置 gh 桩，`npm run test:doctor`，72 条断言）：403 注入到"改正文"⇒ 该项 ✗、exit 1、**改正文 PATCH
-  调用数 = 1**、其后**零写调用**；错误里塞假 token ⇒ 输出**不出现**原文且出现 `<redacted>`。
+- 负向（内置 gh 桩，`npm run test:doctor`，**82 条断言**）：403 注入到"改正文"⇒ 该项 ✗、exit 1、**改正文 PATCH
+  调用数 = 1**、其后**零写调用**；错误里塞假 token ⇒ 输出**不出现**原文且出现 `<redacted>`；
+  **评论 403（改正文已成功）⇒ `last-ok` 保持运行前的旧值、本地 heartbeat.json 不落盘、同一份状态跑
+  `--heartbeat-check` 仍判陈旧 exit 3**（回归：旧实现会让失败运行把 `last-ok` 推进到"现在"，云端静默放过）。
 - 变异自证（证明断言不是恒真）：① 删掉"403 后阻断后续写"⇒ 自测在 `403 之后没有任何写调用` 变红
-  （期望 0 实际 6）；② 把"心跳新鲜"改成恒真 ⇒ 自测在 `陈旧 ⇒ exit 3` 变红（期望 3 实际 0）。
+  （期望 0 实际 6）；② 把"心跳新鲜"改成恒真 ⇒ 自测在 `陈旧 ⇒ exit 3` 变红（期望 3 实际 0）；
+  ③ 把 `last-ok` 写回"改正文"处 ⇒ 自测在 `[2b] 失败运行不推进 last-ok` 等 3 条变红（实际 `last-ok` 被推进到
+  本次 `--now`，`--heartbeat-check` 由 exit 3 变成 exit 0）；该变异已固化为 `test-automation-gates.mjs` 的 doctor 组第 2 条。
 
-**未做 / 不可验证**：`评论` / `加 label` / `关闭` 三行在当前 PAT 下**从未被探测到**（403 后按纪律停止），
-所以"矩阵 6 项全绿"**尚未在真实凭据上出现过一次**（它只能在修好 PAT 后出现）；PAT 过期时间读不到（见上）；
+**未做 / 不可验证**：`评论` / `加 label` / `关闭` 三行在 2026-10-24 早先的 PAT 下**从未被探测到**（403 后按纪律停止）；
+同日晚些 PAT 补齐 Issues:write 后已在真实仓库探测通过（见上）。PAT 过期时间读不到（见上）；
 canary 是长期资产，需人别删（标题写明"勿删"，缺失时脚本会重建，`bootstrap-at` 保证不误报）。
 
 ## 反向心跳（A5，"没消息也报警"，2026-10-24 落地）
@@ -720,11 +731,12 @@ canary 是长期资产，需人别删（标题写明"勿删"，缺失时脚本�
 disable、或脚本每轮都失败但 systemd 只负责重启时，**没有任何人会收到"没有告警"的告警**。这一层补的是
 "任务是否按时发生"（Healthchecks.io 的 dead man's switch 语义），不是"任务失败时有没有报错"（同上 §2.3）。
 
-**信号怎么过河**：云端看不到本机文件。所以本机 `dsh-doctor` 每次**成功完成写操作**后：
-① 写 `~/.dsh/heartbeat.json`（`{lastOkAt, version, didWrite}` —— 失败运行**不写**，否则反向心跳会替一个
-坏掉的链路作伪证）；② 把 `last-ok=<UTC ISO>` 写进 canary 正文。云端
-`.github/workflows/dsh-heartbeat-check.yml`（**每日 03:00 UTC + `workflow_dispatch`**）跑
-`node scripts/dsh-doctor.mjs --heartbeat-check --grace-hours 26`，只读 canary 正文的字段。
+**信号怎么过河**：云端看不到本机文件。所以本机 `dsh-doctor` **只有在全部必需能力（读/建/改/评论/label/
+关闭）都通过之后**（末尾一步）才：① 写 `~/.dsh/heartbeat.json`（`{lastOkAt, version, didWrite}`）；
+② 把 `last-ok=<UTC ISO>` 写进 canary 正文。**任一步失败 ⇒ 两者都不推进**（失败运行不写 `last-ok`，否则反向
+心跳会替一个坏掉的链路作伪证）。诊断信息走 stdout / `--json` 的 `lastFailAt`/`lastFailReason`，**不参与心跳
+判据**。云端 `.github/workflows/dsh-heartbeat-check.yml`（**每日 03:00 UTC + `workflow_dispatch`**）跑
+`node scripts/dsh-doctor.mjs --heartbeat-check --grace-hours 26`，**只读 canary 正文的 `last-ok`**。
 
 **双向判据（下表每一行都有桩覆盖；新鲜/宽限/陈旧三支另在真实 canary #221 上验过）**：
 
@@ -746,19 +758,23 @@ disable、或脚本每轮都失败但 systemd 只负责重启时，**没有任�
 评论与 label 全部失败），这样红色才可以区分。
 
 **实测**：
-- 真实 canary #221（本机 PAT 写不进 `last-ok`）：`--heartbeat-check` 读到 `bootstrap-at` 距今 **0.02h**
+- 真实 canary #221（当时本机 PAT 写不进 `last-ok`）：`--heartbeat-check` 读到 `bootstrap-at` 距今 **0.02h**
   ⇒ **静默** exit 0 —— "canary 在但从未写入过心跳"没有被误报成"心跳死了"。
+- **2026-10-24 复测（失败运行不得伪造新鲜）**：两次成功运行把 `last-ok` 从 `08:17:31.595Z` 推进到
+  `09:12:57.854Z`、`09:13:39.262Z`；紧接着"写评论 403"的失败运行后 `last-ok` 仍是 `09:13:39.262Z`；
+  `--heartbeat-check --now <last-ok+27h> --dry-run` 输出"判定：**心跳陈旧** —— last-ok 距今 27.0h > 26h"。
 - 同一条 canary + `--now 2026-10-26T00:00:00Z` ⇒ `bootstrap-at 距今 51.42h > 26h` 判陈旧；`--dry-run` 打印
   "会评论 @karoc + 加 `priority:high` + exit 3"，**零写**。
-- 桩（`npm run test:doctor`）：`last-ok` 48h 前 ⇒ exit 3、评论 1 条含 `@o` 与 `48.0h`、`priority:high` 已加、
+- 桩（`npm run test:doctor`，82 条断言）：`last-ok` 48h 前 ⇒ exit 3、评论 1 条含 `@o` 与 `48.0h`、`priority:high` 已加、
   再跑一次**不重复评论**；`last-ok` 5min 前 ⇒ exit 0、零评论、零 label；canary 不存在 ⇒ 创建 1 条且 exit 0；
-  dry-run 零写。
+  dry-run 零写；**评论 403 的失败运行 ⇒ `last-ok` 不前进，心跳判据仍判陈旧（exit 3）**。
 
 **未做 / 不可验证**：
 - **本机 timer 未安装**：谁每天跑 `dsh-doctor` 由用户决定（systemd unit 属用户资产；模板做法同 autopilot
   头注释）。装上之前，云端读到的 `last-ok` 会停在最后一次手工运行 ⇒ 26h 后如实报警。
-- **当前 PAT 缺 Issues:write** ⇒ `last-ok` 写不进去 ⇒ 本 workflow 合并后会在 26h 后开始**每日报警**。这是
-  **设计内的信号**（"写路径坏了"），不是误报；修 PAT 或临时 disable workflow，二者之一。
+- **PAT 的 Issues:write 会漂移**：2026-10-24 早先实测 403，晚些修复后复测 7 项全 ✓；若它再丢失，
+  `last-ok` 写不进去 ⇒ 本 workflow 会在 26h 后开始**每日报警**。这是**设计内的信号**（"写路径坏了"），
+  不是误报；修 PAT 或临时 disable workflow，二者之一（**不要**手写 `last-ok` 绕过）。
 - "评论 / issue 是否能真的叫醒人"取决于该账号的通知设置，本机不可验证（与 §0.4 的边界相同）。
 - 只覆盖"canary 心跳"这一条链路：CI 侧 `GITHUB_TOKEN` 的心跳、字面意义的"runner 没跑"（需要第二检查者 /
   另一台机器）未做。

@@ -594,8 +594,8 @@ MIT
   （该 RED 就 RED + exit 1、该 FATAL 就 exit 2、该停在第 N 步就停在第 N 步、"没有数据"就判红）。
   **为什么存在**：恒真的门禁比没有门禁更糟 —— 那份 harness 原本只在 `/tmp`，CI 从不跑它，判据回归没人拦。
   单跑：`node scripts/test-automation-gates.mjs`（`--only probe|sla|watch|doctor|adapt|drift|mutation` 只跑一组、
-  `--fast` 跳过等待型用例、`--keep` 保留临时目录排障）。它自带 **6 条变异自证**（其中 doctor 组证明「凭据 canary 写失败 ⇒ 退出码非零」真的在阻断；在**工作树临时副本**上
-  **临时副本**上把判据改坏 ⇒ 本套件必须变红；绝不改仓库文件），已知仍不完美的判据标 `KNOWN_GAP`
+  `--fast` 跳过等待型用例、`--keep` 保留临时目录排障）。它自带 **7 条变异自证**（其中 doctor 组两条：①「凭据 canary 写失败 ⇒ 退出码非零」真的在阻断；②「把 `last-ok` 挪回"改正文"处 ⇒ 失败运行伪造心跳新鲜」必须被抓；
+  在**工作树临时副本**上把判据改坏 ⇒ 本套件必须变红；绝不改仓库文件），已知仍不完美的判据标 `KNOWN_GAP`
   —— 只逐条打印、**不判红**（既不用"跳过"掩盖假绿，也不会因为别的 agent 正在修它而把链判红；
   行为一旦变化会打 `GAP?` 提醒把它升级成正确性断言）。
 - **两个定时工作流**（零 secret，只用 `GITHUB_TOKEN`）：`dsh-watch.yml` 每 15 分钟探测 npm dist-tags
@@ -719,20 +719,25 @@ MIT
   （2026-10-24 事故：admin=true 仍 `updateIssue` 403）；classic token 能从 `X-OAuth-Scopes` 头读 scope，
   fine-grained PAT 连这个头都没有，而 GitHub **没有**"模拟写"接口（AWS `SimulatePrincipalPolicy` /
   k8s `SelfSubjectAccessReview` 的等价物不存在）⇒ 唯一可靠的判据是 canary 写。脚本对一条**专用 canary
-  issue**（标题含 `[dsh-doctor] canary`；首次自动创建、之后只复用）做**可逆写**：改正文（写入探针行 +
-  `last-ok=<ISO>` → 读回复核 → 还原，**净变化只有 last-ok**）→ 评论（有则 PATCH 同一条、无则只建一条）→
-  加 label（加 → 读回 → 移除）→ 关闭（关 → 读回 CLOSED → 重开 → 读回 OPEN），输出 **7 行矩阵**：读 issue
-  列表 / 建 canary / 改正文 / 评论 / 加 label / 关闭 + **PAT 过期（本地 token.meta）**，每行 ✓/✗ + 实际错误
-  （**错误信息里的 token 一律打码**）。第 7 行的数据源是**本机文件**而不是 GitHub（见下一小节），
+  issue**（标题含 `[dsh-doctor] canary`；首次自动创建、之后只复用）做**可逆写**：改正文（只写探针行 →
+  读回复核 → 还原，**净变化 0**）→ 评论（有则 PATCH 同一条、无则只建一条）→
+  加 label（加 → 读回 → 移除）→ 关闭（关 → 读回 CLOSED → 重开 → 读回 OPEN）；**只有以上全部通过之后**，
+  才在**末尾**单独一步写 `last-ok=<ISO>`（心跳；任一步失败 ⇒ **不写**）。输出 **8 行矩阵**：读 issue
+  列表 / 建 canary / 改正文 / 评论 / 加 label / 关闭 / **写心跳 last-ok** + **PAT 过期（本地 token.meta）**，
+  每行 ✓/✗ + 实际错误（**错误信息里的 token 一律打码**）。第 8 行的数据源是**本机文件**而不是 GitHub（见下一小节），
   **不参与退出码**：没录入 ⇒ `· 未知（建议 set --expires）`，绝不会因此把 doctor 判红。**fail-loud**：任一必需能力不可用 ⇒ exit 1 + 一句话结论 + 修复建议（"给 PAT 勾 Issues: Read and
   write"）。**遇 403 立即停止后续写探测**（资源级权限是边界，继续试只会制造重复 403 与次级限流）；
   `--dry-run` 只读、**不写**心跳文件；`--json <out>` 出机器可读矩阵（`--json -` 打 stdout）。
-  ⚠️ 当前实测（2026-10-24）：**建 issue 可用、改正文 403**（`Resource not accessible by personal access
-  token (updateIssue)`）⇒ 1 ✓ / 1 ✗ / 3 ⊘、exit 1 —— 这就是"能读不能写"的现场证据；修权限前 `dsh-watch`
-  与 autopilot 的 issue 维护仍会失败。
-- **反向心跳（A5，"没消息也报警"，2026-10-24）**：本机侧 `dsh-doctor` 每次**成功**运行后写
-  `~/.dsh/heartbeat.json`（`{lastOkAt, version, didWrite}`；失败运行**不写** —— 不替坏链路作伪证），并把
-  `last-ok=<ISO>` 写进 canary 正文；云端侧 `.github/workflows/dsh-heartbeat-check.yml`（**每日一次**
+  ⚠️ 当前实测（2026-10-24 09:12Z / 09:13Z UTC）：**7 项必需能力连续两次全 ✓**（读 / 复用 canary #221 /
+  改正文 / 评论 / 加 label / 关闭 / 写 last-ok），两次 `lastOkAt` 都前进（08:17Z → 09:12Z → 09:13Z）。
+  再用临时 gh 包装把"写评论"打成 403（**未改真实凭据**）复跑 ⇒ 改正文仍 ✓、评论 ✗、exit 1，
+  `last-ok` 保持 `09:13:39.262Z` 不动（失败运行不伪造心跳）。早先同日的"建 issue 可用、改正文 403"是
+  真实事故现场 —— 也正是本脚本存在的理由。
+- **反向心跳（A5，"没消息也报警"，2026-10-24）**：本机侧 `dsh-doctor` **只有全部必需能力通过（整轮 PASS）**
+  才写 `~/.dsh/heartbeat.json`（`{lastOkAt, version, didWrite}`）并把 `last-ok=<ISO>` 写进 canary 正文
+  （**末尾一步**；任一步失败 ⇒ 两者都**不推进** —— 失败运行绝不伪造心跳新鲜）。诊断信息走 stdout /
+  `--json`（`lastFailAt` / `lastFailReason`），**不进心跳判据**；云端 `--heartbeat-check` **只读 `last-ok`**。
+  云端侧 `.github/workflows/dsh-heartbeat-check.yml`（**每日一次**
   03:00 UTC + `workflow_dispatch`）跑 `node scripts/dsh-doctor.mjs --heartbeat-check --grace-hours 26`
   —— 云端**看不到**本机文件，唯一可见的信号就是 canary 正文那个字段。**双向判据**（缺一不可）：心跳新鲜
   （age ≤ 26h）⇒ **静默** exit 0；心跳陈旧 ⇒ 在 canary 评论 `@owner` + 加 `priority:high` + **exit 3**；
@@ -742,13 +747,15 @@ MIT
   手段全部失败）；同一段停更期只发一条报警评论（`priority:high` 每次确保；`--repeat-hours` 默认 168h 兜
   "从未成功过"），避免每日刷屏。判据的负向对照在 `npm run test:doctor` 的内置 gh 桩里：`last-ok` 48h 前 ⇒
   必须报警（评论 + label）、5min 前 ⇒ 必须静默、canary 缺失 ⇒ 创建且不误报、403 注入 ⇒ 该项 ✗ 且
-  **后续零写调用**、错误里带 token ⇒ 必须被打码；桩写入的时间必须等于钉死的 `--now`（桩时钟与断言时钟同源，
-  否则真实 UTC 越过钉死点后去重判据会失效、门禁随时间永久变红）。共 72 条断言；另有两条变异自证确认它会红。
+  **后续零写调用**、**评论 403（改正文已成功）⇒ `last-ok` 不得前进、心跳判据仍判陈旧**；
+  错误里带 token ⇒ 必须被打码；桩写入的时间必须等于钉死的 `--now`（桩时钟与断言时钟同源，
+  否则真实 UTC 越过钉死点后去重判据会失效、门禁随时间永久变红）。共 **82 条断言**；另有 **3 条变异自证**
+  确认它会红（含新增的"把 `last-ok` 挪回改正文处"）。
   ⚠️ 诚实边界：① **PAT 过期时间读不到**（个人 fine-grained PAT 没有 REST 查询端点，`GET /user` 不返回
   `expires_at`）⇒ 只能人工录一次，已由下一小节的本地元数据方案补上（工具能查、能提醒，**录入本身仍需人手**）；② "issue 创建/评论是否真的叫醒人"取决于该账号 GitHub 通知设置，本机**不可验证**；
   ③ "本机每天有人跑 doctor"**不由本仓库安装**（systemd unit 属用户资产，模板参见 autopilot 头注释）；
-  ④ 在 PAT 拿到 Issues:write 之前 `last-ok` 永远写不进去 ⇒ 反向心跳会在 26h 后**如实报警**——这是设计要的
-  信号，不是噪音；要么修 PAT，要么在排障期手动 disable 该 workflow。
+  ④ 若 PAT 再丢 Issues:write，`last-ok` 就写不进去 ⇒ 反向心跳会在 26h 后**如实报警**——这是设计要的
+  信号，不是噪音；修 PAT 或排障期手动 disable 该 workflow（**不要**手写 `last-ok` 绕过）。
 - **PAT 过期元数据（A4，2026-10-24）**：`node scripts/dsh-token-meta.mjs …`（等价 `npm run dsh:token-meta`）
   —— 补的是"**这张 token 哪天过期**"这个 GitHub 不告诉你的问题。
   ① **为什么只能人工录**：个人 fine-grained PAT 的过期时间**没有可读的 REST 端点**（`GET /user` 不返回
@@ -768,7 +775,7 @@ MIT
      （warn→urgent→critical→expired 各一条；回到 ok 评论"已解除"并关闭该单）。
      **写权不足（403）⇒ 只打印提醒文本 + 一条可复制的建单命令，不重试**（issue 写权限缺着的时候，
      不要把 cron 变成日志洪水）。
-  ⑤ **doctor 集成**：`npm run dsh:doctor` 的矩阵第 7 行读同一个文件；缺失显示
+  ⑤ **doctor 集成**：`npm run dsh:doctor` 的矩阵第 8 行读同一个文件；缺失显示
      `· PAT 过期（本地 token.meta）—— 未录入 ⇒ 未知`，**不判红**（`required=false`，不进退出码）。
   ⑥ **每日定时**（模板，**装不装是用户动作**；本仓库不动你的 systemd）：把下面两段存成
      `~/.config/systemd/user/dsh-token-meta.{service,timer}`（`ExecStart` 的仓库路径换成你的绝对路径），
