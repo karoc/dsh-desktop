@@ -34,8 +34,9 @@
 //
 //   node scripts/dsh-doctor.mjs --self-test
 //      自测（零外部依赖：内置有状态 gh 桩，跑在临时目录里，不碰仓库/真实 gh/真实 ~/.dsh）。
-//      覆盖：矩阵幂等（跑两次不重复建 canary/评论）、403 注入（该项 ✗、退出码非零、不再试写、
-//      token 打码）、心跳陈旧 48h ⇒ 报警、心跳新鲜 5min ⇒ 静默、canary 缺失 ⇒ 创建且不误报。
+//      覆盖：矩阵幂等（跑两次不重复建 canary/评论）、评论已存在 ⇒ 用 **REST 数字 id** 走 PATCH
+//      （node id 会 404 的回归）、403 注入（该项 ✗、退出码非零、不再试写、token 打码）、
+//      心跳陈旧 48h ⇒ 报警、心跳新鲜 5min ⇒ 静默、canary 缺失 ⇒ 创建且不误报。
 //
 // 退出码：
 //   默认模式   0 = 必需能力全部可用；1 = 有必需能力缺失 / 读列表失败 / gh 不可用；2 = 用法错误。
@@ -454,12 +455,24 @@ function doctor() {
   else if (DRY) mark(commentRow, 'dry', '将写探测评论（dry-run 不写）')
   else if (writeBlock) mark(commentRow, 'skip', writeBlock)
   else {
-    const v = viewIssue('comments')
+    // 已存在评论的 id 必须取 **REST 数字 id**：`gh issue view --json comments` 给的是 GraphQL node id
+    // （形如 `IC_kwDO...`，databaseId 为空），拼进 REST `PATCH /issues/comments/<id>` 会 404。
+    const v = runGH(['api', `repos/${REPO}/issues/${canaryNo}/comments?per_page=100`])
+    let comments = null
     if (!v.ok) {
-      mark(commentRow, 'fail', '', `读评论失败：${v.error}`)
+      mark(commentRow, 'fail', '', `读评论失败：${oneLine(v)}`)
       blockWrites('读不到评论列表')
     } else {
-      const existing = (v.data.comments ?? []).find((c) => String(c.body ?? '').includes(COMMENT_MARK))
+      try {
+        comments = JSON.parse(v.stdout)
+        if (!Array.isArray(comments)) throw new Error('返回的不是数组')
+      } catch (e) {
+        mark(commentRow, 'fail', '', `REST 评论列表无法解析：${redact(e.message).slice(0, 120)}`)
+        blockWrites('读不到评论列表')
+      }
+    }
+    if (comments) {
+      const existing = comments.find((c) => String(c.body ?? '').includes(COMMENT_MARK))
       const dir = mkdtempSync(join(tmpdir(), 'dsh-doctor-'))
       const f = join(dir, 'comment.md')
       writeFileSync(f, `${COMMENT_MARK}\n凭据能力探测：评论写入可用（由 \`scripts/dsh-doctor.mjs\` 维护，最近一次 ${NOW_ISO}）。\n`)
@@ -853,7 +866,8 @@ if (cmd === 'issue view') {
   const fields = (flag('--json') || '').split(',')
   const o = {}
   for (const f of fields) {
-    if (f === 'comments') o.comments = (i.comments || []).map((c) => ({ id: c.id, body: c.body, createdAt: c.createdAt, author: { login: 'stub' } }))
+    // 还原真实行为：gh issue view --json comments 的 id 是 GraphQL node id（IC_...），不是 REST 数字 id。
+    if (f === 'comments') o.comments = (i.comments || []).map((c) => ({ id: c.node_id || ('IC_' + c.id), databaseId: null, body: c.body, createdAt: c.createdAt, author: { login: 'stub' } }))
     else if (f === 'labels') o.labels = labelsOf(i)
     else if (f === 'body') o.body = i.body
     else if (f === 'state') o.state = i.state
@@ -892,7 +906,7 @@ if (cmd === 'issue comment') {
   if (!i) return die('no such issue')
   i.comments = i.comments || []
   const id = st.nextCommentId = (st.nextCommentId || 1000) + 1
-  i.comments.push({ id, body: readBody(flag('--body-file')), createdAt: at })
+  i.comments.push({ id, node_id: 'IC_' + id, body: readBody(flag('--body-file')), createdAt: at })
   return out(url(i.number) + '#issuecomment-' + id)
 }
 if (cmd === 'issue close') { const i = issue(argv[2]); if (!i) return die('no such issue'); i.state = 'CLOSED'; return out(url(i.number)) }
@@ -906,11 +920,21 @@ if (cmd === 'label create') {
 if (cmd.startsWith('api ')) {
   if (argv.includes('--method') && argv.includes('PATCH')) {
     const target = argv.find((a) => a.includes('/issues/comments/'))
-    const id = target ? Number(target.split('/issues/comments/')[1]) : null
+    const id = target ? target.split('/issues/comments/')[1] : ''
+    // 真实 GitHub：只有 REST 数字 id 能命中；把 GraphQL node id（IC_...）拼进路径会 404。
+    const hit = (st.issues || []).flatMap((i) => i.comments || []).find((c) => /^\d+$/.test(String(id)) && String(c.id) === String(id))
+    if (!hit) return die('gh: Not Found (HTTP 404)')
     const field = argv.find((a) => a.startsWith('body=@'))
-    const body = field ? readBody(field.slice('body=@'.length)) : ''
-    for (const i of st.issues || []) for (const c of i.comments || []) if (Number(c.id) === id) { c.body = body; c.updatedAt = at }
-    return out({ id })
+    hit.body = field ? readBody(field.slice('body=@'.length)) : ''
+    hit.updatedAt = at
+    return out({ id: Number(id) })
+  }
+  // REST 列评论（doctor 用它拿**数字** id，供后续 PATCH 用）
+  const listM = /\/issues\/(\d+)\/comments(?:\?|$)/.exec(String(argv[1] || ''))
+  if (listM) {
+    const i = issue(listM[1])
+    if (!i) return die('gh: Not Found (HTTP 404)')
+    return out((i.comments || []).map((c) => ({ id: c.id, node_id: c.node_id, body: c.body, created_at: c.createdAt, user: { login: 'stub' } })))
   }
   if (argv.includes('.permissions')) return out({ admin: true, maintain: true, push: true, triage: true, pull: true })
   if (argv.includes('.login')) return out('stub-user')
@@ -998,6 +1022,34 @@ function selfTest() {
   const calls2 = s.calls.slice(before)
   eq('第二次运行 issue create 次数 0', 0, count(calls2, (c) => c.argv[0] === 'issue' && c.argv[1] === 'create'))
   check('第二次运行 last-ok 前进', /^last-ok=2026-10-24T05:00:00\.000Z$/m.test(s.issues[0].body))
+
+  console.log('\n[1b] 能力矩阵 · 评论已存在 ⇒ 必须用 **REST 数字 id** 走 PATCH（node id ⇒ 404 回归）')
+  // 夹具还原真实 GitHub：`gh issue view --json comments` 的 id 是 GraphQL node id（IC_...），
+  // 数字 id 只在 REST 里。旧实现把 node id 拼进 REST PATCH ⇒ 404（真实事故：第二次起必失败，心跳不再刷新）。
+  const seeded = {
+    id: 6381490135, node_id: 'IC_kwDOT4z6kM8AAAABfF3P1w',
+    body: `${COMMENT_MARK}\n旧的探测评论\n`, createdAt: '2026-10-20T00:00:00.000Z',
+  }
+  writeState(seed({
+    issues: [{
+      number: 7, title: CANARY_TITLE,
+      body: 'dsh-doctor canary\n\nlast-ok=2026-10-20T00:00:00.000Z\nbootstrap-at=2026-10-20T00:00:00.000Z\n',
+      state: 'OPEN', labels: [], comments: [seeded], createdAt: '2026-10-20T00:00:00.000Z',
+    }],
+  }))
+  const rc = runStatus(['--repo', 'o/r', '--heartbeat-file', join(HOME, 'heartbeat-1b.json'), '--now', '2026-10-24T04:30:00Z'])
+  eq('评论已存在 ⇒ exit 0（不因 404 假红）', 0, rc.status)
+  check('评论行 ✓ 且说明是"更新"（不是新建）', /✓ 评论\s+—— 更新探测评论 #6381490135/.test(rc.out), rowLine(rc.out, '评论'))
+  const sc = readState()
+  eq('评论仍只有 1 条（PATCH 未新增）', 1, (sc.issues[0].comments || []).length)
+  eq('没有调用 gh issue comment（走 PATCH）', 0, count(sc.calls, (c) => c.argv[0] === 'issue' && c.argv[1] === 'comment'))
+  eq('没有用 gh issue view --json comments 取 id（那是 node id）', 0,
+    count(sc.calls, (c) => c.argv[0] === 'issue' && c.argv[1] === 'view' && c.argv.includes('comments')))
+  const patchCall = sc.calls.find((c) => c.argv[0] === 'api' && c.argv.includes('PATCH'))
+  check('PATCH 目标是数字 id（不是 node id）', Boolean(patchCall) && patchCall.argv.includes('repos/o/r/issues/comments/6381490135'),
+    patchCall ? patchCall.argv.join(' ') : '（没有 PATCH 调用）')
+  check('PATCH 后评论正文已刷新到本次 now', String(sc.issues[0].comments[0].body).includes('最近一次 2026-10-24T04:30:00.000Z'),
+    String(sc.issues[0].comments[0].body).slice(0, 100))
 
   console.log('\n[2] 能力矩阵 · 负向：403 注入到"改正文"（不继续试写 + token 打码）')
   writeState(seed({ fail: { bodyPatch: true } }))
