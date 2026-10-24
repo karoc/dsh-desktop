@@ -823,7 +823,12 @@ const fs = require('fs')
 const stFile = process.env.STUB_STATE
 const st = JSON.parse(fs.readFileSync(stFile, 'utf8'))
 const argv = process.argv.slice(2)
-const at = new Date().toISOString()
+// ⚠️ 桩时钟：这个桩里所有"现在"（createdAt / updatedAt / 调用记录）都必须取 STUB_NOW，绝不直接读真实墙钟。
+//    断言侧的"现在"是 --now 钉死的固定值；桩若用墙钟，真实 UTC 一旦越过钉死点，报警评论的 createdAt
+//    就落在"现在"之后 ⇒ 去重判据 sinceLastAlarmH >= 0 永远不成立 ⇒ 同一段停更期被判定要发第二条评论
+//    ⇒ 自测从那天起永久变红（时间炸弹）。STUB_NOW 由 selfTest() 的 run() 从**同一条** --now 派生（单一时间源）。
+//    负向对照：把下面这行改回 new Date().toISOString() ⇒ "桩写入的 createdAt == 钉死的 now" 断言必须红。
+const at = process.env.STUB_NOW || new Date().toISOString()
 st.calls = st.calls || []
 st.calls.push({ argv, at })
 st.fail = st.fail || {}
@@ -938,10 +943,19 @@ function selfTest() {
   const writeState = (s) => writeFileSync(statePath, JSON.stringify(s, null, 2))
   const readState = () => JSON.parse(readFileSync(statePath, 'utf8'))
   const seed = (extra = {}) => ({ repo: 'o/r', issues: [], labels: ['priority:high'], nextCommentId: 1000, calls: [], fail: {}, ...extra })
+  // 桩时钟必须与断言时钟同源：STUB_NOW 从**同一条** --now 派生（内置 gh 桩见 STUB_SOURCE 顶部注释）。
+  // 也就是说：自测里任何"桩认为的现在"都只能经这里进来，桩自己永远不读墙钟 —— 否则真实 UTC 越过
+  // 钉死的 now 之后，去重判据失效、套件永久变红（2026-10-24 的实测事故）。
+  const stubNowOf = (args) => {
+    const i = args.indexOf('--now')
+    if (i < 0 || !args[i + 1]) return ''
+    const t = new Date(args[i + 1])
+    return Number.isNaN(t.getTime()) ? '' : t.toISOString()
+  }
   const run = (args, extraEnv = {}) => {
     const r = execFileSync(process.execPath, [SELF, ...args], {
       encoding: 'utf8',
-      env: { ...process.env, GH_BIN: BIN, STUB_STATE: statePath, HOME, GH_TOKEN: '', GITHUB_TOKEN: '', DSH_TOKEN_META: join(HOME, 'token.meta.json'), ...extraEnv },
+      env: { ...process.env, GH_BIN: BIN, STUB_STATE: statePath, STUB_NOW: stubNowOf(args), HOME, GH_TOKEN: '', GITHUB_TOKEN: '', DSH_TOKEN_META: join(HOME, 'token.meta.json'), ...extraEnv },
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     return { status: 0, out: String(r ?? '') }
@@ -1004,6 +1018,7 @@ function selfTest() {
 
   console.log('\n[3] 反向心跳 · 负向：last-ok=48h 前 ⇒ 必须报警（评论 + label）')
   const fixNow = '2026-10-24T04:00:00Z'
+  const pinnedIso = new Date(fixNow).toISOString() // 断言时钟的标准形态；桩时钟必须与它同源
   const stale = new Date(Date.parse(fixNow) - 48 * 3600e3).toISOString()
   writeState(seed({
     issues: [{ number: 7, title: CANARY_TITLE, body: `dsh-doctor canary\n\nlast-ok=${stale}\nbootstrap-at=${stale}\n`, state: 'OPEN', labels: [], comments: [], createdAt: stale }],
@@ -1013,6 +1028,12 @@ function selfTest() {
   check('输出说报警', /已报警/.test(h1.out), h1.out.split('\n').slice(-4).join('|'))
   s = readState()
   eq('报警评论 1 条', 1, (s.issues[0].comments || []).length)
+  // 防回归（时间炸弹）：上面"不重复评论"能成立的前提是——桩写入的时间来自被钉死的 now，而不是真实墙钟。
+  // 断言时钟（--now）与桩时钟（STUB_NOW）同源 ⇒ createdAt 必须恰好等于 pinnedIso。
+  // 负向对照（已实测）：把 STUB_SOURCE 里的 `process.env.STUB_NOW ||` 去掉（桩回到墙钟）⇒ 下面两条必红。
+  eq('桩写入的 createdAt == 钉死的 now（单一时间源，不是墙钟）', pinnedIso, (s.issues[0].comments[0] || {}).createdAt)
+  const stubCallTimes = [...new Set((s.calls || []).map((c) => c.at))]
+  check('桩的调用记录也全部来自同一个钉死的 now', stubCallTimes.length === 1 && stubCallTimes[0] === pinnedIso, `at=${stubCallTimes.join(',')}`)
   check('评论 @ 属主', String(s.issues[0].comments[0].body).includes('@o '), s.issues[0].comments[0].body.split('\n')[1])
   check('评论含陈旧小时数', /48\.0h/.test(s.issues[0].comments[0].body), s.issues[0].comments[0].body.split('\n')[1])
   check('已加 priority:high', (s.issues[0].labels || []).includes('priority:high'), JSON.stringify(s.issues[0].labels))
