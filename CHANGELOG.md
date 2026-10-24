@@ -21,6 +21,13 @@
 >
 > 详情见 `.agents/notes/implemented/bug-fix/2026-09-08-legacy-uninstaller-name-kill.md`。
 
+## [0.21.1](https://github.com/karoc/dsh-desktop/compare/v0.21.0...v0.21.1) (2026-10-24)
+
+
+### Bug Fixes
+
+* **shell:** 右键不再被抢去开浏览器（只处理中键与 _blank 左键）([#233](https://github.com/karoc/dsh-desktop/issues/233)) ([01ef402](https://github.com/karoc/dsh-desktop/commit/01ef4029b94665af7d2e96883e9be0c74d4fc7c3))
+
 ## [0.21.0](https://github.com/karoc/dsh-desktop/compare/v0.20.0...v0.21.0) (2026-10-24)
 
 
