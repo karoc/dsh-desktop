@@ -29,6 +29,6 @@ Status: implemented
 
 ## Consequences
 
-买到的是：写能力有了**真实**判据（不是 `admin=true` 的推断）；"任务没按时发生"有了独立于 `Restart=on-failure` 的检测通道；两条判据都能在本地用内置 gh 桩跑 53 条断言（另有两条变异自证证明断言会红）；2026-10-24（A11）起还常驻 `test-automation-gates` 的 doctor 组（5 条断言 + 1 条变异对照），不再只靠 `npm run test:doctor` 记得跑。
+买到的是：写能力有了**真实**判据（不是 `admin=true` 的推断）；"任务没按时发生"有了独立于 `Restart=on-failure` 的检测通道；两条判据都能在本地用内置 gh 桩跑 65 条断言（2026-10-24 补两条"桩时钟 == 断言时钟"防回归断言，见 [自测桩时钟同源](../testing/2026-10-24-doctor-selftest-stub-clock.md)）（另有两条变异自证证明断言会红）；2026-10-24（A11）起还常驻 `test-automation-gates` 的 doctor 组（5 条断言 + 1 条变异对照），不再只靠 `npm run test:doctor` 记得跑。
 
 代价与未完成项：canary issue 变成长期资产（需人别删；脚本发现缺失会重建、发现多条只用最小编号并提示人工关闭）；**本机 timer 不由本仓库安装**，在用户把 `dsh-doctor` 挂进 timer 之前，云端的 `last-ok` 会停在最后一次手工运行 ⇒ 26h 后如实报警；**当前 PAT 缺 Issues:write ⇒ `last-ok` 写不进去**，合并后该 workflow 会在 26h 后开始每日报警 —— 这是设计内的信号（"写路径坏了"），修 PAT 或临时 disable workflow 二者之一；`评论` / `加 label` / `关闭` 三行在真实凭据上从未被探测到（403 后按纪律停止），"矩阵 6 项全绿"尚未在真实 PAT 上出现过一次；PAT 过期时间仍不可读（个人 fine-grained PAT 无 REST 端点）；"issue/评论是否真的叫醒人"取决于账号通知设置，本机不可验证。相关：[研究清单](../process/2026-10-24-alerting-idempotency-research.md)、[双心跳架构](../architecture/2026-10-21-dsh-upgrade-heartbeat-dual.md)、[watch 单写者](../architecture/2026-10-24-watch-idempotency-single-writer.md)。
