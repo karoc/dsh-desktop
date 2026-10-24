@@ -17,10 +17,12 @@
 //   ② 判定（A2）：chrome 暴露的 externalUrlVerdict 的正/负用例（安全边界在值上断言，
 //      不对源码做字符串匹配）；
 //   ③ 接线（A2）：window.open 覆盖 + 外链点击 → ACTIONS['open-url'] → lib.rs 的
-//      桥端点 / IPC 命令 / 单一判定函数 validate_external_url；
+//      桥端点 / IPC 命令 / 单一判定函数 validate_external_url；激活意图是纯函数，
+//      门禁直接模拟 click / auxclick（**右键 button=2 必须什么都不做**）；
 //   ④ 变异自证（本套件自带，**只在临时目录里造变异体，绝不改仓库**）：
 //      A1 把 dragDropEnabled 改回 true ⇒ `a1-dragdrop-disabled` 必须变红；
-//      A2 把 chrome 的 scheme 白名单放宽（加 file:/javascript:）⇒ `a2-reject-file` 必须变红。
+//      A2 把 chrome 的 scheme 白名单放宽（加 file:/javascript:）⇒ `a2-reject-file` 必须变红；
+//      A2-rightclick 去掉 auxclick 的 `button !== 1` 判断 ⇒ `a2-auxclick-right-ignored` 必须变红。
 //
 // 可注入文件（供变异体使用，与 test-chrome-real 的 DSH_CHROME_FILE 同风格）：
 //   DSH_TAURI_CONF=<path>  DSH_CHROME_FILE=<path>
@@ -135,6 +137,56 @@ check('a2-scheme-set-is-http-https', 'chrome 的 scheme 白名单恰好是 http/
   JSON.stringify(config.EXTERNAL_URL_SCHEMES) === JSON.stringify(['http', 'https']),
   JSON.stringify(config.EXTERNAL_URL_SCHEMES))
 
+// ── ②b A2：激活意图（模拟真实事件参数，断言"会不会走 open-url"）────────────
+// 2026-10-25 实机回归：右键（auxclick button=2）在菜单弹出前就把外链交了出去。
+// 这里直接模拟 handler 收到的 kind/event/anchor 属性，判定 handle=true 等价于
+// "右键菜单还没出现就可能调 open-url"，因此 button=2 必须是 handle=false。
+const linkIntent = config.linkActivationIntent
+check('a2-intent-exported', 'chrome 暴露 linkActivationIntent 纯函数（供门禁模拟 click/auxclick）',
+  '激活意图没导出 ⇒ 右键回归只能靠源码字符串匹配，改实现就失效',
+  typeof linkIntent === 'function')
+const activation = (kind, ev = {}, href = 'https://example.com/a', target = '') => {
+  try {
+    return typeof linkIntent === 'function'
+      ? linkIntent(kind, { button: 0, ctrlKey: false, metaKey: false, ...ev }, href, target, 'https:')
+      : { handle: false, reason: 'missing-fn' }
+  } catch (err) { return { handle: false, reason: `threw: ${err && err.message}` } }
+}
+const opens = (r) => r.handle === true && !!r.verdict && r.verdict.ok === true
+// 必须是真的"判定为忽略"：函数缺失/抛异常时 handle 也是 false，但那是夹具失效，
+// 不能让它冒充"右键被正确忽略"（否则 pre-fix 源会让右键断言假绿）。
+const ignores = (r) => r.handle === false && !r.reason
+
+const middle = activation('auxclick', { button: 1 })
+check('a2-auxclick-middle-opens', '模拟 auxclick{button:1}（中键）⇒ 必须走 open-url',
+  '修右键不能把中键一起修掉：中键打开外链是 A2 的保留能力',
+  opens(middle), JSON.stringify(middle))
+const right = activation('auxclick', { button: 2 }, 'https://example.com/a', '_blank')
+check('a2-auxclick-right-ignored', '模拟 auxclick{button:2}（右键）⇒ 不得走 open-url（哪怕 target=_blank）',
+  '右键也要弹页面/WebView 的菜单；旧实现按 _blank 误判成"打开"，于是菜单没出现系统浏览器先开了（用户报告的回归本体）',
+  ignores(right), JSON.stringify(right))
+const rightMod = activation('auxclick', { button: 2, ctrlKey: true }, 'https://example.com/a', '_blank')
+check('a2-auxclick-right-modifier-ignored', '右键带 Ctrl/Meta 也必须忽略（不能靠修饰键让右键复活）',
+  'Ctrl+右键仍是右键：修饰键只对左键/中键有意义，不能成为绕过 button 判断的后门',
+  ignores(rightMod), JSON.stringify(rightMod))
+const ctx = activation('contextmenu', { button: 2 }, 'https://example.com/a', '_blank')
+check('a2-contextmenu-never-activates', 'contextmenu 事件本身永不激活外链（只允许 click/auxclick）',
+  '把 contextmenu 当激活入口 ⇒ 右键直接开浏览器；未知事件类型必须保守忽略',
+  ignores(ctx), JSON.stringify(ctx))
+check('a2-click-blank-opens', '模拟 click{button:0} + target=_blank ⇒ 必须走 open-url',
+  'A2 的左键主受害面（聊天里的外链通常 target=_blank）不能被右键修复误伤',
+  opens(activation('click', {}, 'https://example.com/a', '_blank')),
+  JSON.stringify(activation('click', {}, 'https://example.com/a', '_blank')))
+check('a2-click-ctrl-opens', '模拟 click{button:0, ctrlKey:true} ⇒ 必须走 open-url',
+  'Ctrl/Cmd+左键是 A2 明确保留的新窗口意图',
+  opens(activation('click', { ctrlKey: true })), JSON.stringify(activation('click', { ctrlKey: true })))
+check('a2-click-same-tab-ignored', '模拟 click{button:0} 无修饰键、target 空 ⇒ 不得走 open-url',
+  '同窗口导航不拦（只处理会开新窗口的点击）；否则普通链接也会被丢给系统浏览器',
+  ignores(activation('click')), JSON.stringify(activation('click')))
+check('a2-click-middle-not-double', '模拟 click{button:1} ⇒ 不处理（中键只由 auxclick 处理，防双开）',
+  '某些合成/引擎路径可能同时派发 click 与 auxclick；两边都处理会打开两次',
+  ignores(activation('click', { button: 1 })), JSON.stringify(activation('click', { button: 1 })))
+
 // ── ③ A2：接线（chrome ↔ bridge ↔ Rust）───────────────────────────────────
 const chromeSrc = readFileSync(CHROME_PATH, 'utf8')
 const openAction = ACTIONS['open-url'] || null
@@ -147,8 +199,20 @@ check('a2-window-open-wired', 'chrome 覆写 window.open（http(s) → 桥；abo
   chromeSrc.includes('window.open = function') && chromeSrc.includes('nativeOpen.apply') && chromeSrc.includes("tag: 'open-url'"))
 check('a2-anchor-wired', 'chrome 捕获 click/auxclick 的外链点击（_blank / 中键 / Ctrl-Cmd），且不抢页面自己的处理',
   '页面内 target=_blank 的链接是 A2 的主要受害面；抢在页面之前处理会双开',
-  ['onLinkActivation', "'click'", "'auxclick'", '_blank', 'ctrlKey', 'defaultPrevented', "call('open-url'"]
+  ['onLinkActivation', 'linkActivationIntent', "'click'", "'auxclick'", '_blank', 'ctrlKey', 'defaultPrevented', "call('open-url'"]
     .every((s) => chromeSrc.includes(s)))
+// 右键菜单必须原样留给页面/WebView：任何 window/document 级 contextmenu 监听（尤其是
+// preventDefault）都会让"复制链接/在新标签页打开"看不到或失效。chrome 唯一允许的
+// contextmenu 监听在壳自己的 host 上（顶栏区域不出页面菜单），不在此列。
+const pageContextMenuHooks = [
+  /window\.addEventListener\(\s*['"]contextmenu['"]/,
+  /document\.addEventListener\(\s*['"]contextmenu['"]/,
+  /window\.oncontextmenu\s*=/,
+  /document\.oncontextmenu\s*=/,
+].filter((re) => re.test(chromeSrc))
+check('a2-no-contextmenu-hijack', 'chrome 不在 window/document 级监听或改写 contextmenu（右键菜单归页面/WebView）',
+  '抢 contextmenu（监听或 preventDefault）⇒ 右键菜单被我们干扰，"在新标签页打开/复制链接"无从谈起',
+  pageContextMenuHooks.length === 0, pageContextMenuHooks.length ? `${pageContextMenuHooks.length} 处命中` : '无 window/document 级 contextmenu 钩子')
 check('a2-rust-bridge-arm', 'lib.rs 有 POST /shell/open-url 桥分支',
   '桥缺分支 ⇒ chrome 的 call 打到 404，用户仍然"点了没反应"',
   LIB_RS.includes('("POST", "/shell/open-url")'))
@@ -224,6 +288,16 @@ if (!chromeSrc.includes(CHROME_ANCHOR)) {
   writeFileSync(path, chromeSrc.replace(CHROME_ANCHOR, "const EXTERNAL_URL_SCHEMES = ['http', 'https', 'file', 'javascript'];"), 'utf8')
   mutations.push({ key: 'A2', label: 'scheme 白名单放宽（加 file:/javascript:）', env: { DSH_CHROME_FILE: path }, expect: 'a2-reject-file-share' })
 }
+// 右键回归的负向对照：把 auxclick 的 `button !== 1` 判断去掉（改为恒 false）。
+// 期望只有右键相关断言变红；如果整套仍绿，说明门禁没有真的覆盖按钮区分。
+const AUXCLICK_GUARD = "if (kind === 'auxclick' ? button !== 1 : button !== 0) return { handle: false };"
+if (!chromeSrc.includes(AUXCLICK_GUARD)) {
+  mutations.push({ key: 'A2-rightclick', ok: false, why: `夹具与被测源码脱钩：找不到锚点 ${AUXCLICK_GUARD}` })
+} else {
+  const path = join(tmp, 'shell-chrome.mutant-auxclick.js')
+  writeFileSync(path, chromeSrc.replace(AUXCLICK_GUARD, "if (kind === 'auxclick' ? false : button !== 0) return { handle: false };"), 'utf8')
+  mutations.push({ key: 'A2-rightclick', label: '去掉 auxclick 的 button===1 判断', env: { DSH_CHROME_FILE: path }, expect: 'a2-auxclick-right-ignored' })
+}
 
 try {
   for (const m of mutations) {
@@ -259,6 +333,6 @@ if (process.exitCode) {
 } else {
   const count = mutations.filter((m) => m.ok !== false).length
   console.log(`\nPASS: shell passthrough gate（${checks.length}/${checks.length} 条断言；${count}/${count} 变异体均被判红 —— ` +
-    'A1 拖放配置 / A2 外链白名单）')
+    'A1 拖放配置 / A2 外链白名单 / A2 右键不抢跑）')
 }
 void mutatedOk

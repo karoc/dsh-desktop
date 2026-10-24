@@ -227,7 +227,10 @@ node scripts/server-manager.mjs \
   `window.open(http(s))`，都改由**默认浏览器**打开（经环回桥 `POST /shell/open-url`；本地启动页
   走 IPC `open_url`，两条通道共用同一套校验）。边界：① **同窗口内导航不拦**（dsh 自己的
   `linkOpening` 行为不变）；② `about:blank` 原样交回页面（OAuth 类"先开空窗再写 location"的形态）；
-  ③ 只允许 `http:`/`https:`，其余 scheme（`file:` / `javascript:` / `data:` / `ms-*` …）拒绝并写日志。
+  ③ 只允许 `http:`/`https:`，其余 scheme（`file:` / `javascript:` / `data:` / `ms-*` …）拒绝并写日志；
+  ④ **右键不拦**：`auxclick` 只认中键（`button===1`），右键（`button===2`）和 `contextmenu`
+  完全不由壳处理 ⇒ 页面/WebView 自己的右键菜单原样出现（"复制链接"等菜单项不被壳抢先动作；
+  菜单项的具体行为由 WebView2/页面决定，壳只保证不去抢）。
   点击处理走**冒泡阶段**且延后一拍看 `defaultPrevented`：页面自己接管了（例如侧栏浏览器）就不动，
   避免"系统浏览器 + 页面内面板"双开。
 
