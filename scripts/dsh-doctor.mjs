@@ -9,17 +9,19 @@
 //     的等价物），classic token 能读 `X-OAuth-Scopes`、fine-grained PAT 连这个头都没有 ⇒
 //     唯一可靠的判据是 **canary 写**：用真实凭据做一次**可逆**写，失败就 fail-closed。
 //   · **心跳死了没人知道**：`Restart=on-failure` 只能覆盖"脚本自己知道自己失败"；机器关机 / timer 被
-//     disable / 脚本一直失败时**没有人收到"没有告警"的告警**。本脚本把「本机最后一次成功写操作」写进
-//     一条专用 canary issue 的正文（`last-ok=<ISO>`），云端 `dsh-heartbeat-check.yml` 每日读它：
-//     新鲜 ⇒ 静默；陈旧 ⇒ 评论 @owner + `priority:high`。
+//     disable / 脚本一直失败时**没有人收到"没有告警"的告警**。本脚本**只在全部必需能力探测通过之后**，
+//     才把「本机最后一次完整成功的 doctor 运行」写进一条专用 canary issue 的正文（`last-ok=<ISO>`），
+//     云端 `dsh-heartbeat-check.yml` 每日读它：新鲜 ⇒ 静默；陈旧 ⇒ 评论 @owner + `priority:high`。
+//     **任何一步失败都不写 `last-ok`** —— 否则失败运行会伪造心跳新鲜，反向心跳永远不报警（2026-10-24 事故）。
 //
 // 用法：
 //   node scripts/dsh-doctor.mjs [--dry-run] [--json <out>] [--repo <owner/name>] [--now <iso>]
 //                               [--heartbeat-file <path>] [--timeout <sec>]
 //      能力矩阵（默认模式）。用真实凭据对**专用 canary issue**（标题含 `[dsh-doctor] canary`，
-//      首次自动创建后复用）做可逆写：改正文（写入 → 读回 → 还原，净变化只有 `last-ok` 心跳字段）。
-//      输出 7 行矩阵：读 issue 列表 / 建 canary / 改 canary 正文 / 评论 / 加 label / 关闭
-//      + **PAT 过期（本地 token.meta，A4）**。每行 ✓ / ✗ + 实际错误信息（**错误信息里的 token 一律打码**）。
+//      首次自动创建后复用）做可逆写：改正文（写探针行 → 读回 → 还原，**净变化为 0**）→ 评论 →
+//      加 label → 关闭；**全部通过后**才在末尾单独写 `last-ok`（心跳）。
+//      输出 8 行矩阵：读 issue 列表 / 建 canary / 改 canary 正文 / 评论 / 加 label / 关闭 /
+//      写心跳 last-ok + **PAT 过期（本地 token.meta，A4）**。每行 ✓ / ✗ + 实际错误信息（**错误信息里的 token 一律打码**）。
 //      最后一行的数据源是**本机文件**（`~/.dsh/token.meta.json`），不是 GitHub：个人 fine-grained PAT 的
 //      过期时间没有 REST 端点可读 ⇒ 那一行永远不参与退出码（缺失 = "未知（建议 set）"，**不是失败**）。
 //      `--dry-run` 只读（不写、不写心跳文件）；`--json <out>` 把矩阵写成 JSON（`--json -` 打到 stdout）。
@@ -36,6 +38,7 @@
 //      自测（零外部依赖：内置有状态 gh 桩，跑在临时目录里，不碰仓库/真实 gh/真实 ~/.dsh）。
 //      覆盖：矩阵幂等（跑两次不重复建 canary/评论）、评论已存在 ⇒ 用 **REST 数字 id** 走 PATCH
 //      （node id 会 404 的回归）、403 注入（该项 ✗、退出码非零、不再试写、token 打码）、
+//      **失败运行不推进 last-ok**（评论 403 时改正文已成功，旧实现会留下新鲜心跳 ⇒ 必须判红）、
 //      心跳陈旧 48h ⇒ 报警、心跳新鲜 5min ⇒ 静默、canary 缺失 ⇒ 创建且不误报。
 //
 // 退出码：
@@ -53,6 +56,8 @@
 //   · 不会反复建 canary（按标题查找并复用；只允许全仓一条）；
 //   · 不会把 token 打进任何输出（含错误信息）；
 //   · 不会在 `--dry-run` 下写任何远端对象或本地心跳文件；
+//   · 不会在任何探测步骤失败时写 `last-ok`（失败运行不推进心跳；诊断信息只进 stdout / `--json`，
+//     不进心跳判据 —— 云端 `--heartbeat-check` **只读 `last-ok`**）；
 //   · 不会用 `permissions.admin=true` 推断 Issues 可写（那正是本次事故的反例）。
 
 import { execFileSync } from 'node:child_process'
@@ -214,7 +219,7 @@ function baseBody(nowIso) {
   return `dsh-doctor canary —— \`scripts/dsh-doctor.mjs\` 自动维护的**凭据能力探测 / 反向心跳**载体。
 
 - **请勿删除、请勿改标题**；全仓只需要一条（脚本按标题查找并复用，不会重复创建）。
-- \`last-ok=\` 是本机自动化**最后一次成功完成写操作**的 UTC 时间。云端
+- \`last-ok=\` 是本机自动化**最后一次完整通过全部必需能力探测**的 UTC 时间（任一步失败都**不更新**）。云端
   \`.github/workflows/dsh-heartbeat-check.yml\` 每日读它判断心跳是否陈旧
   （默认 >${GRACE_HOURS}h 未更新 ⇒ 在该 issue 评论 @${OWNER} + 加 \`${PRIORITY_LABEL}\`）。
 - \`bootstrap-at=\` 是首次创建时间，**只在"从未写入过 last-ok"时**用于宽限期，避免刚建就误报。
@@ -383,11 +388,12 @@ function doctor() {
     }
   }
 
-  // ③ 改 canary 正文：写入（last-ok + 探针行）→ 读回 → 还原（探针行去掉、last-ok 保留）
-  //    这是"可逆写"的定义：远端正文的**净变化只有 last-ok** 这一个心跳字段，探针行不残留。
+  // ③ 改 canary 正文：写入**探针行** → 读回 → 还原。
+  //    **这一步不动 last-ok**：写能力由探针行证明即可；last-ok 是云端唯一的新鲜度判据，只能等
+  //    ④⑤⑥ 全部通过后由 ⑦ 在末尾单独提交。否则后续步骤失败会留下一个"新鲜"的假心跳
+  //    （2026-10-24 实测：评论 403 的失败运行仍把 last-ok 推进到当下，云端心跳判据被静默骗过）。
   const editRow = row('edit', '改 canary 正文')
   let didWrite = false
-  let lastOkWritten = null
   const viewIssue = (fields) => {
     const r = runGH(['issue', 'view', String(canaryNo), '--json', fields])
     if (!r.ok) return { ok: false, error: oneLine(r) }
@@ -406,8 +412,9 @@ function doctor() {
       blockWrites('读不到 canary 正文')
     } else {
       const original = String(v.data.body ?? '')
+      const clean = stripProbe(original) // 自愈：清掉上次崩溃残留的探针行；这是还原目标
+      const target = clean // 还原目标：原正文（**不碰 last-ok**；last-ok 由 ⑦ 提交）
       const nonce = randomBytes(4).toString('hex')
-      const target = stripProbe(setField(original, 'last-ok', NOW_ISO)) // 净变化：last-ok
       const probeBody = `${target.replace(/\s+$/, '')}\n<!-- dsh-doctor:probe nonce=${nonce} -->\n`
       const dir = mkdtempSync(join(tmpdir(), 'dsh-doctor-'))
       const f1 = join(dir, 'probe.md')
@@ -420,27 +427,26 @@ function doctor() {
         blockWrites('改正文被拒（403/权限不足），不再追加写请求 —— 先修 PAT 的 Issues 写权限')
       } else {
         const rb1 = viewIssue('body')
-        const ok1 = rb1.ok && hasProbe(rb1.data.body, nonce) && getField(rb1.data.body, 'last-ok') === NOW_ISO
+        // 探测写只允许加探针行：last-ok 必须**原样**（此时还没到提交心跳的 ⑦）。
+        const ok1 = rb1.ok && hasProbe(rb1.data.body, nonce) && getField(rb1.data.body, 'last-ok') === getField(target, 'last-ok')
         if (!ok1) {
-          mark(editRow, 'fail', '', rb1.ok ? '写入后读回复核不一致（探针行/last-ok 未落地）' : `读回复核失败：${rb1.error}`)
+          mark(editRow, 'fail', '', rb1.ok ? '写入后读回复核不一致（探针行未落地或 last-ok 被改动）' : `读回复核失败：${rb1.error}`)
           blockWrites('写后读回复核失败')
         } else {
           didWrite = true
-          lastOkWritten = NOW_ISO
           const p2 = runGH(['issue', 'edit', String(canaryNo), '--body-file', f2])
           if (!p2.ok) {
-            mark(editRow, 'fail', `last-ok=${NOW_ISO} 已写入，但探针行未能还原（下次运行会自愈）`, oneLine(p2))
+            mark(editRow, 'fail', '探针行未能还原（下次运行会自愈）', oneLine(p2))
             blockWrites('还原正文失败')
           } else {
             const rb2 = viewIssue('body')
             const restoredOk = rb2.ok
               && !hasProbe(rb2.data.body, nonce)
-              && getField(rb2.data.body, 'last-ok') === NOW_ISO
               && stripMarkers(rb2.data.body) === stripMarkers(target)
             if (restoredOk) {
-              mark(editRow, 'ok', `写入→读回→还原 均成功；净变化只有 last-ok=${NOW_ISO}`)
+              mark(editRow, 'ok', '写入→读回→还原 均成功；净变化 0（last-ok 未动，等 ⑦ 全部通过后再写）')
             } else {
-              mark(editRow, 'fail', '', rb2.ok ? '还原后正文与预期不一致（探针行残留或 last-ok 丢失）' : `还原后读回复核失败：${rb2.error}`)
+              mark(editRow, 'fail', '', rb2.ok ? '还原后正文与预期不一致（探针行残留或正文被改动）' : `还原后读回复核失败：${rb2.error}`)
               blockWrites('还原后读回复核失败')
             }
           }
@@ -545,6 +551,59 @@ function doctor() {
     }
   }
 
+  // ⑦ 提交心跳：**只有前面所有必需能力（读/建/改/评论/label/关闭）都通过之后**，才把 last-ok 写进
+  //    canary 正文。为什么必须放在末尾：last-ok 是云端唯一的新鲜度判据；任何一步失败都绝不能让它前进，
+  //    否则失败运行会伪造"心跳新鲜"，反向心跳（"没消息=坏消息"）就永远不报警了。
+  //    注意：心跳判据只读 `last-ok`；不要在这里之外的任何地方写它（诊断信息走 stdout / --json）。
+  const lastOkRow = row('lastok', '写心跳 last-ok')
+  let lastOkWritten = null
+  let lastOkMayHaveAdvanced = false
+  if (DRY) {
+    mark(lastOkRow, 'dry', '将在全部能力通过后写（dry-run 不写）')
+  } else if (canaryNo == null) {
+    mark(lastOkRow, 'skip', '没有 canary')
+  } else if (writeBlock) {
+    mark(lastOkRow, 'skip', `前面的写探测未全部通过 ⇒ 不写（${writeBlock}）`)
+  } else {
+    const v = viewIssue('body')
+    if (!v.ok) {
+      mark(lastOkRow, 'fail', '', `读正文失败：${v.error}`)
+    } else {
+      const before = stripProbe(String(v.data.body ?? ''))
+      const prevLastOk = getField(before, 'last-ok')
+      const targetBody = setField(before, 'last-ok', NOW_ISO)
+      const dir = mkdtempSync(join(tmpdir(), 'dsh-doctor-'))
+      const fCommit = join(dir, 'last-ok.md')
+      const fRollback = join(dir, 'last-ok-rollback.md')
+      writeFileSync(fCommit, targetBody)
+      writeFileSync(fRollback, before)
+      const w = runGH(['issue', 'edit', String(canaryNo), '--body-file', fCommit])
+      if (!w.ok) {
+        // 写被拒 ⇒ 正文未变（GitHub 的 PATCH 是原子的）；不重试（403 纪律）。
+        mark(lastOkRow, 'fail', '', `写 last-ok 被拒：${oneLine(w)}`)
+      } else {
+        const rb = viewIssue('body')
+        const committed = rb.ok
+          && getField(rb.data.body, 'last-ok') === NOW_ISO
+          && stripMarkers(rb.data.body) === stripMarkers(targetBody)
+        if (committed) {
+          lastOkWritten = NOW_ISO
+          mark(lastOkRow, 'ok', `last-ok=${NOW_ISO}（全部必需能力通过后才写）`)
+        } else {
+          // 写调用成功但读回不能确认 ⇒ 尝试回滚到旧正文（旧 last-ok）。宁可不新鲜，也不伪造新鲜。
+          const rollback = runGH(['issue', 'edit', String(canaryNo), '--body-file', fRollback])
+          const why = rb.ok ? '写后读回复核不一致（last-ok 未确认落地）' : `写后读回复核失败：${rb.error}`
+          if (rollback.ok) {
+            mark(lastOkRow, 'fail', `已回滚到旧 last-ok=${prevLastOk || '（空）'}（失败运行不伪造新鲜心跳）`, why)
+          } else {
+            lastOkMayHaveAdvanced = true
+            mark(lastOkRow, 'fail', '回滚也失败：last-ok 可能已前进，需人工核对 canary 正文', `${why}；回滚失败：${oneLine(rollback)}`)
+          }
+        }
+      }
+    }
+  }
+
   // ⑧ PAT 过期（本地元数据，A4）：数据源是**本机文件**，不联网、不进 required。
   //    缺失/损坏 ⇒ "未知（建议 set）"，**绝不**因为"还没录入"把 doctor 判红 —— 没启用功能不是故障。
   const tokenRow = row('tokenExpiry', 'PAT 过期（本地 token.meta）', false)
@@ -588,7 +647,7 @@ function doctor() {
       console.log('结论：PASS（只读检查）—— 能读到 issue 列表；写能力**未验证**（dry-run 不写），')
       console.log('      所以本次不写 ~/.dsh/heartbeat.json —— 心跳只代表"写路径真实可用"。')
     } else {
-      console.log(`结论：PASS —— ${required.length} 项能力全部可用（写能力已用真实 canary #${canaryNo} 证明，可逆）。`)
+      console.log(`结论：PASS —— ${required.length} 项必需能力全部可用（写能力已用真实 canary #${canaryNo} 证明，可逆；last-ok 已作为最后一步写入）。`)
     }
   } else {
     // 区分"实测不可用"与"因为已撞到 403 而不再探测" —— 后者不能算"能力缺失"的证据，
@@ -599,7 +658,7 @@ function doctor() {
     if (failed.length) parts.push(`${failed.length} 项必需能力**不可用**（${failed.map((r) => r.label).join('、')}）`)
     if (notProbed.length) parts.push(`${notProbed.length} 项**未探测**（撞到 403 后已按纪律停止写探测：${notProbed.map((r) => r.label).join('、')}）`)
     console.log(`结论：FAIL —— ${parts.join('；')}。`)
-    const writeMissing = missing.some((r) => ['create', 'edit', 'comment', 'label', 'close'].includes(r.key))
+    const writeMissing = missing.some((r) => ['create', 'edit', 'comment', 'label', 'close', 'lastok'].includes(r.key))
     if (writeMissing) {
       console.log(`修复建议：给 PAT 勾上 **Issues: Read and write**（fine-grained PAT → Repository permissions → Issues）。`)
       console.log(`          当前快照：仓库角色 ${typeof permissions === 'string' ? permissions : JSON.stringify(permissions)} ——`)
@@ -610,7 +669,8 @@ function doctor() {
     if (writeBlock) console.log(`停止原因：${writeBlock}`)
   }
 
-  // 本地心跳：只在"写路径被真实证明"时写 —— 否则反向心跳会替一个坏掉的链路作伪证。
+  // 心跳：本地文件只在"全部必需能力通过"时写；远端 last-ok 已由 ⑦ 在同一条件下写入。
+  // 失败运行两者都不推进 —— 否则失败运行会伪造心跳新鲜（反向心跳就永远不报警）。
   if (!DRY && exitCode === 0) {
     try {
       mkdirSync(dirname(HEARTBEAT_FILE), { recursive: true })
@@ -622,10 +682,20 @@ function doctor() {
     } catch (e) {
       console.log(`心跳：写 ${HEARTBEAT_FILE} 失败：${redact(e.message)}（不影响本次判定，但云端反向心跳会失去本地对照）`)
     }
+    console.log(`云端心跳：canary #${canaryNo} 正文 last-ok=${lastOkWritten}（全部必需能力通过后才写；云端 dsh-heartbeat-check 只读这个字段）`)
   } else if (!DRY) {
-    console.log(`心跳：**未写**（本次未证明写能力；云端 last-ok 也不会更新 ⇒ 反向心跳会在 ${GRACE_HOURS}h 后如实报警）`)
+    if (lastOkMayHaveAdvanced) {
+      console.log(`心跳：**未确认**（本次有必需能力未通过，且 last-ok 的回滚也失败 —— 它可能已前进；请人工核对 canary #${canaryNo} 的正文）`)
+    } else {
+      console.log(`心跳：**未写**（本次未通过全部必需能力 ⇒ canary 的 last-ok 保持原值、本机 heartbeat.json 不写；反向心跳会按真实陈旧度报警）`)
+    }
   }
-  if (lastOkWritten) console.log(`云端心跳：canary #${canaryNo} 正文 last-ok=${lastOkWritten}（云端 dsh-heartbeat-check 读这个字段）`)
+
+  // 诊断字段：与心跳判据无关（云端只读 last-ok）；失败时给出"哪一步、什么时候"，不写进 canary 正文。
+  const lastFailAt = exitCode === 0 ? null : NOW_ISO
+  const lastFailReason = exitCode === 0
+    ? null
+    : (missing.map((r) => `${r.label}=${r.status}`).join('；') || writeBlock || 'unknown')
 
   emitJSON({
     mode: 'doctor',
@@ -645,6 +715,8 @@ function doctor() {
     },
     heartbeatFile: HEARTBEAT_FILE,
     lastOkWritten,
+    lastFailAt,
+    lastFailReason,
     exitCode,
   })
 
@@ -1067,6 +1139,37 @@ function selfTest() {
   check('退出码是 1', /exit 1|结论：FAIL/.test(r3.out) || r3.status === 1, `status=${r3.status}`)
   const hbAfterFail = JSON.parse(readFileSync(HB, 'utf8'))
   eq('失败运行不写心跳（不替坏链路作伪证）', '2026-10-24T05:00:00.000Z', hbAfterFail.lastOkAt)
+
+  console.log('\n[2b] 能力矩阵 · 负向：评论 403（改正文已成功）⇒ **不得推进 last-ok**（回归：失败运行伪造心跳新鲜）')
+  // 事故复现：旧实现把 last-ok 写在"改正文"这一步；后面的评论/加 label/关闭即使失败，last-ok 也已经前进。
+  // 于是云端 --heartbeat-check 读到"0.15h 前"⇒ 静默 exit 0，反向心跳永远不报警。
+  // 这里把失败点放在**改正文成功之后**（评论 403），并让旧 last-ok 远超 26h：新实现必须保持旧值 ⇒ 判陈旧。
+  const oldLastOk = '2026-10-20T00:00:00.000Z'
+  const failAt = '2026-10-24T06:30:00Z' // 距 oldLastOk 102.5h > 26h
+  const HB2B = join(HOME, 'heartbeat-2b.json')
+  writeState(seed({
+    issues: [{
+      number: 7, title: CANARY_TITLE,
+      body: `dsh-doctor canary\n\nlast-ok=${oldLastOk}\nbootstrap-at=${oldLastOk}\n`,
+      state: 'OPEN', labels: [], comments: [], createdAt: oldLastOk,
+    }],
+    fail: { comment: true },
+  }))
+  const r3b = runStatus(['--repo', 'o/r', '--heartbeat-file', HB2B, '--now', failAt])
+  eq('[2b] 评论 403 ⇒ exit 1', 1, r3b.status)
+  check('[2b] 改正文 ✓（写探测本身成功，失败在之后的步骤）', /✓ 改 canary 正文/.test(r3b.out), rowLine(r3b.out, '改 canary 正文'))
+  check('[2b] 评论 ✗ 且如实给 403', /✗ 评论/.test(r3b.out) && /Resource not accessible by personal access token/.test(r3b.out), rowLine(r3b.out, '评论'))
+  const s3b = readState()
+  eq('[2b] 失败运行不推进 last-ok（正文保持运行前的值）', oldLastOk, getField(s3b.issues[0].body, 'last-ok'))
+  check('[2b] 探针行未残留', !s3b.issues[0].body.includes('dsh-doctor:probe'), s3b.issues[0].body.split('\n').find((l) => l.includes('probe')) ?? '')
+  check('[2b] 不打印"云端心跳：last-ok=<本次 now>"的成功行', !/云端心跳：.*last-ok=2026-10-24T06:30:00/.test(r3b.out), '出现了成功心跳行')
+  check('[2b] 输出明说心跳未写', /心跳：\*\*未写\*\*/.test(r3b.out), r3b.out.split('\n').filter((l) => l.startsWith('心跳：')).join('|'))
+  eq('[2b] 失败运行不写本地 heartbeat.json', false, existsSync(HB2B))
+  // 心跳判据（云端薄壳的本体）：只读 last-ok。旧值仍在 ⇒ 必须判陈旧，而不能被失败运行伪造成"新鲜"。
+  writeState({ ...readState(), fail: {} }) // 只解除评论 403，让报警能送达
+  const hc3b = runStatus(['--heartbeat-check', '--repo', 'o/r', '--now', failAt])
+  check('[2b] 心跳判据读到的是旧 last-ok（不是本次 now）', new RegExp(`last-ok=${oldLastOk.replace(/\./g, '\\.')}`).test(hc3b.out), hc3b.out.split('\n').filter((l) => l.includes('心跳字段')).join('|'))
+  eq('[2b] 失败运行后心跳判据仍判陈旧（exit 3），没有被伪造成新鲜', 3, hc3b.status)
 
   console.log('\n[3] 反向心跳 · 负向：last-ok=48h 前 ⇒ 必须报警（评论 + label）')
   const fixNow = '2026-10-24T04:00:00Z'

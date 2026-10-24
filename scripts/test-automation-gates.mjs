@@ -1009,6 +1009,17 @@ const MUTATIONS = [
     to: ': 0',
     expect: 'exit 非零',
   },
+  {
+    group: 'doctor',
+    // 回归 2026-10-24 事故：last-ok 在"改正文"步骤就被写，后续评论/加 label/关闭失败时它已经前进
+    // ⇒ 云端 --heartbeat-check 读到"新鲜"并静默 exit 0，反向心跳永远不报警。
+    platform: 'posix',
+    name: 'dsh-doctor 在"改正文"探测时就写 last-ok（失败运行伪造心跳新鲜）',
+    file: 'scripts/dsh-doctor.mjs',
+    from: 'const target = clean // 还原目标',
+    to: "const target = stripProbe(setField(original, 'last-ok', NOW_ISO)) // MUTATION",
+    expect: '失败运行不推进 last-ok',
+  },
 ]
 
 function groupMutation() {
