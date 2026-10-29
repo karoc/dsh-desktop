@@ -1,6 +1,6 @@
 {
   "note": "由 scripts/test-patch-targets.mjs --update-fixture 生成；抬 dsh 地板时刷新",
-  "dshVersion": "0.2.1-rc.2",
+  "dshVersion": "0.2.1-rc.5",
   "capturedFrom": "@deepseek-ai/dsh-web-app/cordis.patch.yml",
   "ids": [
     "account-controller",
@@ -30,6 +30,7 @@
     "deepseek-llm-api-extensions",
     "desktop-product-telemetry",
     "directory-picker",
+    "entry-customization",
     "file-reference-local",
     "file-upload",
     "fs-observation-policy",
