@@ -21,6 +21,15 @@
 >
 > 详情见 `.agents/notes/implemented/bug-fix/2026-09-08-legacy-uninstaller-name-kill.md`。
 
+## [0.21.1](https://github.com/karoc/dsh-desktop/compare/v0.21.0...v0.21.1) (2026-10-29)
+
+
+### Bug Fixes
+
+* **automation:** rehearse 探针在 target≠地板 时按演练假设判定 ([#238](https://github.com/karoc/dsh-desktop/issues/238)) ([cf48173](https://github.com/karoc/dsh-desktop/commit/cf48173d8cf56e87091fd0ca5d7769e8e27dde4a))
+* **dsh:** 适配上游 dsh 0.2.1-rc.5（地板 0.2.1-rc.2 → 0.2.1-rc.5） ([#237](https://github.com/karoc/dsh-desktop/issues/237)) ([f9fe8a3](https://github.com/karoc/dsh-desktop/commit/f9fe8a32a901cb3515bcea513d7fbad4ccf80d2a))
+* **shell:** 右键不再被抢去开浏览器（只处理中键与 _blank 左键）([#233](https://github.com/karoc/dsh-desktop/issues/233)) ([01ef402](https://github.com/karoc/dsh-desktop/commit/01ef4029b94665af7d2e96883e9be0c74d4fc7c3))
+
 ## [0.21.0](https://github.com/karoc/dsh-desktop/compare/v0.20.0...v0.21.0) (2026-10-24)
 
 
