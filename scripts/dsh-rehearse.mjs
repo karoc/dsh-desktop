@@ -34,6 +34,15 @@
 // 想演练比地板新的版本：把 `--registry` 指向 latest 更高的镜像（或等上游把 latest 挪上去），
 // 然后用 `--version <那个版本>` 表达期望。
 //
+// ── `--version` ≠ 壳地板 时的探针判据（2026-10-30 修）──
+// 适配**之前**跑 install 演练（target > 壳地板）时，探针的「已装 == 壳地板」与「已装 == 夹具版本」
+// 两条判据必然 RED —— 那是「还没抬地板 / 还没重采夹具」的正常状态，不是不兼容。因此这时探针按
+// `--assume-floor <target> --assume-fixture <target>` 的**演练假设值**判定，并断言报告里
+// `rehearsal=true` 且 `assumed.floor/assumed.fixture` 都等于 target（假设没生效 ⇒ 判失败）。
+// 结论里必须带「演练假设」字样：它**不构成**版本已一致 / 适配已完成的证据。旧实现只写
+// `verdict !== 'red'` 却不给假设开关 ⇒ 该分支永远不可达，target≠floor 的 install 演练 100% 红，
+// autopilot 的 ② 适配因此结构性阻塞（2026-10-30 实录：连续 10 轮失败后才发现）。
+//
 // ── 三个场景 ───────────────────────────────────────────────────────────────
 //  install（默认）= 上面这条：空临时 runtime → manager 启动期自动安装 → 探针 → 只读自证。
 //  upgrade        = 「旧版 → 新版」升级覆盖演练（本次新增）：
@@ -158,7 +167,8 @@ const USAGE = `usage: node scripts/dsh-rehearse.mjs [--scenario install|bump|upg
                      必须与 .pnpm-store **同设备**（跨设备 pnpm 会退化/变慢）⇒ 不符即 exit 3，不静默降级。
   --version <v>      期望落地的 dsh 版本（默认 = 壳地板 MIN_DSH_VERSION）。不等于"指定安装版本"：
                      install 的启动期目标 = max(壳地板, registry latest)；upgrade 的兼容闸门目标 = 壳地板。
-                     不一致时如实报 MISMATCH。
+                     不一致时如实报 MISMATCH。target≠壳地板时探针按演练假设值（--assume-floor /
+                     --assume-fixture = target）判定，报告标 rehearsal=true —— 不是版本已一致的证据。
   --keep             保留临时 runtime（默认成功即清理；失败一律保留现场）
   --json <out>       结构化结果写入 <out>
   --timeout <sec>    安装段超时（默认 300）
@@ -554,10 +564,15 @@ dshEntryOk = existsSync(join(tmp, `node_modules/${DSH_PKG}/lib/bin.js`))
 {
   const s = now()
   const probeJson = join(tmp, 'probe.json')
+  // 适配前（target ≠ 当前地板）那两条版本一致性判据必然 RED，用探针的**演练假设值**换掉它们的
+  // 期望值；下面还要断言假设确实生效（见 rehearsalOk），否则等于"没演练却判绿"。
+  const greenExpected = targetVersion === floor
+  const probeArgs = [PROBE, '--runtime', tmp, '--json', probeJson]
+  if (!greenExpected) probeArgs.push('--assume-floor', targetVersion, '--assume-fixture', targetVersion)
   let exitCode = 0
   let wrote = false
   try {
-    const out = execFileSync(process.execPath, [PROBE, '--runtime', tmp, '--json', probeJson],
+    const out = execFileSync(process.execPath, probeArgs,
       { encoding: 'utf8', timeout: Math.max(300_000, opts.timeoutSec * 1000), maxBuffer: 64 * 1024 * 1024 })
     probeInfo.stdoutTail = out.trim().split('\n').slice(-14)
     wrote = true
@@ -568,15 +583,29 @@ dshEntryOk = existsSync(join(tmp, `node_modules/${DSH_PKG}/lib/bin.js`))
     wrote = existsSync(probeJson)
   }
   const report = readJson(probeJson)
+  const assumed = report?.assumed ?? {}
   probeInfo.exitCode = exitCode
   probeInfo.verdict = report?.verdict ?? (/verdict = (\w+)/.exec(probeInfo.stdoutTail.join('\n'))?.[1]?.toLowerCase() ?? null)
   probeInfo.counts = report?.counts ?? null
   probeInfo.blocking = (report?.findings ?? []).filter((f) => f.sev !== 'info').map((f) => ({ sev: f.sev, id: f.id, msg: f.msg }))
+  probeInfo.rehearsal = report?.rehearsal ?? null
+  probeInfo.assumed = { floor: assumed.floor ?? null, fixture: assumed.fixture ?? null }
   probeMs = now() - s
-  const greenExpected = targetVersion === floor
-  const verdictOk = greenExpected ? probeInfo.verdict === 'green' : probeInfo.verdict !== 'red'
+  // 报告缺失 = 探针没跑成 = **不能**算通过（"没有判断 = 没有验证"）。旧实现在 target≠floor 时
+  // 会把「没有报告」读成 verdict=null 再落进 `!== 'red'` 分支 ⇒ 探针崩溃也能假绿。
+  const missingReport = !report
+  // 演练假设必须可证明生效，两个方向都拦：该带没带 ⇒ 假演练；不该带却带了 ⇒ 真实校验被污染。
+  const rehearsalOk = greenExpected
+    ? report?.rehearsal !== true
+    : (report?.rehearsal === true && probeInfo.assumed.floor === targetVersion && probeInfo.assumed.fixture === targetVersion)
+  const verdictOk = !missingReport && rehearsalOk &&
+    (greenExpected ? probeInfo.verdict === 'green' : probeInfo.verdict !== 'red')
+  const provenance = greenExpected
+    ? ''
+    : `（演练假设：地板/夹具期望值 = ${targetVersion}；rehearsal=${JSON.stringify(probeInfo.rehearsal)}、` +
+      `assumed.floor=${JSON.stringify(probeInfo.assumed.floor)}、assumed.fixture=${JSON.stringify(probeInfo.assumed.fixture)}）`
   step('probe', verdictOk ? 'ok' : 'fail', probeMs,
-    `verdict=${(probeInfo.verdict ?? '?').toUpperCase()} exit=${exitCode}${greenExpected ? '' : '（期望版本≠地板 ⇒ 只要求非 RED，见下）'}`)
+    missingReport ? '探针没有产出报告（探针失败 ≠ 通过）' : `verdict=${(probeInfo.verdict ?? '?').toUpperCase()} exit=${exitCode}${provenance}`)
   for (const f of probeInfo.blocking) console.log(`        [${f.sev.toUpperCase()}] ${f.id}: ${f.msg}`)
 }
 

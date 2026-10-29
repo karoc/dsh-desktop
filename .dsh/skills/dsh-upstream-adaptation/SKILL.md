@@ -164,6 +164,18 @@ node scripts/dsh-rehearse.mjs --scenario install --keep --json /tmp/r.json
 `--help` 存在（实测列出全部参数）。热 store 缺省 = Windows dev runtime，本机用
 `/mnt/c/Users/<user>/AppData/Roaming/dsh.smoothly.desktop.dev/runtime`；Linux 裸机用 `--warm-store <dir>`。
 
+**`--version` ≠ 壳地板 时（适配前演练，2026-10-30 修）**：探针两条版本判据
+（`version-vs-floor` / `version-vs-fixture`）在 target≠floor 时必然 RED，所以脚本此时自动给探针传
+`--assume-floor <target> --assume-fixture <target>`，并**断言假设生效**：报告必须 `rehearsal=true` 且
+`assumed.floor`/`assumed.fixture` 都等于 target，否则该步失败；**探针没产出报告一律判失败**（旧实现会把
+null 读成「非 RED」⇒ 探针崩溃也假绿）。步骤文案会打印 `rehearsal`/`assumed` 实际值——**演练假设不等于
+「版本已一致」**。修前该分支不可达：target≠floor 的 install 演练 100% 红，autopilot ② 因此结构性阻塞
+（rc.3/rc.4/rc.5 三期未适配）。修后实测 rc.5：`结论: GREEN`、install 22.4s（热 store + 已有 runtime）、
+探针 `GREEN`（red 0 / yellow 0 / info 16），报告 `rehearsal=true`、`assumed={floor:"0.2.1-rc.5",fixture:"0.2.1-rc.5"}`。
+在沙箱/CI 里跑要做两件事：给 `npm_config_cache` 一个**可写**目录（否则 npm 查询 latest 直接
+`EROFS: read-only file system, open '<home>/.npm/_cacache/tmp/…'`），并且**不要**继承宿主的
+`NODE_USE_ENV_PROXY=1`（它会让 `test-proxy` 崩在 `proxy.mjs` 的 Host/authority 校验上）。
+
 ### 3.4 一条命令适配（抬地板）
 
 ```sh
@@ -181,7 +193,7 @@ GH_BIN=$PWD/scripts/gh node scripts/dsh-adapt.mjs --version <v> --runtime <已�
 | `--canary` | 第 8 步真机验收：读 **两个**日志、断言三个标记（session 日志的 `client/log chrome ready` + `client-ready (http)`；`<runtime>/manager.log` 的 `preinstalled bundles:`）。**只认脚本启动之后新写入的行** ⇒ 前提是 dev 壳在检查期间**新启动**；只读，不启动也不杀进程 |
 | `--manager-log <path>` | 随包 manager 的 `log()` 落盘处（`<runtime>/manager.log`）；**缺这个文件 `--canary` 结构上永不通过**（旧实现只读 dev-log 就是这个问题） |
 | `--dev-log <path>` | dev 壳的 `dsh-desktop-session.log` |
-| `--strict-chain` | 把「本机跳过的非 node 命令」也算失败（跳过 ≠ 通过）。当前链 25 条，本机 24 条真跑 + 1 条条件式跳过 |
+| `--strict-chain` | 把「本机跳过的非 node 命令」也算失败（跳过 ≠ 通过）。当前链 30 条（28 条 `node scripts/*` + 1 条 `npm run test:cargo-lock-sync` 转 node + 1 条条件式 parity），本机 29 条真跑 + 1 条条件式跳过 |
 | `--allow-yellow` | 默认给探针带 `--fail-on-yellow`（YELLOW 即停）；仅在明确接受含糊时放行 |
 
 **实测**（幂等路径：目标 == 地板，`--runtime` 指向 Windows dev runtime）：
@@ -481,6 +493,14 @@ git push -u origin <branch>
 - **处理**：先把真故障修掉（代理端口 / 凭据 / 网络），再 `--reset-state`（只重置本地状态，不写 GitHub）；
   下一轮成功会自己 reset 并只在跃迁时发一条恢复评论。**不要**删整个 `~/.dsh/state/` 来"图快"：
   删状态 = 忘掉退避历史，但也会丢掉"已通知过谁"的上下文。
+- **实录（2026-10-30，autopilot 连败 6h）**：`~/.dsh/state/dsh-release-autopilot.json` 里
+  `lastError=git fetch autopilot main 失败（exit=128）：fatal: Could not read from remote repository`。
+  该仓库的 `git fetch` 走 SSH ⇒ `~/.ssh/github-proxy.sh` 的 `nc -X connect -x 127.0.0.1:20172`，与 npm
+  用的 HTTP 代理**不是同一条通道**（当天 HTTP 侧一直 `[proxy] … (cached, verified)`，只有 20172 抖）。
+  复现/判据：`git -C <repo> fetch --no-tags autopilot main` 手动跑一次；`nc -z -w1 127.0.0.1 20172` 看端口。
+  退避阶梯到 60min/轮 ⇒ 网络一抖就停摆一小时；**修好网络后不必等**，手动跑一次成功即自愈（成功轮会 reset）。
+  注意 `/tmp` 在 DSH 沙箱里是**每次 bash 调用一个私有 tmpfs**：日志里"现场保留 /tmp/…"的路径在
+  沙箱 shell 里通常看不到，排障要用服务自己的日志/state，不要靠翻 /tmp。
 
 ## 7. 纪律（硬规则，别绕过）
 
