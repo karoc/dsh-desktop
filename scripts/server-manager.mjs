@@ -88,8 +88,11 @@ const NATIVE_BUILD_PKGS = [
  * 2026-10-18 抬到 0.2.1-rc.2：夹具重采 188 → 190 id（--update-fixture，dev runtime 实装 rc.2），
  * overlay 唯一兜底目标 `ui-sidebar-browser` 仍为 `disabled: false`（test-patch-targets 绿）；四个预装
  * bundle 的 peer 范围均被新地板满足（test-plugin-dsh-compat 绿）；manager 安装链路实测 32s 完成升级。
+ * 2026-10-30 抬到 0.2.1-rc.5：夹具重采（--update-fixture，临时 runtime 实装 rc.5，190 → 191 id）；
+ * 探针 GREEN（red 0 / yellow 0：客户端 seam / CLI 开关 / native 白名单 / 四个预装 peer），全量门禁 29 套
+ * 通过；README 地板数值同步。dev 实机验收（--canary）要求窗口内新启动的 dev 壳，截至发版尚未执行。
  */
-const MIN_DSH_VERSION = '0.2.1-rc.2'
+const MIN_DSH_VERSION = '0.2.1-rc.5'
 
 // ── args ───────────────────────────────────────────────────────────────────
 function parseArgs(argv) {
