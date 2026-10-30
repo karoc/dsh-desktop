@@ -65,6 +65,16 @@
 //     **绝不**对 main/master 做任何 force/写操作）。
 //   * 成功/失败评论带内容摘要标记；同一内容的重复评论会被跳过（重跑不刷屏）。
 //
+// ── ⑥–⑧ 的「停摆版本 PR」兜底（2026-10-30）──────────────────────────────────
+// 入口恒为「本轮检测到新版」⇒ 适配 PR 合并后地板==target，dsh-watch 不再报它，⑥–⑧ 不会自动续走；
+// 一次无关 fix 合并留下的 release-please 版本 PR 会一直挂到下一次上游发版（实录：#234 从 10-24 停到
+// 10-30，整整 5 天，v0.21.0 之后没有任何新壳）。因此在两条「本轮不干活」的早退路径（无新版 /
+// 预发布通道跳过）上补一次收尾：若存在 open 的 `chore(main): release X.Y.Z`，走与 ⑥⑦⑧ **完全相同**的
+// 合并 → 派发构建 → 等资产逻辑（写域白名单 / 冲突 / check 失败同口径 fail，不静默跳过）。
+//   * `--no-release-resume` 关闭该兜底（人工接管/演练时用）；
+//   * 该路径**不回帖 issue**：没有 target 可归因，避免把版本 PR 的收尾挂到预发布跟踪单上；
+//   * 查询失败（gh 抖动）按「本轮无操作」处理并告警 —— 无新版轮次不该因为一次 API 抖动记失败。
+//
 // ── 刻意不做 ───────────────────────────────────────────────────────────────
 //   * 不改仓库设置 / 分支保护 / 密钥；不 kill 任何进程；不动用户真实 runtime（只读软链 .pnpm-store）。
 //   * 不在 CI 里合并（依赖本机 `scripts/gh` 的项目 PAT 才能 --admin）；`GH_BIN` 缺省自动指向它。
@@ -171,6 +181,7 @@ const USAGE = `usage: node scripts/dsh-release-autopilot.mjs [--dry-run] [--stag
   --failure-threshold <n>  连续失败几次进入 broken（默认 3）
   --reset-state      重置本地退避状态为 healthy（不写 GitHub）后退出
   --no-backoff       禁用退避/状态记录（只给演练与负向对照）
+  --no-release-resume 关闭「无新版时仍合并停摆的 release-please 版本 PR」兜底（默认开）
 
 退出码：0 完成 / 1 失败 / 2 用法 / 3 前置不满足。详见脚本头注释。`
 
@@ -183,6 +194,7 @@ function parseArgs(argv) {
     runtime: null, repo: null, assignee: null, canaryTimeout: 180,
     devLog: null, managerLog: null, help: false,
     stateDir: null, stateFile: null, failureThreshold: 3, resetState: false, noBackoff: false,
+    releaseResume: true,
   }
   const val = (i, name) => {
     const v = argv[i + 1]
@@ -227,6 +239,7 @@ function parseArgs(argv) {
     else if (a === '--state-file' || eq === '--state-file') o.stateFile = resolve(take('--state-file'))
     else if (a === '--reset-state') o.resetState = true
     else if (a === '--no-backoff') o.noBackoff = true
+    else if (a === '--no-release-resume') o.releaseResume = false
     else if (a === '--failure-threshold' || eq === '--failure-threshold') {
       const n = Number(take('--failure-threshold'))
       if (!Number.isInteger(n) || n < 1) throw new UsageError('--failure-threshold 必须是正整数')
@@ -289,6 +302,7 @@ const STATE = {
   adapt: null,
   releasePr: null,
   releaseVersion: null,
+  resumed: null,
   tag: null,
   assets: [],
   waitingForHuman: false,
@@ -1273,6 +1287,78 @@ ${err instanceof AutopilotError && err.exitCode === 3 ? '> 前置不满足（exi
 }
 
 // ══ 主流程 ═════════════════════════════════════════════════════════════════
+// ══ ⑥–⑧ 可复用收尾（含「停摆版本 PR」兜底）════════════════════════════════
+/** ⑦：等 tag → 无构建运行才派发 build.yml → 等 Release 资产 ≥3。flow 与兜底路径共用。 */
+async function shipTag(version) {
+  beginStage('⑦ 发版')
+  const tag = await waitForTag(version)
+  STATE.tag = tag
+  const runs = buildRunCount(tag)
+  if (runs === null) {
+    fail(1, `无法确认 ${tag} 是否已有构建运行（gh api 失败）—— 不派发，避免重复派发取消在跑的构建；修复权限/网络后重跑`)
+  }
+  if (runs === 0) {
+    mustRun(GH, withRepo(['workflow', 'run', 'build.yml', '--ref', tag]), `gh workflow run build.yml --ref ${tag}`, { code: 1 })
+    step('dispatch', 'ok', 0, `已派发 build.yml @ ${tag}`)
+  } else {
+    step('dispatch', 'skip', 0, `${tag} 已有 ${runs ?? '?'} 次构建运行（不重复派发，避免 cancel-in-progress 取消在跑的构建）`)
+  }
+  const assets = await releaseAssets(tag)
+  STATE.assets = assets
+  endStage('⑦ 发版', `${tag} 资产 ${assets.length} 个：${assets.join(', ')}`)
+  return tag
+}
+
+/**
+ * 无新版 / 预发布跳过时，收尾「停摆的 release-please 版本 PR」（见头注释同名段）。
+ * 返回是否真的续走了一次发布；查询失败按无操作处理（不让一次 gh 抖动把无新版轮次记成失败）。
+ */
+async function resumeStrandedRelease(reason) {
+  if (!opts.releaseResume) {
+    step('⑥′ 停摆版本 PR', 'skip', 0, `${reason}；--no-release-resume：不做兜底`)
+    return false
+  }
+  let pr
+  try {
+    resolveRepo()
+    pr = findReleasePr()
+  } catch (err) {
+    log(`[warn] 查询停摆版本 PR 失败（本轮按无操作处理，不记失败）：${short(err.message, 300)}`)
+    return false
+  }
+  if (!pr) {
+    step('⑥′ 停摆版本 PR', 'skip', 0, `${reason}；没有 open 的 release-please 版本 PR`)
+    return false
+  }
+  beginStage('⑥′ 停摆版本 PR')
+  log(`[info] 本轮没有可自动适配的目标（${reason}），但发现 open 的版本 PR #${pr.number}「${pr.title}」—— 续走 ⑥–⑧`)
+  const release = await mergeReleasePr()
+  endStage('⑥′ 停摆版本 PR', `#${release.pr.number} → ${release.version}`)
+  await shipTag(release.version)
+  STATE.resumed = {
+    reason,
+    pr: release.pr.number,
+    version: release.version,
+    tag: STATE.tag,
+    assets: STATE.assets,
+  }
+  STATE.stage = 'release-resumed'
+  return true
+}
+
+/** dry-run：只读地报告「如果有停摆版本 PR，会做什么」。 */
+function printResumePlan(reason) {
+  let pr = null
+  try { resolveRepo(); pr = findReleasePr() } catch (err) { log(`[warn] 查询停摆版本 PR 失败：${short(err.message, 200)}`) }
+  log('')
+  if (!pr) {
+    log(`[plan] ${reason}；没有停摆的 release-please 版本 PR —— 无操作，exit 0`)
+    return
+  }
+  log(`[plan] ${reason}；发现停摆的版本 PR #${pr.number}「${pr.title}」—— 会合并它 → 等 tag → 无构建运行才派发`
+    + ' build.yml → 等 Release 资产 ≥3（dry-run 不执行任何写操作）')
+}
+
 async function flow() {
   // ① 探测
   beginStage('① 探测')
@@ -1285,8 +1371,14 @@ async function flow() {
     step('① 探测', 'skip', Date.now() - STATE.currentStageStarted,
       `地板 ${probe.floor}；latest=${probe.tags?.latest ?? '—'} next=${probe.tags?.next ?? '—'} alpha=${probe.tags?.alpha ?? '—'}`)
     log('')
-    log('无需适配（当前无新版）—— 地板已不低于 npm 任何通道，未开单、未推分支、未触发发布。')
+    log('无需适配（当前无新版）—— 地板已不低于 npm 任何通道，未开单、未推分支。')
     STATE.stage = 'no-update'
+    STATE.currentStage = null
+    if (opts.dryRun) {
+      printResumePlan('本轮无新版')
+      return 0
+    }
+    await resumeStrandedRelease('本轮无新版')
     return 0
   }
   step('① 探测', 'ok', Date.now() - STATE.currentStageStarted,
@@ -1303,6 +1395,9 @@ async function flow() {
     step('② 适配', 'skip', 0, `预发布目标 ${probe.target}：按方案决策 ③C 只开 issue、不自动适配（安装路径只装 max(地板, latest)）`)
     log(`预发布通道目标 ${probe.target}：不自动适配（决策 ③C）。issue 由 dsh-watch 维护，本脚本不推分支、不开 PR。`)
     STATE.stage = 'pre-release-skip'
+    STATE.currentStage = null
+    // 预发布通道挡住的是「适配」，不是「发布」：已合并提交留下的版本 PR 仍应发出。
+    await resumeStrandedRelease('预发布通道目标不自动适配')
     return 0
   }
 
@@ -1420,23 +1515,8 @@ async function flow() {
   const release = await mergeReleasePr()
   endStage('⑥ 版本 PR', `#${release.pr.number} → ${release.version}`)
 
-  // ⑦ 派发构建 + 等资产
-  beginStage('⑦ 发版')
-  const tag = await waitForTag(release.version)
-  STATE.tag = tag
-  const runs = buildRunCount(tag)
-  if (runs === null) {
-    fail(1, `无法确认 ${tag} 是否已有构建运行（gh api 失败）—— 不派发，避免重复派发取消在跑的构建；修复权限/网络后重跑`)
-  }
-  if (runs === 0) {
-    mustRun(GH, withRepo(['workflow', 'run', 'build.yml', '--ref', tag]), `gh workflow run build.yml --ref ${tag}`, { code: 1 })
-    step('dispatch', 'ok', 0, `已派发 build.yml @ ${tag}`)
-  } else {
-    step('dispatch', 'skip', 0, `${tag} 已有 ${runs ?? '?'} 次构建运行（不重复派发，避免 cancel-in-progress 取消在跑的构建）`)
-  }
-  const assets = await releaseAssets(tag)
-  STATE.assets = assets
-  endStage('⑦ 发版', `${tag} 资产 ${assets.length} 个：${assets.join(', ')}`)
+  // ⑦ 派发构建 + 等资产（与兜底路径共用 shipTag，避免两处漂移）
+  await shipTag(release.version)
 
   // ⑧ 收尾
   beginStage('⑧ 收尾')
@@ -1464,6 +1544,7 @@ function resultJson(exitCode) {
     adapt: STATE.adapt,
     releasePr: STATE.releasePr ? { number: STATE.releasePr.number, title: STATE.releasePr.title } : null,
     releaseVersion: STATE.releaseVersion,
+    resumed: STATE.resumed,
     tag: STATE.tag,
     assets: STATE.assets,
     published: STATE.stage === 'already-published' || Boolean(STATE.releaseVersion && STATE.assets.length >= 3),
@@ -1489,6 +1570,9 @@ function printSummary(exitCode) {
   log(`  总耗时 ${fmtDuration(Date.now() - T0)}；退出码 ${exitCode}`)
   if (exitCode === 0 && STATE.stage === 'done') {
     log(`  ✅ 已合并并发布：${STATE.tag}（资产 ${STATE.assets.length} 个）`)
+  }
+  if (exitCode === 0 && STATE.stage === 'release-resumed') {
+    log(`  ✅ 本轮无新版，但已收尾停摆版本 PR：${STATE.tag}（版本 ${STATE.releaseVersion}，资产 ${STATE.assets.length} 个）`)
   }
 }
 

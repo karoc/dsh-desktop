@@ -130,7 +130,7 @@ node_modules 符号链接树、写迁移标记、绝不上移覆盖已有新数�
 ## 本地验证（Linux 可跑的部分）
 
 ```bash
-npm test                 # 全量 30 套（29 条 node 直接可跑 + 1 条条件式）：清单一致性 / overlay 目标行 / 升级标记 /
+npm test                 # 全量 31 套（30 条 node 直接可跑 + 1 条条件式）：清单一致性 / overlay 目标行 / 升级标记 /
                          #   通知插件 / 控制面 / 代理 / 代理e2e / 启动页设置 / 壳顶栏契约 / 壳不吞页面原生行为
                          #   （拖放与外链，见下）/ 壳引导桩（纯 Node，无浏览器）/ 启动器扫动 / 请求头预算 /
                          #   半截安装自愈 / 副本一致性 / 版本比较 parity /
@@ -521,10 +521,10 @@ MIT
   都会实际执行（第 7 步会为门禁**临时** sync `Cargo.lock`，跑完立即还原 ⇒ 净写入仍为零），探针判 RED 时
   仍然 exit 1；所以它不是"只打印计划"，而是"不落盘地走一遍真实门禁"
   （2026-10-19 实测 `--version 0.2.1-rc.2 --runtime <dev runtime> --dry-run` ⇒ exit 0、当时 23 套通过，
-  且运行前后 `git status --porcelain` 完全一致；此后链上新增了 `test-automation-gates` 与 parity 两条，
-  数字相应变成 25）。⚠️ 也正因第 4 步（夹具重采）被跳过，**目标版本 ≠ 当前地板/夹具时它
-  必然停在第 6 步探针**（`version-vs-*` RED）⇒ dry-run 只对"目标 == 现状"的幂等路径能全绿，
-  **不能**用它演练一次版本变更。
+  且运行前后 `git status --porcelain` 完全一致；2026-10-30 全链已增至 **31 条**：30 条真跑 + 1 条条件式 parity）。
+  ⚠️ 目标版本 ≠ 当前地板/夹具时，探针按 `--assume-floor/--assume-fixture = 目标版本` 的**演练假设值**判定
+  （报告标 `rehearsal=true`）——这**不代表**版本已一致；真实一致性由非 dry-run 的第 4 步重采 + 第 6 步探针
+  （拿到 rehearsal 标记直接 abort）证明。前置同非 dry-run：`--runtime` 必须是**已装目标版本**的 runtime。
   `--canary`（第 8 步）**读两个日志、断言三个标记**：session 日志（默认 `<dev 数据目录>/dsh-desktop-session.log`，
   可 `--dev-log` 覆盖）出 `client/log chrome ready` 与 `client-ready (http)`；`<runtime>/manager.log`
   （可 `--manager-log` 覆盖，是随包 manager 的 `log()` 落盘处）出 `preinstalled bundles:`。**只认检查开始之后
