@@ -65,6 +65,11 @@ import { fileURLToPath } from 'node:url'
 // 跟踪单的确定性键：与 `dsh-watch.mjs` 共用同一份实现（标题前缀 + `dsh <版本>` 锚点 + 词边界）。
 // 这份模块存在的原因就是"报表按 label 取数、watch 按标题去重"那次漂移（事故 #201–#217）。
 import { earliestTrackingIssue, isTrackingIssue, parseIssueVersion, TRACKING_PREFIXES } from './lib/issue-key.mjs'
+// 「待适配」vs「已被更高地板覆盖」的分类（纯逻辑 + 单测）：地板单调上移，中间预发布被跳过后
+// 不应永久留在 pending（实录 rc.3/rc.4 被 rc.5 跳过）。口径：用发布时间代理版本先后，见该模块头注释。
+import { classifyPendingVersions } from './lib/sla-pending.mjs'
+// 语义化版本比较（共享实现，parity 门禁覆盖）：报表判断「地板是否覆盖某版本」与「通道是否领先地板」。
+import { cmpVersion } from './lib/version-compare.mjs'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const argv = process.argv.slice(2)
@@ -349,28 +354,38 @@ const channels = ['latest', 'next', 'alpha'].map((ch) => ({
   channel: ch, version: tags[ch] ?? null, publishedAt: utc(tags[ch] ? times[tags[ch]] : null),
 }))
 const headFloorAt = HEAD_FLOOR ? utc(times[HEAD_FLOOR]) : null
-// 版本先后用**发布时间先后**作代理（同一个包的发布序列单调）—— 不在这里再养一套 semver 比较，
-// 免得与 `dsh-watch.mjs` 的 cmp 口径漂移；取不到时间戳的通道显式标注"未知"，不猜先后。
-const ahead = (HEAD_FLOOR && headFloorAt)
-  ? channels.filter((c) => c.version && c.publishedAt && new Date(c.publishedAt) > new Date(headFloorAt))
+// 版本先后用**语义化比较**（共享 `scripts/lib/version-compare.mjs`，已纳入 parity 门禁）。
+// 2026-10-31 修：旧实现用发布时间作代理，实跑抓到反例 —— `0.2.2-alpha.2` 的发布时间早于
+// `0.2.1-rc.5`（alpha 线先切出来）⇒ 被误判成"不晚于壳地板"，而它语义上更高、仍是待适配版本。
+const cmpFloor = (v) => (HEAD_FLOOR ? cmpVersion(v, HEAD_FLOOR) : NaN)
+const ahead = HEAD_FLOOR
+  ? channels.filter((c) => c.version && Number.isFinite(cmpFloor(c.version)) && cmpFloor(c.version) > 0)
   : []
 // ── 待适配版本的检测延迟（上游已发布 + 已有跟踪单，但还没有任何壳版本携带它）──────────
 // 这些版本配不到"我方发布"⇒ 不进上面的两段表；但**检测段照样可算**（上游发布 → 首次开单），
 // 而且这是"发版前唯一能看到检测段真实数字"的窗口（检测延迟本来就该在发版前被发现）。
 // 旧实现（按 label 取数）在这里恒为"未检测到"—— 事故里 16 条 issue 无 label，正是这个位置永远空白。
-const pending = [...issueByVersion.keys()]
-  .filter((v) => times[v] && !measuredFloors.has(v))
-  .map((v) => {
-    const issue = issueByVersion.get(v)
-    const detection = hours(times[v], issue.createdAt)
-    return {
-      version: v, upstreamAt: utc(times[v]),
-      issue: issue.number, issueAt: utc(issue.createdAt),
-      issueCount: watchIssues.filter((i) => i.parsed.version === v).length,
-      detection: Number.isFinite(detection) ? detection : null,
-    }
-  })
-  .sort((a, b) => new Date(a.upstreamAt) - new Date(b.upstreamAt))
+// 2026-10-31 修：旧判据只认「**恰好**有壳版本携带该版本作地板」⇒ 被更高地板跳过的预发布（rc.3/rc.4）
+// 永久留在 pending（"还有两个版本没适配"的假信号）。分类移到 `scripts/lib/sla-pending.mjs`。
+const pendingPlan = classifyPendingVersions({
+  versions: [...issueByVersion.keys()].filter((v) => times[v]), measured, carriedFloors: measuredFloors,
+})
+const pendingRow = (v) => {
+  const issue = issueByVersion.get(v)
+  const detection = hours(times[v], issue.createdAt)
+  return {
+    version: v, upstreamAt: utc(times[v]),
+    issue: issue.number, issueAt: utc(issue.createdAt),
+    issueCount: watchIssues.filter((i) => i.parsed.version === v).length,
+    detection: Number.isFinite(detection) ? detection : null,
+  }
+}
+const pending = pendingPlan.pending.map(pendingRow).sort((a, b) => new Date(a.upstreamAt) - new Date(b.upstreamAt))
+// 被更高地板覆盖的版本**单列一段**：保留检测段数字，但不再读成「还欠着」（不计入 pending 计数）。
+const coveredPending = pendingPlan.covered.map((c) => ({
+  ...pendingRow(c.version),
+  coveredBy: { shell: c.shell, floor: c.floor, publishedAt: utc(c.publishedAt) },
+})).sort((a, b) => new Date(a.upstreamAt) - new Date(b.upstreamAt))
 const pendingText = pending.length ? [
   '### 待适配版本的检测延迟（上游已发布 + 已有跟踪单，但我方还没发版）',
   '',
@@ -380,6 +395,15 @@ const pendingText = pending.length ? [
   '|---|---|---|---|',
   ...pending.map((p) => `| \`${p.version}\` | ${utcCell(p.upstreamAt)} | #${p.issue} ${utcCell(p.issueAt)}（共 ${p.issueCount} 条） | **${fmt(p.detection)}** |`),
 ].join('\n') : ''
+const coveredText = coveredPending.length ? [
+  '### 已被更高地板覆盖（不计入待适配）',
+  '',
+  '地板是单调上移的：这些版本上游发过、也开过单，但下一次抬地板直接跨过去了 —— 语义上已被新地板覆盖，不算欠账。',
+  '',
+  '| 版本 | 上游发布 (UTC) | 首次 issue (UTC) | 检测 | 被谁覆盖（壳体版本 / 随包地板） |',
+  '|---|---|---|---|---|',
+  ...coveredPending.map((p) => `| \`${p.version}\` | ${utcCell(p.upstreamAt)} | #${p.issue} ${utcCell(p.issueAt)}（共 ${p.issueCount} 条） | **${fmt(p.detection)}** | ${p.coveredBy.shell}（floor \`${p.coveredBy.floor}\`） |`),
+].join('\n') : ''
 const statusLines = []
 statusLines.push(`- **壳地板**（当前 HEAD 的 \`scripts/server-manager.mjs\`）：${HEAD_FLOOR ? `\`${HEAD_FLOOR}\`（上游发布 ${headFloorAt ? utcCell(headFloorAt) : '时间未知'}）` : '⚠️ 读不到 `MIN_DSH_VERSION` ⇒ 无法判断当前地板'}`)
 statusLines.push(`- **上游最新各通道**：${channels.map((c) => (c.version ? `${c.channel}=\`${c.version}\`（${c.publishedAt ? utcCell(c.publishedAt) : '发布时间未知'}）` : `${c.channel}=—`)).join('、')}`)
@@ -388,8 +412,8 @@ statusLines.push(newestIssue
   : `- **最新 watch issue**：**未检测到**（标题前缀 ${TRACKING_PREFIXES.map((p) => `\`${p}\``).join(' / ')} 在 --state all 下一条都没有；不是"最近没有"，是"从来没有人开过单"）`)
 statusLines.push(`- **未关闭的跟踪 issue**：${openIssues.length ? `${openIssues.length} 条（${openIssues.map((i) => `#${i.number}`).join('、')}）` : '**无**'}`)
 if (!HEAD_FLOOR) statusLines.push('- **待适配判定**：⚠️ 壳地板读不到 ⇒ 无法判断（不猜）')
-else if (!headFloorAt) statusLines.push(`- **待适配判定**：⚠️ 壳地板 \`${HEAD_FLOOR}\` 在 npm packument 里没有发布时间 ⇒ 无法比较先后（不猜）`)
-else if (!ahead.length) statusLines.push('- **待适配判定**：各通道最新版本都不晚于壳地板（按发布时间比较）⇒ 当前没有待适配的上游版本')
+else if (!Number.isFinite(cmpVersion(HEAD_FLOOR, HEAD_FLOOR))) statusLines.push(`- **待适配判定**：⚠️ 壳地板 \`${HEAD_FLOOR}\` 解析不出版本语义 ⇒ 无法比较（不猜）`)
+else if (!ahead.length) statusLines.push('- **待适配判定**：各通道最新版本都不高于壳地板（语义化比较）⇒ 当前没有待适配的上游版本')
 else statusLines.push(`- **待适配判定**：${ahead.map((c) => {
   // 与检测段同口径：**最早**那条未关闭 issue（不是列表里的第一条），这样这里点名的编号与「待适配版本」段一致。
   const open = openIssues.filter((i) => i.parsed.version === c.version)
@@ -410,7 +434,13 @@ for (const i of watchIssues) {
 for (const [v, issue] of issueByVersion) {
   const dup = watchIssues.filter((i) => i.parsed.version === v && i.number !== issue.number)
   if (dup.length) warnLines.push(`ℹ️ 版本 \`${v}\` 有多条 issue（${[issue.number, ...dup.map((d) => d.number)].join('、')}）⇒ 检测延迟取**最早**的 #${issue.number}`)
-  if (!measuredFloors.has(v) && times[v]) warnLines.push(`ℹ️ 版本 \`${v}\` 已开单（最早 #${issue.number}，共 ${dup.length + 1} 条）但还没有任何壳版本携带它作地板（未适配 / 未发布）⇒ 检测延迟见「待适配版本」段`)
+  if (!measuredFloors.has(v) && times[v]) {
+    if (coveredPending.some((p) => p.version === v)) {
+      warnLines.push(`ℹ️ 版本 \`${v}\` 已开单（最早 #${issue.number}，共 ${dup.length + 1} 条）但已被更高地板覆盖 ⇒ 不计入待适配（见「已被更高地板覆盖」段）`)
+    } else {
+      warnLines.push(`ℹ️ 版本 \`${v}\` 已开单（最早 #${issue.number}，共 ${dup.length + 1} 条）但还没有任何壳版本携带它作地板（未适配 / 未发布）⇒ 检测延迟见「待适配版本」段`)
+    }
+  }
 }
 for (const r of measured) if (r.detectionAnomaly) warnLines.push(`⚠️ ${r.shell}（地板 \`${r.floor}\`）：${r.detectionAnomaly}`)
 
@@ -430,6 +460,7 @@ const md = [
   ...stats, '',
   ...lines,
   pendingText ? `\n${pendingText}` : '',
+  coveredText ? `\n${coveredText}` : '',
   warnLines.length ? `\n注意：${warnLines.join('\n')}` : '',
   skipped.length ? `\n跳过：${skipped.map((r) => `${r.tag}（${r.skip}）`).join('；')}` : '',
 ].join('\n')
@@ -470,6 +501,8 @@ if (OUT) {
       measured: det.n, unknown: detUnknown, median: Number.isFinite(det.median) ? det.median : null, max: Number.isFinite(det.max) ? det.max : null,
       // 还没发版的版本也有检测延迟（上游发布 → 首次开单）；这是发版前唯一能看到检测段的窗口。
       pending: pending.map((p) => ({ version: p.version, upstreamAt: p.upstreamAt, issue: p.issue, issueAt: p.issueAt, issueCount: p.issueCount, detection: p.detection })),
+      // 已被更高地板覆盖（例如 rc.3/rc.4 被 rc.5 跳过）：保留检测段数字，但**不计入** pending。
+      pendingCovered: coveredPending.map((p) => ({ version: p.version, upstreamAt: p.upstreamAt, issue: p.issue, issueAt: p.issueAt, issueCount: p.issueCount, detection: p.detection, coveredBy: p.coveredBy })),
       adaptation: { measured: ada.n, median: Number.isFinite(ada.median) ? ada.median : null, max: Number.isFinite(ada.max) ? ada.max : null },
       floorSegment: { measured: flo.n, median: Number.isFinite(flo.median) ? flo.median : null, max: Number.isFinite(flo.max) ? flo.max : null },
     },

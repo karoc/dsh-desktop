@@ -1,12 +1,13 @@
 #!/usr/bin/env node
-// 门禁（parity）：三份"版本比较"实现必须给出**完全一致**的结论。
+// 门禁（parity）：四份"版本比较"实现必须给出**完全一致**的结论。
 //
 //   node scripts/test-version-compare-parity.mjs [--root <dir>]
 //
-// 为什么需要它：语义化比较在仓库里有**三份独立实现** ——
+// 为什么需要它：语义化比较在仓库里有**四份独立来源** ——
 //   scripts/dsh-watch.mjs            cmp(a, b)        （+ bare / pre）
 //   scripts/dsh-compat-probe.mjs     cmp(a, b)        （+ preParts）
 //   scripts/server-manager.mjs       versionGt(a, b)  （+ preParts / preCmp，返回布尔）
+//   scripts/lib/version-compare.mjs  cmpVersion(a, b) （SLA 报表：地板覆盖判定 / 通道领先判定）
 // 审计 P0-1 / P0-2 的教训是"一次只修一份"：main 上曾三份同时错（把正式版判成比同号预发布旧），
 // 修的时候又只改了其中两份 ⇒ 剩下一份随时会再漂。本套件把"三份必须同结论"变成**可失败断言**。
 //
@@ -49,6 +50,7 @@ const files = {
   watch: join(ROOT, 'scripts/dsh-watch.mjs'),
   probe: join(ROOT, 'scripts/dsh-compat-probe.mjs'),
   manager: join(ROOT, 'scripts/server-manager.mjs'),
+  versionCompare: join(ROOT, 'scripts/lib/version-compare.mjs'),
 }
 
 // ── 抽取器（源文本 → 可求值的源码片段）──────────────────────────────────────
@@ -116,6 +118,14 @@ try {
   const mgrRaw = build([mgrPre, mgrPreCmp, mgrGt], 'versionGt', 'server-manager')
   impls.push({ name: 'server-manager.mjs versionGt()', rel: mgrRaw, kind: 'boolean' })
   extractionNotes.push(`server-manager.mjs   preParts=${mgrPre.length}B preCmp=${mgrPreCmp.length}B versionGt=${mgrGt.length}B`)
+
+  const vcSrc = readFileSync(files.versionCompare, 'utf8')
+  // 共享模块是 ESM（`export function`）：抽出来后去掉 `export` 才能在 `new Function` 里求值。
+  const vcText = extractBlock(vcSrc, /\nexport function cmpVersion\(a, b\) \{/, 'lib/version-compare')
+    .replace(/export\s+function/, 'function')
+  const vcRaw = build([vcText], 'cmpVersion', 'lib/version-compare')
+  impls.push({ name: 'lib/version-compare.mjs cmpVersion()', rel: vcRaw, kind: 'numeric' })
+  extractionNotes.push(`lib/version-compare  cmpVersion=${vcText.length}B（第 4 个调用点）`)
 } catch (error) {
   console.error(`FAIL 抽取三份实现时出错：${error.message}`)
   process.exit(1)
@@ -184,7 +194,7 @@ for (const [a, b, expected, why] of CASES) {
     continue
   }
   if (values[0] !== expected) {
-    failures.push(`三份一致但与语义期望不符：cmp('${a}','${b}') → ${values[0]}，期望 ${expected}（${why}）—— 可能是三份一起错`)
+    failures.push(`四份一致但与语义期望不符：cmp('${a}','${b}') → ${values[0]}，期望 ${expected}（${why}）—— 可能是四份一起错`)
   }
 }
 
@@ -201,17 +211,17 @@ for (const [a, b] of EXTRA) {
     try { return { short, value: String(rel(a, b)) } } catch { return { short, value: 'ERR' } }
   })
   const distinct = new Set(pairs.map((p) => p.value))
-  extraLines.push(`  ${a} vs ${b}: ${pairs.map((p) => `${p.short}=${p.value}`).join(' | ')}${distinct.size > 1 ? '   ← 域外差异（不计入判定）' : '   ← 三份结论一致'}`)
+  extraLines.push(`  ${a} vs ${b}: ${pairs.map((p) => `${p.short}=${p.value}`).join(' | ')}${distinct.size > 1 ? '   ← 域外差异（不计入判定）' : '   ← 四份结论一致'}`)
 }
 
 console.log(`域外输入（非 semver；仅记录，不参与退出码）：`)
 for (const l of extraLines) console.log(l)
 
 if (failures.length) {
-  console.error(`\nFAIL — 三份版本比较实现不一致（${failures.length} 项）：`)
+  console.error(`\nFAIL — 四份版本比较实现不一致（${failures.length} 项）：`)
   for (const f of failures) console.error(`  ✗ ${f}`)
   console.error('\n修法：以 dsh-watch 的 cmp 语义为准（正式版 > 同号预发布；预发布数字段按数值、字母段按 ASCII），'
-    + '三份**同一次**改齐。共享方案见本文件头部注释（A：scripts/lib 由 watch/probe 共用；B：随包 manager 目录三处共用）。')
+    + '四份**同一次**改齐。共享方案见本文件头部注释（A：scripts/lib 由 watch/probe 共用；B：随包 manager 目录三处共用）。')
   process.exit(1)
 }
-console.log(`\nPASS — ${CASES.length} 条用例：三份实现（watch cmp / probe cmp / manager versionGt）结论完全一致`)
+console.log(`\nPASS — ${CASES.length} 条用例：四份实现（watch cmp / probe cmp / manager versionGt / lib cmpVersion）结论完全一致`)

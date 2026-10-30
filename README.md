@@ -497,7 +497,8 @@ MIT
 - **一条命令适配**：`node scripts/dsh-adapt.mjs --version <版本> [--runtime <已装新版的 runtime 目录>]`
   `[--dry-run] [--allow-yellow] [--canary] [--canary-timeout 180] [--dev-log <session.log>] [--manager-log <runtime/manager.log>] [--strict-chain]`
   （等价 `npm run dsh:adapt -- --version <版本> …`）
-  —— 依次做：地板两份 + 适配记录（写进注释块内部，`node --check` 校验，不过则回滚）→ README 地板数值 →
+  —— 依次做：地板两份 + 适配记录（写进注释块内部、按注释块缩进对齐，`node --check` 校验，不过则回滚）→
+  **README 地板数值（只改地板语境行；历史叙述/示例原样保留并打印被跳过的行号）** →
   patch 夹具重采 → 预装 peer 兼容 → 探针非 RED（YELLOW 需显式 `--allow-yellow`，探针**没产出报告**也算失败）→
   全量门禁（**跑链前先 sync 派生的 `Cargo.lock`**，与 CI 的 `test` 作业一致）。**任一步失败立即停**；
   `--runtime` 缺省时会尝试 dev 实例的固定 runtime 路径，**路径不存在且未显式给出 ⇒ 直接 exit 2**（不发车）。
@@ -651,8 +652,10 @@ MIT
   **首个稳定 Release** 的 `publishedAt`。
   报表开头的**当前状态**是实时信号：最新 watch issue（标题 / 开单时间 / 距今多久 / 是否未关闭）、上游各通道最新版本
   及其发布时间、壳地板（当前 HEAD 的 `scripts/server-manager.mjs`）、**有没有未关闭的跟踪 issue**，以及"上游最新是否
-  已晚于壳地板（按**发布时间**先后比较，不再养第二套 semver）且是否已被发现"。紧跟两段表的
-  「待适配版本的检测延迟」段列出"上游已发布 + 已有跟踪单、但我方还没发版"的版本（原因见上）。
+  已晚于壳地板（**语义化比较**：共享 `scripts/lib/version-compare.mjs`，与 watch/probe/manager 三份一起受
+  `test-version-compare-parity` 门禁约束；旧实现的发布时间代理会把"上游早发但版本更高"的 alpha 误判成套内）
+  且是否已被发现"。紧跟两段表的「待适配版本的检测延迟」段列出**真正**还没被地板覆盖的版本；被更高地板跳过的
+  （如 `0.2.1-rc.3`/`rc.4` 被 `rc.5` 跳过）单列一段「已被更高地板覆盖（不计入待适配）」，保留检测段数字但不计欠账。
   `--issue` 把报表 upsert 到 `sla-report` issue（创建时 `--assignee` + 正文 @ 提及属主；weekly 更新走
   `edit`，仅当目标版本/达标状态变化才追加一条短 comment —— 见上一条「告警如何送达」）；
   `--registry` 只为演练/离线复核指向 stub registry；`--now <iso>` 只为演练钉住"现在"（只影响"距今多久"，坏输入 exit 2）。
