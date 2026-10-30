@@ -1062,7 +1062,7 @@ function canaryPrecheck(target) {
 // ══ ⑥ release-please 版本 PR ════════════════════════════════════════════════
 function findReleasePr() {
   const list = ghJson(withRepo(['pr', 'list', '--state', 'open', '--json',
-    'number,title,headRefName,mergeable,statusCheckRollup,url', '--limit', '30']))
+    'number,title,headRefName,mergeable,statusCheckRollup,url,labels', '--limit', '30']))
   if (!Array.isArray(list)) return null
   return list.find((p) => /^chore\(main\):\s*release\s+\d+\.\d+\.\d+$/.test(String(p.title ?? ''))) ?? null
 }
@@ -1328,6 +1328,14 @@ async function resumeStrandedRelease(reason) {
   }
   if (!pr) {
     step('⑥′ 停摆版本 PR', 'skip', 0, `${reason}；没有 open 的 release-please 版本 PR`)
+    return false
+  }
+  // 人工批次刹车：带 `release-hold` 标签的版本 PR 不自动合并。默认为「合并即发版、≤10 分钟一轮」，
+  // 想攒几个 PR 一起发版时给版本 PR 打这个标签；确认要发时移除，下一轮会继续（不需要改 systemd）。
+  const held = (Array.isArray(pr.labels) ? pr.labels : []).some((l) => String(l?.name ?? l) === 'release-hold')
+  if (held) {
+    step('⑥′ 停摆版本 PR', 'skip', 0, `${reason}；版本 PR #${pr.number} 带 release-hold 标签 —— 不合并（人工决定何时发版）`)
+    log(`[info] 版本 PR #${pr.number} 带 \`release-hold\`：跳过自动合并。确认要发版时移除该标签，下一轮（≤10 分钟）会继续。`)
     return false
   }
   beginStage('⑥′ 停摆版本 PR')

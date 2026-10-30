@@ -59,7 +59,8 @@ if (argv[0] === 'pr' && argv[1] === 'list') {
   if (scenario.ghListFails) die('gh: Server Error (HTTP 502)')
   if (state.merged || !pr) out([])
   out([{ number: pr.number, title: pr.title, headRefName: pr.headRefName,
-    mergeable: scenario.conflicting ? 'CONFLICTING' : 'MERGEABLE', statusCheckRollup: checks, url: pr.url ?? '' }])
+    mergeable: scenario.conflicting ? 'CONFLICTING' : 'MERGEABLE', statusCheckRollup: checks, url: pr.url ?? '',
+    labels: (scenario.labels ?? []).map((name) => ({ name })) }])
 }
 if (argv[0] === 'pr' && argv[1] === 'view') {
   const n = Number(argv[2])
@@ -247,6 +248,17 @@ console.log(`test-autopilot-release-resume：仓库 ${ROOT}\n临时目录 ${TMP}
   check('没有合并', !c.has('pr', 'merge'))
   check('没有派发', !c.has('workflow', 'run'))
   check('dry-run 报告会合并版本 PR', /会合并它/.test(c.output), c.output.slice(-400))
+}
+
+// 10. release-hold 标签 ⇒ 不合并（人工批次刹车）
+{
+  console.log('\n[10] release-hold 标签 ⇒ 不合并、不派发（人工决定何时发版）')
+  const c = runCase('case10', { watch: NO_TARGET, scenario: releasePr({ labels: ['release-hold'] }) })
+  eq('exit 0', 0, c.status)
+  eq('stage = no-update', 'no-update', c.result?.stage)
+  check('没有合并', !c.has('pr', 'merge'))
+  check('没有派发', !c.has('workflow', 'run'))
+  check('输出点名 release-hold', /release-hold/.test(c.output), c.output.slice(-300))
 }
 
 console.log(`\n结果：${pass} 通过 / ${fail} 失败`)
