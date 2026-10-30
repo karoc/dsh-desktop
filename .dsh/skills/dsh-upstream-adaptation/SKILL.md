@@ -260,7 +260,15 @@ node scripts/dsh-release-autopilot.mjs --require-canary # ⑤ 之前额外要求
 有 ⇒ 走与 ⑥–⑧ **完全相同**的合并（写域白名单 / 冲突 / check 失败同口径 fail）→ 派发构建 → 等资产 ≥3；
 没有 ⇒ 照旧 exit 0。**查询 gh 失败按无操作处理**（不让 API 抖动把无新版轮次记成失败）；该路径不回帖 issue
 （没有 target 可归因）。`--no-release-resume` 可关。桩测：`node scripts/test-autopilot-release-resume.mjs`
-⇒ 0（9 组 / 42 条断言，含「写域越界 / 冲突 / gh 抖动 / --dry-run」四组负向对照）。
+⇒ 0（10 组 / 47 条断言，含「写域越界 / 冲突 / gh 抖动 / --dry-run / release-hold」五组负向/只读对照）。
+**真实轮次已验（2026-10-30T21:23Z）**：合并 #240/#241 后版本 PR #242（0.22.0）由 release-please 开出 →
+autopilot 同一轮 `⑥′` 命中并合并（21:24:00Z）→ 派发 build → 10m59s 后三个资产齐（带 sha256 digest）→
+日志 `✅ 本轮无新版，但已收尾停摆版本 PR：v0.22.0`，exit 0。
+
+**发版节奏（重要，2026-10-30 起）**：默认「合并进 main 的提交 ≤10 分钟后就发版」。想攒几个 PR 一起发，
+给版本 PR 打 **`release-hold`** 标签即可（autopilot 跳过；确认发版时移除标签，下一轮继续）。因此
+「文档/看板类提交不要碎片化发布」这条纪律现在的操作方式是**先别合进 main**（或打 hold），而不是让版本
+PR 挂着等——自动兜底不会让版本 PR 一直停着。
 
 ### 3.7 SLA 报表（两段延迟，别把 unknown 当 0）
 
