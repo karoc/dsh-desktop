@@ -21,6 +21,13 @@
 >
 > 详情见 `.agents/notes/implemented/bug-fix/2026-09-08-legacy-uninstaller-name-kill.md`。
 
+## [0.23.0](https://github.com/karoc/dsh-desktop/compare/v0.22.0...v0.23.0) (2026-10-30)
+
+
+### Features
+
+* **automation:** release-hold 标签作为「停摆版本 PR」的批次刹车 ([#243](https://github.com/karoc/dsh-desktop/issues/243)) ([3946ac3](https://github.com/karoc/dsh-desktop/commit/3946ac3ecae87c434f6803866aa894567413eb61))
+
 ## [0.22.0](https://github.com/karoc/dsh-desktop/compare/v0.21.1...v0.22.0) (2026-10-30)
 
 
