@@ -44,6 +44,8 @@ import { chmodSync, closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openS
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+// 「待适配 vs 已被更高地板覆盖」分类（2026-10-31）：纯函数单测放在 sla 组，避免只靠报表输出目测。
+import { classifyPendingVersions } from './lib/sla-pending.mjs'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const SELF = fileURLToPath(import.meta.url)
@@ -451,6 +453,31 @@ function groupSla() {
   check('sla', '--recent abc ⇒ exit 2（旧实现 NaN ⇒ 静默检查全部）', '2', String(sla(write('out3.json', winRows()), ['--recent', 'abc']).status))
   check('sla', '--recent -1 ⇒ exit 2（负数会丢行）', '2', String(sla(write('out4.json', winRows()), ['--recent', '-1']).status))
   check('sla', '--recent 2 是合法值（只查最近 2 个）⇒ exit 0', '0', String(sla(write('out5.json', winRows()), ['--recent', '2']).status))
+
+  // ── 待适配 vs 已被更高地板覆盖（2026-10-31）────────────────────────────────
+  // 旧判据「没有任何壳版本**恰好**携带该版本作地板」会把被跳过的预发布永久算成 pending
+  // （实录 rc.3/rc.4 被 rc.5 跳过）。判据必须用**语义化版本比较**：首次实跑抓到反例 ——
+  // `0.2.2-alpha.2` 的发布时间早于 `0.2.1-rc.5`，按时间比会被误判成"已被覆盖"，但它语义上更高。
+  const measuredRows = [
+    { shell: 'v0.21.0', floor: '0.2.1-rc.2', publishedAt: '2026-10-24T14:00:00Z' },
+    { shell: 'v0.21.1', floor: '0.2.1-rc.5', publishedAt: '2026-10-29T23:58:07Z' },
+  ]
+  const plan = classifyPendingVersions({
+    versions: ['0.2.1-rc.3', '0.2.1-rc.4', '0.2.2-alpha.2'],
+    measured: measuredRows, carriedFloors: new Set(['0.2.1-rc.5']),
+  })
+  check('sla', '被更高地板跳过的 rc.3/rc.4 ⇒ 归入 covered、不再算 pending（旧实现永久 pending）', '1|2|0.2.1-rc.5',
+    `${plan.pending.length}|${plan.covered.length}|${plan.covered[0]?.floor}`)
+  check('sla', '  ⇒ pending 只剩 alpha（0.2.2-alpha.2）', '0.2.2-alpha.2', String(plan.pending[0]))
+  check('sla', '  ⇒ **反例**：alpha 发布时间早于 rc.5 但语义上更高，不得判"已被覆盖"（时间代理会误判）', 'false|true',
+    `${plan.covered.some((c) => c.version === '0.2.2-alpha.2')}|${plan.pending.includes('0.2.2-alpha.2')}`)
+  check('sla', '覆盖者取**最早**发布的那次抬地板 ⇒ v0.21.1（rc.2 语义上更旧）', 'v0.21.1', String(plan.covered[0]?.shell))
+  check('sla', '解析不出版本语义的版本 ⇒ 保守留在 pending（不静默清账）', '0|1',
+    (() => { const p = classifyPendingVersions({ versions: ['0.2.x'], measured: measuredRows }); return `${p.covered.length}|${p.pending.length}` })())
+  check('sla', '恰好被某壳版本携带过（carriedFloors）⇒ 两类都不进（它已进两段表）', '0|0',
+    (() => { const p = classifyPendingVersions({ versions: ['0.2.1-rc.5'], measured: measuredRows, carriedFloors: new Set(['0.2.1-rc.5']) }); return `${p.pending.length}|${p.covered.length}` })())
+  check('sla', '空输入安全', '0|0',
+    (() => { const p = classifyPendingVersions({}); return `${p.pending.length}|${p.covered.length}` })())
 }
 
 // ══ 3. watch ═══════════════════════════════════════════════════════════════
@@ -827,6 +854,34 @@ function groupAdapt() {
   r = adapt(copy, ['--version', floor, '--runtime', R.good, '--allow-yellow', '--strict-chain'])
   check('adapt', '--strict-chain 把"本机跳过"算失败 ⇒ exit 1 + 明说覆盖缺口不算通过', '1|true',
     `${r.status}|${r.stdout.includes('覆盖缺口不算通过')}`)
+
+  // 2026-10-31：步骤 2/3 的**改写质量**（旧实现只在真实适配轮次里暴露两类坏结果）。
+  // 把副本地板改旧让步骤 2/3 真的执行；README 里种两行：地板语境（应改）+ 历史叙述（不许改）。
+  const rewriteCopy = makeRepoCopy(join(TMP, 'copy-rewrite'))
+  const OLD_FLOOR = '0.2.0-alpha.9' // 合成版本：保证 README 里除了种的那行不会有别的出现
+  for (const rel of ['scripts/server-manager.mjs', 'src-tauri/resources/manager/server-manager.mjs']) {
+    const p = join(rewriteCopy, rel)
+    writeFileSync(p, readFileSync(p, 'utf8').replace(/MIN_DSH_VERSION = '[^']+'/, `MIN_DSH_VERSION = '${OLD_FLOOR}'`))
+  }
+  const rewriteReadme = join(rewriteCopy, 'README.md')
+  writeFileSync(rewriteReadme, `- 测试用：版本地板：\`${OLD_FLOOR}\`（应被改写）\n`
+    + `- 测试用：2026-10-19 实测 \`--version ${OLD_FLOOR} --dry-run\` ⇒ exit 0（历史叙述，不许改）\n`
+    + readFileSync(rewriteReadme, 'utf8'))
+  const rw = adapt(rewriteCopy, ['--version', floor, '--runtime', R.good, '--allow-yellow'])
+  check('adapt', '旧地板的副本：步骤 2/3 真的执行，且整轮仍能走完金路径', '0|true',
+    `${rw.status}|${rw.stdout.includes('2 地板（两份）+ 适配记录')}`)
+  const mgrText = readFileSync(join(rewriteCopy, 'scripts/server-manager.mjs'), 'utf8')
+  const block = mgrText.slice(mgrText.lastIndexOf('/*', mgrText.indexOf('const MIN_DSH_VERSION =')),
+    mgrText.indexOf('const MIN_DSH_VERSION ='))
+  const bodyLines = block.split('\n').slice(1).filter((l) => l.trim()).slice(0, -1) // 去掉开 `/*` 与收 `*/`
+  const misindented = bodyLines.filter((l) => !l.startsWith(' * '))
+  check('adapt', '适配记录每行缩进与注释块一致（旧实现首行会写成两空格 `  * `）', '0|true',
+    `${misindented.length}|${block.includes(`抬到 ${floor}`)}`)
+  const readmeAfter = readFileSync(rewriteReadme, 'utf8')
+  check('adapt', 'README 只改地板语境；历史叙述原样保留（旧实现会把 `--version <旧地板>` 一起改掉 ⇒ 伪史）', 'true|true',
+    `${readmeAfter.includes(`版本地板：\`${floor}\``)}|${readmeAfter.includes(`--version ${OLD_FLOOR} --dry-run`)}`)
+  check('adapt', '  且输出点名被跳过的历史行（人工确认），不是"替换 N 处"了事', 'true',
+    String(/跳过 1 处非地板语境（行 2/.test(rw.stdout)))
 
   // 审计定性 P1：探针进程崩/不写报告时，整轮**必须**停（旧实现 exit 0 = 全链路假绿）
   const crashCopy = makeRepoCopy(join(TMP, 'copy-probe-crash'))

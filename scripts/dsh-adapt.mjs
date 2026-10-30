@@ -130,7 +130,10 @@ if (installed !== TARGET) {
 note('1 runtime 已装版本', 'ok', `${installed}`)
 
 // ── 2. 两份地板 + 适配记录（插在注释块内部）+ 语法校验，失败回滚 ─────────────
-const LOG_LINE = ` * ${new Date().toISOString().slice(0, 10)} 抬到 ${TARGET}：夹具重采（--update-fixture，runtime 实测 ${TARGET}），\n * README 地板数值同步，预装 bundle 的 peer 由 test-plugin-dsh-compat 校验（地板与 bundle 同批）。\n`
+const ADAPT_LOG_LINES = [
+  `${new Date().toISOString().slice(0, 10)} 抬到 ${TARGET}：夹具重采（--update-fixture，runtime 实测 ${TARGET}），`,
+  'README 地板数值同步，预装 bundle 的 peer 由 test-plugin-dsh-compat 校验（地板与 bundle 同批）。',
+]
 const patchManager = (file) => {
   const before = readFileSync(file, 'utf8')
   const floor = floorOf(file)
@@ -139,11 +142,19 @@ const patchManager = (file) => {
   let text = before.replace(`const MIN_DSH_VERSION = '${floor}'`, `const MIN_DSH_VERSION = '${TARGET}'`)
   // 适配记录必须落在 `const MIN_DSH_VERSION` 之前那个注释块**内部**：
   // 插在 `*/` 外面会变成裸文本 ⇒ SyntaxError（本会话真实踩过，只有会执行 manager 的套件抓到）。
+  // 缩进按**注释块收尾行**对齐：`*/` 前的空白就是块内每行的前缀（顶层块通常是 ` * `）。
+  // 旧实现把 ` * …` 直接拼在 `*/` 的位置，吃掉了收尾行的前导空格 ⇒ 插入的第一行变成 `  * `
+  // 而后续行是 ` * `（2026-10-30 实测：单行缩进漂移，像人工手改坏）。判据由 gates 的 adapt 组守护。
   const idx = text.indexOf('const MIN_DSH_VERSION =')
   const open = text.lastIndexOf('/*', idx)
   const close = text.lastIndexOf('*/', idx)
   if (open < 0 || close < 0 || close > idx) throw new Error(`${file} 的 MIN_DSH_VERSION 前找不到完整注释块`)
-  text = text.slice(0, close) + LOG_LINE + ' ' + text.slice(close)
+  const closeLineStart = text.lastIndexOf('\n', close) + 1
+  const indent = text.slice(closeLineStart, close)
+  if (!/^[ \t]*$/.test(indent)) throw new Error(`${file} 的注释收尾行不干净（${JSON.stringify(indent)}），不敢插适配记录`)
+  // 内容行 = `${indent}* <text>`：收尾行是 `${indent}*/`，块内每行应是 `${indent}* `（顶层块 indent=' ' ⇒ ` * …`）。
+  const block = ADAPT_LOG_LINES.map((line) => `${indent}* ${line}\n`).join('')
+  text = text.slice(0, closeLineStart) + block + `${indent}*/` + text.slice(close + 2)
   return { changed: true, text }
 }
 try {
@@ -168,7 +179,7 @@ try {
   abort('2 地板（两份）+ 适配记录', error.message)
 }
 
-// ── 3. README 地板数值同步（只替换**旧地板字符串**，不碰历史版本号与插件版本号）──
+// ── 3. README 地板数值同步（只改**地板语境**里的旧地板字符串，历史叙述/示例原样保留）──
 {
   const src = readFileSync(README, 'utf8')
   if (PREV_FLOOR === null) {
@@ -176,14 +187,33 @@ try {
   } else if (PREV_FLOOR === TARGET) {
     note('3 README 地板数值', 'skip', `README 已无旧地板 ${PREV_FLOOR}（或本来就一致）`)
   } else {
-    const hits = src.split(PREV_FLOOR).length - 1
+    // 2026-10-30 修：旧实现 `src.split(PREV_FLOOR).join(TARGET)` 会把**历史叙述**一起改掉
+    // （实测：README 里"2026-10-19 实测 `--version 0.2.1-rc.2 --dry-run`"被改成 rc.5 ⇒ 伪史；
+    // 词边界反例段里的 rc.2 同理）。现在只改同一行里同时出现「地板语境」词的：地板 / MIN_DSH_VERSION /
+    // 壳要求 dsh；其余行原样保留，并把行号打出来让作者人工确认（判据由 gates 的 adapt 组守护）。
+    const CLAIM = /地板|MIN_DSH_VERSION|壳要求 dsh/
+    const lines = src.split('\n')
+    const changedLines = []
+    const skippedLines = []
+    let hits = 0
+    const next = lines.map((line, i) => {
+      if (!line.includes(PREV_FLOOR)) return line
+      if (!CLAIM.test(line)) { skippedLines.push(i + 1); return line }
+      hits += line.split(PREV_FLOOR).length - 1
+      changedLines.push(i + 1)
+      return line.split(PREV_FLOOR).join(TARGET)
+    })
+    const skippedText = skippedLines.length
+      ? `；跳过 ${skippedLines.length} 处非地板语境（行 ${skippedLines.join('、')}，历史/示例，请人工确认）`
+      : ''
     if (hits === 0) {
-      note('3 README 地板数值', 'skip', `README 里找不到旧地板 ${PREV_FLOOR}；CI 的文档同步门禁要求同 PR 改 README，请人工确认`)
+      note('3 README 地板数值', 'skip',
+        `README 里有 ${skippedLines.length} 处 ${PREV_FLOOR} 但都不在地板语境（行 ${skippedLines.join('、')}）；CI 的文档同步门禁要求同 PR 改 README，请人工确认`)
     } else if (DRY) {
-      note('3 README 地板数值', 'skip', `dry-run：将把 ${hits} 处 ${PREV_FLOOR} 换成 ${TARGET}`)
+      note('3 README 地板数值', 'skip', `dry-run：将把 ${hits} 处（行 ${changedLines.join('、')}）${PREV_FLOOR} 换成 ${TARGET}${skippedText}`)
     } else {
-      writeFileSync(README, src.split(PREV_FLOOR).join(TARGET))
-      note('3 README 地板数值', 'ok', `替换 ${hits} 处 ${PREV_FLOOR} → ${TARGET}`)
+      writeFileSync(README, next.join('\n'))
+      note('3 README 地板数值', 'ok', `替换 ${hits} 处（行 ${changedLines.join('、')}）${PREV_FLOOR} → ${TARGET}${skippedText}`)
     }
   }
 }

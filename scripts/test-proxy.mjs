@@ -9,14 +9,29 @@
 // network involved.
 import { createServer, request as httpRequest } from 'node:http'
 import { connect, createServer as netCreateServer } from 'node:net'
+import { spawnSync } from 'node:child_process'
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import assert from 'node:assert/strict'
 import {
   createForwardProxy, readProxyConfig, shouldProxy, providerHostsFromProfileDocument, providerHostsFromSettings,
   isLoopbackHost, normalizeHostForMatch, parseConnectAuthority, formatAuthority,
 } from './proxy.mjs'
+
+// 套件必须 hermetic：宿主/agent 环境会注入 env 代理（本机 harness：NODE_USE_ENV_PROXY=1 + HTTP(S)_PROXY/ALL_PROXY）。
+// Node 在**进程启动时**读取 NODE_USE_ENV_PROXY（运行时再删 process.env 无效，Node 24.22 实测），而继承 env 代理会让
+// forward proxy 的上游转发请求（绝对 URI + fake upstream）被二次改写，撞 `validateRequestAuthority`
+// （ERR_INVALID_ARG_VALUE，栈落在 proxy.mjs 的上游 httpRequest）—— 与套件要测的"直连 vs 经上游"语义无关。
+// 所以：检测到这类环境变量就用**干净环境重跑自身**（子进程一次性，判据本身不变）。
+const PROXY_ENV_KEYS = ['NODE_USE_ENV_PROXY', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy']
+if (!process.env.DSH_TEST_PROXY_ENV_CLEANED && PROXY_ENV_KEYS.some((k) => process.env[k])) {
+  const env = { ...process.env, DSH_TEST_PROXY_ENV_CLEANED: '1' }
+  for (const key of PROXY_ENV_KEYS) delete env[key]
+  const child = spawnSync(process.execPath, [fileURLToPath(import.meta.url), ...process.argv.slice(2)], { stdio: 'inherit', env })
+  process.exit(child.status ?? 1)
+}
 
 const work = mkdtempSync(join(tmpdir(), 'dsh-proxy-'))
 
