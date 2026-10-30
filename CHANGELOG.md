@@ -21,6 +21,13 @@
 >
 > 详情见 `.agents/notes/implemented/bug-fix/2026-09-08-legacy-uninstaller-name-kill.md`。
 
+## [0.23.1](https://github.com/karoc/dsh-desktop/compare/v0.23.0...v0.23.1) (2026-10-30)
+
+
+### Bug Fixes
+
+* **automation:** SLA 待适配判据改用语义化版本 + dsh-adapt 改写边界 + test-proxy 环境隔离 ([#247](https://github.com/karoc/dsh-desktop/issues/247)) ([cd5767d](https://github.com/karoc/dsh-desktop/commit/cd5767d68475635f3f027011d3c87326e056b02c))
+
 ## [0.23.0](https://github.com/karoc/dsh-desktop/compare/v0.22.0...v0.23.0) (2026-10-30)
 
 
