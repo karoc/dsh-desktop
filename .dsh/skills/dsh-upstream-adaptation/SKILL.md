@@ -261,9 +261,10 @@ node scripts/dsh-release-autopilot.mjs --require-canary # ⑤ 之前额外要求
 没有 ⇒ 照旧 exit 0。**查询 gh 失败按无操作处理**（不让 API 抖动把无新版轮次记成失败）；该路径不回帖 issue
 （没有 target 可归因）。`--no-release-resume` 可关。桩测：`node scripts/test-autopilot-release-resume.mjs`
 ⇒ 0（10 组 / 47 条断言，含「写域越界 / 冲突 / gh 抖动 / --dry-run / release-hold」五组负向/只读对照）。
-**真实轮次已验（2026-10-30T21:23Z）**：合并 #240/#241 后版本 PR #242（0.22.0）由 release-please 开出 →
-autopilot 同一轮 `⑥′` 命中并合并（21:24:00Z）→ 派发 build → 10m59s 后三个资产齐（带 sha256 digest）→
-日志 `✅ 本轮无新版，但已收尾停摆版本 PR：v0.22.0`，exit 0。
+**真实轮次已验（两次）**：合并 #240/#241 后版本 PR #242（0.22.0）由 release-please 开出 → autopilot 同一轮 `⑥′`
+命中并合并（2026-10-30T21:24:00Z）→ 派发 build → 10m59s 后三个资产齐（带 sha256 digest）→ 日志
+`✅ 本轮无新版，但已收尾停摆版本 PR：v0.22.0`；21:53Z 的下一轮同路径又自动发了 **v0.23.0**（版本 PR #244 合并 →
+build 41134480089 job 级全绿 → 10m05s 后资产齐）。
 
 **发版节奏（重要，2026-10-30 起）**：默认「合并进 main 的提交 ≤10 分钟后就发版」。想攒几个 PR 一起发，
 给版本 PR 打 **`release-hold`** 标签即可（autopilot 跳过；确认发版时移除标签，下一轮继续）。因此
@@ -567,7 +568,7 @@ git push -u origin <branch>
 | 缺口 | 影响 / 应对 |
 |---|---|
 | **canary 默认关** | 定时器给不了「窗口期内新启动 dev 壳」的前提；`--require-canary` 只给有人值守的窗口 |
-| **autopilot 的适配段（②–⑤）仍未真机跑过** | 历史真实轮次都停在 ②（rehearse 死分支，2026-10-30 已修）；⑥–⑧ 与「停摆版本 PR 兜底」有 42 条桩断言（`GH_BIN`/`GIT_BIN`/`NODE_BIN`/`DSH_AUTOPILOT_WATCH_JSON` 注入）。**真实建 PR / 合并适配 PR 的路径仍只有桩** ⇒ 首次实战要有人在旁边看 |
+| **autopilot 的适配段（②–⑤）仍未真机跑过** | 发布半程（⑥–⑧ + 停摆版本 PR 兜底）已**两次真机验证**（v0.22.0 / v0.23.0，见 §9）；但「检测到新版 → 建适配 PR → 合并适配 PR」这条 ②–⑤ 仍只有桩（历史真实轮次都停在 ②，rehearse 死分支 2026-10-30 已修）。桩：`test-autopilot-release-resume.mjs` 10 组 / 47 条断言（`GH_BIN`/`GIT_BIN`/`NODE_BIN`/`DSH_AUTOPILOT_WATCH_JSON` 注入）⇒ **首次上游发版实战仍需有人在旁边看** |
 | **`dsh-rehearse` 只覆盖全新安装** | 空 runtime ⇒ `dshInstalled()=false`。**升级覆盖**分支、isolated→hoisted 布局迁移、兼容闸门（已装 < 地板）都没走到 |
 | **rehearse 只到探针** | 在 `launching dsh web` 处按进程组终止 ⇒ 「装完 dsh web 能否真起来」仍靠真机验收 |
 | **`release` 的 `needs` 不含 smoke** | `needs: [windows, linux]` ⇒ `linux-smoke` 红**不会**阻止出包。刚恢复的 canary 要先连续绿几轮才升格 |
@@ -576,25 +577,30 @@ git push -u origin <branch>
 | **版本 PR 合并 = 零人工审阅** | 替代审查只有「mergeable + 写域白名单 + 非失败 check」，不读 diff 语义。CONTRIBUTING 里那份人工清单（四处版本一致 / CHANGELOG 段 / `npm test` / `audit-preinstalled`）在自动路径上**不执行** |
 | **进度看板/归档文件的边界** | `KANBAN.json`、`.agents/notes/archive.json` 被 git 跟踪 ⇒ autopilot 提交时跳过、rebase 时 autostash；改动它们不算适配写域 |
 | **心跳 timer 执行工作树脚本** | 见 §6.14：工作树漂移 ⇒ 线上跑旧代码（2026-10-24→30 实际发生 5 天）。目前只靠「ROOT 留在 main」的纪律；运行前校验守卫仍是看板 todo |
-| **`dsh-doctor` 的每日轮次依赖工作树正确** | timer 已装（每日 06:23），执行的是工作树脚本（§6.14）。2026-10-30 00:31Z 手动实跑 **7/7 ✓**；系统轮次要等下一个 06:23 才验证修复真的生效 |
+| **`dsh-doctor` 的每日轮次依赖工作树正确** | timer 已装（每日 06:23），执行的是工作树脚本（§6.14）。2026-10-31 06:23 CST（22:23Z）**系统轮次 PASS 7/7**、`last-ok=2026-10-30T22:23:23.255Z` ⇒ §6.14 的修复在真实 timer 上已生效；工作树若再漂移会退回「每天 FAIL」 |
 
-## 9. 本技能实测坐标（2026-10-30/31）
+## 9. 本技能实测坐标（2026-10-31 06:40 CST）
 
-- 仓库：`main` = **de4bafc**（v0.21.1，含 #237 适配 rc.5、#238 rehearse 修复）；壳地板
-  `MIN_DSH_VERSION = 0.2.1-rc.5`；npm `latest`/`next` = `0.2.1-rc.5`，`alpha` = `0.2.2-alpha.2`。
-- 心跳现场（2026-10-30 20:44Z）：四条 timer 全部 enabled；autopilot 状态 `healthy`（00:43Z 自 `broken` 自愈，
-  当轮 target=alpha ⇒ 按 ③C 跳过）；doctor 2026-10-30 00:31Z 手动实跑 **7/7 ✓**（含评论 PATCH / label / 关闭重开 /
-  last-ok）。**注意**：timer 执行的是**工作树**里的脚本（§6.14）——工作树必须留在 `main`。
-- 实跑清单（2026-10-30，命令见 §3 / §5）：
-  `dsh-watch --dry-run` ⇒ 0｜`dsh-rehearse --scenario install --version 0.2.1-rc.5` ⇒ **GREEN**（22.4s，热 store +
-  `--runtime-dir` 复用已有 runtime；探针 red0/yellow0/info16、`rehearsal=true`）｜`dsh-adapt --version 0.2.1-rc.5`
-  ⇒ **0**（29/29 门禁）｜`dsh-sla-report --json` ⇒ 0（检测段**首次**拿到 1.82h 实测）｜
-  `dsh-release-autopilot` 真实轮次：修复前 ② RED 失败；修复后 00:43Z 无新版轮次 exit 0｜
-  `node scripts/test-autopilot-release-resume.mjs` ⇒ **0（9 组 / 42 条断言）**。
-- 已发布：**v0.21.1**（2026-10-29T23:58:07Z），3 个资产（AppImage 124,443,128 / deb 54,562,528 /
-  x64-setup.exe 28,213,771）均带 sha256 digest；rc.5 发布 → 我方发布 = **9.71h**（SLA 6h 未达标）。
-- 未验证：资产端点的真实下载/续传（§3.8）；`--scenario bump` 的成功路径；`--require-canary` 的真实通过；
-  **「停摆版本 PR 兜底」的真实 gh 写路径**（42 条桩断言已过，真实合并首次要有人看着）。
+- 仓库：`origin/main` = **5637e1e**（`chore(main): release 0.23.0`）；壳地板 `MIN_DSH_VERSION = 0.2.1-rc.5`；
+  npm `latest`/`next` = `0.2.1-rc.5`，`alpha` = `0.2.2-alpha.2`（alpha 领先 ⇒ 按决策 ③C 只跟踪、不适配，issue #239）。
+- **发布半程已真机验证两次（无人值守，autopilot 自己合并版本 PR）**：
+  - **v0.22.0**：版本 PR #242 → autopilot 于 2026-10-30T21:24:00Z 合并 → 派发 build → **10m59s** 后 3 个资产齐
+    （AppImage 124,451,320 / deb 54,562,640 / x64-setup.exe 28,212,920，均带 sha256 digest）；日志
+    `✅ 本轮无新版，但已收尾停摆版本 PR：v0.22.0`。
+  - **v0.23.0**：版本 PR #244 → 21:54:22Z 合并 → build run 41134480089 **job 级全绿**（check/test/windows/linux/
+    linux-smoke/release）→ 3 个资产齐 → 22:04:33Z 日志同样的 `✅`；autopilot 状态 `healthy`。
+  - 闸门：`node scripts/test-autopilot-release-resume.mjs` ⇒ **0（10 组 / 47 条断言）**；
+    `test-automation-gates --only watch` ⇒ **41 条断言全绿**（含 A12 正向/幂等/--dry-run/负向四例）。
+- 心跳现场（2026-10-31 06:23 CST = 2026-10-30T22:23Z）：`dsh-doctor` **系统轮次 PASS 7/7**（评论 PATCH / label /
+  关闭重开 / last-ok 全 ✓，canary `last-ok=2026-10-30T22:23:23.255Z`）——证明 §6.14「工作树切回 main」真的生效。
+  四条 timer 在跑、autopilot `healthy`。**timer 执行工作树脚本（§6.14）**，工作树必须留在 `main`。
+- 其它实跑坐标（2026-10-30，命令见 §3 / §5）：`dsh-rehearse --scenario install --version 0.2.1-rc.5` ⇒ **GREEN**
+  （22.4s，热 store；探针 red0/yellow0/info16、`rehearsal=true`）｜`dsh-adapt --version 0.2.1-rc.5` ⇒ **0**（29/29 门禁）｜
+  `dsh-sla-report --json` ⇒ 0（检测段首次实测 1.82h）｜`test-manifest-consistency` ⇒ PASS（含「文档套数 == 链长」门禁）｜
+  `v0.21.1` 为人工补发（rc.5 发布 14:15Z → 发布 23:58Z = **9.71h**，SLA 6h 未达标）。
+- 未验证：资产端点的真实下载/续传（§3.8）；`dsh-rehearse --scenario bump` 的成功路径；`--require-canary` 的真实通过；
+  **autopilot 的适配段 ②–⑤（检测到新版 → 建 / 合并适配 PR）**；A12 的**真实关闭动作**（自 v0.23.0 起没有
+  「已被地板覆盖」的 open 跟踪单可关，只有桩测）。
 
 ## 10. 维护本技能
 
