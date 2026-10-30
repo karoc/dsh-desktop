@@ -72,6 +72,13 @@
 //  flock 只保本机；跨写者的 TOCTOU（两边同时查到 0 条再各建一条）无法在客户端根除 —— 那正是对账这一层
 //  存在的理由（下一轮收敛）。所以**不要**把这里的"先查后建"当成原子的唯一性约束。
 
+//  已适配跟踪单的收敛（2026-10-30，A12）：每轮（有 target 与无 target 都算）扫描 open 跟踪单，凡标题
+//     里的目标版本 <= 当前壳地板的（`cmp(floor, target) >= 0`），说明它跟踪的版本已经发过壳 ⇒
+//     `close --reason completed` + 一条"已适配：地板=…"的说明评论。解决的是「适配完成后没人关单」：
+//     autopilot 的入口恒为「检测到新版」，地板抬到 target 的下一轮就不再报这个版本 ⇒ 之前只能人工关
+//     （实录 #217/#235/#236）。负向保证：只认本脚本标题前缀 + `dsh <版本>` 锚点（issue-key 唯一实现），
+//     解析不出版本 / 目标比地板新（例如 alpha 领先的单 #239）的单**一律不碰**；--dry-run / PAUSE 下零写。
+
 import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
@@ -502,7 +509,7 @@ const report = {
   registry: REGISTRY, generatedAt: new Date().toISOString(),
   dryRun: DRY, paused: PAUSED, pauseFile: PAUSED ? PAUSE_FILE : null,
   lock: UNDER_LOCK ? LOCK_FILE : null,
-  dedupe: null, reconcile: null, backoff: null,
+  dedupe: null, reconcile: null, adapted: null, backoff: null,
 }
 const finish = (code) => {
   // A6：记账（只读轮次不记；code 2 = 用法/属主配置错误，不当作"探针坏了" —— 否则打错一次
@@ -709,10 +716,65 @@ function applyReconcile(plans) {
   return { closed, failed, notes }
 }
 
+// ── 已适配跟踪单的收敛（2026-10-30，A12）────────────────────────────────────
+// 适配完成后（壳地板 >= 该单的 target）这条跟踪/SLA 单就完成使命；但 autopilot 的入口恒为
+// 「检测到新版」，适配 PR 合并后地板==target ⇒ 不会再有哪一轮"顺手"关掉它 ⇒ open 里的 SLA 红单
+// 永久堆积（实录：rc.3/rc.4/rc.5 三条只能人工关；#239 的 alpha 单比地板新，必须保持 open）。
+// 这里每轮扫描 open 跟踪单，对 `cmp(floor, target) >= 0` 的单执行 close + 一条说明评论。
+// 负向保证：只认本脚本标题前缀 + `dsh <版本>` 锚点（复用 issue-key，别人开的 issue 不碰）；
+// 解析不出版本的不碰；**目标比地板新的不碰**（那是还没适配的当前单）；--dry-run / PAUSE 下零写。
+const ADAPTED_NOTE = (version, floor) =>
+  `已适配：壳地板已抬到 \`${floor}\`（>= \`${version}\`），本单跟踪的版本已随壳发布，关闭。\n\n`
+  + `<!-- dsh-watch-adapted: version=${version} floor=${floor} -->`
+function planAdaptedClosures(issues, floor) {
+  const plans = []
+  for (const i of issues ?? []) {
+    if (!isTracking(i)) continue
+    const v = versionInTitle(i.title)
+    if (!v) continue
+    if (cmp(floor, v) < 0) continue
+    plans.push({ number: i.number, version: v })
+  }
+  return plans.sort((a, b) => a.number - b.number)
+}
+const adaptedPlanText = (plans, floor) => [
+  `收敛：${plans.length} 条跟踪单的版本已不高于壳地板 ${floor}，准备关闭 ——`,
+  ...plans.map((p) => `  · #${p.number}（dsh ${p.version}）`),
+].join('\n')
+const adaptedManualCommands = (plans, floor) => plans.map((p) =>
+  `  ./scripts/gh issue close ${p.number} --reason completed --comment "${ADAPTED_NOTE(p.version, floor).split('\n')[0]}"`)
+const adaptedManualText = (plans, floor, why) => [
+  `待人工关闭已适配单（${why}；不要重复重试，每次重试都是一条噪音）：`,
+  ...adaptedManualCommands(plans, floor),
+].join('\n')
+function applyAdaptedClosures(plans, floor) {
+  const closed = []
+  const failed = []
+  const notes = []
+  for (const p of plans) {
+    const c = runWrite(`关闭已适配单 #${p.number}`, () => execFileSync(GH,
+      ['issue', 'close', String(p.number), '--reason', 'completed'], { encoding: 'utf8' }))
+    if (!c.ok) { failed.push({ number: p.number, error: c.err }); continue }
+    closed.push(p.number)
+    const k = runWrite(`已适配评论 #${p.number}`, () => execFileSync(GH,
+      ['issue', 'comment', String(p.number), '--body', ADAPTED_NOTE(p.version, floor)], { encoding: 'utf8' }))
+    if (!k.ok) notes.push({ number: p.number, error: k.err })
+  }
+  return { closed, failed, notes }
+}
+
 // ── 无新版本：仍然做一次只读/收敛对账（自愈不依赖本轮 target）───────────────
 if (!target) {
   const got = readOpenIssues()
-  const plans = got.ok ? planReconcile(got.issues) : []
+  const adapted = got.ok ? planAdaptedClosures(got.issues, floor) : []
+  // 已被「已适配」计划覆盖的版本不再走"重复单"对账：它们会被统一关闭（含同版本重复单）。
+  const plans = (got.ok ? planReconcile(got.issues) : []).filter((p) => cmp(floor, p.version) < 0)
+  report.adapted = {
+    floor,
+    available: got.ok,
+    plans: adapted.map((p) => ({ number: p.number, version: p.version })),
+    applied: null,
+  }
   report.reconcile = {
     scanned: got.ok ? got.issues.length : null,
     available: got.ok,
@@ -723,9 +785,32 @@ if (!target) {
     failErr('!! 本轮不做对账（读不到 open issue 列表）—— 这是故障，不是"没有重复"')
     finish(1)
   }
+  const canWrite = !DRY && !PAUSED
+  if (adapted.length) {
+    console.log(adaptedPlanText(adapted, floor))
+    if (!canWrite) {
+      const why = DRY ? '--dry-run：未执行任何写操作' : `paused by ${PAUSE_FILE}`
+      console.log(adaptedManualText(adapted, floor, why))
+      report.adapted.manual = adaptedManualCommands(adapted, floor)
+    } else {
+      const appliedAdapted = applyAdaptedClosures(adapted, floor)
+      report.adapted.applied = appliedAdapted
+      if (appliedAdapted.closed.length) {
+        console.log(`已关闭 ${appliedAdapted.closed.length} 条已适配的跟踪单（地板 ${floor}）：`
+          + `${appliedAdapted.closed.map((n) => `#${n}`).join(' ')}`)
+      }
+      if (appliedAdapted.failed.length) {
+        console.log(adaptedManualText(adapted.filter((p) => appliedAdapted.failed.some((f) => f.number === p.number)),
+          floor, `关闭失败：${appliedAdapted.failed[0].error}`))
+        report.adapted.manual = adaptedManualCommands(adapted, floor)
+      }
+      if (appliedAdapted.notes.length) {
+        console.log(`!! 已关闭但评论未发出（${appliedAdapted.notes.map((x) => `#${x.number}`).join(' ')}）`)
+      }
+    }
+  }
   if (plans.length) {
     console.log(planText(plans))
-    const canWrite = !DRY && !PAUSED
     if (!canWrite) {
       console.log(manualText(plans, DRY ? '--dry-run：未执行任何写操作' : `paused by ${PAUSE_FILE}`))
       report.reconcile.manual = manualCommands(plans)
@@ -733,7 +818,7 @@ if (!target) {
       const applied = applyReconcile(plans)
       report.reconcile.applied = applied
       const after = readOpenIssues()
-      const left = after.ok ? planReconcile(after.issues) : null
+      const left = after.ok ? planReconcile(after.issues).filter((p) => cmp(floor, p.version) < 0) : null
       report.reconcile.remaining = left ? left.length : null
       if (left === null) {
         failErr('!! 对账后无法复核（读不到列表）—— 不报"已收敛"')
@@ -868,11 +953,33 @@ if (DRY) {
   } else if (got.ok) {
     console.log(`对账（只读）：开单前扫描 ${got.issues.length} 条 open issue，无同版本重复`)
   }
+  const adaptedDry = got.ok ? planAdaptedClosures(got.issues, floor) : []
+  if (adaptedDry.length) {
+    console.log(adaptedPlanText(adaptedDry, floor))
+    console.log(adaptedManualText(adaptedDry, floor, '--dry-run：未执行任何写操作'))
+    report.adapted = {
+      floor,
+      plans: adaptedDry.map((p) => ({ number: p.number, version: p.version })),
+      applied: null,
+      manual: adaptedManualCommands(adaptedDry, floor),
+    }
+  }
   finish(0)
 }
 
 if (PAUSED) {
   console.log(`\n[paused] 本轮本应 ${match ? `更新 #${match.number}` : '新建 1 条'}（标题：${title}）—— 零写操作。`)
+  const adaptedPaused = got.ok ? planAdaptedClosures(got.issues, floor) : []
+  if (adaptedPaused.length) {
+    console.log(adaptedPlanText(adaptedPaused, floor))
+    console.log(adaptedManualText(adaptedPaused, floor, `paused by ${PAUSE_FILE}`))
+    report.adapted = {
+      floor,
+      plans: adaptedPaused.map((p) => ({ number: p.number, version: p.version })),
+      applied: null,
+      manual: adaptedManualCommands(adaptedPaused, floor),
+    }
+  }
   if (reconcilePlans.length) {
     console.log(planText(reconcilePlans))
     console.log(manualText(reconcilePlans, `paused by ${PAUSE_FILE}`))
@@ -884,6 +991,35 @@ if (PAUSED) {
 if (!got.ok) {
   failErr('!! 拒绝新建/更新：读不到 open issue 列表时无法做去重判定，此时开单只会再造一条重复')
   finish(1)
+}
+
+// ── 写 ⓪：先收敛「已适配」的跟踪单（与"本轮有没有新 target"无关）─────────────
+// 放在 label/对账/写单之前：① 被地板覆盖的版本不该再参与"重复单"对账（它们会被统一关闭）；
+// ② 若这里因权限停写，后面的写操作也会被同一个 writeBlocked 拦住（fail-closed）。
+{
+  const adaptedNow = planAdaptedClosures(got.issues, floor)
+  reconcilePlans = reconcilePlans.filter((p) => cmp(floor, p.version) < 0)
+  if (adaptedNow.length) {
+    console.log(adaptedPlanText(adaptedNow, floor))
+    const appliedAdapted = applyAdaptedClosures(adaptedNow, floor)
+    report.adapted = {
+      floor,
+      plans: adaptedNow.map((p) => ({ number: p.number, version: p.version })),
+      applied: appliedAdapted,
+    }
+    if (appliedAdapted.closed.length) {
+      console.log(`已关闭 ${appliedAdapted.closed.length} 条已适配的跟踪单（地板 ${floor}）：`
+        + `${appliedAdapted.closed.map((n) => `#${n}`).join(' ')}`)
+    }
+    if (appliedAdapted.failed.length) {
+      console.log(adaptedManualText(adaptedNow.filter((p) => appliedAdapted.failed.some((f) => f.number === p.number)),
+        floor, `关闭失败：${appliedAdapted.failed[0].error}`))
+      report.adapted.manual = adaptedManualCommands(adaptedNow, floor)
+    }
+    if (appliedAdapted.notes.length) {
+      console.log(`!! 已关闭但评论未发出（${appliedAdapted.notes.map((x) => `#${x.number}`).join(' ')}）`)
+    }
+  }
 }
 
 // ── 写 ①：label（"已存在即可"；失败不算错 —— 去重不依赖 label）───────────────

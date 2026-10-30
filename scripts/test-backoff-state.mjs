@@ -195,9 +195,12 @@ function integration() {
   writeFileSync(okPkg, JSON.stringify({ 'dist-tags': { latest: '0.1.0' }, time: { '0.1.0': '2026-10-01T00:00:00Z' } }))
   writeFileSync(comments, '[]')
   writeFileSync(calls, '')
+  // 注意：这里的 seed issue 目标版本刻意用 9.9.9（**高于任何真实壳地板**）。A12（2026-10-30 起）
+  // 会在"地板 >= issue 目标版本"时关闭跟踪单并补一条"已适配"评论 —— 那会污染本套件对
+  // "跃迁评论条数"的计数（恢复轮期望只多 1 条）。用不可能被地板覆盖的版本，让本套件只测退避。
   writeFileSync(issues, JSON.stringify([{
     number: 42,
-    title: '[dsh-watch][best-effort 24h（预发布通道）] dsh 0.2.1-rc.3 比地板 0.2.1-rc.2 新',
+    title: '[dsh-watch][best-effort 24h（预发布通道）] dsh 9.9.9 比地板 0.1.0 新',
     body: '', labels: [], assignees: [], createdAt: '2026-10-23T08:00:00Z',
   }]))
 

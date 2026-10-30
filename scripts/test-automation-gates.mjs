@@ -695,6 +695,61 @@ function groupWatch() {
     `${ri.stdout.includes('保留 #217')}|${ri.stdout.includes('issue close 201 --reason')}|${countCalls(st, /^issue (create|edit|comment|close)/)}|${openCount(st)}`)
   check('watch', '  ⇒ 去重判定也落在规范单上（命中 #217，而不是即将被关掉的 #201）', '217|true',
     `${ri.report?.dedupe?.matched}|${ri.report?.reconcile?.plans?.length === 1}`)
+
+  // ⑨ A12 已适配跟踪单的收敛（2026-10-30）：地板 >= 单的 target ⇒ close(completed) + 说明评论；
+  //    比地板新的单（还没适配，例如 alpha 领先的 #239）必须保持 open。负向：地板更旧 ⇒ 一条都不关。
+  const ADAPT_PACK = packument({ latest: '0.2.1-rc.5' }, { '0.2.1-rc.5': '2026-10-29T14:00:00Z' })
+  const runAdaptClose = (stateFile, { floor = '0.2.1-rc.5', extra = [], env = {}, json = false,
+    pack = ADAPT_PACK, stateDir = null } = {}) => {
+    const sd = stateDir ?? join(S, `sd-adapt-${++idemSeq}`)
+    const o = json ? join(W, `adapt-${++seq}.json`) : null
+    const args = [join(ROOT, 'scripts/dsh-watch.mjs'), '--floor', floor, '--registry', 'http://127.0.0.1:9',
+      '--now', '2026-10-31T00:00:00Z', '--state-dir', sd, ...(o ? ['--json', o] : []), ...extra]
+    const r = cmd(process.execPath, args, {
+      env: {
+        ...privateTmpEnv, PATH: PATH_WITH_STUBS, FAKE_PACKUMENT: pack,
+        GH_BIN: GH_STATE_STUB, FAKE_GH_STATE: stateFile, GH_CALLS: callsFor(stateFile), ...env,
+      },
+    })
+    return { ...r, report: o ? jsonOf(o) : null, sid: sd }
+  }
+  const adaptedSeeds = () => [
+    seedIssue(217, {
+      title: '[SLA 未达标] dsh 0.2.1-rc.3 已发布 79.4h（门槛 24h），地板仍停在 0.2.1-rc.2',
+      body: '@karoc\n\n<!-- dsh-watch-state: target=0.2.1-rc.3 breached=true -->',
+    }),
+    seedIssue(235, { title: '[SLA 未达标] dsh 0.2.1-rc.4 已发布 65.6h（门槛 24h），地板仍停在 0.2.1-rc.2', body: '' }),
+    seedIssue(239, {
+      title: '[SLA 未达标] dsh 0.2.2-alpha.2 已发布 53.2h（门槛 24h），地板仍停在 0.2.1-rc.5',
+      labels: ['sla-breach', 'priority:high'], assignees: ['karoc'],
+      body: '@karoc\n\n<!-- dsh-watch-state: target=0.2.2-alpha.2 breached=true -->',
+    }),
+  ]
+  st = mkState('adapted', adaptedSeeds())
+  ri = runAdaptClose(st, { json: true })
+  check('watch', 'A12①地板 rc.5 ⇒ rc.3/rc.4 的单各 close 一次（reason=completed）+ 说明评论', '1|1|0|true',
+    `${countCalls(st, /^issue close 217/)}|${countCalls(st, /^issue close 235/)}|${ri.status}|${readCalls(st).includes('已适配：壳地板已抬到')}`)
+  check('watch', '  ⇒ 比地板新的 alpha 单 #239 保持 open（还没适配，不许关）', '1|open',
+    `${openCount(st)}|${JSON.parse(readFileSync(st, 'utf8')).find((i) => i.number === 239).state}`)
+  check('watch', '  ⇒ 报告里记了 adapted 计划（plans=2、applied.closed=2）', '2|2',
+    `${ri.report?.adapted?.plans?.length}|${ri.report?.adapted?.applied?.closed?.length}`)
+  ri = runAdaptClose(st)
+  check('watch', 'A12②再跑一次：没有新的 close（幂等，已关的不再碰）', '1|1|0',
+    `${countCalls(st, /^issue close 217/)}|${countCalls(st, /^issue close 235/)}|${ri.status}`)
+
+  st = mkState('adapted-dry', adaptedSeeds())
+  ri = runAdaptClose(st, { extra: ['--dry-run'], json: true })
+  check('watch', 'A12③--dry-run：列出将关闭的单 + 可复制命令，零写入', 'true|true|0',
+    `${ri.stdout.includes('准备关闭')}|${ri.stdout.includes('issue close 217 --reason completed')}|${countCalls(st, /^issue (close|comment)/)}`)
+  check('watch', '  ⇒ 三条 issue 仍全部 open', 3, openCount(st))
+
+  st = mkState('adapted-newer', adaptedSeeds())
+  ri = runAdaptClose(st, {
+    floor: '0.2.1-rc.2',
+    pack: packument({ latest: '0.2.1-rc.2' }, { '0.2.1-rc.2': '2026-10-18T00:00:00Z' }),
+  })
+  check('watch', 'A12④负向：地板 rc.2（比 rc.3/rc.4 旧）⇒ 一条都不关', '0|3|0',
+    `${countCalls(st, /^issue close/)}|${openCount(st)}|${ri.status}`)
 }
 
 // ══ 4. adapt ═══════════════════════════════════════════════════════════════

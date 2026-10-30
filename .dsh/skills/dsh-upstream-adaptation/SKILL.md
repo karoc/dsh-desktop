@@ -130,6 +130,13 @@ GH_BIN=$PWD/scripts/gh node scripts/dsh-watch.mjs --dry-run --json /tmp/watch.js
 `--registry <url>` / `--floor <v>`（演练注入点）、`--now <iso>`、`--repo <o/r>`、`--assignee <login>`
 （属主解析不到时**报错而不是静默跳过**）。
 
+**已适配跟踪单会自动关闭（A12，2026-10-30 起）**：每轮（有 target 与无 target 都算）扫 open 跟踪单，凡标题里
+`dsh <版本>` 锚点取到的版本 **<= 当前壳地板**的，执行 `issue close --reason completed` + 一条
+「已适配：壳地板已抬到 …」说明评论（幂等：已关的不再碰；`--dry-run` / `PAUSE` 下只列待关清单与可复制命令）。
+**负向保证**：只认本脚本标题前缀 + `issue-key` 的锚点/词边界 ⇒ 别人开的 issue、解析不出版本的、以及
+**目标比地板新的单（例如 alpha 通道领先时的 #239）一律不碰**。桩测在
+`scripts/test-automation-gates.mjs --only watch` 的 A12 组（正/负向各两例）。
+
 ### 3.2 预演「抬地板」全链路（bump，写域只在 /tmp）
 
 ```sh
