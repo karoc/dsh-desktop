@@ -21,6 +21,14 @@
 >
 > 详情见 `.agents/notes/implemented/bug-fix/2026-09-08-legacy-uninstaller-name-kill.md`。
 
+## [0.22.0](https://github.com/karoc/dsh-desktop/compare/v0.21.1...v0.22.0) (2026-10-30)
+
+
+### Features
+
+* **automation:** dsh-watch 在适配完成后自动关闭跟踪/SLA 单（A12） ([#241](https://github.com/karoc/dsh-desktop/issues/241)) ([0e41166](https://github.com/karoc/dsh-desktop/commit/0e411663f7ce49d0fbabf7b1585257b49f8c410a))
+* **automation:** 无新版轮次也收尾停摆的 release-please 版本 PR ([#240](https://github.com/karoc/dsh-desktop/issues/240)) ([d5c66cd](https://github.com/karoc/dsh-desktop/commit/d5c66cdd07cc16350f43e7e3dfb6fb9dc05fedc2))
+
 ## [0.21.1](https://github.com/karoc/dsh-desktop/compare/v0.21.0...v0.21.1) (2026-10-29)
 
 
