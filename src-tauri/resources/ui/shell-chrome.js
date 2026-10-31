@@ -1053,6 +1053,10 @@
   // **不武断**的说明 + 提供手动重试入口。
   // ⚠️ 边界（刻意）：壳**分不清**"真密钥错"与"上游抖动"（文案相同），所以措辞不得断言"不是密钥问题"，
   // 只能给出可能性；也**不自动重试**（会掩盖真实鉴权错误、放大请求量）——只帮用户点一下。
+  // 2026-10-31 设备级实测修正：在 AUTH 失败态 dsh 0.2.1-rc.5 **不渲染任何重试控件**（只有
+  // `Sixlwa_turnErrorCopy`），`findRetryControl()` 必然落空 ⇒ 文案不得承诺"可直接重试本轮"；
+  // 改为指引"重新发送上一条消息"。按钮保留为 **best-effort**（别的 dsh 版本/错误态可能有重试入口），
+  // 找不到时把指引说清楚，而不是让用户去点一个不存在的「重试」。
   /**
    * 页面文本里出现"鉴权失败"文案时返回一句**不武断**的补充提示；否则返回 ''。
    * 纯函数（无 DOM 依赖）——由 scripts/test-shell-chrome.mjs 用 vm 沙箱直接验证。
@@ -1065,7 +1069,7 @@
   function misleadingAuthHint(text) {
   const AUTH_MISREPORT_RE = /API 密钥无效|Invalid API key/;
     if (typeof text !== 'string' || !AUTH_MISREPORT_RE.test(text)) return '';
-    return '这也可能是上游瞬时故障（403/5xx 被误判为鉴权失败）；若密钥确实正确，可直接重试本轮。';
+    return '这也可能是上游瞬时故障（403/5xx 被误判为鉴权失败）；若密钥确实正确，可重新发送上一条消息。';
   }
   const authBanner = document.createElement('div');
   authBanner.className = 'errbanner';
@@ -1099,7 +1103,7 @@
   authRetryBtn.addEventListener('click', () => {
     const target = findRetryControl();
     if (target) { target.click(); miniToast('已替你点击「重试」'); return; }
-    miniToast('未找到重试入口：请在失败的那一轮上点「重试」');
+    miniToast('未找到应用内重试入口：请重新发送上一条消息');
   });
   authDismissBtn.addEventListener('click', () => { authDismissed = true; authBanner.hidden = true; });
   // 失败轮次随时可能出现 ⇒ 用低频长跑探测（5s 一次；每次只做字符串包含判断，正常使用开销可忽略）。
