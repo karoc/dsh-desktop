@@ -52,6 +52,8 @@ npm test                          # 全量 34 套（33 条 node + 1 条 `[ -f �
 
 **依赖面（2026-10-17 起是机制，不靠谁想起来）**：仓库已开启 Dependabot **漏洞告警** + **自动安全修复**（核验：`gh api -i /repos/<owner>/<repo>/vulnerability-alerts` 返回 204、`/automated-security-fixes` 返回 200；开启命令是同路径的 `-X PUT`），告警出现在仓库 Security 页、修复以 PR 自动开出。本地自查用 `npm audit --omit=dev`（当前 0 漏洞）。**为什么不把 `npm audit` 塞进 CI 必过**：它依赖 registry 网络，上游发一条与我们无关的 advisory 就会红掉整条 PR —— 门禁的信噪比比覆盖率更重要。
 
+**门禁可信度对照（`scripts/test-controls.mjs`，链上第 20 套，2026-10-31 扩到 6 条）**：光有断言不算门禁 —— 必须证明"注入真实缺陷它会红、还原它会绿"。当前 6 条：资源副本篡改／版本号篡改／manager 空 catch／tree-guard 忽略未提交改动／版本比较把正式版判成与同号预发布相等／logrotate 残留检查被关掉，分别要求 copy-consistency、manifest、silent-failures、tree-guard、version-compare-parity、install-logrotate 变红。**约定**：新增或修改一个"守行为"的门禁，就同时给它加一条注入对照；确实不能加（例如纯静态文档门禁），在 PR 里写明理由 —— 否则没人知道这个门禁能不能失败。
+
 `scripts/test-chrome-bootstrap.mjs`（链上紧随 `test-shell-chrome`）是**壳注入脚本"真实初始化路径"的纯 Node
 门禁**：`test-shell-chrome.mjs` 设了 `__DSH_CHROME_TEST__` ⇒ chrome 在 TEST_HOOK 处提前 return ⇒ 它后面那段
 （挂载守卫 / 契约写入 / MutationObserver 自愈 / 引导上报）在单测里**从不执行**，而真机门禁 `test:chrome-real`
