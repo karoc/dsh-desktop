@@ -501,6 +501,10 @@ assert.ok(misleadingAuthHint('Turn failed\nInvalid API key').length > 0, '命中
 assert.equal(misleadingAuthHint('本轮运行失败\n上游返回 502'), '', '非鉴权失败不触发（负向对照 1）')
 assert.equal(misleadingAuthHint('添加一个 API Key 开始使用'), '', '引导弹窗不触发（负向对照 2）')
 assert.equal(misleadingAuthHint(undefined), '', '非字符串输入安全')
+// 2026-10-31 设备级实测：AUTH 失败态 dsh 不渲染任何重试控件 ⇒ 提示不得承诺"可直接重试本轮"，
+// 必须给出用户真能执行的动作（重新发送上一条消息）。这是对"过度承诺"的可失败断言。
+assert.ok(!/可直接重试本轮/.test(misleadingAuthHint('本轮运行失败\nAPI 密钥无效')), '提示不得承诺"可直接重试本轮"（AUTH 态无重试控件）')
+assert.ok(/重新发送上一条消息/.test(misleadingAuthHint('本轮运行失败\nAPI 密钥无效')), '提示要给出可执行动作：重新发送上一条消息')
 if (/不是密钥问题|密钥没有问题/.test(misleadingAuthHint('API 密钥无效'))) {
   throw new Error('措辞不得断言"不是密钥问题"（壳分不清真实鉴权失败与上游抖动）')
 }
