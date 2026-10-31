@@ -8,6 +8,7 @@
 //                              [--repo <owner/name>] [--assignee <login>]
 //                              [--state-dir <dir>] [--lock-file <path>] [--pause-file <path>]
 //                              [--state-file <path>] [--failure-threshold <n>] [--reset-state] [--no-backoff]
+//                              [--strict-tree]
 //
 // 退避 / 三态（A6，`scripts/lib/backoff-state.mjs`）：
 //   状态文件 `<state-dir>/state/dsh-watch.json`（默认 `~/.dsh/state/dsh-watch.json`；`--state-file` 直接指定）。
@@ -40,8 +41,19 @@
 //
 // 零 secret：只用 GITHUB_TOKEN（issues: write）。退出码：0 = 正常（含"今天没有新版本"、以及对账失败但
 // 已输出待人工清单）；1 = 真故障（拿不到 npm packument / 读不到 open issue 列表 / 跟踪单没开成或没更新成）；
-// 2 = 用法/属主解析失败。
+// 2 = 用法/属主解析失败。`--strict-tree` 是**唯一**给退出码加的入口（漂移 ⇒ 1），默认行为不变。
 // 红色只应代表"这个 job 坏了"，不代表"今天没有新版本"。
+//
+// 运行时守卫（`scripts/lib/tree-guard.mjs`，2026-10-31 事故跟进）：本机 systemd timer 直接执行
+// **这棵树**里的 `scripts/*.mjs` —— 2026-10-24→30 就因 ROOT 停在旧分支，让"线上"跑了**五天旧代码**
+// （而 dsh-doctor 每天 FAIL 仍推进 last-ok、反向心跳照常显示新鲜）。现在每轮在"真正干活之前"判一次：
+// 判定路径（`scripts` + `src-tauri/resources/{manager,preinstalled}`）相对 `origin/main` 有没有差异、
+// 有没有未提交改动 ⇒ 有则**大声告警一行**（stderr）然后**照常干活、退出码不变**；
+// 只有 `--strict-tree`（或 env `DSH_TREE_GUARD=strict`）才在告警后 exit 1 停跑。
+// `origin/main` 解析不到 / 不是 git 仓库 / git 命令失败 ⇒ 判 `unknown`（"无法判断"）：同样只告警后继续，
+// **不猜成漂移、也不静默通过**。判据刻意**不是** `HEAD == origin/main`（发布合并后本地 ref 落后是常态，
+// 那样每轮都会假警报，假警报很快就会被当噪音忽略）；记录层（KANBAN.json / .agents）不在判定路径里，
+// 天然豁免 —— 看板与笔记的日常改动不该把心跳挡下来。
 //
 // ── 2026-10-24 止血（事故 #201–#217；方案 A1 + A2 + A10）────────────────────────────────
 // 事故：上游发了 `0.2.1-rc.3` 后，本机 systemd timer 与 Actions cron **双写**，共开出 17 条重复 issue。
@@ -95,6 +107,9 @@ import {
 import {
   findTrackingIssue, isTrackingIssue as isTracking, versionInTitle,
 } from './lib/issue-key.mjs'
+// 运行时守卫：ROOT 工作树是否偏离 origin/main（与 dsh-release-autopilot / dsh-doctor 共用唯一实现）。
+// 纯逻辑模块 —— 不 exit、不打印；是否停跑由下面的 --strict-tree / DSH_TREE_GUARD 决定。
+import { checkTreeDrift, formatTreeDrift } from './lib/tree-guard.mjs'
 
 const SELF = fileURLToPath(import.meta.url)
 const ROOT = join(dirname(SELF), '..')
@@ -411,6 +426,23 @@ if (!DRY && !PAUSED && !UNDER_LOCK) {
 }
 if (UNDER_LOCK && !quiet()) console.log(`已获取本机独占锁（flock ${LOCK_FILE}）`)
 if (PAUSED) console.log(`paused by ${PAUSE_FILE} —— 本轮跳过一切写操作（只读探测、去重判定、重复单报告继续）`)
+
+// ── 运行时守卫：干活之前先确认"这棵树"没偏离 origin/main（判据与理由见 scripts/lib/tree-guard.mjs）──
+// 位置刻意在 flock 之后：① skipped-by-lock 的进程没干活，不该因为漂移判红（真正干活的实例会告警）；
+// ② flock 的父子 re-exec 会让守卫跑两次、告警打两遍 —— 放在锁内就只有真正干活的那一次。
+// 告警走 stderr：stdout 留给报表/人工可读输出（`--json` 的文件另写）。默认**不改变退出码**。
+const TREE_STRICT = argv.includes('--strict-tree') || process.env.DSH_TREE_GUARD === 'strict'
+const treeDrift = checkTreeDrift({ root: ROOT })
+const treeWarning = formatTreeDrift(treeDrift)
+if (treeWarning) {
+  console.error(treeWarning)
+  if (TREE_STRICT) {
+    // 停跑不记账（不写退避状态、不写心跳）：这不是"探针坏了"，而是"这棵树不该跑"——
+    // 让反向心跳因为心跳文件陈旧而报警，才是"有人必须来看"的正确信号。
+    console.error('tree-guard: --strict-tree / DSH_TREE_GUARD=strict ⇒ 停跑（exit 1），本轮不探测、不记账')
+    process.exit(1)
+  }
+}
 
 const bare = (v) => (v ?? '').split('-')[0].split('.').map(Number)
 // 无预发布必须返回**空数组**：`'0.2.1'.split('-')[1]` 是 undefined，旧写法 `?? ''` 再 split('.')

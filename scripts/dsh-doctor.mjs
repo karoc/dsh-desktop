@@ -16,7 +16,7 @@
 //
 // 用法：
 //   node scripts/dsh-doctor.mjs [--dry-run] [--json <out>] [--repo <owner/name>] [--now <iso>]
-//                               [--heartbeat-file <path>] [--timeout <sec>]
+//                               [--heartbeat-file <path>] [--timeout <sec>] [--strict-tree]
 //      能力矩阵（默认模式）。用真实凭据对**专用 canary issue**（标题含 `[dsh-doctor] canary`，
 //      首次自动创建后复用）做可逆写：改正文（写探针行 → 读回 → 还原，**净变化为 0**）→ 评论 →
 //      加 label → 关闭；**全部通过后**才在末尾单独写 `last-ok`（心跳）。
@@ -27,7 +27,7 @@
 //      `--dry-run` 只读（不写、不写心跳文件）；`--json <out>` 把矩阵写成 JSON（`--json -` 打到 stdout）。
 //
 //   node scripts/dsh-doctor.mjs --heartbeat-check [--grace-hours 26] [--repeat-hours 168]
-//                               [--now <iso>] [--repo <owner/name>] [--dry-run] [--json <out>]
+//                               [--now <iso>] [--repo <owner/name>] [--dry-run] [--json <out>] [--strict-tree]
 //      反向心跳判据（云端 dsh-heartbeat-check.yml 的薄壳内容）。**双向**：
 //        心跳新鲜（age ≤ grace）⇒ 静默，exit 0（不评论、不加 label）；
 //        心跳陈旧（age > grace）⇒ 评论 `@owner` + 加 `priority:high`，exit 3；
@@ -46,6 +46,7 @@
 //   心跳模式   0 = 静默（新鲜或刚创建）；3 = **已报警**（陈旧；这是「报警」不是「job 坏了」）；
 //              1 = 检查自身坏了（读不到 issue / 报警手段全部失败）；2 = 用法错误。
 //   自测       0 = 全部断言通过；1 = 有断言失败。
+//   `--strict-tree`：工作树漂移 / 无法判断 ⇒ 告警后 1（默认**只告警**，退出码不变）。
 //
 // 测试注入点：`GH_BIN`（默认 **`scripts/gh`** —— 项目专用 PAT；**不要**用裸 `gh`，它落到另一个 token）、
 // `--repo` / `GH_REPO` / `GITHUB_REPOSITORY`、`--now`（钉住"现在"）、`--heartbeat-file` /
@@ -59,6 +60,21 @@
 //   · 不会在任何探测步骤失败时写 `last-ok`（失败运行不推进心跳；诊断信息只进 stdout / `--json`，
 //     不进心跳判据 —— 云端 `--heartbeat-check` **只读 `last-ok`**）；
 //   · 不会用 `permissions.admin=true` 推断 Issues 可写（那正是本次事故的反例）。
+//
+// ── 运行时守卫（2026-10-31，scripts/lib/tree-guard.mjs）────────────────────────
+//   本机 systemd timer 直接执行**这棵树**的 scripts/*.mjs：2026-10-24→30 曾因 ROOT 停在旧分支，让"线上"
+//   跑了五天旧代码，而本脚本每天 FAIL **仍推进 last-ok** —— 反向心跳因此一直显示"新鲜"（最坏组合：
+//   在跑旧代码、且没有人被叫醒）。现在默认模式与 --heartbeat-check 在**真正干活之前**先判一次：
+//   判定路径（`scripts` + `src-tauri/resources/{manager,preinstalled}`）相对 `origin/main` 有没有差异 /
+//   有没有未提交改动 ⇒ 有就告警（stderr：stdout 在 `--json -` 时必须是纯 JSON）后**照常干活、退出码不变**；
+//   `--strict-tree` / env `DSH_TREE_GUARD=strict` 才在告警后 exit 1 停跑。
+//   `origin/main` 解析不到 / 不是 git 仓库 / git 命令失败 ⇒ `unknown`（"无法判断"）：同样只告警后继续，
+//   **不猜成漂移、也不静默通过**。判据刻意**不是** `HEAD == origin/main`（发布合并后本地 ref 落后是常态，
+//   那样每轮假警报）；记录层（KANBAN.json / .agents）不在判定路径里 ⇒ 天然豁免。
+//   `--self-test` **不接**守卫：自测要求"零外部依赖、不碰仓库/真实 ~/.dsh"，且门禁套件会在**没有 .git** 的
+//   临时副本里跑它（那里守卫永远是 unknown，只会给自测输出加噪音、并让自测结论依赖仓库状态）。
+//   守卫自身的行为由 `scripts/test-tree-guard.mjs` 逐条证明；"严格模式真会停跑"由人工负向对照
+//   （真实工作树 + `--dry-run --strict-tree` ⇒ exit 1 并点名文件）证明。
 
 import { execFileSync } from 'node:child_process'
 import { accessSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
@@ -67,6 +83,8 @@ import { dirname, isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomBytes } from 'node:crypto'
 import { LEVEL_LABEL as TOKEN_LEVEL_LABEL, evaluate as evaluateTokenMeta } from './lib/token-meta.mjs'
+// 运行时守卫：ROOT 工作树是否偏离 origin/main（与 dsh-watch / dsh-release-autopilot 共用唯一实现，纯逻辑不 exit）。
+import { checkTreeDrift, formatTreeDrift } from './lib/tree-guard.mjs'
 
 const SELF = fileURLToPath(import.meta.url)
 const ROOT = join(dirname(SELF), '..')
@@ -1277,6 +1295,7 @@ function selfTest() {
 const KNOWN_FLAGS = new Set([
   '--dry-run', '--heartbeat-check', '--self-test', '--json', '--repo', '--now', '--assignee',
   '--grace-hours', '--repeat-hours', '--heartbeat-file', '--token-meta', '--timeout', '--help', '-h',
+  '--strict-tree',
 ])
 const UNKNOWN = argv.find((a, i) => a.startsWith('--') && !KNOWN_FLAGS.has(a))
 if (UNKNOWN) {
@@ -1284,8 +1303,25 @@ if (UNKNOWN) {
   process.exit(2)
 }
 if (has('--help') || has('-h')) {
-  console.log(readFileSync(SELF, 'utf8').split('\n').slice(0, 46).join('\n'))
+  // 前 50 行 = 用法 + 退出码（含 --strict-tree）；窗口长度随头注释增长调整过（46 → 50），
+  // 否则 --help 会停在「退出码」段中间。
+  console.log(readFileSync(SELF, 'utf8').split('\n').slice(0, 50).join('\n'))
   process.exit(0)
+}
+
+// ── 运行时守卫：真正干活之前先确认"这棵树"没偏离 origin/main ──────────────────────────
+// 判据/理由见 scripts/lib/tree-guard.mjs 与头注释「运行时守卫」段。`--self-test` 刻意不接（见头注释）。
+// 默认**不改变退出码**；--strict-tree / DSH_TREE_GUARD=strict 才停跑（exit 1）。
+// 告警走 stderr：stdout 在 `--json -` 时必须是纯 JSON（云端/报表解析的是它）。
+if (MODE !== 'selftest') {
+  const treeWarning = formatTreeDrift(checkTreeDrift({ root: ROOT }))
+  if (treeWarning) {
+    console.error(treeWarning)
+    if (argv.includes('--strict-tree') || process.env.DSH_TREE_GUARD === 'strict') {
+      console.error('tree-guard: --strict-tree / DSH_TREE_GUARD=strict ⇒ 停跑（exit 1），本轮不探测、不写任何东西')
+      process.exit(1)
+    }
+  }
 }
 
 if (MODE === 'selftest') selfTest()

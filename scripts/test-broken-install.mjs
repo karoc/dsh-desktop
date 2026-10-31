@@ -102,8 +102,24 @@ const child = spawn(NODE, [
   // POSIX：自成进程组，便于整树回收（manager 被 SIGKILL 时它的假 dsh 子进程
   // 不会自己退出 —— 曾实测泄漏两个常驻 node 进程）。
   detached: process.platform !== 'win32',
-  env: { ...process.env, HOME: fakeHome, DSH_DESKTOP_NO_UPDATE: '1', DSH_TEST_FAKE_DSH_PKG: fakeDshDir },
+  env: childEnv(),
 })
+
+/**
+ * 子进程环境必须 hermetic（2026-10-31 实测）：
+ * 宿主用 `npm test` 启动本套件时，npm 会注入 `npm_config_*`（本机是 npm_config_cache=~/.npm、
+ * npm_config_proxy=http://127.0.0.1:20172）。manager 的 auto-install 要跑 `npm view` 子进程，
+ * 它继承这些变量后：cache 只读 ⇒ npm 写缓存失败退出 1、proxy 指向 harness 且无 noproxy ⇒ 本地
+ * fake registry 被代理。表现是 `auto-install dsh failed: 无法查询最新版本：npm 退出码 1`，
+ * install 路径根本走不到 pnpm 桩（本套件在 npm test 下因此假红，直接跑却是绿的）。
+ * 修法：清掉 npm 注入的配置，并把 cache 指到本套件的临时目录（可写）。
+ */
+function childEnv() {
+  const env = { ...process.env, HOME: fakeHome, DSH_DESKTOP_NO_UPDATE: '1', DSH_TEST_FAKE_DSH_PKG: fakeDshDir }
+  for (const key of Object.keys(env)) if (/^npm_config_/i.test(key) || /^npm_lifecycle_/i.test(key)) delete env[key]
+  env.npm_config_cache = join(tmp, 'npm-cache')
+  return env
+}
 
 /** 杀掉 manager 及其全部子进程（POSIX 用进程组，Windows 用 taskkill /T）。 */
 function killTree(pid) {

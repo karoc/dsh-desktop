@@ -847,7 +847,15 @@ async function installDshUpdate({ force = false, version } = {}) {
       cpSync(join(backupDir, entry), to, { recursive: true, force: true })
     }
     rmSync(backupDir, { recursive: true, force: true })
-    rmSync(prevBackupDir, { recursive: true, force: true }) // 安装成功 ⇒ 上一周期的保留副本可清
+    // 2026-10-31 修（端到端套件抓到的数据丢失面）：`.prev` 只在**安装成功**时清。
+    // 安装跑完但失败时，恢复循环只把 backupDir 的内容放回 node_modules；`.prev` 里可能还留着
+    // 上一次被打断的安装中"唯一的一份"插件拷贝（与只挪不删的威胁模型同源）。删掉 = 把可恢复变成不可恢复。
+    // 失败时保留 `.prev`：下次启动的恢复路径在「主备份不存在而 .prev 存在」时会用它兜底（见 main() 的 recoverFrom）。
+    if (lastErr === null) {
+      rmSync(prevBackupDir, { recursive: true, force: true })
+    } else {
+      log('安装失败 ⇒ 保留 .plugin-backup.prev 供下次启动恢复（不删除唯一可能的插件拷贝）')
+    }
     installError = lastErr
   } finally {
     // Safety net: if anything above threw before the restore loop, put the

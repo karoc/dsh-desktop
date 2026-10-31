@@ -52,6 +52,8 @@
 //   --assignee <login>   新建 issue 时的 assignee/@提及；缺省=仓库 owner。
 //   --canary-timeout <s> 透传给 dsh-adapt --canary-timeout（默认 180）。
 //   --dev-log/--manager-log  --require-canary 时的真实 dev 壳日志路径（同 dsh-adapt 的参数）。
+//   --strict-tree       ROOT 工作树偏离 origin/main（脚本/随包资源有差异、或这些路径有未提交改动）时
+//                       **停跑**（exit 1）。默认只告警一行后照常干活；env `DSH_TREE_GUARD=strict` 等价。
 //
 // 退出码：0 全绿完成（含无新版 / 已发布 / stage1 完成）｜1 失败（含 CI 红 / pending 超时 / 冲突 / 资产<3）
 //         2 用法错误｜3 前置不满足（探测失败 / runtime 装不上 / 无法解析仓库或 issue / canary 缺日志）。
@@ -98,6 +100,18 @@
 //   `--reset-state` 人工恢复（不写 GitHub）；`--no-backoff` 只给演练/负向对照。
 //   退出码补充：退避跳过轮 0（不干活、也不是新故障）；2（用法）/130（中断）不记账。
 //   详细口径与"为什么 CI 里只记账不发评论"见 dsh-watch 头注释同名段。
+//
+// ── 运行时守卫（2026-10-31，scripts/lib/tree-guard.mjs）────────────────────────
+//   本机 timer 直接执行**这棵树**的 scripts/*.mjs：2026-10-24→30 曾因 ROOT 停在旧分支，让"线上"跑了
+//   五天旧代码（dsh-doctor 每天 FAIL 仍推进 last-ok）。每轮在退避判定之后、`flow()` 之前判一次：
+//   判定路径（`scripts` + `src-tauri/resources/{manager,preinstalled}`）相对 `origin/main` 有没有差异、
+//   有没有未提交改动 ⇒ 有就**大声告警**（stderr —— `--json` 不带文件时 stdout 必须是纯 JSON）然后照常干活；
+//   `--strict-tree` / env `DSH_TREE_GUARD=strict` 才在告警后 exit 1 停跑。
+//   `origin/main` 解析不到 / 不是 git 仓库 / git 命令失败 ⇒ `unknown`（"无法判断"）：同样只告警后继续 ——
+//   **不猜成漂移，也不静默通过**。判据刻意**不是** `HEAD == origin/main`（发布合并后本地 ref 落后是常态，
+//   那样每轮假警报，很快被当噪音忽略）；记录层（KANBAN.json / .agents）不在判定路径里 ⇒ 天然豁免。
+//   位置在退避跳过 / `--reset-state` 之后：那些轮次本来就不干活，不该因为守卫判红；守卫也**不写**退避或
+//   心跳记录 ——「这棵树不该跑」要让反向心跳因心跳文件陈旧而报警，才是"有人必须来看"的正确信号。
 //
 // ── systemd user timer 模板（本仓库**不**改你机器上的 systemd；只给模板）──────
 //   ~/.config/systemd/user/dsh-release-autopilot.service
@@ -149,6 +163,8 @@ import {
   renderBrokenEntry, renderHeartbeat, renderStillBroken, renderTransitionComment,
   resetStateFile, saveState,
 } from './lib/backoff-state.mjs'
+// 运行时守卫：ROOT 工作树是否偏离 origin/main（与 dsh-watch / dsh-doctor 共用唯一实现，纯逻辑不 exit）。
+import { checkTreeDrift, formatTreeDrift } from './lib/tree-guard.mjs'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const T0 = Date.now()
@@ -182,6 +198,7 @@ const USAGE = `usage: node scripts/dsh-release-autopilot.mjs [--dry-run] [--stag
   --reset-state      重置本地退避状态为 healthy（不写 GitHub）后退出
   --no-backoff       禁用退避/状态记录（只给演练与负向对照）
   --no-release-resume 关闭「无新版时仍合并停摆的 release-please 版本 PR」兜底（默认开）
+  --strict-tree      ROOT 工作树偏离 origin/main 时停跑（exit 1）；默认只告警一行后照常干活
 
 退出码：0 完成 / 1 失败 / 2 用法 / 3 前置不满足。详见脚本头注释。`
 
@@ -194,7 +211,7 @@ function parseArgs(argv) {
     runtime: null, repo: null, assignee: null, canaryTimeout: 180,
     devLog: null, managerLog: null, help: false,
     stateDir: null, stateFile: null, failureThreshold: 3, resetState: false, noBackoff: false,
-    releaseResume: true,
+    releaseResume: true, strictTree: false,
   }
   const val = (i, name) => {
     const v = argv[i + 1]
@@ -240,6 +257,7 @@ function parseArgs(argv) {
     else if (a === '--reset-state') o.resetState = true
     else if (a === '--no-backoff') o.noBackoff = true
     else if (a === '--no-release-resume') o.releaseResume = false
+    else if (a === '--strict-tree') o.strictTree = true
     else if (a === '--failure-threshold' || eq === '--failure-threshold') {
       const n = Number(take('--failure-threshold'))
       if (!Number.isInteger(n) || n < 1) throw new UsageError('--failure-threshold 必须是正整数')
@@ -431,6 +449,20 @@ if (opts.noBackoff) {
       emitJson(0)
       process.exit(0)
     }
+  }
+}
+
+// ── 运行时守卫：真正干活（flow）之前先确认"这棵树"没偏离 origin/main ──────────────────
+// 判据/理由见 scripts/lib/tree-guard.mjs 与头注释「运行时守卫」段。位置在退避跳过与 --reset-state 之后：
+// 那些轮次本来就不干活，不必为此判红。告警走 log()（`--json` 不带文件时自动改走 stderr，保住纯 JSON）。
+// 默认**不改变退出码**；--strict-tree / DSH_TREE_GUARD=strict 才停跑（exit 1 = 失败，不是用法错误）。
+const TREE_STRICT = opts.strictTree || process.env.DSH_TREE_GUARD === 'strict'
+const treeWarning = formatTreeDrift(checkTreeDrift({ root: ROOT }))
+if (treeWarning) {
+  log(treeWarning)
+  if (TREE_STRICT) {
+    log('tree-guard: --strict-tree / DSH_TREE_GUARD=strict ⇒ 停跑（exit 1），本轮不探测、不 clone、不 push')
+    process.exit(1)
   }
 }
 function step(name, status, ms, detail = '') {
