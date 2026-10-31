@@ -369,6 +369,46 @@ CI 的 `check` 作业跑的是 **host（ubuntu）** 的 `cargo clippy -- -D warn
 只有 `include_str!` 的 `resources/ui/shell-chrome.js` 与 Rust 代码才必须重新构建。**别把 rebuild 当验证手段**
 （10 分钟一次，还不一定测到你想测的那段）。
 
+### 4.11 Windows 实机验收配方（CDP 真实输入，2026-10-31 起）
+
+需要验证**只在 Windows WebView2 里才成立**的行为（外链右键/中键、壳条幅、重试按钮、原生菜单）时，UIA 只能读、
+不能发右键/中键，也不能把文本送进 composer（前台锁 + SendKeys 实测不可靠）。用「临时 CDP + 真实输入事件」：
+
+**一次性准备（dev 树 `D:\Dev\dsh-desktop-dev`）**
+1. PowerShell 更新：`git fetch origin; git checkout -f -B main origin/main; npm install; npm run bundle:dev`
+   （WSL 对 /mnt/d 只读，写操作必须走 Windows 互操作）。
+2. 给 `src-tauri/tauri.conf.json` 的 `app.windows[0]` 临时加 `"additionalBrowserArgs": "--remote-debugging-port=9333"`，
+   重建。**必须 UTF-8 无 BOM**（PowerShell 5.1 `Set-Content -Encoding UTF8` 会写 BOM ⇒ tauri build 报
+   `unable to parse JSON Tauri config`）；`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` 环境变量**无效**
+   （wry 会传程序化 additional args，env 被覆盖）。
+3. 安装：静默安装器对**同版本会跳过覆盖**（实测 exe 时间戳不变）⇒ 停掉 dev 壳后直接
+   `Copy-Item target\release\dsh-desktop-dev.exe "$env:LOCALAPPDATA\DSH Smoothly Desktop Dev\"`，再启动；
+   `http://127.0.0.1:9333/json/version` 有响应即 CDP 就绪。
+
+**驱动（Windows node 24，全局 `WebSocket`，零依赖）**
+- `/json/list` 取 page target → WebSocket → `Runtime.evaluate`。
+- **不要 `Page.navigate`**：壳的导航守卫会把非 live origin 弹回 dsh；要测页面交互就留在当前页注入
+  （`document.body.appendChild` 一个 `position:fixed` 的 `<a target=_blank>`），用
+  `Input.dispatchMouseEvent`（button=right/2、middle/4）发**真实输入**。
+- 输入文本：JS `el.focus()` + `Input.insertText` + `Input.dispatchKeyEvent`（Enter）——不依赖 OS 焦点，
+  在用户正用机器时也安全。
+- 断言通道（按需组合）：① 本地 stub 的命中日志（外链是否真打开）② `dsh-desktop-session.log` 的
+  `bridge: /shell/open-url` 行数 ③ 页面 DOM + **shadowRoot**（`document.getElementById('dsh-shell-chrome').shadowRoot`
+  —— 壳条幅在这里，UIA 看不到）④ 顶层窗口枚举（原生菜单 = WebView2 进程出现 `Chrome_WidgetWin_1` 弹窗；
+  fresh launch 基线无此窗口）。
+- 收尾：revert `tauri.conf.json` → 重建干净 → 覆盖安装 → 停 dev 壳；**不要截图**（用户在用桌面时
+  CopyFromScreen 会抓到前台别的窗口 —— 隐私 + 误证，实测踩过）。
+
+**P2 鉴权误报设备验证（可复用）**
+- dev 实例 `profiles/web/cordis.patch.yml`：`agent-default-model.provider=stub403` + `model=stub-model`；
+  `stub403` provider 已存在（baseURL `http://127.0.0.1:41803/v1`、`apiKeyEnv: STUB_KEY`，`.env` 里有值）。
+  **必须删掉 `reasoningEffort`**（stub 模型不支持 ⇒ 直接 `UNSUPPORTED_REASONING_EFFORT`，请求根本不出网）。
+- 桩：HTTP 403 + `{"type":"server_error","code":"server_error","message":"..."}` ⇒ 页面「API 密钥无效」⇒
+  壳条幅出现；负向对照用 404（非 AUTH）⇒ 条幅不得出现。**条幅状态（authShown）按页面存**：换会话不重置，
+  负向对照需「新建会话 → Page.reload → 发消息」。
+- 已知边界（2026-10-31 实测）：AUTH 失败态 dsh **不渲染任何重试控件**，壳「重试本轮」只能回退 toast
+  「未找到重试入口…」——见看板卡 `card-d9ec479a`（文案过度承诺，待决策）。
+
 ## 5. Tauri 2 踩坑速查（本轮新踩，先查再写）
 | 坑 | 真相 |
 |---|---|
@@ -530,3 +570,7 @@ git status --short                           # 确认无意外文件
 - `docs/archive/2026-09-21-dsh-0.1.6-alpha.2-upgrade-plan.md` —— 0.1.6-alpha.2 升级方案（含壳内
   插件管理整体移除的决策、移除清单、能力对账与验证计划）
 - 验收清单：README「壳菜单栏」「开发版」小节（Windows 实机：拖动/三键/Aero 最大化图标/SPA 自愈）
+- `scripts/verify-dev-ui.ps1` —— dev 壳 UI 自动验收（dump / shot / invoke / 点击，WSL interop）
+- Windows 实机验收记录：`.agents/notes/implemented/testing/2026-10-31-windows-dev-shell-link-acceptance-cdp.md`
+  （外链右键/中键）与 `.agents/notes/implemented/testing/2026-10-31-auth-hint-device-verification-403-stub.md`
+  （403 误报提示 + 重试按钮实测）
