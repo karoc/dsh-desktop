@@ -239,6 +239,11 @@ static PENDING_OPEN: Mutex<Option<String>> = Mutex::new(None);
 /// signal of "user clicked the toast and came back".
 static FOCUS_OPEN: Mutex<Option<String>> = Mutex::new(None);
 
+/// 最近一次上报的会话聚合 `(运行中, 待你处理, 已完成未查看)`。client 插件在
+/// 数值**变化时**才 POST /state——快照每次事件都会触发，稳态不得反复打桥。
+/// `None` = 尚未收到任何上报（页面还没挂载），托盘保持产品名。
+static SESSION_AGGREGATE: Mutex<Option<(u32, u32, u32)>> = Mutex::new(None);
+
 /// Whether the "dsh 有更新" toast has already been shown this process launch
 /// (the manager reports update-status at boot and on demand — remind once).
 static UPDATE_TOAST_SHOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -566,6 +571,44 @@ fn show_toast(app: &AppHandle, title: String, body: String) {
                 }
             }
         }
+    }
+}
+
+/// 把 client 上报的会话聚合写进托盘 tooltip。
+///
+/// 用户切走后不必打开窗口就能知道"现在有没有活在跑、有没有在等我"——这是
+/// 桌面壳相对浏览器版唯一不可替代的一层（浏览器没有常驻托盘）。文案只在
+/// 数值变化时改：`set_tooltip` 每次都会让 Windows 重建 tooltip，快照级频率
+/// 调用没有意义。全 0 时回到产品名，避免托盘常驻一条无信息量的文字。
+fn apply_session_aggregate(app: &AppHandle, running: u32, pending: u32, done: u32) {
+    let next = (running, pending, done);
+    {
+        let mut guard = SESSION_AGGREGATE.lock().unwrap();
+        if *guard == Some(next) {
+            return;
+        }
+        *guard = Some(next);
+    }
+    let base = app.package_info().name.clone();
+    let text = if running + pending + done == 0 {
+        base
+    } else {
+        let mut parts: Vec<String> = Vec::new();
+        if running > 0 {
+            parts.push(format!("{running} 个运行中"));
+        }
+        if pending > 0 {
+            parts.push(format!("{pending} 个待处理"));
+        }
+        if done > 0 {
+            parts.push(format!("{done} 个已完成"));
+        }
+        format!("{base} — {}", parts.join(" · "))
+    };
+    // 托盘可能尚未创建（早期启动）或已被移除：两处都要静默跳过，托盘状态
+    // 属于诊断信息，绝不能让一条 tooltip 失败影响桥的响应。
+    if let Some(tray) = app.tray_by_id("dsh-tray") {
+        let _ = tray.set_tooltip(Some(text.as_str()));
     }
 }
 
@@ -1371,7 +1414,7 @@ mod danger_action_tests {
             assert!(!action.title.is_empty() && !action.detail.is_empty(), "{path} 文案不能为空");
         }
         // 非危险端点与只读方法一律不拦
-        for path in ["/window/state", "/window/drag", "/alive", "/log", "/notify", "/pending-open", "/shell/state", "/shell/status", "/devtools"] {
+        for path in ["/window/state", "/window/drag", "/alive", "/log", "/notify", "/state", "/pending-open", "/shell/state", "/shell/status", "/devtools"] {
             assert!(dangerous_bridge_action("POST", path).is_none(), "{path} 不应被拦");
             assert!(dangerous_bridge_action("GET", path).is_none(), "GET {path} 不应被拦");
         }
@@ -2836,6 +2879,21 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
                 log_line(&data, &format!("notification session={s}"));
             }
             show_toast(app, title, body2);
+            ("200 OK", String::new())
+        }
+        // 会话聚合（运行中 / 待你处理 / 已完成未查看）。client 插件只在数值
+        // 变化时发一次；这里只做落库 + 托盘 tooltip，不打扰、不弹窗。
+        ("POST", "/state") => {
+            let (running, pending, done) = serde_json::from_str::<serde_json::Value>(&body)
+                .map(|v| {
+                    (
+                        v.get("running").and_then(|x| x.as_u64()).unwrap_or(0) as u32,
+                        v.get("pending").and_then(|x| x.as_u64()).unwrap_or(0) as u32,
+                        v.get("done").and_then(|x| x.as_u64()).unwrap_or(0) as u32,
+                    )
+                })
+                .unwrap_or((0, 0, 0));
+            apply_session_aggregate(app, running, pending, done);
             ("200 OK", String::new())
         }
         ("GET", "/update-status") => {

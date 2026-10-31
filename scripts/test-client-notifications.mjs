@@ -387,5 +387,54 @@ try {
 
 disposeB()
 
-console.log('PASS — notification plugin behavioral test (23 scenarios)')
+// ── scenarios 24-29: aggregate state for the shell tray (/state) ────────────
+// While the window is hidden the tray tooltip is the ONLY place that can
+// answer "is anything working / is anything waiting on me". The contract:
+// post on CHANGE only (the snapshot fires per event; a steady state must not
+// keep the bridge warm), subagent rows never inflate the work count (their
+// parent turn covers them, same rule as the toasts) but a subagent's pending
+// interaction still counts (a person must answer it), and blank rows count
+// for nothing.
+state = { ids: [], byId: {}, current: undefined, phase: 'ready', subagentsByParent: {}, jobsBySession: {}, currentAddress: undefined }
+allPosts = []
+// eslint-disable-next-line no-eval
+eval(clientJs)
+const aggPosts = () => allPosts
+  .filter((e) => String(e[0]).endsWith('/state'))
+  .map((e) => JSON.parse(e[1].body || '{}'))
+const disposeAgg = windowStub.__handoff.factory().apply(ctx)
+
+// 24: baseline posts the zero aggregate exactly once
+assert.equal(aggPosts().length, 1, 'baseline posts the zero aggregate once')
+assert.deepEqual(aggPosts()[0], { running: 0, pending: 0, done: 0 })
+
+// 25: a running session appears in the aggregate
+introduce('agg-A', { running: true, title: '跑着' })
+assert.deepEqual(aggPosts().at(-1), { running: 1, pending: 0, done: 0 }, 'running session counted')
+
+// 26: an unchanged snapshot must NOT re-post
+const aggBefore = aggPosts().length
+mutate({ ids: ['agg-A'], byId: { 'agg-A': session('agg-A', { running: true, title: '跑着' }) } })
+assert.equal(aggPosts().length, aggBefore, 'steady state must not re-post /state')
+
+// 27: pending counts; a subagent row does not inflate the work count
+mutate({
+  ids: ['agg-A', 'agg-S'],
+  byId: {
+    'agg-A': session('agg-A', { running: true, pendingInteraction: 'approval', title: '跑着' }),
+    'agg-S': session('agg-S', { running: true, origin: 'subagent', parentId: 'agg-A', cwd: '/work' }),
+  },
+})
+assert.deepEqual(aggPosts().at(-1), { running: 1, pending: 1, done: 0 }, 'subagent work excluded, pending counted')
+
+// 28: a blank (created-but-unused) row counts for nothing
+mutate({ ids: ['agg-B'], byId: { 'agg-B': session('agg-B', { running: true, blank: true }) } })
+assert.deepEqual(aggPosts().at(-1), { running: 0, pending: 0, done: 0 }, 'blank row excluded')
+
+// 29: finished-but-unviewed counts as done
+mutate({ ids: ['agg-C'], byId: { 'agg-C': session('agg-C', { running: false, completed: true, title: '完成未看' }) } })
+assert.deepEqual(aggPosts().at(-1), { running: 0, pending: 0, done: 1 }, 'unviewed completion counted')
+disposeAgg()
+
+console.log('PASS — notification plugin behavioral test (23 notification + 6 aggregate scenarios)')
 process.exit(0)

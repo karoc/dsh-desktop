@@ -13,6 +13,7 @@ DSH Smoothly Desktop（**DSH SD**）把 [DeepSeek Harness](https://github.com/de
 - **原生通知**：dsh 需要你问答（`pendingInteraction`：问题 / 批准 / 计划审阅）时，或某个会话结束（`running` 由真变假）时，弹出系统通知；窗口在前台时不打扰。
 - **点击通知直达会话**：单击系统通知会把窗口带回前台并打开对应会话（单实例 + 本地桥实现）。
 - **托盘常驻**：关窗只是隐藏，服务继续跑；托盘菜单"退出"才真正停止并退出。
+- **托盘显示会话状态**：client 插件在会话聚合发生变化时上报壳（运行中 / 待你处理 / 已完成未查看），托盘 tooltip 随之更新——不打开窗口就知道"现在有没有活在跑、有没有在等我"。数值不变时不上报（快照每次事件都会触发，稳态不得反复打桥）；subagent 行不计入运行数（其父回合已覆盖），但 subagent 的待处理交互仍然计入；空白会话不计入。
 - **壳内代理**：所有 dsh 出站流量（模型请求、web 搜索、npm 安装/更新、插件、子代理）都经壳内置的本地正向代理；默认直连，可在设置里勾选哪些主机走上游代理（含可选账号密码），保存即生效。**入口 = 托盘「代理设置…」**（打开独立设置窗口，不打断 dsh 页面）。
 - **官方零改动**：通知插件通过 `dsh web --patch` 在运行时注入，更新 dsh 不会冲掉它。
 - 桌面端数据自包含（`DSH_HOME` 默认在运行时目录内），与浏览器版各自独立，可随时切回共用。
@@ -30,7 +31,7 @@ DSH Smoothly Desktop（**DSH SD**）把 [DeepSeek Harness](https://github.com/de
 │ 本地通知桥（127.0.0.1:<bridge>）                           │
 │   /notify → tauri-plugin-notification 弹系统通知           │
 │   /pending-open → 点通知后的"待打开会话"                    │
-│   /log /alive → 决策日志 + 心跳（排查用）                   │
+│   /log /alive /state → 日志 + 心跳 + 会话聚合               │
 │ 自绘顶栏（decorations:false）：窗口三键 + 壳菜单栏           │
 │   注入 shell-chrome.js（SHELL_MENUS 定义点，IPC/桥双通道）   │
 │ 托盘：显示窗口 / 重启服务 / 打开数据目录 / 退出              │
