@@ -21,6 +21,13 @@
 >
 > 详情见 `.agents/notes/implemented/bug-fix/2026-09-08-legacy-uninstaller-name-kill.md`。
 
+## [0.24.0](https://github.com/karoc/dsh-desktop/compare/v0.23.1...v0.24.0) (2026-10-31)
+
+
+### Features
+
+* **automation:** 工作树漂移守卫 + logrotate 安装守卫 + 备份保留失败路径修复 + 测试环境影响加固 ([#249](https://github.com/karoc/dsh-desktop/issues/249)) ([6a3daa7](https://github.com/karoc/dsh-desktop/commit/6a3daa78eafe20bbd4cc2c42e21b5783e270f98d))
+
 ## [0.23.1](https://github.com/karoc/dsh-desktop/compare/v0.23.0...v0.23.1) (2026-10-30)
 
 
