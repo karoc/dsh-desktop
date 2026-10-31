@@ -228,6 +228,34 @@ window.__ModuleLoader__.load({
           if (!shapeReported) { shapeReported = true; reportShape('unrecognized') }
           return null
         }
+        // ── aggregate state for the shell (tray tooltip) ────────────────────
+        // What a user needs without opening the window: is anything working,
+        // is anything waiting on me. Posted only when the numbers CHANGE — the
+        // snapshot fires on every event, and a steady state must not keep the
+        // bridge warm. Subagent rows are excluded from the WORK count (one
+        // parent turn covers them, the same rule the toasts follow), but a
+        // subagent's pending interaction still needs a person, so it counts.
+        // Blank rows (created, never used) count for nothing.
+        let lastAggregateKey = null
+        function reportAggregate(shaped) {
+          let running = 0
+          let pending = 0
+          let done = 0
+          for (const id of shaped.ids) {
+            const item = shaped.byId[id]
+            if (!item || item.blank === true) continue
+            if (item.pendingInteraction) pending += 1
+            if (item.origin === 'subagent') continue
+            if (item.running === true) running += 1
+            else if (item.completed === true) done += 1
+          }
+          const key = `${running}/${pending}/${done}`
+          if (key === lastAggregateKey) return
+          lastAggregateKey = key
+          logEvent('aggregate', null, key)
+          post('/state', { running, pending, done })
+        }
+
         const scan = () => {
           let snap
           try {
@@ -317,6 +345,7 @@ window.__ModuleLoader__.load({
               lastErrorToastAt.delete(id)
             }
           }
+          reportAggregate(shaped)
         }
         const list = ctx.sessions.list
         const unsubscribe = list && typeof list.subscribe === 'function'
