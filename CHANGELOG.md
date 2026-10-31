@@ -21,6 +21,13 @@
 >
 > 详情见 `.agents/notes/implemented/bug-fix/2026-09-08-legacy-uninstaller-name-kill.md`。
 
+## [0.24.1](https://github.com/karoc/dsh-desktop/compare/v0.24.0...v0.24.1) (2026-10-31)
+
+
+### Bug Fixes
+
+* **shell:** 鉴权误报提示不再承诺「可直接重试本轮」（AUTH 态 dsh 无重试控件） ([#253](https://github.com/karoc/dsh-desktop/issues/253)) ([a7c1ef1](https://github.com/karoc/dsh-desktop/commit/a7c1ef1d4a2c0b7772ba775add19243d947a5c8e))
+
 ## [0.24.0](https://github.com/karoc/dsh-desktop/compare/v0.23.1...v0.24.0) (2026-10-31)
 
 
