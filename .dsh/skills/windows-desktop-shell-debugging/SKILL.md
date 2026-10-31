@@ -249,3 +249,33 @@ web(`runtime\node_modules\` 后反斜杠)、`...\runtime` 结尾 → 全部命�
 _old/-extra/desktopX → 全部不命中。CommandLine null 显式排除。**测试坑**：tasklist 的
 `grep "^PID "` 会因 PID 列对齐空格误报"进程死了"——精确检查用
 `Get-CimInstance Win32_Process -Filter "ProcessId=N"`。
+
+### 9.12 manager 被「客户端 RST」打死（CONNECT 握手窗口）——2026-11-01 两次正式版崩溃
+
+**症状**：壳窗口退回启动页（D1：不自动重启，用户得手动点「重启服务」）；`runtime/manager.log` 末段是
+`fatal(uncaughtException) Error: read ECONNRESET` + `at TCP.onStreamRead (node:internal/stream_base_commons:216:20)`。
+
+**根因（已修）**：`scripts/proxy.mjs` 的 `server.on('connect')`。Node 的 http server 把 socket 交给
+'connect' 监听器时会摘掉自己的 'error' 处理，而从这一刻到 `pipeTunnel`（要等上游 CONNECT 握手或 TCP 建连完成）
+之间，`clientSocket` 无人接 'error' —— 客户端在这段窗口里 RST，就是 uncaughtException → 整个 manager 退出。
+触发者可以是任何客户端：dsh 自己取消的请求、被终止的子进程（工具命令 / `Select-Object -First` 类的管道提前
+结束）、npm/curl 之类的子 CLI。
+
+**判定三步（全只读）**：
+1. `runtime/reports/manager-exception-<ts>.txt` 在 ⇒ manager 自身未捕获异常（不在而 code=1 ⇒ 更像外部
+   TerminateProcess）。同目录 `manager-report-<pid>-<ts>.json` 是完整 node 诊断报告。
+2. 读该 report 的 `libuv` 段找指纹：同时出现「已建立的非 loopback tcp 隧道」+「`remoteEndpoint:null`、
+   `readable:false/writable:false`、有 `localEndpoint` 的 tcp（= connect 还没完成）」+「一个已 destroy 的
+   inactive tcp（= 刚 RST 掉的那个）」，就是「客户端在等建连的窗口里 RST」。
+3. 解码会话转录（§9.3）看崩溃瞬间在跑什么；注意 `turn/end reason:interrupted` 是 resume 时补写的
+   crash-orphan 标记（时间回填最后真实事件），**不**等于用户停止（用户停止记 `aborted`）。
+
+**最小复现（任何平台；Windows 用宿主自带 node.exe，已验证 node 24.18 栈坐标与线上一致）**：
+`net.connect` 到代理 → 发 `CONNECT <host>:443` → 让代理的上游/直连建连保持 pending（黑洞 IP：`10.255.255.1`，
+或只收不回 CONNECT 的假上游）→ 客户端 `socket.resetAndDestroy()`。修前：进程 uncaughtException `read ECONNRESET`
+（exit 1）；修后：无 uncaught 且同一代理实例仍能建新隧道（exit 0）。现成断言见 `scripts/test-proxy.mjs` scenario 13。
+
+**同一缺陷族**（修 socket 层时要一起看）：普通 HTTP 转发路径的 `upRes`/`req`/`res` 流没 error 监听、
+`headersSent` 之后又 `writeHead` 抛 `ERR_HTTP_HEADERS_SENT`、把已建立隧道当 HTTP 响应通道写 502 —— 都能以同样
+方式打死 manager。**不要**用全局 `uncaughtException` 兜底来"修"它：那会把真缺陷变成静默（manager 的 fail-fast +
+取证是设计）。

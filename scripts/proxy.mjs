@@ -204,6 +204,17 @@ function openUpstreamTunnel(cfg, targetHost, targetPort, authHeader) {
   return new Promise((resolvePromise, rejectPromise) => {
     let socket = null
     const fail = (e) => { try { socket?.destroy() } catch {}; rejectPromise(e) }
+    // 握手成功即移交所有权：`fail` 只属于"握手阶段失败"。旧实现把它留在
+    // socket 上，隧道建立后的正常 RST 会再走一遍"握手失败"路径（promise
+    // 已 settle，reject 无效，但 destroy 与 pipeTunnel 各来一次，语义混乱）。
+    // 这里换成明确的"隧道期 error"处理：既保证从 settle 到 pipeTunnel 挂载
+    // 之间不出现无接收者的窗口（那正是一个 uncaughtException 窗口），又让
+    // 行为与 pipeTunnel 一致 —— 只销毁、不上抛。
+    const settle = (rest) => {
+      socket.removeListener('error', fail)
+      socket.on('error', () => { try { socket.destroy() } catch {} })
+      resolvePromise({ socket, rest })
+    }
     if (protocol === 'https') {
       socket = tlsConnect({ host: u.host, port: Number(u.port), servername: u.host })
     } else {
@@ -214,7 +225,7 @@ function openUpstreamTunnel(cfg, targetHost, targetPort, authHeader) {
       try {
         if (protocol === 'socks5') {
           await socks5Handshake(socket, u, targetHost, targetPort)
-          resolvePromise({ socket, rest: Buffer.alloc(0) })
+          settle(Buffer.alloc(0))
         } else {
           const lines = [`CONNECT ${formatAuthority(targetHost, targetPort)} HTTP/1.1`, `Host: ${formatAuthority(targetHost, targetPort)}`]
           if (authHeader) lines.push(`Proxy-Authorization: ${authHeader}`)
@@ -223,7 +234,7 @@ function openUpstreamTunnel(cfg, targetHost, targetPort, authHeader) {
           if (!/^HTTP\/1\.[01]\s+2\d\d/.test(head)) {
             throw new Error(`upstream CONNECT rejected: ${head.split('\r\n')[0] || 'no status'}`)
           }
-          resolvePromise({ socket, rest })
+          settle(rest)
         }
       } catch (e) {
         fail(e)
@@ -503,10 +514,36 @@ export function createForwardProxy({ configFile, onHosts, log = () => {} }) {
     b.on('close', cleanup)
   }
 
+  /**
+   * 回 502 —— 但只在响应头还没发出时。响应体已经开始流动（headersSent）后
+   * 再 writeHead 会抛 ERR_HTTP_HEADERS_SENT，而这个异常发生在 socket/stream
+   * 的 error 回调里 → uncaughtException，等于换一种方式把 manager 打挂（线上
+   * 同类崩溃的另一条入口）。已开始的响应只能截断，不能再写状态行。
+   */
+  const failClient = (res, message) => {
+    try {
+      if (res.headersSent || res.destroyed) {
+        res.destroy()
+        return
+      }
+      res.writeHead(502, { 'content-type': 'text/plain' })
+      res.end(message)
+    } catch { /* socket already gone */ }
+  }
+
   const server = createServer((req, res) => {
     // Plain-HTTP forward-proxy request: request-target is an absolute URI
     // ("GET http://host:port/path HTTP/1.1") — this is what undici sends for
     // http:// targets.
+    //
+    // 为什么先挂这两个流的 error 处理：客户端 abort（req）与上游 reset
+    // （upRes）都只在 stream 层 emit 'error'，http.Server 的默认处理只覆盖
+    // socket 层，没有监听器时就是 uncaughtException → manager 退出。这里只做
+    // 清理（断开另一侧、别让管道悬着），业务错误仍然由下面的 failClient 表达。
+    let up = null
+    const abortUpstream = () => { try { up?.destroy() } catch {} }
+    res.on('error', abortUpstream) // 客户端已消失：上游请求也不必继续
+    req.on('error', () => { abortUpstream(); try { res.destroy() } catch {} }) // 客户端 abort：别把上游请求悬在半空
     let u
     try {
       u = new URL(req.url)
@@ -539,35 +576,48 @@ export function createForwardProxy({ configFile, onHosts, log = () => {} }) {
     if (useUpstream) {
       const auth = upstreamAuth(cfg)
       if (auth) headers['proxy-authorization'] = auth
-      const up = httpRequest(
+      up = httpRequest(
         { host: cfg.upstream.host, port: Number(cfg.upstream.port), method: req.method, path: req.url, headers },
         (upRes) => {
+          // 上游响应体中途 RST：只截断客户端响应；不挂这个监听器就是
+          // uncaughtException（消费方/源流的 error 不会自动转发）。
+          upRes.on('error', () => { try { res.destroy() } catch {} })
+          if (res.destroyed) { try { upRes.destroy() } catch {}; return } // 客户端先走了
           res.writeHead(upRes.statusCode ?? 502, upRes.headers)
           upRes.pipe(res)
         },
       )
-      up.on('error', (e) => {
-        res.writeHead(502, { 'content-type': 'text/plain' })
-        res.end(`proxy: upstream error: ${e.message}`)
-      })
+      up.on('error', (e) => failClient(res, `proxy: upstream error: ${e.message}`))
       req.pipe(up)
     } else {
-      const up = httpRequest(
+      up = httpRequest(
         { host, port, method: req.method, path: u.pathname + u.search, headers },
         (upRes) => {
+          upRes.on('error', () => { try { res.destroy() } catch {} }) // 源站响应体中途 RST 同上
+          if (res.destroyed) { try { upRes.destroy() } catch {}; return } // 客户端先走了
           res.writeHead(upRes.statusCode ?? 502, upRes.headers)
           upRes.pipe(res)
         },
       )
-      up.on('error', (e) => {
-        res.writeHead(502, { 'content-type': 'text/plain' })
-        res.end(`proxy: origin error: ${e.message}`)
-      })
+      up.on('error', (e) => failClient(res, `proxy: origin error: ${e.message}`))
       req.pipe(up)
     }
   })
 
   server.on('connect', (req, clientSocket, head) => {
+    // 为什么这里第一件事是挂 error 监听：http.Server 把 socket 交给 'connect'
+    // 监听器时已经摘掉了自己的 'error' 处理，而从这里到 pipeTunnel（要等上游
+    // CONNECT 握手 / TCP 建连完成）之间是一个"没有接收者"的窗口。客户端在这个
+    // 窗口里 RST，'error' 无人处理 → uncaughtException → manager 整个进程退出
+    // （2026-10-31 线上两次 `read ECONNRESET at TCP.onStreamRead`）。所以：
+    // 只清理、只记录，绝不上抛，并且带上还在建立中的出站 socket 一起收掉。
+    let pending = null // 建立中的出站 socket（客户端提前消失时销毁，避免半开连接泄漏）
+    let tunneled = false
+    let clientGone = false
+    const dropPending = () => { try { pending?.destroy() } catch {} }
+    clientSocket.on('error', () => { clientGone = true; dropPending() })
+    clientSocket.on('close', () => { clientGone = true; if (!tunneled) dropPending() })
+
     // CONNECT host:port — the HTTPS tunnel every model request rides. IPv6
     // literals arrive bracketed (`[::1]:443`), so the authority is parsed.
     const target = parseConnectAuthority(String(req.url ?? ''))
@@ -588,6 +638,7 @@ export function createForwardProxy({ configFile, onHosts, log = () => {} }) {
     const rejectClient = (reason) => {
       const msg = String(reason?.message ?? reason).slice(0, 200).replace(/[\r\n]+/g, ' ')
       log(`connect ${host}:${port} failed: ${msg}`)
+      if (clientGone) return // 日志保留（路由/失败语义不变），但不再往死 socket 写
       try {
         clientSocket.write(`HTTP/1.1 502 Bad Gateway\r\nContent-Length: ${Buffer.byteLength(msg)}\r\n\r\n${msg}`)
       } catch { /* socket already gone */ }
@@ -598,6 +649,9 @@ export function createForwardProxy({ configFile, onHosts, log = () => {} }) {
       // Tunnel through the configured upstream (http / https / socks5).
       openUpstreamTunnel(cfg, host, port, upstreamAuth(cfg))
         .then(({ socket: tunnel, rest }) => {
+          tunneled = true
+          pending = null
+          if (clientGone) { try { tunnel.destroy() } catch {}; return } // 客户端已消失，别白建隧道
           clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n')
           if (head?.length) tunnel.write(head)
           if (rest.length) clientSocket.write(rest)
@@ -606,8 +660,19 @@ export function createForwardProxy({ configFile, onHosts, log = () => {} }) {
         .catch(rejectClient)
     } else {
       const origin = tcpConnect({ host, port })
-      origin.on('error', rejectClient)
+      pending = origin
+      // 建立前：建连失败回 502。建立成功后必须由隧道级处理接管 —— 旧实现把
+      // rejectClient 一直挂在 origin 的 'error' 上，隧道里的正常 RST 会被当成
+      // "握手失败"，往已建立的隧道里写一段 502 响应体再销毁客户端（数据破坏 +
+      // 误杀正常连接）。这里用 tunneled 标记切断：建立后的 error 只由
+      // pipeTunnel 处理，rejectClient 不再碰隧道。
+      const onOriginError = (e) => { if (!tunneled) rejectClient(e) }
+      origin.on('error', onOriginError)
       origin.on('connect', () => {
+        if (tunneled) return
+        tunneled = true
+        pending = null
+        if (clientGone) { try { origin.destroy() } catch {}; return }
         clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n')
         if (head?.length) origin.write(head)
         pipeTunnel(clientSocket, origin)

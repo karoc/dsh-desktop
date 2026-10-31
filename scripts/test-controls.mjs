@@ -9,6 +9,8 @@
 //   ④ 让 tree-guard 忽略未提交改动 ⇒ test-tree-guard 必须红（dirty 判定是它的一半判据）
 //   ⑤ 让 cmpVersion 把正式版判成与同号预发布相等 ⇒ test-version-compare-parity 必须红（审计 P0-1 的核心）
 //   ⑥ 关掉 logrotate 的 @HOME@ 残留检查 ⇒ test-install-logrotate 必须红（该检查就是事故形态的防线）
+//   ⑦ 删掉代理 CONNECT 的早期 clientSocket error 监听 ⇒ test-proxy 必须红（2026-11-01 两次线上
+//      manager 崩溃的根因；门禁若抓不住它，等于这条回归线不存在）
 //
 // 约定（2026-10-31 起）：新增/修改一个"守行为"的门禁，就同时给这里加一条注入对照；确实不能加（如纯静态
 // 文档门禁），在 PR 里写明理由。没有这一条，门禁本身的可失败性就没人验证。
@@ -81,6 +83,14 @@ const controls = [
     target: 'scripts/install-logrotate.mjs',
     mutate: (s) => s.replace('  if (content.includes(PLACEHOLDER)) {', '  if (false) { // mutation-control'),
     suite: 'scripts/test-install-logrotate.mjs',
+  },
+  {
+    // 2026-11-01：正式版 manager 两次死于客户端在 CONNECT 握手窗口里 RST（read ECONNRESET）。
+    // 这条监听器就是那次事故的修复；删掉它，test-proxy scenario 13 必须立刻变红。
+    name: '删掉代理 CONNECT 的早期 clientSocket error 监听 ⇒ 代理 socket 隔离门禁必须红',
+    target: 'scripts/proxy.mjs',
+    mutate: (s) => s.replace("clientSocket.on('error', () => { clientGone = true; dropPending() })", ''),
+    suite: 'scripts/test-proxy.mjs',
   },
 ]
 

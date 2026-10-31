@@ -530,9 +530,198 @@ writeCfg({
   s5.close()
 }
 
+// ── scenario 13: socket-level error isolation (2026-10-31 manager crash) ─────
+// 线上两次 manager 死于 `Error: read ECONNRESET at TCP.onStreamRead`：Node 的
+// http server 把 socket 交给 'connect' 监听器时会摘掉自己的 error 处理，隧道
+// 建立前的窗口里客户端 RST 就无人接收 → uncaughtException → 整个 manager 退出。
+// 这里用进程级 uncaughtException 监听把"会不会崩"变成显式断言，并且每个子场景
+// 之后都证明代理实例仍能正常转发（不是"测试进程还没退出"这种隐式判据）。
+{
+  const uncaught = []
+  const onUncaught = (e) => uncaught.push(e)
+  process.on('uncaughtException', onUncaught)
+  const describeUncaught = () => uncaught.map((e) => `${e.message} | ${String(e.stack ?? '').split('\n')[1]?.trim()}`)
+  const waitForUncaught = async (ms = 1500) => {
+    const deadline = Date.now() + ms
+    while (uncaught.length === 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25))
+    await new Promise((r) => setTimeout(r, 100)) // 让尾随的第二个 error 也落地
+  }
+  // 未修复时代理可能把响应永远挂着（socket 已死但 res 没被关闭），断言前的
+  // 等待必须有界，否则"红"会退化成超时挂起而不是一条明确的失败信息。
+  const withTimeout = (promise, ms, fallback) => Promise.race([
+    promise,
+    new Promise((r) => { setTimeout(() => r(fallback), ms).unref?.() }),
+  ])
+  // 断言"没有 uncaught"（监听器由整个场景块的 finally 负责摘除）。
+  const checkNoUncaught = (message) => assert.deepEqual(describeUncaught(), [], message)
+
+  try {
+    // (a) CONNECT 握手窗口：上游只接受 TCP、永不回 CONNECT 响应，代理就停在
+    // readUntil 里 —— 这是一个确定性的窗口，客户端在其中 RST。
+    const hangingUpstream = netCreateServer((socket) => {
+      socket.on('error', () => {}) // 代理清理这条连接时测试进程自己不能崩
+    })
+    await new Promise((r) => hangingUpstream.listen(0, '127.0.0.1', r))
+    writeCfg({
+      upstream: { enabled: true, host: '127.0.0.1', port: hangingUpstream.address().port, username: '', password: '' },
+      proxiedHosts: ['handshake-rst.example'],
+      knownHosts: [],
+    })
+    uncaught.length = 0
+    await new Promise((resolvePromise) => {
+      const sock = connect({ host: '127.0.0.1', port: proxyPort })
+      sock.on('error', () => {})
+      sock.on('connect', () => {
+        sock.write('CONNECT handshake-rst.example:443 HTTP/1.1\r\nHost: handshake-rst.example:443\r\n\r\n')
+        // 150ms：代理已把 CONNECT 交给上游并进入 readUntil，窗口正中间。
+        setTimeout(() => { try { sock.resetAndDestroy() } catch {}; resolvePromise() }, 150)
+      })
+    })
+    await waitForUncaught()
+    checkNoUncaught('CONNECT 握手窗口内客户端 RST 不得产生 uncaughtException（2026-10-31 线上崩溃根因）')
+    const aliveAfterRst = await withTimeout(rawConnect(proxyPort, O1), 3000, { sock: { destroy() {} }, status: 'timeout' })
+    assert.match(aliveAfterRst.status, /200/, 'RST 之后同一个代理实例仍能建立新隧道（进程没被带崩）')
+    aliveAfterRst.sock.destroy()
+
+    // (a2) 直连隧道已经建立后源站 RST：客户端应当只看到隧道被关闭，绝不能收到
+    // 一段被写进隧道的 "502 Bad Gateway" 响应体（旧实现把 rejectClient 留在
+    // origin 的 error 上，会把已建立的隧道误当成 HTTP 响应通道写坏）。
+    const resetAfterAccept = netCreateServer((socket) => {
+      socket.on('error', () => {})
+      setTimeout(() => { try { socket.resetAndDestroy() } catch {} }, 80)
+    })
+    await new Promise((r) => resetAfterAccept.listen(0, '127.0.0.1', r))
+    const resetAuthority = `127.0.0.1:${resetAfterAccept.address().port}`
+    uncaught.length = 0
+    const tunnelBytes = await withTimeout(new Promise((resolvePromise) => {
+      const sock = connect({ host: '127.0.0.1', port: proxyPort })
+      let buf = ''
+      sock.on('error', () => {})
+      sock.on('connect', () => sock.write(`CONNECT ${resetAuthority} HTTP/1.1\r\nHost: ${resetAuthority}\r\n\r\n`))
+      sock.on('data', (d) => { buf += d.toString() })
+      sock.on('close', () => resolvePromise(buf))
+      setTimeout(() => { try { sock.destroy() } catch {}; resolvePromise(buf) }, 800)
+    }), 2000, '')
+    assert.match(tunnelBytes, /200 Connection Established/, '直连隧道先建立成功（源站随后才 RST）')
+    assert.ok(
+      !tunnelBytes.includes('502 Bad Gateway'),
+      `隧道建立后的源站 RST 不得被改写成隧道里的 502 响应体（got ${JSON.stringify(tunnelBytes)}）`,
+    )
+    await waitForUncaught()
+    checkNoUncaught('直连隧道建立后源站 RST 不得产生 uncaughtException')
+    resetAfterAccept.close()
+    // (a3) rejectClient 的正常语义不变：直连目标拒绝连接时客户端仍拿到 502。
+    const refused = await withTimeout(rawConnect(proxyPort, '127.0.0.1:1'), 3000, { sock: { destroy() {} }, status: 'timeout' })
+    assert.match(refused.status, /502/, '直连建连失败仍然回 502（rejectClient 的行为未改变）')
+    refused.sock.destroy()
+
+    // (b) 普通 HTTP 转发路径：上游在响应体中途 RST —— 代理的 upRes 流没有
+    // error 监听器的话，同样是一个 uncaughtException。
+    let resettingUpstreamSawRequest = 0
+    const resettingUpstream = createServer((req, res) => {
+      resettingUpstreamSawRequest += 1
+      res.writeHead(200, { 'content-type': 'text/plain', 'content-length': '1000' })
+      res.write('partial-')
+      setTimeout(() => { try { res.socket.resetAndDestroy() } catch {} }, 30)
+    })
+    await new Promise((r) => resettingUpstream.listen(0, '127.0.0.1', r))
+    writeCfg({
+      upstream: { enabled: true, host: '127.0.0.1', port: resettingUpstream.address().port, username: '', password: '' },
+      proxiedHosts: ['rst-midbody.example'],
+      knownHosts: [],
+    })
+    uncaught.length = 0
+    const outcome = await withTimeout(new Promise((resolvePromise) => {
+      const req = httpRequest({
+        host: '127.0.0.1', port: proxyPort, method: 'GET', path: 'http://rst-midbody.example/x',
+      }, (res) => {
+        let body = ''
+        res.on('data', (d) => { body += d })
+        res.on('error', () => resolvePromise({ status: res.statusCode, body, error: 'reset' }))
+        res.on('end', () => resolvePromise({ status: res.statusCode, body, error: null }))
+      })
+      req.on('error', (e) => resolvePromise({ status: 0, body: '', error: e.message }))
+      req.end()
+    }), 3000, { status: 0, body: '', error: 'proxy left the client response open (timeout)' })
+    await waitForUncaught()
+    assert.equal(resettingUpstreamSawRequest, 1, '上游确实收到了代理转发的那次请求')
+    checkNoUncaught('上游响应体中途 RST 不得产生 uncaughtException（普通 HTTP 转发路径）')
+    assert.ok(
+      outcome.error !== null || outcome.status === 502 || outcome.body.length < 1000,
+      `客户端必须看到 502 或响应中断，而不是一个完整成功的响应（got ${JSON.stringify(outcome)}）`,
+    )
+    const afterUpstreamReset = await withTimeout(httpViaProxy('/after-upstream-reset'), 3000, { status: 'timeout', body: '' })
+    assert.equal(afterUpstreamReset.status, 200, '上游 RST 之后代理仍能正常转发普通 HTTP 请求')
+    assert.equal(afterUpstreamReset.body, 'origin:GET:/after-upstream-reset', '转发语义在崩溃场景之后仍未改变')
+
+    // (b2) 直连（非上游）普通 HTTP 路径的同类缺陷：源站响应体中途 RST。
+    const resettingOrigin = createServer((req, res) => {
+      res.writeHead(200, { 'content-type': 'text/plain', 'content-length': '1000' })
+      res.write('partial-')
+      setTimeout(() => { try { res.socket.resetAndDestroy() } catch {} }, 30)
+    })
+    await new Promise((r) => resettingOrigin.listen(0, '127.0.0.1', r))
+    const resettingOriginAuthority = `127.0.0.1:${resettingOrigin.address().port}`
+    uncaught.length = 0
+    const directOutcome = await withTimeout(new Promise((resolvePromise) => {
+      const req = httpRequest({
+        host: '127.0.0.1', port: proxyPort, method: 'GET', path: `http://${resettingOriginAuthority}/x`,
+      }, (res) => {
+        let body = ''
+        res.on('data', (d) => { body += d })
+        res.on('error', () => resolvePromise({ status: res.statusCode, body, error: 'reset' }))
+        res.on('end', () => resolvePromise({ status: res.statusCode, body, error: null }))
+      })
+      req.on('error', (e) => resolvePromise({ status: 0, body: '', error: e.message }))
+      req.end()
+    }), 3000, { status: 0, body: '', error: 'proxy left the client response open (timeout)' })
+    await waitForUncaught()
+    checkNoUncaught('直连普通 HTTP 路径：源站响应体中途 RST 不得产生 uncaughtException')
+    assert.ok(
+      directOutcome.error !== null || directOutcome.status === 502 || directOutcome.body.length < 1000,
+      `直连路径的客户端必须看到 502 或响应中断（got ${JSON.stringify(directOutcome)}）`,
+    )
+
+    // (c) 客户端在普通 HTTP 转发中途 abort：代理随后才拿到上游响应，把响应写回
+    // 已消失的客户端时 res 流会 emit 'error' —— 同样不能变成进程级异常。
+    const slowOrigin = createServer((req, res) => {
+      setTimeout(() => {
+        try {
+          res.writeHead(200, { 'content-type': 'text/plain' })
+          res.end('late')
+        } catch { /* 代理已断开 */ }
+      }, 150)
+    })
+    await new Promise((r) => slowOrigin.listen(0, '127.0.0.1', r))
+    writeCfg({ upstream: { enabled: false, host: '', port: 0 }, proxiedHosts: [], knownHosts: [] })
+    const slowOriginAuthority = `127.0.0.1:${slowOrigin.address().port}`
+    uncaught.length = 0
+    await new Promise((resolvePromise) => {
+      const sock = connect({ host: '127.0.0.1', port: proxyPort })
+      sock.on('error', () => {})
+      sock.on('connect', () => {
+        sock.write(`GET http://${slowOriginAuthority}/slow HTTP/1.1\r\nHost: ${slowOriginAuthority}\r\nConnection: close\r\n\r\n`)
+        setTimeout(() => { try { sock.resetAndDestroy() } catch {}; resolvePromise() }, 20)
+      })
+    })
+    await waitForUncaught()
+    checkNoUncaught('客户端 abort 后代理把迟到响应写回已消失的连接，不得产生 uncaughtException')
+
+    hangingUpstream.close()
+    resettingUpstream.close()
+    resettingOrigin.close()
+    slowOrigin.close()
+  } finally {
+    // 无论断言通过还是失败都必须摘掉监听器：否则断言抛出的异常会被 Node 当成
+    // uncaughtException 再喂回本监听器，失败就退化成"挂到超时"而不是红 ——
+    // 门禁的"红"必须是明确的退出码 1。
+    process.removeListener('uncaughtException', onUncaught)
+  }
+}
+
 proxy.close()
 up.srv.close()
 o1.srv.close()
 rmSync(work, { recursive: true, force: true })
-console.log('PASS — forward proxy (12 scenarios)')
+console.log('PASS — forward proxy (13 scenarios)')
 process.exit(0)

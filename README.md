@@ -162,7 +162,7 @@ npm run test:chrome-bootstrap   # 同一条链路的**纯 Node 门禁**（进 `n
                             # 做不到的：顶栏"真的在视口顶部"、菜单尺寸/滚动条仍归 test:chrome-real（本套件的
                             # getBoundingClientRect 是桩常量，不对几何下结论）
 npm run test:control     # manager 控制面（11 场景，含版本地板闸门）
-npm run test:proxy       # 内置正向代理（12 场景）
+npm run test:proxy       # 内置正向代理（13 场景，含「客户端 RST 不得打死 manager」的回归）
 npm run test:launcher-settings  # 代理设置窗口（6 场景）
 npm run test:shell-chrome       # 壳顶栏契约（菜单 id ↔ ACTIONS ↔ lib.rs 桥/命令）
 node scripts/test-shell-passthrough.mjs
