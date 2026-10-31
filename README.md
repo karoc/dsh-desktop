@@ -130,11 +130,14 @@ node_modules 符号链接树、写迁移标记、绝不上移覆盖已有新数�
 ## 本地验证（Linux 可跑的部分）
 
 ```bash
-npm test                 # 全量 31 套（30 条 node 直接可跑 + 1 条条件式）：清单一致性 / overlay 目标行 / 升级标记 /
+npm test                 # 全量 34 套（33 条 node 直接可跑 + 1 条条件式）：清单一致性 / overlay 目标行 / 升级标记 /
                          #   通知插件 / 控制面 / 代理 / 代理e2e / 启动页设置 / 壳顶栏契约 / 壳不吞页面原生行为
                          #   （拖放与外链，见下）/ 壳引导桩（纯 Node，无浏览器）/ 启动器扫动 / 请求头预算 /
                          #   半截安装自愈 / 副本一致性 / 版本比较 parity /
-                         #   **自动化链路门禁自证**（scripts/test-automation-gates.mjs，见「维护者」小节）
+                         #   **自动化链路门禁自证**（scripts/test-automation-gates.mjs，见「维护者」小节）/
+                         #   **工作树漂移守卫**（scripts/test-tree-guard.mjs，62 条断言）/ **logrotate 安装守卫**
+                         #   （scripts/test-install-logrotate.mjs，7 条断言 + 4 变异）/ **插件备份只挪不删**
+                         #   （scripts/test-plugin-backup-preserve.mjs，被打断/跑完但失败双场景 + 负向对照）
                          #   **挂起看护"dump 后再探一次"**（scripts/test-watchdog-recovery.mjs，含 3 个变异自证）
                          #   **gh 凭据纪律**（scripts/test-gh-bin-discipline.mjs：裸 gh 缺省扫描 + 消费者兜底 + unit 模板）
                          #   **PAT 过期元数据**（scripts/test-token-meta.mjs：五级分级/退出码、缺失与损坏 ⇒ 未知且
@@ -591,6 +594,15 @@ MIT
   权限不同；CI 里显式 `GH_BIN=gh` 是唯一例外），门禁 `scripts/test-gh-bin-discipline.mjs` 守这条。
   systemd 运行环境需能读 SSH key（`git push` 走 SSH）与网络。演练/测试注入点：`GH_BIN` / `GIT_BIN` / `NODE_BIN` 与
   `DSH_AUTOPILOT_WATCH_JSON`（见脚本头注释）。
+- **运行时守卫：工作树漂移**（2026-10-31）：三个仓库脚本（`dsh-watch` / `dsh-release-autopilot` /
+  `dsh-doctor`）在解析参数后、真正干活前，检查**这棵树**的 `scripts/` 与随包资源
+  （`src-tauri/resources/{manager,preinstalled}`）相对 `origin/main` 有没有差异、或这些路径有没有未提交
+  改动 —— 有就**大声告警一行**（点名文件 + 修复命令 `git -C <ROOT> switch main && git -C <ROOT> merge
+  --ff-only origin/main`）后照常干活，退出码不变；`--strict-tree` 或 `DSH_TREE_GUARD=strict` 才停跑（exit 1）。
+  **判据刻意不是 `HEAD == origin/main`**（发布合并后本地 ref 落后是常态，逐轮比会造成假警报，假警报等于没有
+  守卫）；`KANBAN.json` / `.agents` 记录层天然豁免。`git` 判断不了（非 git 树 / 解析不到 origin/main）报
+  `unknown` 告警后继续 —— 不猜成漂移、也不静默通过。实现 `scripts/lib/tree-guard.mjs`（三入口共用），
+  可失败性由 `scripts/test-tree-guard.mjs`（62 条断言）与 gates 的 watch/doctor 组守护。
 - **门禁自证**（`node scripts/test-automation-gates.mjs`，`npm test` 链上的一员，约 60s）：它覆盖的是
   **"自动化链路判据的可失败性"** —— 把 2026-10-19「假门禁猎手」审计的 49 条注入断言落成可重复运行的一道门禁：
   用合成 runtime + npm/gh/curl **桩**（写在临时目录、经 PATH/GH_BIN 注入，零外部依赖：不要 jq、不要本机 npm），
@@ -854,10 +866,13 @@ MIT
   - **轮转模板**：[scripts/logrotate.dsh.conf](scripts/logrotate.dsh.conf)（`daily` + `maxsize 20M` +
     `rotate 7` + `compress` + `delaycompress` + `copytruncate` + `missingok` + `notifempty`；
     `copytruncate` 是必须的：systemd 一直持有 append 模式的 fd，不能通知它 reopen，复制后原地截断是标准解，
-    代价是"复制 → 截断"之间极小的丢数据窗口）。安装与干跑（**用户级，不需要 root**）：
-    `sed "s|@HOME@|$HOME|g" scripts/logrotate.dsh.conf > ~/.dsh/logrotate.dsh.conf`，
+    代价是"复制 → 截断"之间极小的丢数据窗口）。**覆盖四个日志**（watch / autopilot / tagdispatch / doctor；
+    `dsh-web.out.log` 由服务自身轮转、不纳管，避免两份配置抢文件）。安装与干跑（**用户级，不需要 root**）：
+    `node scripts/install-logrotate.mjs`（带守卫：替换 `@HOME@`、校验无残留 / 路径为绝对路径 / `logrotate -d`
+    语法干跑；任一校验失败**不落盘**并保留旧配置；`--dry-run` 只打印），
     `/usr/sbin/logrotate -d ~/.dsh/logrotate.dsh.conf`（只检查语法/匹配，不动文件），
     再 `/usr/sbin/logrotate -s ~/.dsh/logrotate.status ~/.dsh/logrotate.dsh.conf` 真跑一次。
+    手动配方（等价、无守卫）：`sed "s|@HOME@|$HOME|g" scripts/logrotate.dsh.conf > ~/.dsh/logrotate.dsh.conf`。
     定时用 systemd **user** timer（模板，别装到 `/etc/systemd/system`）：
     ```ini
     # ~/.config/systemd/user/dsh-logrotate.service

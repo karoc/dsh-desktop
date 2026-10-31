@@ -210,7 +210,7 @@ GH_BIN=$PWD/scripts/gh node scripts/dsh-adapt.mjs --version <v> --runtime <已�
 | `--canary` | 第 8 步真机验收：读 **两个**日志、断言三个标记（session 日志的 `client/log chrome ready` + `client-ready (http)`；`<runtime>/manager.log` 的 `preinstalled bundles:`）。**只认脚本启动之后新写入的行** ⇒ 前提是 dev 壳在检查期间**新启动**；只读，不启动也不杀进程 |
 | `--manager-log <path>` | 随包 manager 的 `log()` 落盘处（`<runtime>/manager.log`）；**缺这个文件 `--canary` 结构上永不通过**（旧实现只读 dev-log 就是这个问题） |
 | `--dev-log <path>` | dev 壳的 `dsh-desktop-session.log` |
-| `--strict-chain` | 把「本机跳过的非 node 命令」也算失败（跳过 ≠ 通过）。当前链 31 条（29 条 `node scripts/*` + 1 条 `npm run test:cargo-lock-sync` 转 node + 1 条条件式 parity），本机 30 条真跑 + 1 条条件式跳过 |
+| `--strict-chain` | 把「本机跳过的非 node 命令」也算失败（跳过 ≠ 通过）。当前链 34 条（32 条 `node scripts/*` + 1 条 `npm run test:cargo-lock-sync` 转 node + 1 条条件式 parity），本机 34 条全跑（条件式文件已存在） |
 | `--allow-yellow` | 默认给探针带 `--fail-on-yellow`（YELLOW 即停）；仅在明确接受含糊时放行 |
 
 **实测**（幂等路径：目标 == 地板，`--runtime` 指向 Windows dev runtime）：
@@ -562,7 +562,14 @@ git push -u origin <branch>
   `✗ 评论 HTTP 404`、失败运行仍推进 `last-ok`（违反它自己写明的负向保证），而仓库侧 CI 全绿、看板标 done。
   把工作树切回 `main` 后同一条命令 **7/7 ✓**。
 - **处理**：动这些脚本前先 `git -C /home/karoc/dsh-desktop status -sb` 确认在 `main` 且 `scripts/` 无未提交改动；
-  切分支开发前先想到「线上会跟着跑」。结构性守卫（运行前校验 HEAD 与 `origin/main`）仍是看板上的 todo。
+  切分支开发前先想到「线上会跟着跑」。**结构性守卫已实现（2026-10-31）**：`scripts/lib/tree-guard.mjs` +
+  `dsh-watch` / `dsh-release-autopilot` / `dsh-doctor` 三入口；判据是**路径过滤后的差异**（`scripts/` +
+  `src-tauri/resources/{manager,preinstalled}` 相对 `origin/main`，或这些路径有未提交改动），**不是**
+  `HEAD == origin/main`（发布合并后本地 ref 落后是常态 ⇒ 会每轮假警报）；记录层天然豁免。默认**告警一行
+  后照常干活**（退出码不变），`--strict-tree` / `DSH_TREE_GUARD=strict` 才停跑（exit 1）；`unknown`
+  （非 git 树 / 解析不到 origin/main）告警后继续 —— 不猜成漂移、也不静默通过。`dsh-start` 之外的
+  `dsh-tagdispatch` 在仓库侧**没有脚本**（unit 是用户维护的），不受该守卫覆盖；`dsh-doctor --self-test`
+  刻意不接（要求零外部依赖、且门禁套件在无 `.git` 的副本里跑它）。
 
 ## 7. 纪律（硬规则，别绕过）
 
@@ -595,7 +602,7 @@ git push -u origin <branch>
 | **`--version` 不可注入** | manager 启动期目标恒 `max(地板, latest)` ⇒ 结构上装不到更高的预发布；`next`/alpha 不自动适配，只开 issue |
 | **版本 PR 合并 = 零人工审阅** | 替代审查只有「mergeable + 写域白名单 + 非失败 check」，不读 diff 语义。CONTRIBUTING 里那份人工清单（四处版本一致 / CHANGELOG 段 / `npm test` / `audit-preinstalled`）在自动路径上**不执行** |
 | **进度看板/归档文件的边界** | `KANBAN.json`、`.agents/notes/archive.json` 被 git 跟踪 ⇒ autopilot 提交时跳过、rebase 时 autostash；改动它们不算适配写域 |
-| **心跳 timer 执行工作树脚本** | 见 §6.14：工作树漂移 ⇒ 线上跑旧代码（2026-10-24→30 实际发生 5 天）。目前只靠「ROOT 留在 main」的纪律；运行前校验守卫仍是看板 todo |
+| **心跳 timer 执行工作树脚本** | 见 §6.14：工作树漂移 ⇒ 线上跑旧代码（2026-10-24→30 实际发生 5 天）。2026-10-31 起有运行时守卫（默认告警、`--strict-tree` 停跑；判据是路径差异，不是 HEAD==main）。**剩余边界**：① `dsh-tagdispatch` 在仓库侧没有脚本，不受守卫覆盖；② 用户 unit 若不加 `--strict-tree`，守卫只告警不停跑（日志在，但不会自动止血）；③ `unknown`（非 git / 无 origin/main）按"无法判断"处理而非失败 |
 | **`dsh-doctor` 的每日轮次依赖工作树正确** | timer 已装（每日 06:23），执行的是工作树脚本（§6.14）。2026-10-31 06:23 CST（22:23Z）**系统轮次 PASS 7/7**、`last-ok=2026-10-30T22:23:23.255Z` ⇒ §6.14 的修复在真实 timer 上已生效；工作树若再漂移会退回「每天 FAIL」 |
 
 ## 9. 本技能实测坐标（2026-10-31 06:40 CST）
