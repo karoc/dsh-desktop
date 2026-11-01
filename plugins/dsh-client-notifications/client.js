@@ -455,6 +455,19 @@ window.__ModuleLoader__.load({
         const unsubscribe = list && typeof list.subscribe === 'function'
           ? list.subscribe(scan)
           : undefined
+        // CRITICAL: pendingInteraction lives in uiSession.sessionStatus, a
+        // SEPARATE observable from sessions.list. A session entering "waiting
+        // for approval" changes NO list row, so subscribing to the list alone
+        // meant scan() never re-ran — the tray stayed on ▶ and the 「需要你」
+        // toast never fired, even though the UI showed the orange dot. Both
+        // sources must drive the scan.
+        const unsubscribeStatus = (() => {
+          try {
+            const obs = ctx.uiSession && ctx.uiSession.sessionStatus
+            if (obs && typeof obs.subscribe === 'function') return obs.subscribe(scan)
+          } catch { /* fall through: list-only behaviour */ }
+          return undefined
+        })()
         scan() // record baseline; never notify for pre-existing state
         // Diagnostic canary: tells the shell this module loaded and the bridge
         // is reachable (no toast, no tauri dependency).
@@ -486,6 +499,7 @@ window.__ModuleLoader__.load({
         pollPendingOpen(ctx)
         return () => {
           if (unsubscribe) unsubscribe()
+          if (unsubscribeStatus) unsubscribeStatus()
         }
       },
     }
