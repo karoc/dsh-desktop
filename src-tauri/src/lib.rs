@@ -5185,6 +5185,12 @@ pub fn run() {
             if staged.is_some() {
                 *PENDING_OPEN.lock().unwrap() = staged;
             }
+            // The Action Center click arrives HERE, not through the in-process
+            // `clicked` closure (that one only fires while the toast is still
+            // on screen). Clearing history from `clicked` therefore never ran
+            // for this path — verified by the complete absence of any
+            // `toast-history:` line in the log.
+            clear_toast_history(app);
             activate_window(app);
         }))
         .manage(ServerState {
