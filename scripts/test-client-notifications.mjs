@@ -21,12 +21,19 @@ let calls = [] // collected /notify POSTs (url + parsed body)
 let allPosts = [] // every fetch (incl. the /alive canary)
 let focus = false
 globalThis.__DSH_BRIDGE_PORT__ = '39999'
+let pendingOpenSid = null // what GET /pending-open should answer
 globalThis.fetch = (url, opts = {}) => {
   allPosts.push([String(url), opts])
   if (String(url).includes('/notify')) {
     calls.push([String(url), JSON.parse(opts.body || '{}')])
   }
-  return Promise.resolve({ ok: true })
+  // The real bridge TAKES the pending session (one delivery), so the stub must
+  // too — otherwise every poll tick re-opens the same session and the test
+  // would be asserting behaviour the product does not have.
+  const json = String(url).includes('/pending-open')
+    ? async () => { const sid = pendingOpenSid; pendingOpenSid = null; return { sessionId: sid } }
+    : async () => ({})
+  return Promise.resolve({ ok: true, json })
 }
 Object.defineProperty(globalThis, 'Notification', { configurable: true, writable: true, value: undefined })
 
@@ -44,7 +51,7 @@ assert.ok(windowStub.__handoff, '__ModuleLoader__.load must be called')
 assert.equal(windowStub.__handoff.id, '@dsh-desktop/client-notifications')
 
 const plugin = windowStub.__handoff.factory()
-assert.deepEqual(plugin.inject, ['sessions', 'connection', 'uiSession'], 'must inject uiSession — pendingInteraction lives there, not on the list row')
+assert.deepEqual(plugin.inject, ['sessions', 'connection', 'uiSession', 'uiWorkspace'], 'must inject uiSession (status) and uiWorkspace (open target)')
 assert.equal(typeof plugin.apply, 'function')
 
 // ── sessions list store stub (mirrors SnapshotStore<SessionListState>) ──────
@@ -71,9 +78,11 @@ const uiSession = {
     subscribe: (fn) => { statusListeners.add(fn); return () => statusListeners.delete(fn) },
   },
 }
+const openedSessions = [] // what uiWorkspace.openSession received
 const ctx = {
   sessions: { list },
   uiSession,
+  uiWorkspace: { openSession: (target) => { openedSessions.push(target) } },
   connection: {
     api: {
       sessions: {
@@ -545,5 +554,27 @@ assert.deepEqual(aggPosts().at(-1), { running: 0, pending: 1, done: 0, items: [{
   'status-only pending change must reach the tray')
 disposeSub()
 
-console.log('PASS — notification plugin behavioral test (23 notification + 9 aggregate scenarios)')
+// ── scenario 33: a click must open the session through uiWorkspace ──────────
+// `ctx.sessions.open` does NOT exist on dsh 0.2.x. The old code's else-if wrote
+// a field nobody reads and logged success, so clicking a toast brought the
+// window forward but never switched sessions. This scenario is the regression.
+state = { ids: [], byId: {}, current: undefined, phase: 'ready', subagentsByParent: {}, jobsBySession: {}, currentAddress: undefined }
+allPosts = []
+openedSessions.length = 0
+pendingOpenSid = null
+// eslint-disable-next-line no-eval
+eval(clientJs)
+const disposeOpen = windowStub.__handoff.factory().apply(ctx)
+pendingOpenSid = 'sess-click-1'
+await new Promise((r) => setTimeout(r, 1500)) // one poll tick
+assert.ok(allPosts.some((e) => String(e[0]).includes('/pending-open')), 'poll must have run at least once')
+assert.deepEqual(openedSessions, ['sess-click-1'], 'click must open via uiWorkspace.openSession')
+assert.ok(
+  allPosts.some((e) => String(e[0]).includes('/log') && String(e[1] && e[1].body || '').includes('uiWorkspace.openSession')),
+  'successful open must be logged with its real mechanism',
+)
+pendingOpenSid = null
+disposeOpen()
+
+console.log('PASS — notification plugin behavioral test (23 notification + 9 aggregate + 1 open-path scenarios)')
 process.exit(0)
