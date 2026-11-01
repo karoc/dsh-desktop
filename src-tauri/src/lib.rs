@@ -633,19 +633,31 @@ fn activate_window(app: &AppHandle) {
 /// which is what made the second click take tens of seconds. Clearing the
 /// history makes the first click the only one.
 #[cfg(windows)]
-fn clear_toast_history() {
+fn clear_toast_history(app: &AppHandle) {
+    use windows::core::HSTRING;
     use windows::UI::Notifications::ToastNotificationManager;
+    let data = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+    // `GetDefault()` only works for packaged (UWP) identity — for a desktop
+    // binary it errors out, which is why the first attempt silently did
+    // nothing and the card stayed in the Action Center. The static
+    // `History()` plus an explicit app id is the desktop-correct path.
+    let app_id = HSTRING::from(app.config().identifier.as_str());
     unsafe {
-        if let Ok(manager) = ToastNotificationManager::GetDefault() {
-            if let Ok(history) = manager.History() {
-                let _ = history.Clear();
-            }
+        match ToastNotificationManager::History() {
+            Ok(history) => match history.ClearWithId(&app_id) {
+                Ok(()) => log_line(&data, "toast-history: cleared"),
+                Err(e) => log_line(&data, &format!("toast-history: clear failed: {e}")),
+            },
+            Err(e) => log_line(&data, &format!("toast-history: unavailable: {e}")),
         }
     }
 }
 
 #[cfg(not(windows))]
-fn clear_toast_history() {}
+fn clear_toast_history(_app: &AppHandle) {}
 
 fn show_toast(app: &AppHandle, title: String, body: String) {
     let data = app
@@ -671,7 +683,7 @@ fn show_toast(app: &AppHandle, title: String, body: String) {
             .unwrap_or_else(|_| std::path::PathBuf::from("."));
         log_line(&data, &format!("toast-clicked pending-open={last:?}"));
         eprintln!("[dsh-desktop] toast-clicked pending-open={last:?}");
-        clear_toast_history();
+        clear_toast_history(app);
         activate_window(app);
     };
 
