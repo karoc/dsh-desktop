@@ -230,6 +230,55 @@ static SERVICE_JOB: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUs
 
 /// Session id of the most recent notification — a toast click re-opens it.
 static LAST_SESSION: Mutex<Option<String>> = Mutex::new(None);
+
+/// The last notified session, persisted so it survives a cold start.
+///
+/// Windows activates a toast from the Action Center by LAUNCHING the app, and
+/// the args it passes carry no `-ToastActivated` marker (verified in
+/// dsh-desktop-session.log: `activated(plain launch)` five seconds after a
+/// notification, with the session only reachable through FOCUS_OPEN's TTL).
+/// In-memory `LAST_SESSION` is empty at that point, so without this file a
+/// click from the notification centre can never reopen the session.
+///
+/// Format: `<unix seconds>\n<session id>`. Read only within
+/// `LAST_SESSION_TTL` so a stale file cannot hijack an unrelated launch.
+const LAST_SESSION_FILE: &str = "last-session.txt";
+const LAST_SESSION_TTL: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
+fn persist_last_session(app: &AppHandle, sid: &str) {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let _ = std::fs::write(dir.join(LAST_SESSION_FILE), format!("{now}\n{sid}"));
+}
+
+/// The persisted session id, if it was written within `LAST_SESSION_TTL`.
+fn load_recent_session(app: &AppHandle) -> Option<String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let raw = std::fs::read_to_string(dir.join(LAST_SESSION_FILE)).ok()?;
+    let mut lines = raw.lines();
+    let at: u64 = lines.next()?.trim().parse().ok()?;
+    let sid = lines.next()?.trim().to_string();
+    if sid.is_empty() {
+        return None;
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    if now.saturating_sub(at) > LAST_SESSION_TTL.as_secs() {
+        return None;
+    }
+    Some(sid)
+}
 /// Session id waiting to be revealed in the UI (set on app activation, cleared
 /// once the client page reads it via /pending-open).
 static PENDING_OPEN: Mutex<Option<String>> = Mutex::new(None);
@@ -2982,6 +3031,7 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
                     .unwrap_or_else(|_| ("dsh".into(), body.clone(), None));
             if let Some(s) = &sid {
                 *LAST_SESSION.lock().unwrap() = Some(s.clone());
+                persist_last_session(app, s);
                 // A notify only happens while the window is unfocused (the
                 // client suppresses focused toasts) — so the next focus event
                 // is almost certainly the user clicking this toast. Stage the
@@ -5085,17 +5135,19 @@ pub fn run() {
             // Only a toast activation may stage a session. A plain second
             // launch (user double-clicks the desktop icon) must just raise the
             // window — staging there would jump to whatever was notified last.
-            let from_toast = args.iter().any(|a| a.contains("-ToastActivated"));
+            let marked = args.iter().any(|a| a.contains("-ToastActivated"));
             let data = app
                 .path()
                 .app_data_dir()
                 .unwrap_or_else(|_| std::path::PathBuf::from("."));
-            if from_toast {
-                let last = LAST_SESSION.lock().unwrap().clone();
-                log_line(&data, &format!("activated(from toast): pending-open={last:?}"));
-                *PENDING_OPEN.lock().unwrap() = last;
-            } else {
-                log_line(&data, "activated(plain launch): no session staged");
+            // Action Center activation passes NO marker, so fall back to the
+            // persisted recent session. A genuinely unrelated second launch is
+            // still protected by LAST_SESSION_TTL.
+            let staged = LAST_SESSION.lock().unwrap().clone().or_else(|| load_recent_session(app));
+            let reason = if marked { "toast marker" } else if staged.is_some() { "recent notification" } else { "plain launch" };
+            log_line(&data, &format!("activated({reason}): pending-open={staged:?}"));
+            if staged.is_some() {
+                *PENDING_OPEN.lock().unwrap() = staged;
             }
             activate_window(app);
         }))
