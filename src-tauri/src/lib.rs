@@ -244,6 +244,26 @@ static FOCUS_OPEN: Mutex<Option<String>> = Mutex::new(None);
 /// 无变化的重复写入没有意义。`None` = 尚未收到任何上报（页面还没挂载）。
 static SESSION_AGGREGATE: Mutex<Option<String>> = Mutex::new(None);
 
+/// 主窗口**真实**焦点状态（由 Tauri 的 `WindowEvent::Focused` 维护）。
+///
+/// 页面侧的 `document.hasFocus()` 在 WebView2 里不可信：窗口被推到别的应用
+/// 后面之后它仍然返回 true，于是通知插件以为用户在看 UI，把所有 toast 都
+/// 抑制掉了（2026-11-01 用户实测：dev 窗口已后置，日志仍记 "suppressed
+/// window focused"）。焦点只能由壳说了算：事件发生时 eval 一个全局，页面
+/// 加载完再通过 `GET /window/focused` 拉一次初始值。
+static WINDOW_FOCUSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// 把真实焦点状态推给页面（`window.__DSH_SHELL_FOCUSED__`）。
+fn push_window_focus(app: &AppHandle, focused: bool) {
+    WINDOW_FOCUSED.store(focused, std::sync::atomic::Ordering::SeqCst);
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.eval(&format!(
+            "globalThis.__DSH_SHELL_FOCUSED__ = {};",
+            if focused { "true" } else { "false" }
+        ));
+    }
+}
+
 /// Whether the "dsh 有更新" toast has already been shown this process launch
 /// (the manager reports update-status at boot and on demand — remind once).
 static UPDATE_TOAST_SHOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -2835,6 +2855,13 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
 
     let (status, resp_body) = match (method, path) {
         ("OPTIONS", _) => ("204 No Content", String::new()),
+        // 页面侧 `document.hasFocus()` 在 WebView2 里不可信（见 WINDOW_FOCUSED），
+        // 页面加载后用它拉一次初始焦点；之后由 Focused 事件 eval 推更新。
+        ("GET", "/window/focused") => {
+            let focused = WINDOW_FOCUSED.load(std::sync::atomic::Ordering::SeqCst);
+            let body = serde_json::json!({ "focused": focused }).to_string();
+            ("200 OK", body)
+        }
         ("GET", "/pending-open") => {
             let sid = PENDING_OPEN.lock().unwrap().take();
             // Log only real handoffs — the 1.2s poll would otherwise flood the
@@ -5351,8 +5378,11 @@ pub fn run() {
                             let _ = w.minimize();
                         }
                     }
-                    tauri::WindowEvent::Focused(true) => {
-                        if let Some(sid) = FOCUS_OPEN.lock().unwrap().take() {
+                    tauri::WindowEvent::Focused(focused) => {
+                        // 真实焦点是通知抑制的唯一依据（见 WINDOW_FOCUSED）。
+                        push_window_focus(&handle, focused);
+                        if focused {
+                            if let Some(sid) = FOCUS_OPEN.lock().unwrap().take() {
                             *PENDING_OPEN.lock().unwrap() = Some(sid.clone());
                             let data = handle
                                 .path()
@@ -5360,6 +5390,7 @@ pub fn run() {
                                 .unwrap_or_else(|_| std::path::PathBuf::from("."));
                             log_line(&data, &format!("focus-open: {sid}"));
                             eprintln!("[dsh-desktop] focus-open: {sid}");
+                            }
                         }
                     }
                     _ => {}

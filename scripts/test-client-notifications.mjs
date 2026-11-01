@@ -44,7 +44,7 @@ assert.ok(windowStub.__handoff, '__ModuleLoader__.load must be called')
 assert.equal(windowStub.__handoff.id, '@dsh-desktop/client-notifications')
 
 const plugin = windowStub.__handoff.factory()
-assert.deepEqual(plugin.inject, ['sessions', 'connection'])
+assert.deepEqual(plugin.inject, ['sessions', 'connection', 'uiSession'], 'must inject uiSession — pendingInteraction lives there, not on the list row')
 assert.equal(typeof plugin.apply, 'function')
 
 // ── sessions list store stub (mirrors SnapshotStore<SessionListState>) ──────
@@ -59,8 +59,20 @@ const list = {
 let historyReason = 'completed' // kind the last turn/end carries
 let historyErrorMsg = ''
 const historyCalls = [] // sessionIds probed via sessions.history
+// ── sessionStatus: the ONLY source of pendingInteraction / completionUnread ──
+// The real `SessionSummary` row has no pendingInteraction field (that bug made
+// the plugin read undefined forever), so the fixture MUST carry status in a
+// separate store exactly like dsh's `uiSession.sessionStatus`.
+let statusMap = new Map()
+const uiSession = {
+  sessionStatus: {
+    getSnapshot: () => statusMap,
+    subscribe: () => () => {},
+  },
+}
 const ctx = {
   sessions: { list },
+  uiSession,
   connection: {
     api: {
       sessions: {
@@ -80,8 +92,26 @@ const ctx = {
 }
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0))
 
+/** Rebuild the status store from the current rows (mirrors dsh's projection). */
+function syncStatus() {
+  const next = new Map()
+  const ids = Array.isArray(state.ids) ? state.ids : (state.items || []).map((i) => i.sessionId || i.id)
+  const byId = state.byId || Object.fromEntries((state.items || []).map((i) => [i.sessionId || i.id, i]))
+  for (const id of ids) {
+    const it = byId[id]
+    if (!it) continue
+    next.set(id, {
+      running: it.running,
+      pendingInteraction: it.pendingInteraction,
+      completionUnread: it.completionUnread ?? it.completed,
+    })
+  }
+  statusMap = next
+}
+
 function mutate(patch) {
   state = { ...state, ...patch }
+  syncStatus()
   for (const l of [...listeners]) l()
 }
 function session(id, fields) {
@@ -467,5 +497,29 @@ assert.deepEqual(
 )
 disposeAgg()
 
-console.log('PASS — notification plugin behavioral test (23 notification + 7 aggregate scenarios)')
+// ── scenario 31: REAL data shape — the list row carries NO pendingInteraction.
+// This is the regression that kept the tray's ● row and the 「需要你」 toast
+// silently dead: `SessionSummary` has no such field, it lives only in
+// uiSession.sessionStatus.
+state = { ids: [], byId: {}, current: undefined, phase: 'ready', subagentsByParent: {}, jobsBySession: {}, currentAddress: undefined }
+allPosts = []
+// eslint-disable-next-line no-eval
+eval(clientJs)
+const disposeReal = windowStub.__handoff.factory().apply(ctx)
+mutate({ ids: ['real-A'], byId: { 'real-A': session('real-A', { running: true, title: '真实形状' }) } })
+assert.ok(!('pendingInteraction' in state.byId['real-A']), 'row must NOT carry pendingInteraction (real SessionSummary shape)')
+assert.deepEqual(aggPosts().at(-1).items, [{ kind: 'running', title: '真实形状' }], 'starts as running')
+// pending arrives ONLY through the status store, exactly like dsh
+statusMap = new Map([['real-A', { running: true, pendingInteraction: 'approval', completionUnread: false }]])
+for (const l of [...listeners]) l()
+assert.deepEqual(aggPosts().at(-1), { running: 0, pending: 1, done: 0, items: [{ kind: 'pending', title: '真实形状' }] },
+  'pending from sessionStatus (not the row) must be picked up')
+// completionUnread in the status store alone marks it done
+statusMap = new Map([['real-A', { running: false, pendingInteraction: undefined, completionUnread: true }]])
+for (const l of [...listeners]) l()
+assert.deepEqual(aggPosts().at(-1), { running: 0, pending: 0, done: 1, items: [{ kind: 'done', title: '真实形状' }] },
+  'completionUnread from sessionStatus marks done')
+disposeReal()
+
+console.log('PASS — notification plugin behavioral test (23 notification + 8 aggregate scenarios)')
 process.exit(0)
