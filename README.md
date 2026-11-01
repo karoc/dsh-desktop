@@ -10,9 +10,10 @@ DSH Smoothly Desktop（**DSH SD**）把 [DeepSeek Harness](https://github.com/de
 - **插件管理在 dsh 自己的页面里**：dsh 0.1.6-alpha.2 起自带插件管理（Web 侧边栏 **Plugins** 页：安装/卸载/启用/停用/行级开关/构建脚本审批/插件配置页）。壳内不再有自建的插件管理窗口——dsh 起不来时用壳菜单「停用全部第三方插件…」自救（会先备份 profile `package.json`）。
 - **升级后自动清理残留嵌套包**：pnpm 的 hoisted 安装不清理上一版留下的嵌套目录，而 Node 解析嵌套副本优先于提升到根的新版 —— 实测 0.1.5-rc.2 → 0.1.6-alpha.2 后 `dsh-session-persistence-jsonl/node_modules/@deepseek-ai/*` 仍是旧版（不导出新版需要的 `./message-projections`）→ dsh 启动即崩。壳在**升级后与每次启动**都检查一次，只删版本与父包不一致的嵌套副本（不重建整棵树、不需要联网）。
 - **内置 Node 24 运行时**：安装包自带 Node（满足 dsh 的运行要求），用户机器无需装 Node。
-- **原生通知**：dsh 需要你问答（`pendingInteraction`：问题 / 批准 / 计划审阅）时，或某个会话结束（`running` 由真变假）时，弹出系统通知；窗口在前台时不打扰。
+- **原生通知**：dsh 需要你问答（`pendingInteraction`：问题 / 批准 / 计划审阅）时，或某个会话结束（`running` 由真变假）时，弹出系统通知；窗口在前台时不打扰。**是否前台以壳的 `WindowEvent::Focused` 为准**——WebView2 里 `document.hasFocus()` 在窗口后置后仍返回 true，曾导致通知被全量误抑制。
 - **点击通知直达会话**：单击系统通知会把窗口带回前台并打开对应会话（单实例 + 本地桥实现）。
 - **托盘常驻**：关窗只是隐藏，服务继续跑；托盘菜单"退出"才真正停止并退出。
+- **托盘显示会话明细**：状态取自 `uiSession.sessionStatus`（`sessions.list` 的行没有 `pendingInteraction` 字段，读它恒为 undefined——这是历史 bug 的根因）；托盘 tooltip 列出产品名 + 每个活跃会话一行——`● 待处理 · 会话标题`、`▶ 会话标题`（运行中）、`○ 会话标题`（完成未查看，打开后自动消失），待处理排在最前。不打开窗口就知道哪个会话在跑、哪个在等你。受 Windows `NOTIFYICONDATAW.szTip` **128 字符硬上限**约束（超出由 tray-icon 静默截断），壳侧按 127 字符预算逐行收敛，放不下时整行丢弃而不是截半行；tooltip 是纯文本**无法着色**，状态只能靠符号形状区分。聚合内容变化才上报（快照每次事件都触发，稳态不得反复打桥）；subagent 行不计入工作/完成（其父回合已覆盖），但其待处理交互仍计入；空白会话不计入。
 - **壳内代理**：所有 dsh 出站流量（模型请求、web 搜索、npm 安装/更新、插件、子代理）都经壳内置的本地正向代理；默认直连，可在设置里勾选哪些主机走上游代理（含可选账号密码），保存即生效。**入口 = 托盘「代理设置…」**（打开独立设置窗口，不打断 dsh 页面）。
 - **官方零改动**：通知插件通过 `dsh web --patch` 在运行时注入，更新 dsh 不会冲掉它。
 - 桌面端数据自包含（`DSH_HOME` 默认在运行时目录内），与浏览器版各自独立，可随时切回共用。
@@ -30,7 +31,7 @@ DSH Smoothly Desktop（**DSH SD**）把 [DeepSeek Harness](https://github.com/de
 │ 本地通知桥（127.0.0.1:<bridge>）                           │
 │   /notify → tauri-plugin-notification 弹系统通知           │
 │   /pending-open → 点通知后的"待打开会话"                    │
-│   /log /alive → 决策日志 + 心跳（排查用）                   │
+│   /log /alive /state → 日志 + 心跳 + 会话聚合               │
 │ 自绘顶栏（decorations:false）：窗口三键 + 壳菜单栏           │
 │   注入 shell-chrome.js（SHELL_MENUS 定义点，IPC/桥双通道）   │
 │ 托盘：显示窗口 / 重启服务 / 打开数据目录 / 退出              │

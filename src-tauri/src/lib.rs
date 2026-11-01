@@ -239,6 +239,70 @@ static PENDING_OPEN: Mutex<Option<String>> = Mutex::new(None);
 /// signal of "user clicked the toast and came back".
 static FOCUS_OPEN: Mutex<Option<String>> = Mutex::new(None);
 
+/// 最近一次写入托盘的 tooltip 文本。client 插件在聚合**变化时**才上报，
+/// 这里再按"文本未变"短路一次：Windows 每次 set_tooltip 都会重建 tooltip，
+/// 无变化的重复写入没有意义。`None` = 尚未收到任何上报（页面还没挂载）。
+static SESSION_AGGREGATE: Mutex<Option<String>> = Mutex::new(None);
+
+/// 主窗口**真实**焦点状态（由 Tauri 的 `WindowEvent::Focused` 维护）。
+///
+/// 页面侧的 `document.hasFocus()` 在 WebView2 里不可信：窗口被推到别的应用
+/// 后面之后它仍然返回 true，于是通知插件以为用户在看 UI，把所有 toast 都
+/// 抑制掉了（2026-11-01 用户实测：dev 窗口已后置，日志仍记 "suppressed
+/// window focused"）。焦点只能由壳说了算：事件发生时 eval 一个全局，页面
+/// 加载完再通过 `GET /window/focused` 拉一次初始值。
+static WINDOW_FOCUSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+
+/// 主窗口是否真的是前台窗口（Win32 权威判定）。
+///
+/// WebView2 下 `document.hasFocus()`、Tauri 的 `is_focused()`、以及
+/// `WindowEvent::Focused(false)` 三者都不可靠：前两者会把"窗口已被推后"
+/// 报成聚焦，后者压根不触发。通知抑制必须建立在真实前台判定上。
+#[cfg(windows)]
+fn main_window_is_foreground(app: &AppHandle) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{GetAncestor, GetForegroundWindow, GetWindowThreadProcessId, GA_ROOT};
+    let Some(w) = app.get_webview_window("main") else {
+        return false;
+    };
+    let Ok(hwnd) = w.hwnd() else {
+        return false;
+    };
+    unsafe {
+        let fg = GetForegroundWindow();
+        if fg.0.is_null() {
+            return false;
+        }
+        // HWND 比较不可靠（Tauri 窗口是多层句柄，GetAncestor 也未必归一）。
+        // 改用"前台窗口属于本进程"这个无歧义判定。
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(fg, Some(&mut pid));
+        if pid == std::process::id() {
+            return true;
+        }
+        let root = GetAncestor(fg, GA_ROOT);
+        root == hwnd || fg == hwnd
+    }
+}
+
+#[cfg(not(windows))]
+fn main_window_is_foreground(app: &AppHandle) -> bool {
+    app.get_webview_window("main")
+        .and_then(|w| w.is_focused().ok())
+        .unwrap_or(false)
+}
+
+/// 把真实焦点状态推给页面（`window.__DSH_SHELL_FOCUSED__`）。
+fn push_window_focus(app: &AppHandle, focused: bool) {
+    WINDOW_FOCUSED.store(focused, std::sync::atomic::Ordering::SeqCst);
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.eval(&format!(
+            "globalThis.__DSH_SHELL_FOCUSED__ = {};",
+            if focused { "true" } else { "false" }
+        ));
+    }
+}
+
 /// Whether the "dsh 有更新" toast has already been shown this process launch
 /// (the manager reports update-status at boot and on demand — remind once).
 static UPDATE_TOAST_SHOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -566,6 +630,77 @@ fn show_toast(app: &AppHandle, title: String, body: String) {
                 }
             }
         }
+    }
+}
+
+/// Windows 托盘 tooltip 的硬上限：`NOTIFYICONDATAW.szTip` 是 `[u16; 128]`，
+/// tray-icon 写入时用 `min(128)` **静默截断**（tray-icon 0.24.2
+/// `platform_impl/windows/mod.rs`）。这里主动收敛到 127 个字符，让截断落在
+/// 我们手里——至少能保证不会把一个标题切成半行、也不会吞掉末尾的数。
+const TRAY_TOOLTIP_MAX_CHARS: usize = 127;
+
+/// 拼托盘 tooltip：产品名 + 每个会话一行（`● 待处理 · 标题` / `▶ 标题` / `○ 标题`）。
+///
+/// 全 0 时只回产品名，不留一条"0 个运行中"这种无信息量的文字。纯文本无法
+/// 着色，状态只能靠符号形状区分（`●` 待处理 / `▶` 运行中 / `○` 完成）。
+/// 超出字符预算时**整行**丢弃，绝不截半行——半条标题比少一条更糟。
+fn build_tray_tooltip(
+    base: &str,
+    running: u32,
+    pending: u32,
+    done: u32,
+    items: &[(String, String)],
+) -> String {
+    if running + pending + done == 0 {
+        return base.to_string();
+    }
+    let mut lines: Vec<String> = vec![base.to_string()];
+    // 已用字符数（含每行结尾的换行符，保守计入）。
+    let mut used = base.chars().count() + 1;
+    for (kind, title) in items {
+        let (mark, label) = match kind.as_str() {
+            "pending" => ("●", "待处理 · "),
+            "running" => ("▶", ""),
+            _ => ("○", ""),
+        };
+        // mark + 空格 + label + 内容 + 换行
+        let overhead = 2 + label.chars().count() + 1;
+        let remaining = TRAY_TOOLTIP_MAX_CHARS.saturating_sub(used + overhead);
+        if remaining < 4 {
+            break;
+        }
+        let truncated: String = title.chars().take(remaining).collect();
+        let line = format!("{mark} {label}{truncated}");
+        used += line.chars().count() + 1;
+        lines.push(line);
+    }
+    lines.join("\r\n")
+}
+
+/// 把 client 上报的会话聚合写进托盘 tooltip。
+///
+/// 用户切走后不必打开窗口就能知道"哪个会话在跑、哪个在等我、哪个跑完了还
+/// 没看"。文案只在**内容变化**时改（见 SESSION_AGGREGATE 的说明）。
+fn apply_session_aggregate(
+    app: &AppHandle,
+    running: u32,
+    pending: u32,
+    done: u32,
+    items: Vec<(String, String)>,
+) {
+    let base = app.package_info().name.clone();
+    let text = build_tray_tooltip(&base, running, pending, done, &items);
+    {
+        let mut guard = SESSION_AGGREGATE.lock().unwrap();
+        if guard.as_deref() == Some(text.as_str()) {
+            return;
+        }
+        *guard = Some(text.clone());
+    }
+    // 托盘可能尚未创建（早期启动）或已被移除：两处都要静默跳过，托盘状态
+    // 属于诊断信息，绝不能让一条 tooltip 失败影响桥的响应。
+    if let Some(tray) = app.tray_by_id("dsh-tray") {
+        let _ = tray.set_tooltip(Some(text.as_str()));
     }
 }
 
@@ -1371,7 +1506,7 @@ mod danger_action_tests {
             assert!(!action.title.is_empty() && !action.detail.is_empty(), "{path} 文案不能为空");
         }
         // 非危险端点与只读方法一律不拦
-        for path in ["/window/state", "/window/drag", "/alive", "/log", "/notify", "/pending-open", "/shell/state", "/shell/status", "/devtools"] {
+        for path in ["/window/state", "/window/drag", "/alive", "/log", "/notify", "/state", "/pending-open", "/shell/state", "/shell/status", "/devtools"] {
             assert!(dangerous_bridge_action("POST", path).is_none(), "{path} 不应被拦");
             assert!(dangerous_bridge_action("GET", path).is_none(), "GET {path} 不应被拦");
         }
@@ -2759,6 +2894,18 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
 
     let (status, resp_body) = match (method, path) {
         ("OPTIONS", _) => ("204 No Content", String::new()),
+        // 页面侧 `document.hasFocus()` 在 WebView2 里不可信（见 WINDOW_FOCUSED），
+        // 页面加载后用它拉一次初始焦点；之后由 Focused 事件 eval 推更新。
+        ("GET", "/window/focused") => {
+            // 实时问 Win32，而不是读事件或 Tauri 的 is_focused()：实测
+            // `WindowEvent::Focused(false)` 不随"窗口被推到后台"触发，而
+            // `is_focused()` 在 WebView2 上恒为 false（连带到前台也不变）。
+            // 唯一可靠的是 GetForegroundWindow 与窗口 HWND 的比较。
+            let focused = main_window_is_foreground(app);
+            WINDOW_FOCUSED.store(focused, std::sync::atomic::Ordering::SeqCst);
+            let body = serde_json::json!({ "focused": focused }).to_string();
+            ("200 OK", body)
+        }
         ("GET", "/pending-open") => {
             let sid = PENDING_OPEN.lock().unwrap().take();
             // Log only real handoffs — the 1.2s poll would otherwise flood the
@@ -2836,6 +2983,35 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
                 log_line(&data, &format!("notification session={s}"));
             }
             show_toast(app, title, body2);
+            ("200 OK", String::new())
+        }
+        // 会话聚合（运行中 / 待你处理 / 已完成未查看 + 各自的会话标题）。
+        // client 插件只在内容变化时发一次；这里只做落库 + 托盘 tooltip，
+        // 不打扰、不弹窗。
+        ("POST", "/state") => {
+            let parsed = serde_json::from_str::<serde_json::Value>(&body).ok();
+            let field = |name: &str| -> u32 {
+                parsed
+                    .as_ref()
+                    .and_then(|v| v.get(name))
+                    .and_then(|x| x.as_u64())
+                    .unwrap_or(0) as u32
+            };
+            let items: Vec<(String, String)> = parsed
+                .as_ref()
+                .and_then(|v| v.get("items"))
+                .and_then(|x| x.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|it| {
+                            let kind = it.get("kind")?.as_str()?.to_string();
+                            let title = it.get("title")?.as_str()?.to_string();
+                            Some((kind, title))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            apply_session_aggregate(app, field("running"), field("pending"), field("done"), items);
             ("200 OK", String::new())
         }
         ("GET", "/update-status") => {
@@ -5246,8 +5422,11 @@ pub fn run() {
                             let _ = w.minimize();
                         }
                     }
-                    tauri::WindowEvent::Focused(true) => {
-                        if let Some(sid) = FOCUS_OPEN.lock().unwrap().take() {
+                    tauri::WindowEvent::Focused(focused) => {
+                        // 真实焦点是通知抑制的唯一依据（见 WINDOW_FOCUSED）。
+                        push_window_focus(&handle, *focused);
+                        if *focused {
+                            if let Some(sid) = FOCUS_OPEN.lock().unwrap().take() {
                             *PENDING_OPEN.lock().unwrap() = Some(sid.clone());
                             let data = handle
                                 .path()
@@ -5255,6 +5434,7 @@ pub fn run() {
                                 .unwrap_or_else(|_| std::path::PathBuf::from("."));
                             log_line(&data, &format!("focus-open: {sid}"));
                             eprintln!("[dsh-desktop] focus-open: {sid}");
+                            }
                         }
                     }
                     _ => {}

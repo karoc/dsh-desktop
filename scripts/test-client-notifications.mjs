@@ -44,7 +44,7 @@ assert.ok(windowStub.__handoff, '__ModuleLoader__.load must be called')
 assert.equal(windowStub.__handoff.id, '@dsh-desktop/client-notifications')
 
 const plugin = windowStub.__handoff.factory()
-assert.deepEqual(plugin.inject, ['sessions', 'connection'])
+assert.deepEqual(plugin.inject, ['sessions', 'connection', 'uiSession'], 'must inject uiSession — pendingInteraction lives there, not on the list row')
 assert.equal(typeof plugin.apply, 'function')
 
 // ── sessions list store stub (mirrors SnapshotStore<SessionListState>) ──────
@@ -59,8 +59,20 @@ const list = {
 let historyReason = 'completed' // kind the last turn/end carries
 let historyErrorMsg = ''
 const historyCalls = [] // sessionIds probed via sessions.history
+// ── sessionStatus: the ONLY source of pendingInteraction / completionUnread ──
+// The real `SessionSummary` row has no pendingInteraction field (that bug made
+// the plugin read undefined forever), so the fixture MUST carry status in a
+// separate store exactly like dsh's `uiSession.sessionStatus`.
+let statusMap = new Map()
+const uiSession = {
+  sessionStatus: {
+    getSnapshot: () => statusMap,
+    subscribe: () => () => {},
+  },
+}
 const ctx = {
   sessions: { list },
+  uiSession,
   connection: {
     api: {
       sessions: {
@@ -80,8 +92,26 @@ const ctx = {
 }
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0))
 
+/** Rebuild the status store from the current rows (mirrors dsh's projection). */
+function syncStatus() {
+  const next = new Map()
+  const ids = Array.isArray(state.ids) ? state.ids : (state.items || []).map((i) => i.sessionId || i.id)
+  const byId = state.byId || Object.fromEntries((state.items || []).map((i) => [i.sessionId || i.id, i]))
+  for (const id of ids) {
+    const it = byId[id]
+    if (!it) continue
+    next.set(id, {
+      running: it.running,
+      pendingInteraction: it.pendingInteraction,
+      completionUnread: it.completionUnread ?? it.completed,
+    })
+  }
+  statusMap = next
+}
+
 function mutate(patch) {
   state = { ...state, ...patch }
+  syncStatus()
   for (const l of [...listeners]) l()
 }
 function session(id, fields) {
@@ -387,5 +417,109 @@ try {
 
 disposeB()
 
-console.log('PASS — notification plugin behavioral test (23 scenarios)')
+// ── scenarios 24-30: aggregate state for the shell tray (/state) ────────────
+// While the window is hidden the tray tooltip is the ONLY place that can
+// answer "what is working / what is waiting on me" — with titles, because
+// "2 running" says nothing about WHAT is running. The contract:
+// post on CHANGE only (the snapshot fires per event; a steady state must not
+// keep the bridge warm), subagent rows never contribute a work/done entry
+// (their parent turn covers them, same rule as the toasts) but a subagent's
+// pending interaction still counts (a person must answer it), and blank rows
+// count for nothing.
+state = { ids: [], byId: {}, current: undefined, phase: 'ready', subagentsByParent: {}, jobsBySession: {}, currentAddress: undefined }
+allPosts = []
+// eslint-disable-next-line no-eval
+eval(clientJs)
+const aggPosts = () => allPosts
+  .filter((e) => String(e[0]).endsWith('/state'))
+  .map((e) => JSON.parse(e[1].body || '{}'))
+const disposeAgg = windowStub.__handoff.factory().apply(ctx)
+
+// 24: baseline posts the zero aggregate exactly once, with no items
+assert.equal(aggPosts().length, 1, 'baseline posts the zero aggregate once')
+assert.deepEqual(aggPosts()[0], { running: 0, pending: 0, done: 0, items: [] })
+
+// 25: a running session appears in the aggregate WITH its title
+introduce('agg-A', { running: true, title: '跑着' })
+assert.deepEqual(
+  aggPosts().at(-1),
+  { running: 1, pending: 0, done: 0, items: [{ kind: 'running', title: '跑着' }] },
+  'running session carries its title',
+)
+
+// 26: an unchanged snapshot must NOT re-post
+const aggBefore = aggPosts().length
+mutate({ ids: ['agg-A'], byId: { 'agg-A': session('agg-A', { running: true, title: '跑着' }) } })
+assert.equal(aggPosts().length, aggBefore, 'steady state must not re-post /state')
+
+// 27: a rename must refresh (title is part of the identity)
+mutate({ ids: ['agg-A'], byId: { 'agg-A': session('agg-A', { running: true, title: '改名了' }) } })
+assert.deepEqual(aggPosts().at(-1).items, [{ kind: 'running', title: '改名了' }], 'rename refreshes tooltip')
+
+// 28: pending wins over running for the same session; subagent work is excluded
+mutate({
+  ids: ['agg-A', 'agg-S'],
+  byId: {
+    'agg-A': session('agg-A', { running: true, pendingInteraction: 'approval', title: '跑着' }),
+    'agg-S': session('agg-S', { running: true, origin: 'subagent', parentId: 'agg-A', cwd: '/work' }),
+  },
+})
+assert.deepEqual(
+  aggPosts().at(-1),
+  { running: 0, pending: 1, done: 0, items: [{ kind: 'pending', title: '跑着' }] },
+  'pending row reported once; subagent work excluded',
+)
+
+// 29: blank (created-but-unused) row counts for nothing
+mutate({ ids: ['agg-B'], byId: { 'agg-B': session('agg-B', { running: true, blank: true }) } })
+assert.deepEqual(aggPosts().at(-1), { running: 0, pending: 0, done: 0, items: [] }, 'blank row excluded')
+
+// 30: finished-but-unviewed carries its title; pending sorts before done
+mutate({
+  ids: ['agg-C', 'agg-D'],
+  byId: {
+    'agg-C': session('agg-C', { running: false, completed: true, title: '完成未看' }),
+    'agg-D': session('agg-D', { pendingInteraction: 'question', title: '等你答' }),
+  },
+})
+assert.deepEqual(
+  aggPosts().at(-1),
+  {
+    running: 0,
+    pending: 1,
+    done: 1,
+    items: [
+      { kind: 'pending', title: '等你答' },
+      { kind: 'done', title: '完成未看' },
+    ],
+  },
+  'pending sorts first, done keeps its title',
+)
+disposeAgg()
+
+// ── scenario 31: REAL data shape — the list row carries NO pendingInteraction.
+// This is the regression that kept the tray's ● row and the 「需要你」 toast
+// silently dead: `SessionSummary` has no such field, it lives only in
+// uiSession.sessionStatus.
+state = { ids: [], byId: {}, current: undefined, phase: 'ready', subagentsByParent: {}, jobsBySession: {}, currentAddress: undefined }
+allPosts = []
+// eslint-disable-next-line no-eval
+eval(clientJs)
+const disposeReal = windowStub.__handoff.factory().apply(ctx)
+mutate({ ids: ['real-A'], byId: { 'real-A': session('real-A', { running: true, title: '真实形状' }) } })
+assert.ok(!('pendingInteraction' in state.byId['real-A']), 'row must NOT carry pendingInteraction (real SessionSummary shape)')
+assert.deepEqual(aggPosts().at(-1).items, [{ kind: 'running', title: '真实形状' }], 'starts as running')
+// pending arrives ONLY through the status store, exactly like dsh
+statusMap = new Map([['real-A', { running: true, pendingInteraction: 'approval', completionUnread: false }]])
+for (const l of [...listeners]) l()
+assert.deepEqual(aggPosts().at(-1), { running: 0, pending: 1, done: 0, items: [{ kind: 'pending', title: '真实形状' }] },
+  'pending from sessionStatus (not the row) must be picked up')
+// completionUnread in the status store alone marks it done
+statusMap = new Map([['real-A', { running: false, pendingInteraction: undefined, completionUnread: true }]])
+for (const l of [...listeners]) l()
+assert.deepEqual(aggPosts().at(-1), { running: 0, pending: 0, done: 1, items: [{ kind: 'done', title: '真实形状' }] },
+  'completionUnread from sessionStatus marks done')
+disposeReal()
+
+console.log('PASS — notification plugin behavioral test (23 notification + 8 aggregate scenarios)')
 process.exit(0)

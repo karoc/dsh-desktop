@@ -86,18 +86,33 @@ window.__ModuleLoader__.load({
       return item.sessionId || item.id || undefined
     }
 
-    function show(title, body, item) {
+    // ── window focus (Bug 2) ───────────────────────────────────────────────
+    // `document.hasFocus()` is NOT trustworthy in WebView2: after the window is
+    // pushed behind another app it keeps returning true, so the shell logged
+    // "suppressed / window focused" while the user was in a different program
+    // and every notification was silently dropped. The shell now listens for
+    // Tauri's `WindowEvent::Focused` and evals `window.__DSH_SHELL_FOCUSED__`;
+    // that value is the only authority. When it is absent (older shell that
+    // does not push it yet) fall back to the old document check rather than
+    // muting every notification.
+    function shellSaysFocused() {
+      const pushed = globalThis.__DSH_SHELL_FOCUSED__
+      if (pushed === true || pushed === false) return pushed
       try {
-        if (
-          typeof document !== 'undefined' &&
-          typeof document.hasFocus === 'function' &&
-          document.hasFocus() &&
-          !document.hidden
-        ) {
-          logEvent('suppressed', item, 'window focused')
-          return // user is looking at the UI; do not nag
-        }
-      } catch { /* keep going */ }
+        return typeof document !== 'undefined'
+          && typeof document.hasFocus === 'function'
+          && document.hasFocus()
+          && !document.hidden
+      } catch {
+        return false
+      }
+    }
+
+    function show(title, body, item) {
+      if (shellSaysFocused()) {
+        logEvent('suppressed', item, 'window focused (shell state)')
+        return // user is looking at the UI; do not nag
+      }
       const payload = { title, body }
       const sid = idOf(item)
       if (sid) payload.sessionId = sid
@@ -200,9 +215,48 @@ window.__ModuleLoader__.load({
 
     return {
       name: 'desktop-notifications',
-      inject: ['sessions', 'connection'],
+      // `uiSession` is the only place the UI status lives: the session-LIST
+      // snapshot row (`SessionSummary`) has NO pendingInteraction field — it
+      // only carries running/blank/origin/updatedAt. Reading `item.pending`
+      // off that row silently yields undefined forever (that bug is why the
+      // 「需要你」 toast and the tray's ● row never worked). UiSession exposes
+      // `sessionStatus` publicly and other plugins read it exactly this way.
+      inject: ['sessions', 'connection', 'uiSession'],
       apply(ctx) {
         const seen = new Map() // sessionId -> { pending?, running, completed, ended }
+
+        /** Live UI status for one session, or undefined when unavailable. */
+        let statusDiag = false
+        function statusOf(id) {
+          try {
+            const ui = ctx.uiSession
+            if (!ui) {
+              if (!statusDiag) { statusDiag = true; logEvent('status-missing', null, 'ctx.uiSession undefined') }
+              return undefined
+            }
+            const obs = ui.sessionStatus
+            if (!obs || typeof obs.getSnapshot !== 'function') {
+              if (!statusDiag) {
+                statusDiag = true
+                logEvent('status-missing', null, 'sessionStatus=' + (obs === undefined ? 'undefined' : typeof obs))
+              }
+              return undefined
+            }
+            const snap = obs.getSnapshot()
+            const st = snap && typeof snap.get === 'function' ? snap.get(id) : undefined
+            if (!statusDiag) {
+              statusDiag = true
+              logEvent('status-probe', null, 'kind=' + (snap && snap.constructor && snap.constructor.name) +
+                ' size=' + (snap && typeof snap.size === 'number' ? snap.size : '?') +
+                ' hit=' + (st ? 'yes' : 'no') +
+                ' st=' + (st ? JSON.stringify(st) : 'undefined'))
+            }
+            return st
+          } catch (e) {
+            if (!statusDiag) { statusDiag = true; logEvent('status-error', null, String((e && e.message) || e)) }
+            return undefined
+          }
+        }
         // Defensive: the sessions store's canonical shape is { ids, byId }
         // (dsh-client-runtime/service.d.ts); accept the UI-projection shape
         // { items } too so a future shape change can never silently kill us.
@@ -228,6 +282,61 @@ window.__ModuleLoader__.load({
           if (!shapeReported) { shapeReported = true; reportShape('unrecognized') }
           return null
         }
+        // ── aggregate state for the shell (tray tooltip) ────────────────────
+        // What a user needs without opening the window: which sessions are
+        // working, which wait on them, which finished unviewed — with titles,
+        // because "2 running" says nothing about WHAT is running. Posted only
+        // when the aggregate CHANGES (the snapshot fires on every event; a
+        // steady state must not keep the bridge warm).
+        //
+        // Row rules (same source as the toast suppression):
+        //   - subagent rows never contribute a work/done entry (one parent turn
+        //     covers their lifecycle) but their PENDING interaction still needs
+        //     a person, so it gets an entry of its own;
+        //   - blank rows (created, never used) contribute nothing;
+        //   - `completed` only means "finished while not selected", so a session
+        //     the user has already opened drops out by itself.
+        // Entries are pre-sorted by urgency; the shell truncates to its 128-char
+        // tooltip budget, so the cap here only avoids shipping junk.
+        const AGGREGATE_MAX_ITEMS = 8
+        let lastAggregateKey = null
+        function reportAggregate(shaped) {
+          const entries = []
+          for (const id of shaped.ids) {
+            const item = shaped.byId[id]
+            if (!item || item.blank === true) continue
+            // Live status comes from uiSession, not from the list row.
+            const st = statusOf(id) || {}
+            const running = st.running === undefined ? item.running === true : st.running === true
+            const unread = st.completionUnread === undefined
+              ? item.completed === true
+              : st.completionUnread === true
+            if (st.pendingInteraction) {
+              entries.push({ kind: 'pending', title: titleOf(item) })
+              continue
+            }
+            if (item.origin === 'subagent') continue
+            if (running) entries.push({ kind: 'running', title: titleOf(item) })
+            else if (unread) entries.push({ kind: 'done', title: titleOf(item) })
+          }
+          const rank = { pending: 0, running: 1, done: 2 }
+          entries.sort((a, b) => rank[a.kind] - rank[b.kind])
+          const running = entries.reduce((n, e) => n + (e.kind === 'running' ? 1 : 0), 0)
+          const pending = entries.reduce((n, e) => n + (e.kind === 'pending' ? 1 : 0), 0)
+          const done = entries.reduce((n, e) => n + (e.kind === 'done' ? 1 : 0), 0)
+          // Titles are part of the identity: a rename must refresh the tooltip.
+          const key = entries.map((e) => `${e.kind}\u0000${e.title}`).join('\u0001')
+          if (key === lastAggregateKey) return
+          lastAggregateKey = key
+          logEvent('aggregate', null, `${running}/${pending}/${done}`)
+          post('/state', {
+            running,
+            pending,
+            done,
+            items: entries.slice(0, AGGREGATE_MAX_ITEMS),
+          })
+        }
+
         const scan = () => {
           let snap
           try {
@@ -257,11 +366,16 @@ window.__ModuleLoader__.load({
             // still raise 「需要你」 (pending branch below fires for every row).
             const isSubagentRow = item.origin === 'subagent'
             const before = seen.get(id)
-            const pending = item.pendingInteraction
+            // The list row has no pendingInteraction field — it must come from
+            // uiSession (see the inject comment). `completed` likewise only
+            // means "ended while unselected"; completionUnread is the real
+            // "finished and not yet acknowledged".
+            const st = statusOf(id) || {}
+            const pending = st.pendingInteraction
             // Completion signal: dsh's `completed` only means "finished while
             // NOT selected" (it never flips for a selected session, even when
             // the window is minimized). The universal edge is running true→false.
-            const running = item.running === true
+            const running = st.running === undefined ? item.running === true : st.running === true
             const completed = item.completed === true
             if (before) {
               if (!before.pending && pending) {
@@ -317,6 +431,7 @@ window.__ModuleLoader__.load({
               lastErrorToastAt.delete(id)
             }
           }
+          reportAggregate(shaped)
         }
         const list = ctx.sessions.list
         const unsubscribe = list && typeof list.subscribe === 'function'
@@ -326,6 +441,30 @@ window.__ModuleLoader__.load({
         // Diagnostic canary: tells the shell this module loaded and the bridge
         // is reachable (no toast, no tauri dependency).
         post('/alive', { loaded: true })
+        // The shell only pushes focus on Focused events, which do NOT fire for
+        // a window that was already focused when the page loaded (e.g. after a
+        // reload). Pull the initial value once so the first suppression
+        // decision is not made against a missing global.
+        // Poll rather than trust the push: on Windows the shell's
+        // `WindowEvent::Focused(false)` does not fire when the window is merely
+        // pushed behind another app, so the eval-driven global would stay stale
+        // at `true` and mute every toast. A loopback GET every few seconds is
+        // cheap and is the only signal that tracks reality.
+        const FOCUS_POLL_MS = 5000
+        function refreshFocus() {
+          if (!BRIDGE_PORT || String(BRIDGE_PORT).startsWith('__DSH')) return
+          fetch(`http://127.0.0.1:${BRIDGE_PORT}/window/focused`)
+            .then((r) => r.json())
+            .then((d) => {
+              if (d && typeof d.focused === 'boolean') globalThis.__DSH_SHELL_FOCUSED__ = d.focused
+            })
+            .catch(() => {})
+        }
+        refreshFocus()
+        {
+          const h = setInterval(refreshFocus, FOCUS_POLL_MS)
+          if (h && typeof h.unref === 'function') h.unref()
+        }
         pollPendingOpen(ctx)
         return () => {
           if (unsubscribe) unsubscribe()
