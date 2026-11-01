@@ -261,7 +261,7 @@ static WINDOW_FOCUSED: std::sync::atomic::AtomicBool = std::sync::atomic::Atomic
 /// 报成聚焦，后者压根不触发。通知抑制必须建立在真实前台判定上。
 #[cfg(windows)]
 fn main_window_is_foreground(app: &AppHandle) -> bool {
-    use windows::Win32::UI::WindowsAndMessaging::{GetAncestor, GetForegroundWindow, GA_ROOT};
+    use windows::Win32::UI::WindowsAndMessaging::{GetAncestor, GetForegroundWindow, GetWindowThreadProcessId, GA_ROOT};
     let Some(w) = app.get_webview_window("main") else {
         return false;
     };
@@ -272,6 +272,13 @@ fn main_window_is_foreground(app: &AppHandle) -> bool {
         let fg = GetForegroundWindow();
         if fg.0.is_null() {
             return false;
+        }
+        // HWND 比较不可靠（Tauri 窗口是多层句柄，GetAncestor 也未必归一）。
+        // 改用"前台窗口属于本进程"这个无歧义判定。
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(fg, Some(&mut pid));
+        if pid == std::process::id() {
+            return true;
         }
         let root = GetAncestor(fg, GA_ROOT);
         root == hwnd || fg == hwnd
