@@ -229,31 +229,52 @@ window.__ModuleLoader__.load({
           return null
         }
         // ── aggregate state for the shell (tray tooltip) ────────────────────
-        // What a user needs without opening the window: is anything working,
-        // is anything waiting on me. Posted only when the numbers CHANGE — the
-        // snapshot fires on every event, and a steady state must not keep the
-        // bridge warm. Subagent rows are excluded from the WORK count (one
-        // parent turn covers them, the same rule the toasts follow), but a
-        // subagent's pending interaction still needs a person, so it counts.
-        // Blank rows (created, never used) count for nothing.
+        // What a user needs without opening the window: which sessions are
+        // working, which wait on them, which finished unviewed — with titles,
+        // because "2 running" says nothing about WHAT is running. Posted only
+        // when the aggregate CHANGES (the snapshot fires on every event; a
+        // steady state must not keep the bridge warm).
+        //
+        // Row rules (same source as the toast suppression):
+        //   - subagent rows never contribute a work/done entry (one parent turn
+        //     covers their lifecycle) but their PENDING interaction still needs
+        //     a person, so it gets an entry of its own;
+        //   - blank rows (created, never used) contribute nothing;
+        //   - `completed` only means "finished while not selected", so a session
+        //     the user has already opened drops out by itself.
+        // Entries are pre-sorted by urgency; the shell truncates to its 128-char
+        // tooltip budget, so the cap here only avoids shipping junk.
+        const AGGREGATE_MAX_ITEMS = 8
         let lastAggregateKey = null
         function reportAggregate(shaped) {
-          let running = 0
-          let pending = 0
-          let done = 0
+          const entries = []
           for (const id of shaped.ids) {
             const item = shaped.byId[id]
             if (!item || item.blank === true) continue
-            if (item.pendingInteraction) pending += 1
+            if (item.pendingInteraction) {
+              entries.push({ kind: 'pending', title: titleOf(item) })
+              continue
+            }
             if (item.origin === 'subagent') continue
-            if (item.running === true) running += 1
-            else if (item.completed === true) done += 1
+            if (item.running === true) entries.push({ kind: 'running', title: titleOf(item) })
+            else if (item.completed === true) entries.push({ kind: 'done', title: titleOf(item) })
           }
-          const key = `${running}/${pending}/${done}`
+          const rank = { pending: 0, running: 1, done: 2 }
+          entries.sort((a, b) => rank[a.kind] - rank[b.kind])
+          const running = entries.reduce((n, e) => n + (e.kind === 'running' ? 1 : 0), 0)
+          const pending = entries.reduce((n, e) => n + (e.kind === 'pending' ? 1 : 0), 0)
+          const done = entries.reduce((n, e) => n + (e.kind === 'done' ? 1 : 0), 0)
+          // Titles are part of the identity: a rename must refresh the tooltip.
+          const key = entries.map((e) => `${e.kind}\u0000${e.title}`).join('\u0001')
           if (key === lastAggregateKey) return
           lastAggregateKey = key
-          logEvent('aggregate', null, key)
-          post('/state', { running, pending, done })
+          logEvent('aggregate', null, `${running}/${pending}/${done}`)
+          post('/state', {
+            running,
+            pending,
+            done,
+            items: entries.slice(0, AGGREGATE_MAX_ITEMS),
+          })
         }
 
         const scan = () => {
