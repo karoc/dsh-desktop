@@ -423,16 +423,26 @@ window.__ModuleLoader__.load({
         // a window that was already focused when the page loaded (e.g. after a
         // reload). Pull the initial value once so the first suppression
         // decision is not made against a missing global.
-        try {
-          if (BRIDGE_PORT && !String(BRIDGE_PORT).startsWith('__DSH')) {
-            fetch(`http://127.0.0.1:${BRIDGE_PORT}/window/focused`)
-              .then((r) => r.json())
-              .then((d) => {
-                if (d && typeof d.focused === 'boolean') globalThis.__DSH_SHELL_FOCUSED__ = d.focused
-              })
-              .catch(() => {})
-          }
-        } catch { /* ignore */ }
+        // Poll rather than trust the push: on Windows the shell's
+        // `WindowEvent::Focused(false)` does not fire when the window is merely
+        // pushed behind another app, so the eval-driven global would stay stale
+        // at `true` and mute every toast. A loopback GET every few seconds is
+        // cheap and is the only signal that tracks reality.
+        const FOCUS_POLL_MS = 5000
+        function refreshFocus() {
+          if (!BRIDGE_PORT || String(BRIDGE_PORT).startsWith('__DSH')) return
+          fetch(`http://127.0.0.1:${BRIDGE_PORT}/window/focused`)
+            .then((r) => r.json())
+            .then((d) => {
+              if (d && typeof d.focused === 'boolean') globalThis.__DSH_SHELL_FOCUSED__ = d.focused
+            })
+            .catch(() => {})
+        }
+        refreshFocus()
+        {
+          const h = setInterval(refreshFocus, FOCUS_POLL_MS)
+          if (h && typeof h.unref === 'function') h.unref()
+        }
         pollPendingOpen(ctx)
         return () => {
           if (unsubscribe) unsubscribe()
