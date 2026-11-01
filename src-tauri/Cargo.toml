@@ -45,4 +45,5 @@ windows = { version = "0.61", features = [
     "Win32_System_JobObjects",
     "Win32_System_IO",
     "UI_Notifications",
+    "Data_Xml_Dom",
 ] }

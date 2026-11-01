@@ -625,6 +625,114 @@ fn activate_window(app: &AppHandle) {
 }
 
 
+
+/// Minimal XML text escaping for toast payloads.
+fn xml_escape(input: &str) -> String {
+    input
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
+/// Toast group name used for every notification this shell raises.
+const TOAST_GROUP: &str = "dsh";
+
+/// Tag prefix inside the toast `launch` argument, so an Action Center click can
+/// tell us WHICH notification was activated (in-memory LAST_SESSION cannot).
+const TOAST_LAUNCH_PREFIX: &str = "dsh-session=";
+
+/// Raise a toast through WinRT directly so it carries Tag + Group.
+///
+/// `tauri-winrt-notification` (used by notify-rust) exposes no tag/group, which
+/// is exactly what `History.RemoveGroupedTagWithId(tag, group, app_id)` needs
+/// (Stack Overflow #44544624). Building the toast ourselves also lets the
+/// `launch` argument carry the session id, so clicking an older card opens the
+/// session that card belonged to rather than "whatever was notified last".
+///
+/// Returns false when WinRT is unavailable so the caller can fall back to
+/// notify-rust.
+#[cfg(windows)]
+fn show_winrt_toast(app: &AppHandle, title: &str, body: &str, session_id: Option<&str>) -> bool {
+    use windows::core::HSTRING;
+    use windows::Data::Xml::Dom::XmlDocument;
+    use windows::UI::Notifications::{ToastNotification, ToastNotificationManager};
+
+    let app_id = app.config().identifier.clone();
+    let launch = match session_id {
+        Some(sid) => format!("{TOAST_LAUNCH_PREFIX}{sid}"),
+        None => "dsh-desktop".to_string(),
+    };
+    let xml_str = format!(
+        concat!(
+            r#"<toast activationType="foreground" launch="{}">"#,
+            r#"<visual><binding template="ToastGeneric">"#,
+            "<text>{}</text><text>{}</text>",
+            r#"</binding></visual></toast>"#
+        ),
+        xml_escape(&launch),
+        xml_escape(title),
+        xml_escape(body)
+    );
+    unsafe {
+        let xml = match XmlDocument::new() {
+            Ok(x) => x,
+            Err(_) => return false,
+        };
+        if xml.LoadXml(&HSTRING::from(xml_str.as_str())).is_err() {
+            return false;
+        }
+        let toast = match ToastNotification::CreateToastNotification(&xml) {
+            Ok(t) => t,
+            Err(_) => return false,
+        };
+        if let Some(sid) = session_id {
+            let _ = toast.SetTag(&HSTRING::from(sid));
+            let _ = toast.SetGroup(&HSTRING::from(TOAST_GROUP));
+        }
+        let notifier = match ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(app_id.as_str())) {
+            Ok(n) => n,
+            Err(_) => return false,
+        };
+        if notifier.Show(&toast).is_err() {
+            return false;
+        }
+    }
+    true
+}
+
+#[cfg(not(windows))]
+fn show_winrt_toast(_app: &AppHandle, _title: &str, _body: &str, _session_id: Option<&str>) -> bool {
+    false
+}
+
+/// Remove the Action Center card belonging to `session_id`.
+#[cfg(windows)]
+fn remove_toast_card(app: &AppHandle, session_id: &str) {
+    use windows::core::HSTRING;
+    use windows::UI::Notifications::ToastNotificationManager;
+    let data = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let app_id = HSTRING::from(app.config().identifier.as_str());
+    let tag = HSTRING::from(session_id);
+    let group = HSTRING::from(TOAST_GROUP);
+    unsafe {
+        match ToastNotificationManager::History() {
+            Ok(history) => match history.RemoveGroupedTagWithId(&tag, &group, &app_id) {
+                Ok(()) => log_line(&data, &format!("toast-card: removed tag={session_id}")),
+                Err(e) => log_line(&data, &format!("toast-card: remove failed: {e}")),
+            },
+            Err(e) => log_line(&data, &format!("toast-card: history unavailable: {e}")),
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn remove_toast_card(_app: &AppHandle, _session_id: &str) {}
+
 /// Drop this app's toasts from the Action Center once one has been acted on.
 ///
 /// notify-rust only registers an in-process activator; it never marks the entry
@@ -659,13 +767,22 @@ fn clear_toast_history(app: &AppHandle) {
 #[cfg(not(windows))]
 fn clear_toast_history(_app: &AppHandle) {}
 
-fn show_toast(app: &AppHandle, title: String, body: String) {
+fn show_toast(app: &AppHandle, title: String, body: String, session_id: Option<String>) {
     let data = app
         .path()
         .app_data_dir()
         .unwrap_or_else(|_| std::path::PathBuf::from("."));
     log_line(&data, &format!("notification: {title} - {body}"));
     eprintln!("[dsh-desktop] notification: {title} - {body}");
+
+    // Preferred path: a WinRT toast we build ourselves, carrying Tag+Group so
+    // the card can be removed later, and a `launch` argument that identifies
+    // the session. Fall back to notify-rust when WinRT refuses.
+    if show_winrt_toast(app, &title, &body, session_id.as_deref()) {
+        log_line(&data, &format!("toast: winrt (session={session_id:?})"));
+        return;
+    }
+    log_line(&data, "toast: winrt unavailable, falling back to notify-rust");
 
     // Show via notify-rust DIRECTLY so we keep the NotificationHandle and can
     // listen for the in-process COM activation callback (tauri-winrt-
@@ -2418,7 +2535,7 @@ fn toggle_gpu_accel_impl(app: &AppHandle) -> Result<serde_json::Value, String> {
             "已开启（页面渲染流畅），重启应用后生效".into()
         } else {
             "已关闭（软件渲染，排查黑屏用），重启应用后生效".into()
-        },
+        }, None,
     );
     Ok(serde_json::json!({ "gpu": !on }))
 }
@@ -2436,7 +2553,7 @@ fn toggle_titlebar_contract_impl(app: &AppHandle) -> Result<serde_json::Value, S
             "已开启（顶栏交给 Web 客户端布局）：刷新页面后生效；若观感异常请关掉".into()
         } else {
             "已关闭：恢复壳自绘顶栏 + 自己推挤高度".into()
-        },
+        }, None,
     );
     log_line(
         &app_data_dir(app),
@@ -3079,7 +3196,7 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
                     .unwrap_or_else(|_| std::path::PathBuf::from("."));
                 log_line(&data, &format!("notification session={s}"));
             }
-            show_toast(app, title, body2);
+            show_toast(app, title, body2, sid.clone());
             ("200 OK", String::new())
         }
         // 会话聚合（运行中 / 待你处理 / 已完成未查看 + 各自的会话标题）。
@@ -3707,7 +3824,7 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
                                     "{} → {}，点托盘「有更新」可一键更新；升级后无法回退读取新数据，建议先备份数据目录",
                                     current.as_deref().unwrap_or("?"),
                                     latest.as_deref().unwrap_or("?"),
-                                ),
+                                ), None,
                             );
                         }
                     }
@@ -4992,7 +5109,7 @@ fn toggle_dev_mode_impl(app: &AppHandle) -> Result<serde_json::Value, String> {
             "已开启（dsh 更新冻结、devtools 可用），重启服务后生效".into()
         } else {
             "已关闭，重启服务后生效".into()
-        },
+        }, None,
     );
     Ok(serde_json::json!({ "devMode": !on }))
 }
@@ -5179,18 +5296,37 @@ pub fn run() {
             // Action Center activation passes NO marker, so fall back to the
             // persisted recent session. A genuinely unrelated second launch is
             // still protected by LAST_SESSION_TTL.
-            let staged = LAST_SESSION.lock().unwrap().clone().or_else(|| load_recent_session(app));
-            let reason = if marked { "toast marker" } else if staged.is_some() { "recent notification" } else { "plain launch" };
+            // A toast we raised ourselves carries its session id in the
+            // `launch` argument, so clicking an OLDER card opens the right
+            // session (LAST_SESSION can only hold the most recent one).
+            let launch_sid = args
+                .iter()
+                .find_map(|a| a.split(TOAST_LAUNCH_PREFIX).nth(1))
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            let staged = launch_sid
+                .clone()
+                .or_else(|| LAST_SESSION.lock().unwrap().clone())
+                .or_else(|| load_recent_session(app));
+            let reason = if launch_sid.is_some() {
+                "toast launch arg"
+            } else if marked {
+                "toast marker"
+            } else if staged.is_some() {
+                "recent notification"
+            } else {
+                "plain launch"
+            };
             log_line(&data, &format!("activated({reason}): pending-open={staged:?}"));
             if staged.is_some() {
-                *PENDING_OPEN.lock().unwrap() = staged;
+                *PENDING_OPEN.lock().unwrap() = staged.clone();
             }
-            // The Action Center click arrives HERE, not through the in-process
-            // `clicked` closure (that one only fires while the toast is still
-            // on screen). Clearing history from `clicked` therefore never ran
-            // for this path — verified by the complete absence of any
-            // `toast-history:` line in the log.
-            clear_toast_history(app);
+            // Remove the card that was actually clicked (needs Tag+Group, which
+            // is why our toasts are built through WinRT directly).
+            match &staged {
+                Some(sid) => remove_toast_card(app, sid),
+                None => clear_toast_history(app),
+            }
             activate_window(app);
         }))
         .manage(ServerState {
@@ -5297,6 +5433,24 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            // ── 冷启动的 toast 激活：Action Center 在壳已退出时会重新启动
+            // 应用，并把 toast 的 `launch` 串作为命令行参数传入。此时页面还
+            // 没加载，所以只把待打开会话放进入 PENDING_OPEN，等桥就绪后由
+            // 页面轮询取走。
+            {
+                let launch_sid = std::env::args()
+                    .find_map(|a| a.split(TOAST_LAUNCH_PREFIX).nth(1))
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
+                if let Some(sid) = launch_sid {
+                    let data = app
+                        .path()
+                        .app_data_dir()
+                        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+                    log_line(&data, &format!("cold-start: toast launch session={sid}"));
+                    *PENDING_OPEN.lock().unwrap() = Some(sid);
+                }
+            }
             // ── 品牌统一数据迁移（必须最先、在任何服务启动前）────────
             // identifier 已统一为 dsh.smoothly.desktop；老版本（dev.dsh.desktop
             // 系）已装用户的旧数据目录在此整体迁入新目录，否则升级即"数据丢失"。
@@ -5482,12 +5636,12 @@ pub fn run() {
                     }
                     "dev-mode" => {
                         if let Err(e) = toggle_dev_mode_impl(app) {
-                            show_toast(app, "开发者模式".into(), format!("切换失败：{e}"));
+                            show_toast(app, "开发者模式".into(), format!("切换失败：{e}"), None);
                         }
                     }
                     "gpu-accel" => {
                         if let Err(e) = toggle_gpu_accel_impl(app) {
-                            show_toast(app, "GPU 加速".into(), format!("切换失败：{e}"));
+                            show_toast(app, "GPU 加速".into(), format!("切换失败：{e}"), None);
                         }
                     }
                     "data" => {
