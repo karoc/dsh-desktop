@@ -5380,8 +5380,8 @@ pub fn run() {
                     }
                     tauri::WindowEvent::Focused(focused) => {
                         // 真实焦点是通知抑制的唯一依据（见 WINDOW_FOCUSED）。
-                        push_window_focus(&handle, focused);
-                        if focused {
+                        push_window_focus(&handle, *focused);
+                        if *focused {
                             if let Some(sid) = FOCUS_OPEN.lock().unwrap().take() {
                             *PENDING_OPEN.lock().unwrap() = Some(sid.clone());
                             let data = handle
