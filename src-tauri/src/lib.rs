@@ -5288,6 +5288,11 @@ pub fn run() {
             // Only a toast activation may stage a session. A plain second
             // launch (user double-clicks the desktop icon) must just raise the
             // window — staging there would jump to whatever was notified last.
+            let data0 = app
+                .path()
+                .app_data_dir()
+                .unwrap_or_else(|_| std::path::PathBuf::from("."));
+            log_line(&data0, &format!("activated args: {args:?}"));
             let marked = args.iter().any(|a| a.contains("-ToastActivated"));
             let data = app
                 .path()
@@ -5323,9 +5328,18 @@ pub fn run() {
             }
             // Remove the card that was actually clicked (needs Tag+Group, which
             // is why our toasts are built through WinRT directly).
+            // `History()` returned E_UNEXPECTED on the activation thread; the
+            // WinRT toast manager needs the main (STA) apartment, so hop there.
             match &staged {
-                Some(sid) => remove_toast_card(app, sid),
-                None => clear_toast_history(app),
+                Some(sid) => {
+                    let app2 = app.clone();
+                    let sid2 = sid.clone();
+                    let _ = app.run_on_main_thread(move || remove_toast_card(&app2, &sid2));
+                }
+                None => {
+                    let app2 = app.clone();
+                    let _ = app.run_on_main_thread(move || clear_toast_history(&app2));
+                }
             }
             activate_window(app);
         }))
