@@ -226,12 +226,34 @@ window.__ModuleLoader__.load({
         const seen = new Map() // sessionId -> { pending?, running, completed, ended }
 
         /** Live UI status for one session, or undefined when unavailable. */
+        let statusDiag = false
         function statusOf(id) {
           try {
-            const obs = ctx.uiSession && ctx.uiSession.sessionStatus
-            if (!obs || typeof obs.getSnapshot !== 'function') return undefined
-            return obs.getSnapshot().get(id)
-          } catch {
+            const ui = ctx.uiSession
+            if (!ui) {
+              if (!statusDiag) { statusDiag = true; logEvent('status-missing', null, 'ctx.uiSession undefined') }
+              return undefined
+            }
+            const obs = ui.sessionStatus
+            if (!obs || typeof obs.getSnapshot !== 'function') {
+              if (!statusDiag) {
+                statusDiag = true
+                logEvent('status-missing', null, 'sessionStatus=' + (obs === undefined ? 'undefined' : typeof obs))
+              }
+              return undefined
+            }
+            const snap = obs.getSnapshot()
+            const st = snap && typeof snap.get === 'function' ? snap.get(id) : undefined
+            if (!statusDiag) {
+              statusDiag = true
+              logEvent('status-probe', null, 'kind=' + (snap && snap.constructor && snap.constructor.name) +
+                ' size=' + (snap && typeof snap.size === 'number' ? snap.size : '?') +
+                ' hit=' + (st ? 'yes' : 'no') +
+                ' st=' + (st ? JSON.stringify(st) : 'undefined'))
+            }
+            return st
+          } catch (e) {
+            if (!statusDiag) { statusDiag = true; logEvent('status-error', null, String((e && e.message) || e)) }
             return undefined
           }
         }
