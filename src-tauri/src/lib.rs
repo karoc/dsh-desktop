@@ -253,6 +253,38 @@ static SESSION_AGGREGATE: Mutex<Option<String>> = Mutex::new(None);
 /// 加载完再通过 `GET /window/focused` 拉一次初始值。
 static WINDOW_FOCUSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
+
+/// 主窗口是否真的是前台窗口（Win32 权威判定）。
+///
+/// WebView2 下 `document.hasFocus()`、Tauri 的 `is_focused()`、以及
+/// `WindowEvent::Focused(false)` 三者都不可靠：前两者会把"窗口已被推后"
+/// 报成聚焦，后者压根不触发。通知抑制必须建立在真实前台判定上。
+#[cfg(windows)]
+fn main_window_is_foreground(app: &AppHandle) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{GetAncestor, GetForegroundWindow, GA_ROOT};
+    let Some(w) = app.get_webview_window("main") else {
+        return false;
+    };
+    let Ok(hwnd) = w.hwnd() else {
+        return false;
+    };
+    unsafe {
+        let fg = GetForegroundWindow();
+        if fg.0.is_null() {
+            return false;
+        }
+        let root = GetAncestor(fg, GA_ROOT);
+        root == hwnd || fg == hwnd
+    }
+}
+
+#[cfg(not(windows))]
+fn main_window_is_foreground(app: &AppHandle) -> bool {
+    app.get_webview_window("main")
+        .and_then(|w| w.is_focused().ok())
+        .unwrap_or(false)
+}
+
 /// 把真实焦点状态推给页面（`window.__DSH_SHELL_FOCUSED__`）。
 fn push_window_focus(app: &AppHandle, focused: bool) {
     WINDOW_FOCUSED.store(focused, std::sync::atomic::Ordering::SeqCst);
@@ -2858,13 +2890,11 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
         // 页面侧 `document.hasFocus()` 在 WebView2 里不可信（见 WINDOW_FOCUSED），
         // 页面加载后用它拉一次初始焦点；之后由 Focused 事件 eval 推更新。
         ("GET", "/window/focused") => {
-            // 实时问窗口，而不是读事件维护的标志：实测 Windows 上
-            // `WindowEvent::Focused(false)` 并不随"窗口被推到后台"触发，
-            // 只靠事件会让状态永远停在 true（正是通知被全量抑制的原因）。
-            let focused = app
-                .get_webview_window("main")
-                .and_then(|w| w.is_focused().ok())
-                .unwrap_or(false);
+            // 实时问 Win32，而不是读事件或 Tauri 的 is_focused()：实测
+            // `WindowEvent::Focused(false)` 不随"窗口被推到后台"触发，而
+            // `is_focused()` 在 WebView2 上恒为 false（连带到前台也不变）。
+            // 唯一可靠的是 GetForegroundWindow 与窗口 HWND 的比较。
+            let focused = main_window_is_foreground(app);
             WINDOW_FOCUSED.store(focused, std::sync::atomic::Ordering::SeqCst);
             let body = serde_json::json!({ "focused": focused }).to_string();
             ("200 OK", body)
