@@ -237,7 +237,18 @@ static PENDING_OPEN: Mutex<Option<String>> = Mutex::new(None);
 /// clicks do not relaunch the exe (no single-instance callback) — they merely
 /// activate/restore the window, so the focus event is the only observable
 /// signal of "user clicked the toast and came back".
-static FOCUS_OPEN: Mutex<Option<String>> = Mutex::new(None);
+/// Session staged for "the toast was just clicked" — paired with the moment it
+/// was armed and only honoured for `FOCUS_OPEN_TTL`.
+///
+/// Without the TTL this fired on ANY Focused(true) while the entry sat there:
+/// tray double-click, tray menu「显示」, alt-tab, closing the settings window —
+/// all of them would open whatever session had been notified last. The window
+/// is the only signal Windows gives us for a toast click that does not arrive
+/// through the in-process activator, so we keep it, but bounded.
+static FOCUS_OPEN: Mutex<Option<(String, std::time::Instant)>> = Mutex::new(None);
+
+/// How long a staged toast-click stays eligible (see FOCUS_OPEN).
+const FOCUS_OPEN_TTL: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// 最近一次写入托盘的 tooltip 文本。client 插件在聚合**变化时**才上报，
 /// 这里再按"文本未变"短路一次：Windows 每次 set_tooltip 都会重建 tooltip，
@@ -2975,7 +2986,7 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
                 // client suppresses focused toasts) — so the next focus event
                 // is almost certainly the user clicking this toast. Stage the
                 // session to open on that focus.
-                *FOCUS_OPEN.lock().unwrap() = Some(s.clone());
+                *FOCUS_OPEN.lock().unwrap() = Some((s.clone(), std::time::Instant::now()));
                 let data = app
                     .path()
                     .app_data_dir()
@@ -5070,18 +5081,22 @@ pub fn run() {
             // 上次的左边位置"）。主窗口仍保留位置/大小/最大化记忆。
             .with_denylist(&["settings", "confirm"])
             .build())
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            // Toast click / external activation: remember the session to
-            // reopen, then bring the existing window forward. Never spawn a
-            // second manager behind the same runtime.
-            let last = LAST_SESSION.lock().unwrap().clone();
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            // Only a toast activation may stage a session. A plain second
+            // launch (user double-clicks the desktop icon) must just raise the
+            // window — staging there would jump to whatever was notified last.
+            let from_toast = args.iter().any(|a| a.contains("-ToastActivated"));
             let data = app
                 .path()
                 .app_data_dir()
                 .unwrap_or_else(|_| std::path::PathBuf::from("."));
-            log_line(&data, &format!("activated: pending-open={last:?}"));
-            eprintln!("[dsh-desktop] activated: pending-open={last:?}");
-            *PENDING_OPEN.lock().unwrap() = last;
+            if from_toast {
+                let last = LAST_SESSION.lock().unwrap().clone();
+                log_line(&data, &format!("activated(from toast): pending-open={last:?}"));
+                *PENDING_OPEN.lock().unwrap() = last;
+            } else {
+                log_line(&data, "activated(plain launch): no session staged");
+            }
             activate_window(app);
         }))
         .manage(ServerState {
@@ -5426,7 +5441,9 @@ pub fn run() {
                         // 真实焦点是通知抑制的唯一依据（见 WINDOW_FOCUSED）。
                         push_window_focus(&handle, *focused);
                         if *focused {
-                            if let Some(sid) = FOCUS_OPEN.lock().unwrap().take() {
+                            let staged = FOCUS_OPEN.lock().unwrap().take();
+                            let staged = staged.filter(|(_, at)| at.elapsed() <= FOCUS_OPEN_TTL);
+                            if let Some((sid, _)) = staged {
                             *PENDING_OPEN.lock().unwrap() = Some(sid.clone());
                             let data = handle
                                 .path()

@@ -179,38 +179,54 @@ window.__ModuleLoader__.load({
       show(label.title, `「${titleOf(item)}」${label.body}`, item)
     }
     let polling = false
+    let disposed = false
     function pollPendingOpen(ctx) {
       if (polling) return
       if (!BRIDGE_PORT || BRIDGE_PORT.startsWith('__DSH')) return
       polling = true
       const sched = () => {
+        if (disposed) return
         const h = setTimeout(tick, 1200)
         // Browser: no-op. Node (behavioral tests): don't pin the loop open.
         if (h && typeof h.unref === 'function') h.unref()
       }
+      // A hung fetch would otherwise freeze the poll forever (`polling` is a
+      // one-shot latch), and every later click would be ignored.
+      const withTimeout = (promise, ms) => Promise.race([
+        promise,
+        new Promise((_, reject) => {
+          const t = setTimeout(() => reject(new Error('timeout')), ms)
+          if (t && typeof t.unref === 'function') t.unref()
+        }),
+      ])
       const tick = async () => {
+        if (disposed) return // a tick already scheduled at dispose time must not run
         try {
-          const res = await fetch(`http://127.0.0.1:${BRIDGE_PORT}/pending-open`)
+          const res = await withTimeout(fetch(`http://127.0.0.1:${BRIDGE_PORT}/pending-open`), 3000)
           const data = await res.json()
           if (data && data.sessionId) {
             const sid = String(data.sessionId)
+            // Open target lives in uiWorkspace; `ctx.sessions.open` does NOT
+            // exist on dsh 0.2.x (it disappeared at 0.1.6). The old else-if
+            // wrote a field that no one reads and logged success — that is why
+            // clicking a toast brought the window forward but never switched
+            // sessions, silently.
             try {
-              if (ctx.sessions && typeof ctx.sessions.open === 'function') {
-                ctx.sessions.open(sid)
-                post('/log', { tag: 'open', sessionId: sid, detail: 'ctx.sessions.open' })
-              } else if (ctx.sessions && ctx.sessions.list && typeof ctx.sessions.list.update === 'function') {
-                ctx.sessions.list.update((draft) => { draft.current = sid })
-                post('/log', { tag: 'open', sessionId: sid, detail: 'store.current' })
+              const ws = ctx.uiWorkspace
+              if (!ws || typeof ws.openSession !== 'function') {
+                throw new Error('ctx.uiWorkspace.openSession unavailable')
               }
+              ws.openSession(sid)
+              post('/log', { tag: 'open', sessionId: sid, detail: 'uiWorkspace.openSession' })
             } catch (err) {
-              console.warn('[dsh-desktop] open session failed', sid, err)
-              post('/log', { tag: 'open-error', sessionId: sid, detail: String(err && err.message || err) })
+              post('/log', { tag: 'open-error', sessionId: sid, detail: String((err && err.message) || err) })
             }
           }
-        } catch { /* bridge briefly unavailable; ignore */ }
+        } catch { /* bridge briefly unavailable / timeout; ignore */ }
         sched()
       }
       sched()
+      return () => { disposed = true }
     }
 
     return {
@@ -221,7 +237,7 @@ window.__ModuleLoader__.load({
       // off that row silently yields undefined forever (that bug is why the
       // 「需要你」 toast and the tray's ● row never worked). UiSession exposes
       // `sessionStatus` publicly and other plugins read it exactly this way.
-      inject: ['sessions', 'connection', 'uiSession'],
+      inject: ['sessions', 'connection', 'uiSession', 'uiWorkspace'],
       apply(ctx) {
         const seen = new Map() // sessionId -> { pending?, running, completed, ended }
 
@@ -496,10 +512,11 @@ window.__ModuleLoader__.load({
           const h = setInterval(refreshFocus, FOCUS_POLL_MS)
           if (h && typeof h.unref === 'function') h.unref()
         }
-        pollPendingOpen(ctx)
+        const stopPolling = pollPendingOpen(ctx)
         return () => {
           if (unsubscribe) unsubscribe()
           if (unsubscribeStatus) unsubscribeStatus()
+          if (stopPolling) stopPolling()
         }
       },
     }
