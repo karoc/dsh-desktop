@@ -387,14 +387,15 @@ try {
 
 disposeB()
 
-// ── scenarios 24-29: aggregate state for the shell tray (/state) ────────────
+// ── scenarios 24-30: aggregate state for the shell tray (/state) ────────────
 // While the window is hidden the tray tooltip is the ONLY place that can
-// answer "is anything working / is anything waiting on me". The contract:
+// answer "what is working / what is waiting on me" — with titles, because
+// "2 running" says nothing about WHAT is running. The contract:
 // post on CHANGE only (the snapshot fires per event; a steady state must not
-// keep the bridge warm), subagent rows never inflate the work count (their
-// parent turn covers them, same rule as the toasts) but a subagent's pending
-// interaction still counts (a person must answer it), and blank rows count
-// for nothing.
+// keep the bridge warm), subagent rows never contribute a work/done entry
+// (their parent turn covers them, same rule as the toasts) but a subagent's
+// pending interaction still counts (a person must answer it), and blank rows
+// count for nothing.
 state = { ids: [], byId: {}, current: undefined, phase: 'ready', subagentsByParent: {}, jobsBySession: {}, currentAddress: undefined }
 allPosts = []
 // eslint-disable-next-line no-eval
@@ -404,20 +405,28 @@ const aggPosts = () => allPosts
   .map((e) => JSON.parse(e[1].body || '{}'))
 const disposeAgg = windowStub.__handoff.factory().apply(ctx)
 
-// 24: baseline posts the zero aggregate exactly once
+// 24: baseline posts the zero aggregate exactly once, with no items
 assert.equal(aggPosts().length, 1, 'baseline posts the zero aggregate once')
-assert.deepEqual(aggPosts()[0], { running: 0, pending: 0, done: 0 })
+assert.deepEqual(aggPosts()[0], { running: 0, pending: 0, done: 0, items: [] })
 
-// 25: a running session appears in the aggregate
+// 25: a running session appears in the aggregate WITH its title
 introduce('agg-A', { running: true, title: '跑着' })
-assert.deepEqual(aggPosts().at(-1), { running: 1, pending: 0, done: 0 }, 'running session counted')
+assert.deepEqual(
+  aggPosts().at(-1),
+  { running: 1, pending: 0, done: 0, items: [{ kind: 'running', title: '跑着' }] },
+  'running session carries its title',
+)
 
 // 26: an unchanged snapshot must NOT re-post
 const aggBefore = aggPosts().length
 mutate({ ids: ['agg-A'], byId: { 'agg-A': session('agg-A', { running: true, title: '跑着' }) } })
 assert.equal(aggPosts().length, aggBefore, 'steady state must not re-post /state')
 
-// 27: pending counts; a subagent row does not inflate the work count
+// 27: a rename must refresh (title is part of the identity)
+mutate({ ids: ['agg-A'], byId: { 'agg-A': session('agg-A', { running: true, title: '改名了' }) } })
+assert.deepEqual(aggPosts().at(-1).items, [{ kind: 'running', title: '改名了' }], 'rename refreshes tooltip')
+
+// 28: pending wins over running for the same session; subagent work is excluded
 mutate({
   ids: ['agg-A', 'agg-S'],
   byId: {
@@ -425,16 +434,38 @@ mutate({
     'agg-S': session('agg-S', { running: true, origin: 'subagent', parentId: 'agg-A', cwd: '/work' }),
   },
 })
-assert.deepEqual(aggPosts().at(-1), { running: 1, pending: 1, done: 0 }, 'subagent work excluded, pending counted')
+assert.deepEqual(
+  aggPosts().at(-1),
+  { running: 0, pending: 1, done: 0, items: [{ kind: 'pending', title: '跑着' }] },
+  'pending row reported once; subagent work excluded',
+)
 
-// 28: a blank (created-but-unused) row counts for nothing
+// 29: blank (created-but-unused) row counts for nothing
 mutate({ ids: ['agg-B'], byId: { 'agg-B': session('agg-B', { running: true, blank: true }) } })
-assert.deepEqual(aggPosts().at(-1), { running: 0, pending: 0, done: 0 }, 'blank row excluded')
+assert.deepEqual(aggPosts().at(-1), { running: 0, pending: 0, done: 0, items: [] }, 'blank row excluded')
 
-// 29: finished-but-unviewed counts as done
-mutate({ ids: ['agg-C'], byId: { 'agg-C': session('agg-C', { running: false, completed: true, title: '完成未看' }) } })
-assert.deepEqual(aggPosts().at(-1), { running: 0, pending: 0, done: 1 }, 'unviewed completion counted')
+// 30: finished-but-unviewed carries its title; pending sorts before done
+mutate({
+  ids: ['agg-C', 'agg-D'],
+  byId: {
+    'agg-C': session('agg-C', { running: false, completed: true, title: '完成未看' }),
+    'agg-D': session('agg-D', { pendingInteraction: 'question', title: '等你答' }),
+  },
+})
+assert.deepEqual(
+  aggPosts().at(-1),
+  {
+    running: 0,
+    pending: 1,
+    done: 1,
+    items: [
+      { kind: 'pending', title: '等你答' },
+      { kind: 'done', title: '完成未看' },
+    ],
+  },
+  'pending sorts first, done keeps its title',
+)
 disposeAgg()
 
-console.log('PASS — notification plugin behavioral test (23 notification + 6 aggregate scenarios)')
+console.log('PASS — notification plugin behavioral test (23 notification + 7 aggregate scenarios)')
 process.exit(0)
