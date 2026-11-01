@@ -2858,7 +2858,14 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
         // 页面侧 `document.hasFocus()` 在 WebView2 里不可信（见 WINDOW_FOCUSED），
         // 页面加载后用它拉一次初始焦点；之后由 Focused 事件 eval 推更新。
         ("GET", "/window/focused") => {
-            let focused = WINDOW_FOCUSED.load(std::sync::atomic::Ordering::SeqCst);
+            // 实时问窗口，而不是读事件维护的标志：实测 Windows 上
+            // `WindowEvent::Focused(false)` 并不随"窗口被推到后台"触发，
+            // 只靠事件会让状态永远停在 true（正是通知被全量抑制的原因）。
+            let focused = app
+                .get_webview_window("main")
+                .and_then(|w| w.is_focused().ok())
+                .unwrap_or(false);
+            WINDOW_FOCUSED.store(focused, std::sync::atomic::Ordering::SeqCst);
             let body = serde_json::json!({ "focused": focused }).to_string();
             ("200 OK", body)
         }
