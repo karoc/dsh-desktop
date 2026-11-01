@@ -818,14 +818,14 @@ fn show_toast(app: &AppHandle, title: String, body: String, session_id: Option<S
     log_line(&data, &format!("notification: {title} - {body}"));
     eprintln!("[dsh-desktop] notification: {title} - {body}");
 
-    // Preferred path: a WinRT toast we build ourselves, carrying Tag+Group so
-    // the card can be removed later, and a `launch` argument that identifies
-    // the session. Fall back to notify-rust when WinRT refuses.
-    if show_winrt_toast(app, &title, &body, session_id.as_deref()) {
-        log_line(&data, &format!("toast: winrt (session={session_id:?})"));
-        return;
-    }
-    log_line(&data, "toast: winrt unavailable, falling back to notify-rust");
+    // notify-rust is the send path on purpose: it registers a
+    // `ToastNotification.Activated` handler in-process, so clicking the POPUP
+    // reacts immediately. Our own WinRT toast (`show_winrt_toast`, kept below
+    // for reference) carries Tag/Group but no Activated handler, so clicks fell
+    // through to COM activation (`-Embedding`) and felt slow — a regression.
+    // Card removal does not need those tags: `History.Clear(appId)` works on
+    // its own (see clear_toast_history_via_powershell).
+    let _ = session_id;
 
     // Show via notify-rust DIRECTLY so we keep the NotificationHandle and can
     // listen for the in-process COM activation callback (tauri-winrt-
@@ -843,7 +843,7 @@ fn show_toast(app: &AppHandle, title: String, body: String, session_id: Option<S
             .unwrap_or_else(|_| std::path::PathBuf::from("."));
         log_line(&data, &format!("toast-clicked pending-open={last:?}"));
         eprintln!("[dsh-desktop] toast-clicked pending-open={last:?}");
-        clear_toast_history(app);
+        clear_toast_history_via_powershell(app, None);
         activate_window(app);
     };
 
