@@ -337,6 +337,24 @@ window.__ModuleLoader__.load({
           })
         }
 
+        // One-shot full dump: every session's live status, so a mismatch
+        // between the UI dot and this store is visible in the shell log.
+        setTimeout(() => {
+          try {
+            const obs = ctx.uiSession && ctx.uiSession.sessionStatus
+            const snap = obs && typeof obs.getSnapshot === 'function' ? obs.getSnapshot() : null
+            if (!snap || typeof snap.forEach !== 'function') {
+              logEvent('status-dump', null, 'no snapshot')
+              return
+            }
+            const rows = []
+            snap.forEach((v, k) => rows.push(String(k).slice(-6) + '=' + JSON.stringify(v)))
+            logEvent('status-dump', null, rows.join(' | ').slice(0, 900))
+          } catch (e) {
+            logEvent('status-dump', null, 'error: ' + String((e && e.message) || e))
+          }
+        }, 4000)
+
         const scan = () => {
           let snap
           try {
