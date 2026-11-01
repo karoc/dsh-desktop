@@ -624,6 +624,29 @@ fn activate_window(app: &AppHandle) {
     }
 }
 
+
+/// Drop this app's toasts from the Action Center once one has been acted on.
+///
+/// notify-rust only registers an in-process activator; it never marks the entry
+/// as handled, so the card stays in the notification centre and can be clicked
+/// again. Repeated clicks then go through Windows' activation re-entry path,
+/// which is what made the second click take tens of seconds. Clearing the
+/// history makes the first click the only one.
+#[cfg(windows)]
+fn clear_toast_history() {
+    use windows::UI::Notifications::ToastNotificationManager;
+    unsafe {
+        if let Ok(manager) = ToastNotificationManager::GetDefault() {
+            if let Ok(history) = manager.History() {
+                let _ = history.Clear();
+            }
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn clear_toast_history() {}
+
 fn show_toast(app: &AppHandle, title: String, body: String) {
     let data = app
         .path()
@@ -648,6 +671,7 @@ fn show_toast(app: &AppHandle, title: String, body: String) {
             .unwrap_or_else(|_| std::path::PathBuf::from("."));
         log_line(&data, &format!("toast-clicked pending-open={last:?}"));
         eprintln!("[dsh-desktop] toast-clicked pending-open={last:?}");
+        clear_toast_history();
         activate_window(app);
     };
 
