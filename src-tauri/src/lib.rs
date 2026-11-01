@@ -239,10 +239,10 @@ static PENDING_OPEN: Mutex<Option<String>> = Mutex::new(None);
 /// signal of "user clicked the toast and came back".
 static FOCUS_OPEN: Mutex<Option<String>> = Mutex::new(None);
 
-/// 最近一次上报的会话聚合 `(运行中, 待你处理, 已完成未查看)`。client 插件在
-/// 数值**变化时**才 POST /state——快照每次事件都会触发，稳态不得反复打桥。
-/// `None` = 尚未收到任何上报（页面还没挂载），托盘保持产品名。
-static SESSION_AGGREGATE: Mutex<Option<(u32, u32, u32)>> = Mutex::new(None);
+/// 最近一次写入托盘的 tooltip 文本。client 插件在聚合**变化时**才上报，
+/// 这里再按"文本未变"短路一次：Windows 每次 set_tooltip 都会重建 tooltip，
+/// 无变化的重复写入没有意义。`None` = 尚未收到任何上报（页面还没挂载）。
+static SESSION_AGGREGATE: Mutex<Option<String>> = Mutex::new(None);
 
 /// Whether the "dsh 有更新" toast has already been shown this process launch
 /// (the manager reports update-status at boot and on demand — remind once).
@@ -574,37 +574,70 @@ fn show_toast(app: &AppHandle, title: String, body: String) {
     }
 }
 
+/// Windows 托盘 tooltip 的硬上限：`NOTIFYICONDATAW.szTip` 是 `[u16; 128]`，
+/// tray-icon 写入时用 `min(128)` **静默截断**（tray-icon 0.24.2
+/// `platform_impl/windows/mod.rs`）。这里主动收敛到 127 个字符，让截断落在
+/// 我们手里——至少能保证不会把一个标题切成半行、也不会吞掉末尾的数。
+const TRAY_TOOLTIP_MAX_CHARS: usize = 127;
+
+/// 拼托盘 tooltip：产品名 + 每个会话一行（`● 待处理 · 标题` / `▶ 标题` / `○ 标题`）。
+///
+/// 全 0 时只回产品名，不留一条"0 个运行中"这种无信息量的文字。纯文本无法
+/// 着色，状态只能靠符号形状区分（`●` 待处理 / `▶` 运行中 / `○` 完成）。
+/// 超出字符预算时**整行**丢弃，绝不截半行——半条标题比少一条更糟。
+fn build_tray_tooltip(
+    base: &str,
+    running: u32,
+    pending: u32,
+    done: u32,
+    items: &[(String, String)],
+) -> String {
+    if running + pending + done == 0 {
+        return base.to_string();
+    }
+    let mut lines: Vec<String> = vec![base.to_string()];
+    // 已用字符数（含每行结尾的换行符，保守计入）。
+    let mut used = base.chars().count() + 1;
+    for (kind, title) in items {
+        let (mark, label) = match kind.as_str() {
+            "pending" => ("●", "待处理 · "),
+            "running" => ("▶", ""),
+            _ => ("○", ""),
+        };
+        // mark + 空格 + label + 内容 + 换行
+        let overhead = 2 + label.chars().count() + 1;
+        let remaining = TRAY_TOOLTIP_MAX_CHARS.saturating_sub(used + overhead);
+        if remaining < 4 {
+            break;
+        }
+        let truncated: String = title.chars().take(remaining).collect();
+        let line = format!("{mark} {label}{truncated}");
+        used += line.chars().count() + 1;
+        lines.push(line);
+    }
+    lines.join("\r\n")
+}
+
 /// 把 client 上报的会话聚合写进托盘 tooltip。
 ///
-/// 用户切走后不必打开窗口就能知道"现在有没有活在跑、有没有在等我"——这是
-/// 桌面壳相对浏览器版唯一不可替代的一层（浏览器没有常驻托盘）。文案只在
-/// 数值变化时改：`set_tooltip` 每次都会让 Windows 重建 tooltip，快照级频率
-/// 调用没有意义。全 0 时回到产品名，避免托盘常驻一条无信息量的文字。
-fn apply_session_aggregate(app: &AppHandle, running: u32, pending: u32, done: u32) {
-    let next = (running, pending, done);
+/// 用户切走后不必打开窗口就能知道"哪个会话在跑、哪个在等我、哪个跑完了还
+/// 没看"。文案只在**内容变化**时改（见 SESSION_AGGREGATE 的说明）。
+fn apply_session_aggregate(
+    app: &AppHandle,
+    running: u32,
+    pending: u32,
+    done: u32,
+    items: Vec<(String, String)>,
+) {
+    let base = app.package_info().name.clone();
+    let text = build_tray_tooltip(&base, running, pending, done, &items);
     {
         let mut guard = SESSION_AGGREGATE.lock().unwrap();
-        if *guard == Some(next) {
+        if guard.as_deref() == Some(text.as_str()) {
             return;
         }
-        *guard = Some(next);
+        *guard = Some(text.clone());
     }
-    let base = app.package_info().name.clone();
-    let text = if running + pending + done == 0 {
-        base
-    } else {
-        let mut parts: Vec<String> = Vec::new();
-        if running > 0 {
-            parts.push(format!("{running} 个运行中"));
-        }
-        if pending > 0 {
-            parts.push(format!("{pending} 个待处理"));
-        }
-        if done > 0 {
-            parts.push(format!("{done} 个已完成"));
-        }
-        format!("{base} — {}", parts.join(" · "))
-    };
     // 托盘可能尚未创建（早期启动）或已被移除：两处都要静默跳过，托盘状态
     // 属于诊断信息，绝不能让一条 tooltip 失败影响桥的响应。
     if let Some(tray) = app.tray_by_id("dsh-tray") {
@@ -2881,19 +2914,33 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
             show_toast(app, title, body2);
             ("200 OK", String::new())
         }
-        // 会话聚合（运行中 / 待你处理 / 已完成未查看）。client 插件只在数值
-        // 变化时发一次；这里只做落库 + 托盘 tooltip，不打扰、不弹窗。
+        // 会话聚合（运行中 / 待你处理 / 已完成未查看 + 各自的会话标题）。
+        // client 插件只在内容变化时发一次；这里只做落库 + 托盘 tooltip，
+        // 不打扰、不弹窗。
         ("POST", "/state") => {
-            let (running, pending, done) = serde_json::from_str::<serde_json::Value>(&body)
-                .map(|v| {
-                    (
-                        v.get("running").and_then(|x| x.as_u64()).unwrap_or(0) as u32,
-                        v.get("pending").and_then(|x| x.as_u64()).unwrap_or(0) as u32,
-                        v.get("done").and_then(|x| x.as_u64()).unwrap_or(0) as u32,
-                    )
+            let parsed = serde_json::from_str::<serde_json::Value>(&body).ok();
+            let field = |name: &str| -> u32 {
+                parsed
+                    .as_ref()
+                    .and_then(|v| v.get(name))
+                    .and_then(|x| x.as_u64())
+                    .unwrap_or(0) as u32
+            };
+            let items: Vec<(String, String)> = parsed
+                .as_ref()
+                .and_then(|v| v.get("items"))
+                .and_then(|x| x.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|it| {
+                            let kind = it.get("kind")?.as_str()?.to_string();
+                            let title = it.get("title")?.as_str()?.to_string();
+                            Some((kind, title))
+                        })
+                        .collect()
                 })
-                .unwrap_or((0, 0, 0));
-            apply_session_aggregate(app, running, pending, done);
+                .unwrap_or_default();
+            apply_session_aggregate(app, field("running"), field("pending"), field("done"), items);
             ("200 OK", String::new())
         }
         ("GET", "/update-status") => {
