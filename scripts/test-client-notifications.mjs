@@ -64,10 +64,11 @@ const historyCalls = [] // sessionIds probed via sessions.history
 // the plugin read undefined forever), so the fixture MUST carry status in a
 // separate store exactly like dsh's `uiSession.sessionStatus`.
 let statusMap = new Map()
+let statusListeners = new Set()
 const uiSession = {
   sessionStatus: {
     getSnapshot: () => statusMap,
-    subscribe: () => () => {},
+    subscribe: (fn) => { statusListeners.add(fn); return () => statusListeners.delete(fn) },
   },
 }
 const ctx = {
@@ -109,6 +110,12 @@ function syncStatus() {
   statusMap = next
 }
 
+
+/** Drive a status-store change ONLY — the list rows stay untouched. */
+function mutateStatus(next) {
+  statusMap = next
+  for (const l of [...statusListeners]) l()
+}
 function mutate(patch) {
   state = { ...state, ...patch }
   syncStatus()
@@ -521,5 +528,22 @@ assert.deepEqual(aggPosts().at(-1), { running: 0, pending: 0, done: 1, items: [{
   'completionUnread from sessionStatus marks done')
 disposeReal()
 
-console.log('PASS — notification plugin behavioral test (23 notification + 8 aggregate scenarios)')
+// ── scenario 32: a pending interaction changes ONLY sessionStatus — the list
+// rows do not move. Without subscribing to sessionStatus the scan never runs
+// and the orange dot is invisible to us (the real-world regression).
+state = { ids: [], byId: {}, current: undefined, phase: 'ready', subagentsByParent: {}, jobsBySession: {}, currentAddress: undefined }
+allPosts = []
+statusMap = new Map()
+// eslint-disable-next-line no-eval
+eval(clientJs)
+const disposeSub = windowStub.__handoff.factory().apply(ctx)
+mutate({ ids: ['sub-A'], byId: { 'sub-A': session('sub-A', { running: true, title: '审批中' }) } })
+assert.deepEqual(aggPosts().at(-1).items, [{ kind: 'running', title: '审批中' }], 'starts running')
+// ONLY the status store changes; no list mutation, no listener on the list
+mutateStatus(new Map([['sub-A', { running: true, pendingInteraction: 'approval', completionUnread: false }]]))
+assert.deepEqual(aggPosts().at(-1), { running: 0, pending: 1, done: 0, items: [{ kind: 'pending', title: '审批中' }] },
+  'status-only pending change must reach the tray')
+disposeSub()
+
+console.log('PASS — notification plugin behavioral test (23 notification + 9 aggregate scenarios)')
 process.exit(0)
