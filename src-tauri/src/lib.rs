@@ -5439,8 +5439,9 @@ pub fn run() {
             // 页面轮询取走。
             {
                 let launch_sid = std::env::args()
-                    .find_map(|a| a.split(TOAST_LAUNCH_PREFIX).nth(1))
-                    .map(|s| s.trim().to_string())
+                    // `args()` yields owned Strings, so the slice must be
+                    // converted inside the closure before `a` is dropped.
+                    .find_map(|a| a.split(TOAST_LAUNCH_PREFIX).nth(1).map(|s| s.trim().to_string()))
                     .filter(|s| !s.is_empty());
                 if let Some(sid) = launch_sid {
                     let data = app
