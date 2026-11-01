@@ -767,6 +767,49 @@ fn clear_toast_history(app: &AppHandle) {
 #[cfg(not(windows))]
 fn clear_toast_history(_app: &AppHandle) {}
 
+/// Clear this app's Action Center entries through PowerShell.
+///
+/// The same WinRT call from Rust (`ToastNotificationManager::History()`)
+/// returns E_UNEXPECTED (0x8000FFFF) on this build, while an unpackaged
+/// PowerShell process performs it successfully — verified side by side. Rather
+/// than block the feature on figuring that discrepancy out, drive it from a
+/// short-lived PowerShell process; it costs a few hundred milliseconds on a
+/// click and actually removes the cards.
+#[cfg(windows)]
+fn clear_toast_history_via_powershell(app: &AppHandle, tag: Option<&str>) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    let app_id = app.config().identifier.clone();
+    let data = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let call = match tag {
+        Some(t) => format!(
+            "$h.RemoveGroupedTag('{tag}', 'dsh'); if (-not $?) {{ $h.Clear('{app_id}') }}"
+        ),
+        None => format!("$h.Clear('{app_id}')"),
+    };
+    let script = format!(
+        "$ErrorActionPreference='Stop';          $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType=WindowsRuntime];          $h = [Windows.UI.Notifications.ToastNotificationManager]::History;          try {{ {call}; Write-Output 'ok' }} catch {{ Write-Output ('err ' + $_.Exception.HResult) }}"
+    );
+    match std::process::Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+    {
+        Ok(out) => {
+            let msg = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            log_line(&data, &format!("toast-card(powershell): {msg}"));
+        }
+        Err(e) => log_line(&data, &format!("toast-card(powershell): spawn failed: {e}")),
+    }
+}
+
+#[cfg(not(windows))]
+fn clear_toast_history_via_powershell(_app: &AppHandle, _tag: Option<&str>) {}
+
 fn show_toast(app: &AppHandle, title: String, body: String, session_id: Option<String>) {
     let data = app
         .path()
@@ -5330,17 +5373,9 @@ pub fn run() {
             // is why our toasts are built through WinRT directly).
             // `History()` returned E_UNEXPECTED on the activation thread; the
             // WinRT toast manager needs the main (STA) apartment, so hop there.
-            match &staged {
-                Some(sid) => {
-                    let app2 = app.clone();
-                    let sid2 = sid.clone();
-                    let _ = app.run_on_main_thread(move || remove_toast_card(&app2, &sid2));
-                }
-                None => {
-                    let app2 = app.clone();
-                    let _ = app.run_on_main_thread(move || clear_toast_history(&app2));
-                }
-            }
+            // Rust-side WinRT History() returns E_UNEXPECTED here, so the
+            // PowerShell path is what actually removes the card (verified).
+            clear_toast_history_via_powershell(app, staged.as_deref());
             activate_window(app);
         }))
         .manage(ServerState {
