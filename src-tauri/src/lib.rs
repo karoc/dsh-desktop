@@ -787,7 +787,7 @@ fn clear_toast_history_via_powershell(app: &AppHandle, tag: Option<&str>) {
         .unwrap_or_else(|_| std::path::PathBuf::from("."));
     let call = match tag {
         Some(t) => format!(
-            "$h.RemoveGroupedTag('{tag}', 'dsh'); if (-not $?) {{ $h.Clear('{app_id}') }}"
+            "$h.RemoveGroupedTag('{t}', 'dsh'); if (-not $?) {{ $h.Clear('{app_id}') }}"
         ),
         None => format!("$h.Clear('{app_id}')"),
     };
