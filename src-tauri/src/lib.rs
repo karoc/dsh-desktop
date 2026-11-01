@@ -785,14 +785,14 @@ fn clear_toast_history_via_powershell(app: &AppHandle, tag: Option<&str>) {
         .path()
         .app_data_dir()
         .unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let call = match tag {
-        Some(t) => format!(
-            "$h.RemoveGroupedTag('{t}', 'dsh'); if (-not $?) {{ $h.Clear('{app_id}') }}"
-        ),
-        None => format!("$h.Clear('{app_id}')"),
-    };
+    // `RemoveGroupedTag` does not exist in this machine's projection
+    // (PowerShell reports "method not found", HResult 0x80131501), while
+    // `Clear(appId)` succeeds. The earlier script chained both inside one try,
+    // so the tag call threw and `Clear` never ran — that is why the card
+    // survived even though the path "executed".
+    let _ = tag;
     let script = format!(
-        "$ErrorActionPreference='Stop';          $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType=WindowsRuntime];          $h = [Windows.UI.Notifications.ToastNotificationManager]::History;          try {{ {call}; Write-Output 'ok' }} catch {{ Write-Output ('err ' + $_.Exception.HResult) }}"
+        "$ErrorActionPreference='Stop'; $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType=WindowsRuntime]; $h = [Windows.UI.Notifications.ToastNotificationManager]::History; try {{ $h.Clear('{app_id}'); Write-Output 'ok' }} catch {{ Write-Output ('err ' + $_.Exception.HResult) }}"
     );
     match std::process::Command::new("powershell.exe")
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
