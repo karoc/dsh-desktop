@@ -5,6 +5,7 @@
     "private": true,
     "type": "module",
     "scripts": {
+        "check:plugin-verifiers": "node scripts/check-plugin-publish-verifiers.mjs",
         "test:plugin": "node scripts/test-client-notifications.mjs",
         "test:control": "node scripts/test-control-plane.mjs",
         "test:proxy": "node scripts/test-proxy.mjs",

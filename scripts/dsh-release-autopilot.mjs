@@ -1236,7 +1236,12 @@ async function releaseAssets(tag) {
         const view = JSON.parse(r.stdout)
         const assets = Array.isArray(view.assets) ? view.assets : []
         lastCount = assets.length
-        if (assets.length >= 3) return assets.map((a) => a?.name).filter(Boolean)
+        // Count-only acceptance let three zero-byte/wrong-kind assets pass the
+        // release gate. Require the expected platform set, non-zero sizes, and
+        // (when gh supplies it) a digest.
+        const named = (re) => assets.some((asset) => typeof asset?.name === 'string' && re.test(asset.name) && Number(asset.size) > 0 && (asset.digest === undefined || (typeof asset.digest === 'string' && asset.digest !== '')))
+        const ready = assets.length >= 3 && named(/AppImage$/i) && named(/\.deb$/i) && named(/x64-setup\.exe$/i)
+        if (ready) return assets.map((a) => a?.name).filter(Boolean)
       } catch { /* keep polling */ }
     }
     if (Date.now() >= deadline) {
