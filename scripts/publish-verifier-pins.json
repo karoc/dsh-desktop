@@ -1,0 +1,17 @@
+{
+  "dsh-turn-nav/scripts/post-publish-check.mjs": "9e5e38e3600516bf89869db7cb042d2682e8678cd9f1fce528089b4330e7c50d",
+  "dsh-turn-nav/scripts/test-post-publish.mjs": "fd655b639346765ecc04f569db03d885134cf309441c75af491da094e6ee1225",
+  "dsh-turn-nav/scripts/publish.mjs": "1defa8c2edfe50431b6a4f10f751045a6ea03ee5b6e028b68a9a385f16ece56a",
+  "dsh-model-reasoning/scripts/post-publish-check.mjs": "9e5e38e3600516bf89869db7cb042d2682e8678cd9f1fce528089b4330e7c50d",
+  "dsh-model-reasoning/scripts/test-post-publish.mjs": "fd655b639346765ecc04f569db03d885134cf309441c75af491da094e6ee1225",
+  "dsh-model-reasoning/scripts/publish.mjs": "1defa8c2edfe50431b6a4f10f751045a6ea03ee5b6e028b68a9a385f16ece56a",
+  "dsh-kanban/scripts/post-publish-check.mjs": "9e5e38e3600516bf89869db7cb042d2682e8678cd9f1fce528089b4330e7c50d",
+  "dsh-kanban/scripts/test-post-publish.mjs": "fd655b639346765ecc04f569db03d885134cf309441c75af491da094e6ee1225",
+  "dsh-kanban/scripts/publish.mjs": "1defa8c2edfe50431b6a4f10f751045a6ea03ee5b6e028b68a9a385f16ece56a",
+  "dsh-smoothly-opencode-session/scripts/post-publish-check.mjs": "9e5e38e3600516bf89869db7cb042d2682e8678cd9f1fce528089b4330e7c50d",
+  "dsh-smoothly-opencode-session/scripts/test-post-publish.mjs": "fd655b639346765ecc04f569db03d885134cf309441c75af491da094e6ee1225",
+  "dsh-smoothly-opencode-session/scripts/publish.mjs": "1defa8c2edfe50431b6a4f10f751045a6ea03ee5b6e028b68a9a385f16ece56a",
+  "dsh-proxy/scripts/post-publish-check.mjs": "9e5e38e3600516bf89869db7cb042d2682e8678cd9f1fce528089b4330e7c50d",
+  "dsh-proxy/scripts/test-post-publish.mjs": "fd655b639346765ecc04f569db03d885134cf309441c75af491da094e6ee1225",
+  "dsh-proxy/scripts/publish.mjs": "1defa8c2edfe50431b6a4f10f751045a6ea03ee5b6e028b68a9a385f16ece56a"
+}
