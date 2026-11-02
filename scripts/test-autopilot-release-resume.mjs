@@ -77,7 +77,7 @@ if (argv[0] === 'pr' && argv[1] === 'merge') {
   out({ merged: true })
 }
 if (argv[0] === 'release' && argv[1] === 'list') out(state.merged ? [{ tagName: scenario.tag }] : [])
-if (argv[0] === 'release' && argv[1] === 'view') out({ tagName: argv[2], assets: (scenario.assets ?? []).map((n) => ({ name: n })) })
+if (argv[0] === 'release' && argv[1] === 'view') out({ tagName: argv[2], assets: (scenario.assets ?? []).map((n) => ({ name: n, size: 1024, digest: `sha256:${'a'.repeat(64)}` })) })
 if (argv[0] === 'api') out({ total_count: Number(scenario.buildRuns ?? 0) })
 if (argv[0] === 'workflow' && argv[1] === 'run') out({})
 if (argv[0] === 'issue' && argv[1] === 'view') out({ comments: [] })
@@ -112,7 +112,7 @@ const releasePr = (over = {}) => ({
   files: OK_FILES,
   checks: [],
   tag: 'v0.21.2',
-  assets: ['setup.exe', 'app.AppImage', 'app.deb'],
+  assets: ['DSH.Smoothly.Desktop_0.21.3_x64-setup.exe', 'DSH.Smoothly.Desktop_0.21.3_amd64.AppImage', 'DSH.Smoothly.Desktop_0.21.3_amd64.deb'],
   buildRuns: 0,
   conflicting: false,
   ghListFails: false,
