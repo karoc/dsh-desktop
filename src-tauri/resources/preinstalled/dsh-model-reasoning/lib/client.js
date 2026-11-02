@@ -665,6 +665,7 @@ window.__ModuleLoader__.load({
 		*/
 		function ProviderParamsSection(props) {
 			const { api, t, useModelReasoning } = props;
+			if (props.view === "summary") return null;
 			if (api === void 0 || t === void 0 || useModelReasoning === void 0) return null;
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(ProviderParamsLoaded, {
 				api,
@@ -2100,9 +2101,9 @@ window.__ModuleLoader__.load({
 			"configForms"
 		];
 		/**
-		* Register the Provider parameters section once the `settings.section`
-		* declaration is on the ledger, binding the `llm-pi-ai` namespace scope on this
-		* plugin's lifecycle.
+		* Register the bundle's configuration once the Plugins page's
+		* `plugins.bundle.config` declaration is on the ledger, binding the
+		* `llm-pi-ai` namespace scope on this plugin's lifecycle.
 		* @param ctx - client root context.
 		*/
 		function apply(ctx) {
@@ -2117,11 +2118,10 @@ window.__ModuleLoader__.load({
 				t,
 				hooks: { modelReasoning: form }
 			});
-			ctx.slots.inject("settings.section", () => ctx.slots.register({
-				name: "settings.section",
-				id: "provider-params",
-				order: 20,
-				label: () => t("nav"),
+			ctx.slots.inject("plugins.bundle.config", () => ctx.slots.register({
+				name: "plugins.bundle.config",
+				key: "dsh-model-reasoning",
+				locale: NS,
 				inject: injected
 			}, ProviderParamsSection));
 		}

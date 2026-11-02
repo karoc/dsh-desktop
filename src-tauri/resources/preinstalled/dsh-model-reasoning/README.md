@@ -27,8 +27,9 @@ updates cannot clobber it.
 
 ## What it manages
 
-A new Settings section, **「思磨力提供方参数 / Smoothly MR」**, placed after the
-built-in Models page. Pick any provider route — every entry in the `llm-pi-ai`
+The configuration lives on the **Plugins page**, on this bundle's detail page
+(**Plugins → dsh-model-reasoning**, section **「思磨力提供方参数 / Smoothly
+MR」**). Pick any provider route — every entry in the `llm-pi-ai`
 `providers` dict is editable here, catalog routes included — and manage it in
 five parameter groups:
 
@@ -103,7 +104,7 @@ hinted while the settings document loads.
 
 **Prerequisites:** a DeepSeek Harness install with the `dsh` CLI, plus [pnpm](https://pnpm.io) (the `dsh plugin` command runs pnpm under the hood). This is an installable **bundle** — it is loaded by `dsh`, not imported as a library.
 
-**Compatibility:** since v0.2.5 the page reads through the settings-forms service (`ctx.configForms`) and writes through the settings **Remote** namespace (`ctx.remote.settings`, the write path since v0.2.2); dsh builds older than 0.1.7 — which removed the predecessor `settingsScope` client seam — are not supported (v0.2.4 remains the release for dsh 0.1.2–0.1.6). The floor is also declared in `package.json` as an optional `@deepseek-ai/dsh-client-ui-settings` peer dependency (`>=0.1.7-rc.1`), making it machine-readable for the peer gate that ships from dsh 0.1.7-rc.1 on: an out-of-range bundle is refused with the exact `dsh plugin allow-version` remedy. Runtimes older than that gate evaluate no peers, so nothing refuses them: on 0.1.2–0.1.6 the page simply never loads, while the 0.1.7 alphas (seam present, gate absent) work as before.
+**Compatibility:** since v0.3.0 the configuration is registered on the Plugins page (`plugins.bundle.config`, keyed by the bundle name), so it needs a dsh build whose plugin manager declares that slot (dsh 0.2.x). Since v0.2.5 the page reads through the settings-forms service (`ctx.configForms`) and writes through the settings **Remote** namespace (`ctx.remote.settings`, the write path since v0.2.2); dsh builds older than 0.1.7 — which removed the predecessor `settingsScope` client seam — are not supported (v0.2.4 remains the release for dsh 0.1.2–0.1.6). The floor is also declared in `package.json` as an optional `@deepseek-ai/dsh-client-ui-settings` peer dependency (`>=0.1.7-rc.1`), making it machine-readable for the peer gate that ships from dsh 0.1.7-rc.1 on: an out-of-range bundle is refused with the exact `dsh plugin allow-version` remedy. Runtimes older than that gate evaluate no peers, so nothing refuses them: on 0.1.2–0.1.6 the page simply never loads, while the 0.1.7 alphas (seam present, gate absent) work as before.
 
 ### From npm (recommended)
 
@@ -113,7 +114,7 @@ The package is published to npm as `dsh-model-reasoning`:
 dsh plugin --profile web add dsh-model-reasoning
 ```
 
-This installs the prebuilt bundle and appends it to the `web` profile. Then **restart `dsh web`** and open **Settings → 思磨力提供方参数 / Smoothly MR**.
+This installs the prebuilt bundle and appends it to the `web` profile. Then **restart `dsh web`** and open **Plugins → dsh-model-reasoning** (the bundle's own configuration page).
 
 ### From git
 
@@ -150,7 +151,7 @@ cordis.patch.yml                # bundle layer: mounts the row that the client-m
 package.json                    # dsh.bundle (patch) + dsh.client (web) + exports["./client"]
 tsdown.config.ts                # self-contained build: node half + module-table client bundle
 src/index.ts                    # host apply (no-op)
-src/client/index.ts             # client apply: configForms.get(llm-pi-ai) + register settings.section
+src/client/index.ts             # client apply: configForms.get(llm-pi-ai) + register plugins.bundle.config
 src/client/ProviderParamsSection.tsx  # the settings page (route → group tabs → editors)
 src/client/params.ts            # managed-field registry: domains, defaults, host-mirroring
                                 # validators, draft model, minimal-op diff engine
