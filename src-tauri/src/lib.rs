@@ -702,10 +702,10 @@ fn show_winrt_toast(app: &AppHandle, title: &str, body: &str, session_id: Option
         {
             let app_h = app.clone();
             let sid_h = session_id.map(|s| s.to_string());
+            use windows::core::Interface as _;
             let handler = windows::Foundation::TypedEventHandler::new(
-                move |_, insp: &Option<windows::core::IInspectable>| {
+                move |_, insp: Option<&windows::core::IInspectable>| {
                     let arg = insp
-                        .as_ref()
                         .and_then(|i| {
                             i.cast::<windows::UI::Notifications::ToastActivatedEventArgs>().ok()
                         })
