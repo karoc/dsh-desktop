@@ -704,8 +704,12 @@ fn show_winrt_toast(app: &AppHandle, title: &str, body: &str, session_id: Option
             let sid_h = session_id.map(|s| s.to_string());
             use windows::core::Interface as _;
             let handler = windows::Foundation::TypedEventHandler::new(
-                move |_, insp: Option<&windows::core::IInspectable>| {
-                    let arg = insp
+                // TypedEventHandler hands us `windows_core::Ref<T>` (Deref to
+                // `Option<T>`), so let inference drive and borrow through it.
+                move |_sender, insp| {
+                    let args: &Option<windows::core::IInspectable> = &insp;
+                    let arg = args
+                        .as_ref()
                         .and_then(|i| {
                             i.cast::<windows::UI::Notifications::ToastActivatedEventArgs>().ok()
                         })
