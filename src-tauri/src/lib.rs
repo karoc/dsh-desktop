@@ -636,6 +636,13 @@ fn xml_escape(input: &str) -> String {
         .replace('\'', "&apos;")
 }
 
+/// 已发出的 toast 对象。`ToastNotification.Activated` 的处理器随对象析构失效——
+/// 不持有的话，卡片进入通知中心后点击只能落到系统级 COM 激活（`-Embedding`），
+/// 表现为 30–60 秒延迟。这里保留最近若干条以便观察该假设是否成立。
+#[cfg(windows)]
+static TOAST_KEEPALIVE: Mutex<Vec<windows::UI::Notifications::ToastNotification>> =
+    Mutex::new(Vec::new());
+
 /// Toast group name used for every notification this shell raises.
 const TOAST_GROUP: &str = "dsh";
 
@@ -690,6 +697,44 @@ fn show_winrt_toast(app: &AppHandle, title: &str, body: &str, session_id: Option
         if let Some(sid) = session_id {
             let _ = toast.SetTag(&HSTRING::from(sid));
             let _ = toast.SetGroup(&HSTRING::from(TOAST_GROUP));
+        }
+        // 进程内激活回调：点击时直接在这里响应，不走 COM。
+        {
+            let app_h = app.clone();
+            let sid_h = session_id.map(|s| s.to_string());
+            let handler = windows::Foundation::TypedEventHandler::new(
+                move |_, insp: &Option<windows::core::IInspectable>| {
+                    let arg = insp
+                        .as_ref()
+                        .and_then(|i| {
+                            i.cast::<windows::UI::Notifications::ToastActivatedEventArgs>().ok()
+                        })
+                        .and_then(|a| a.Arguments().ok())
+                        .map(|h| h.to_string())
+                        .unwrap_or_default();
+                    let data = app_h
+                        .path()
+                        .app_data_dir()
+                        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+                    log_line(
+                        &data,
+                        &format!("toast in-process activated: arg={arg} sid={sid_h:?}"),
+                    );
+                    if let Some(sid) = &sid_h {
+                        *PENDING_OPEN.lock().unwrap() = Some(sid.clone());
+                    }
+                    clear_toast_history_via_powershell(&app_h, None);
+                    activate_window(&app_h);
+                    Ok(())
+                },
+            );
+            let _ = toast.Activated(&handler);
+        }
+        if let Ok(mut keep) = TOAST_KEEPALIVE.lock() {
+            keep.push(toast.clone());
+            if keep.len() > 16 {
+                keep.remove(0);
+            }
         }
         let notifier = match ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(app_id.as_str())) {
             Ok(n) => n,
@@ -825,7 +870,11 @@ fn show_toast(app: &AppHandle, title: String, body: String, session_id: Option<S
     // through to COM activation (`-Embedding`) and felt slow — a regression.
     // Card removal does not need those tags: `History.Clear(appId)` works on
     // its own (see clear_toast_history_via_powershell).
-    let _ = session_id;
+    if show_winrt_toast(app, &title, &body, session_id.as_deref()) {
+        log_line(&data, &format!("toast: winrt+handler (session={session_id:?})"));
+        return;
+    }
+    log_line(&data, "toast: winrt unavailable, falling back to notify-rust");
 
     // Show via notify-rust DIRECTLY so we keep the NotificationHandle and can
     // listen for the in-process COM activation callback (tauri-winrt-
