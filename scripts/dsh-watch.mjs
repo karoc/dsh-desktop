@@ -35,8 +35,19 @@
 // 演练参数（--registry / --floor / --now / --force-published）只为本地回放：本机 npm CLI 不可用、
 // 直连 npmjs 会超时，所以演练要用本地 stub registry（python http.server + 手写 packument）指向。
 //
-// 默认行为：读壳地板（scripts/server-manager.mjs）→ 取 npm dist-tags → 比较 → 需要适配就开/更新
-// `dsh-upgrade` issue（正文含 6h 倒计时与八步适配清单）。**不改地板、不建 PR**。
+// 默认行为：读壳地板（**真源 = `origin/main` 的 scripts/server-manager.mjs**，见下方"地板真源"段）
+// → 取 npm dist-tags → 比较 → 需要适配就开/更新 `dsh-upgrade` issue（正文含 6h 倒计时与八步适配清单）。
+// **不改地板、不建 PR**。
+//
+// 地板真源（2026-11-16，事故：已关闭的跟踪单被每轮静默更新）：发布状态的真源是 `origin/main`，
+// **不是本机工作树**。工作树漂到 feature 分支时（实测：main 地板 `0.2.2-rc.1`、工作树停在
+// `feat/*` 的 `0.2.1-rc.5`），读工作树会把**已适配**的版本判成"未适配" ⇒ 每轮去 edit 一条已经关闭的
+// 跟踪单（#259），autopilot 也吃同一份读数。取法：有界 `git fetch --no-tags origin main`（20s 超时；
+// 超时/失败只跳过 fetch，不阻塞）→ `git show origin/main:scripts/server-manager.mjs` → 现有正则。
+// 读不到/解析不到（不是 git 树 / 没有 origin/main / fetch 后仍取不到）⇒ **回退到工作树文件**并在
+// stderr 打**一行**明确告警（真源 + 原因；不静默）。`--floor` 仍是最高优先级覆盖（此时不跑 git）。
+// 报告（`--json`）里 `floorSource: "arg" | "origin/main" | "worktree"` 写明读数来自哪一份，人读输出
+// 也带一句（`壳地板 0.2.2-rc.1（真源 origin/main）`）—— "地板是多少"与"读的是谁"必须同时可见。
 // --force-target：把某版本强制当作"需要适配"（演练 issue 路径）；配合 --dry-run 可零副作用跑全路径。
 //
 // 零 secret：只用 GITHUB_TOKEN（issues: write）。退出码：0 = 正常（含"今天没有新版本"、以及对账失败但
@@ -123,9 +134,12 @@ const OUT = arg('--json')
 // ⇒ 只开 issue 不赋值、不提及，很可能**根本不会叫醒仓库属主**（2026-10-20 修正）。属主解析顺序：
 // --assignee > --repo > GH_REPO > GITHUB_REPOSITORY > git remote origin；**取不到就报错**，
 // 不静默跳过（静默跳过 = 又回到「issue 开着但没人知道」）。
+// git 的唯一注入点：`GIT_BIN`（与 dsh-release-autopilot / test-autopilot-release-resume 同一约定）。
+// 生产默认就是 PATH 上的 `git`；门禁/演练用它换成立即返回的桩，避免每轮真去连远端。
+const GIT = process.env.GIT_BIN ?? 'git'
 const GIT_SLUG = (() => {
   try {
-    const url = execFileSync('git', ['config', '--get', 'remote.origin.url'], { cwd: ROOT, encoding: 'utf8' }).trim()
+    const url = execFileSync(GIT, ['config', '--get', 'remote.origin.url'], { cwd: ROOT, encoding: 'utf8' }).trim()
     const m = /github\.com[:/]+([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/.exec(url)
     return m ? `${m[1]}/${m[2]}` : null
   } catch { return null }
@@ -477,10 +491,93 @@ function npmPackument() {
   fatal(`拿不到 npm packument（${url}；直连与代理都失败）—— 这是**真故障**，故非零退出`)
 }
 
-// 地板默认读真源（scripts/server-manager.mjs）；--floor 只为演练/回放（把地板钉在某个版本，
-// 否则"上游转正"这类场景只能在真源恰好落后时才能复现）。
+// ── 地板真源（2026-11-16）：`origin/main` 的 scripts/server-manager.mjs ─────────────
+// 优先级：--floor（演练/回放，最高） > origin/main（发布状态的真源） > 工作树文件（回退 + stderr 告警）。
+// 为什么不是工作树：工作树是"谁在开发什么"的现场，不是"发布到哪一步"的事实；它一漂到 feature 分支
+// （2026-11-16 实测：main 地板 0.2.2-rc.1、工作树 0.2.1-rc.5），地板就落后于已适配的状态 ⇒ 每轮把
+// **已关闭**的跟踪单当"未适配"去 edit（#259），autopilot 也吃同一份读数。工作树该不该在 main 由
+// tree-guard（运行时守卫）负责告警；读数不该跟着漂。
+// 取法：有界 fetch（超时/失败只跳过 fetch，不阻塞）→ `git show origin/main:<file>` → 现有正则。
+// fetch 只更新远端跟踪 ref（FETCH_HEAD / refs/remotes/origin/main），不碰工作树与 index；
+// --dry-run 的「不写 issue / 不写状态文件」契约不变（它本来就联网读 npm dist-tags）。
 const FLOOR_ARG = arg('--floor')
-const floor = FLOOR_ARG ?? /MIN_DSH_VERSION\s*=\s*'([^']+)'/.exec(execFileSync(process.execPath, ['-e', `process.stdout.write(require('fs').readFileSync(${JSON.stringify(MANAGER)},'utf8'))`], { encoding: 'utf8' }))?.[1]
+const FLOOR_REF = 'origin/main'
+const FLOOR_FILE = 'scripts/server-manager.mjs'
+const FLOOR_RE = /MIN_DSH_VERSION\s*=\s*'([^']+)'/
+// 有界：心跳每 10 分钟一轮，一次 fetch 卡住不能把整轮拖死；离线/无凭据时快速失败后走回退。
+const GIT_TIMEOUT_MS = 20_000
+// 与 tree-guard 同口径：不信任调用方环境里的 GIT_DIR / GIT_WORK_TREE 等（systemd / 测试注入可能残留），
+// 否则"读 origin/main"可能读的是**另一个仓库**。GIT_TERMINAL_PROMPT=0 防 fetch 卡在凭据提示上。
+const GIT_HIJACKING_ENV = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY']
+const floorOf = (text) => FLOOR_RE.exec(String(text ?? ''))?.[1] ?? null
+/** 跑一条只读 git 命令；任何失败都折成 {ok:false, error}，不抛（地板读不到不该把整轮打崩）。 */
+function runGit(args) {
+  const env = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_PAGER: 'cat' }
+  for (const key of GIT_HIJACKING_ENV) delete env[key]
+  let r
+  try {
+    r = spawnSync(GIT, args, { cwd: ROOT, encoding: 'utf8', timeout: GIT_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024, env })
+  } catch (e) {
+    return { ok: false, stdout: '', error: `git 启动失败：${e.message}` }
+  }
+  if (r.error) {
+    const code = r.error.code
+    return {
+      ok: false,
+      stdout: '',
+      error: code === 'ENOENT' ? `PATH 里找不到 git 可执行文件（GIT_BIN=${GIT}）` : String(r.error.message ?? code ?? '未知错误'),
+    }
+  }
+  if (typeof r.status !== 'number') return { ok: false, stdout: '', error: 'git 进程没有正常退出（超时或被信号杀掉？）' }
+  if (r.status !== 0) {
+    const first = String(r.stderr ?? '').split('\n').map((s) => s.trim()).filter(Boolean)[0]
+    return { ok: false, stdout: '', error: first ?? `git ${args[0]} 退出码 ${r.status}` }
+  }
+  return { ok: true, stdout: String(r.stdout ?? ''), error: null }
+}
+/** origin/main 那份（真源）。fetch 失败不阻塞：仍用本地已有的 origin/main ref 读（可能不是最新，告警一行）。 */
+function readFloorFromOriginMain() {
+  const fetched = runGit(['fetch', '--no-tags', 'origin', 'main'])
+  const shown = runGit(['show', `${FLOOR_REF}:${FLOOR_FILE}`])
+  if (!shown.ok) {
+    return { ok: false, floor: null, error: `取不到 ${FLOOR_REF}:${FLOOR_FILE}（${shown.error}）` + (fetched.ok ? '' : `；fetch 也失败（${fetched.error}）`) }
+  }
+  const f = floorOf(shown.stdout)
+  if (!f) return { ok: false, floor: null, error: `${FLOOR_REF}:${FLOOR_FILE} 里解析不到 MIN_DSH_VERSION` }
+  return { ok: true, floor: f, error: null, fetchError: fetched.ok ? null : fetched.error }
+}
+/** 工作树文件（回退路径；不是真源）。读不到也返回 null，由告警把原因说清楚。 */
+function readFloorFromWorktree() {
+  try { return { floor: floorOf(readFileSync(MANAGER, 'utf8')), error: null } } catch (e) {
+    return { floor: null, error: `读不到工作树文件 ${MANAGER}：${e.message}` }
+  }
+}
+
+let floor = null
+let floorSource = null
+if (FLOOR_ARG) {
+  // --floor 是最高优先级覆盖：**不跑 git、不联网**（演练/回放要能完全离线复刻，且不能被工作树/远端影响）。
+  floor = FLOOR_ARG
+  floorSource = 'arg'
+} else {
+  const fromMain = readFloorFromOriginMain()
+  if (fromMain.ok) {
+    floor = fromMain.floor
+    floorSource = FLOOR_REF
+    if (fromMain.fetchError) {
+      // 不是回退，但读数可能是旧的：说清楚，别让"真源 origin/main"读成"刚拉过最新"。
+      console.error(`!! dsh-watch：git fetch origin main 失败（${fromMain.fetchError}）—— 改用本地已有的 origin/main 读数（${floor}），它可能不是最新；检查网络/凭据后重跑即可`)
+    }
+  } else {
+    // 回退：一行告警（真源 + 原因 + 读数），绝不静默 —— 这一读数可能落后于发布状态。
+    const wt = readFloorFromWorktree()
+    floor = wt.floor
+    floorSource = 'worktree'
+    console.error(`!! dsh-watch：地板真源回退到工作树（读 ${MANAGER}）—— ${fromMain.error}${wt.error ? `；${wt.error}` : ''}；`
+      + `读数 ${floor ?? '（读不到 MIN_DSH_VERSION）'}。工作树漂到 feature 分支时这一读数会落后于发布状态（把已适配版本当未适配）；`
+      + `修法：git -C ${ROOT} fetch origin main；本轮以 --json 报告的 floorSource="worktree" 为准`)
+  }
+}
 const pkg = npmPackument()
 const tags = pkg['dist-tags'] ?? {}
 const time = pkg.time ?? {}
@@ -523,10 +620,17 @@ if (target && threshold !== null) {
   }
 }
 
+// 人读输出同样带真源：只写"地板是多少"会让"读的是工作树（旧）"看起来和"读的是 origin/main"一模一样
+// —— 那正是这次事故的歧义来源。三种取值分别渲染成 --floor / origin/main / worktree（回退）。
+const FLOOR_SOURCE_LABEL = {
+  arg: '--floor（演练覆盖）',
+  [FLOOR_REF]: FLOOR_REF,
+  worktree: `worktree·回退：取不到 ${FLOOR_REF}`,
+}[floorSource] ?? String(floorSource)
 const lines = [
   '### dsh-watch',
   '',
-  `壳地板 \`${floor}\`；npm dist-tags：latest=\`${tags.latest ?? '—'}\` next=\`${tags.next ?? '—'}\` alpha=\`${tags.alpha ?? '—'}\``,
+  `壳地板 \`${floor ?? '读不到'}\`（真源 ${FLOOR_SOURCE_LABEL}）；npm dist-tags：latest=\`${tags.latest ?? '—'}\` next=\`${tags.next ?? '—'}\` alpha=\`${tags.alpha ?? '—'}\``,
   '',
   target ? `需要适配：**${target}** —— ${kind}，${threshold}h 截止 ${deadline}` : '无需适配（地板不落后于任何通道）',
 ]
@@ -537,7 +641,9 @@ if (process.env.GITHUB_STEP_SUMMARY) writeFileSync(process.env.GITHUB_STEP_SUMMA
 // 报告只在结尾写一次：所有分支（含"无事发生"、dry-run、paused、锁跳过）都要留下机器可读结论。
 // 注意 `--now` 是垃圾时在上面就 exit 2 了 ⇒ 不会留下"未违约"的假报告（既有断言如此）。
 const report = {
-  floor, tags, target, kind, threshold, deadline, elapsed, breached, pubUnknown,
+  // floorSource = 这份地板是从哪儿读的（"arg" = --floor 演练覆盖 / "origin/main" = 发布真源 /
+  // "worktree" = 回退，此时 stderr 有一行告警说明原因）。机器消费方（autopilot 等）据此判断读数可信度。
+  floor, floorSource, tags, target, kind, threshold, deadline, elapsed, breached, pubUnknown,
   registry: REGISTRY, generatedAt: new Date().toISOString(),
   dryRun: DRY, paused: PAUSED, pauseFile: PAUSED ? PAUSE_FILE : null,
   lock: UNDER_LOCK ? LOCK_FILE : null,
