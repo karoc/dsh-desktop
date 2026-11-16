@@ -324,6 +324,9 @@ if (DRY) {
   let failed = 0
   let ran = 0
   const skipped = []
+  // 失败套件的 **raw 命令名**（`node scripts/test-a.mjs`）：只给 "2/33 套失败" 的 detail 会让排障必须
+  // 回到克隆里手工重跑整条链才知道是哪两套（2026-11-16 实测多花 1-2h）。abort 的 detail 里逐个列出。
+  const failedCmds = []
   for (const raw of entries) {
     let cmd = raw
     const npmRun = /^npm\s+run\s+([\w:.-]+)$/.exec(cmd)
@@ -333,6 +336,7 @@ if (DRY) {
     ran += 1
     if (out.status !== 0) {
       failed += 1
+      failedCmds.push(raw)
       console.log(`      FAIL ${raw}`)
       console.log(`      ${(out.stdout ?? '').trim().split('\n').slice(-4).join('\n      ').slice(0, 400)}`)
     }
@@ -344,7 +348,7 @@ if (DRY) {
     for (const s of skipped) console.log(`        · ${s}`)
   }
   const restoredOnFail = () => (restoreLock() ? '；dry-run 已还原 Cargo.lock（临时同步仅供门禁使用）' : '')
-  if (failed > 0) abort('7 全量门禁', `${failed}/${ran} 套失败${restoredOnFail()}`)
+  if (failed > 0) abort('7 全量门禁', `${failed}/${ran} 套失败：${failedCmds.join('；')}${restoredOnFail()}`)
   if (skipped.length && STRICT_CHAIN) abort('7 全量门禁', `--strict-chain：${ran} 套通过，但有 ${skipped.length} 项被本机跳过（${skipped.join(' / ')}）—— 覆盖缺口不算通过${restoredOnFail()}`)
   const restored = restoreLock()
   note('7 全量门禁', 'ok', `先 sync Cargo.lock（${syncLine || '无输出'}${restored ? '；dry-run 已还原（临时同步只为让门禁跑在与 CI 相同的状态）' : ''}）；`

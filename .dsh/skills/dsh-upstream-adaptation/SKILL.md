@@ -272,7 +272,8 @@ node scripts/dsh-release-autopilot.mjs --require-canary # ⑤ 之前额外要求
 有 ⇒ 走与 ⑥–⑧ **完全相同**的合并（写域白名单 / 冲突 / check 失败同口径 fail）→ 派发构建 → 等资产 ≥3；
 没有 ⇒ 照旧 exit 0。**查询 gh 失败按无操作处理**（不让 API 抖动把无新版轮次记成失败）；该路径不回帖 issue
 （没有 target 可归因）。`--no-release-resume` 可关。桩测：`node scripts/test-autopilot-release-resume.mjs`
-⇒ 0（10 组 / 47 条断言，含「写域越界 / 冲突 / gh 抖动 / --dry-run / release-hold」五组负向/只读对照）。
+⇒ 0（12 组 / 64 条断言，含「写域越界 / 冲突 / gh 抖动 / --dry-run / release-hold」五组负向/只读对照，
+以及 2026-11-16 新增的「真持锁进程 ⇒ 第二个实例 exit 0」与「多行 ssh 错误 ⇒ 首行 + detail.log」两组）。
 **真实轮次已验（两次）**：合并 #240/#241 后版本 PR #242（0.22.0）由 release-please 开出 → autopilot 同一轮 `⑥′`
 命中并合并（2026-10-30T21:24:00Z）→ 派发 build → 10m59s 后三个资产齐（带 sha256 digest）→ 日志
 `✅ 本轮无新版，但已收尾停摆版本 PR：v0.22.0`；21:53Z 的下一轮同路径又自动发了 **v0.23.0**（版本 PR #244 合并 →
@@ -285,6 +286,12 @@ release-please 成功运行、零版本 PR、零新版本（纯文档/笔记提�
 `chore:`/看板类提交的历史证据不干净（v0.10.1 的 Chores 段与一个 `fix` 混在一起，无法证明 chore 单独就能
 触发 bump），保守做法是**与实质改动同 PR 合入**，或对版本 PR 用 `release-hold`。自动兜底不会让版本 PR
 一直停着，所以「攒版」只能靠 hold / 暂不合入 main。
+
+**单实例（2026-11-16 起）**：autopilot 现在有 **flock** —— 非 `--dry-run` 轮次整个进程包在
+`flock -n -E 75 <state-dir>/locks/dsh-release-autopilot.lock` 里，进程退出即自动释放。手工跑一轮与
+timer 轮次**同时只允许一个**：后到的那个打印一行 `已跳过本轮（skipped by lock）` 并 exit 0（不是失败，
+systemd 不记红）；`--dry-run` 不加锁；`flock` 缺失只告警一行后继续。所以排障时**不必**先停 timer：
+要么拿到锁直接跑，要么被跳过（被跳过说明 timer 正在干活，等它跑完或用 `--dry-run` 只读复现）。
 
 ### 3.7 SLA 报表（两段延迟，别把 unknown 当 0）
 
@@ -597,7 +604,8 @@ git push -u origin <branch>
 - **症状**：修完 §6.15 后仍剩 1 套红：`node scripts/test-proxy-e2e.mjs` 报
   `AssertionError: proxied fetch succeeds end to end, 1 !== 0`。**交互 shell 里手跑同一份代码全绿**，
   systemd 轮次稳定红（实录 2026-11-16，0.2.2-rc.1）。
-- **判据**：在克隆里手工跑链并**打印失败套件的 stderr**（autopilot 日志只留汇总行，看不到套件名）。
+- **判据**：在克隆里手工跑链并**打印失败套件的 stderr**（2026-11-16 之前 autopilot 日志只留汇总行、
+  看不到套件名；现在会转发 `      FAIL <套件命令>` 行，完整输出在 `<state-dir>/dsh-adapt.detail.log`，见 §6.17）。
   复现：`http_proxy=… https_proxy=… node scripts/test-proxy-e2e.mjs` ⇒ 红；`env -u http_proxy -u https_proxy` ⇒ 绿。
   根因：测试给子进程设的是**大写** `HTTP_PROXY`/`HTTPS_PROXY`，却原样继承了宿主的**小写**
   `http_proxy`/`https_proxy`；undici 的 env-proxy 认小写那套 ⇒ 子进程把请求发给宿主的代理，
@@ -607,6 +615,38 @@ git push -u origin <branch>
   autopilot 风格全套 env ⇒ 全 PASS。
 - **别做的事**：不要在 unit 里"只导出大写"来绕过（那只是让本机绿，别的机器照样红），也不要
   `skip` 这条 e2e —— 它验的是内置代理链路的端到端行为，吞掉就没了。
+
+### 6.17 手工轮次与 timer 轮次打架 ⇒ 门禁假红；失败日志只剩末 3 行
+
+- **症状**：手工起一轮排查的同时，timer 的 10 分钟轮次也起来了 —— 两轮各自 clone、各自
+  `dsh-rehearse install`、推同一条 `auto/dsh-<target>` 分支，`dsh-adapt` 第 7 步冒出**不可复现的**红
+  （典型是临时 runtime / 代理相关套件），单独重跑同一份代码却是绿的。另一个症状是失败日志里**只有 stderr
+  的末 3 行**（`Please make sure you have the correct access rights` 这类尾巴），真正的根因
+  （`ssh: connect to host github.com …`）在第一行、看不到，排障凭空多花 1-2h。
+- **判据**：① `systemctl --user status dsh-release-autopilot.timer` 看上一轮是否还在跑；把
+  `~/.dsh/state/dsh-release-autopilot.json` 的 `lastRunAt` 与手工轮次的起止时间对照。
+  ② 日志里出现 `已跳过本轮（skipped by lock）` ⇒ 本轮没干活（这是**正常**的：另一个实例在跑）。
+  ③ 失败摘要带 `（完整输出：<state-dir>/<tool>.detail.log）` ⇒ 完整 stdout/stderr 在那个文件里
+  （128KB 自截断）；摘要里的 `…` 表示中间被省略（摘要 = **首行 + 末 3 行**，不是全文）。
+- **处理（2026-11-16 已修）**：
+  - `dsh-release-autopilot` 加 **flock 单实例**（语义与 `dsh-watch` 的 A2 完全一致）：非 `--dry-run`
+    整个进程包在 `flock -n -E 75 <state-dir>/locks/dsh-release-autopilot.lock` 里，锁靠**进程退出自动
+    释放**（不是 `open('wx')` 那种崩溃后留永久死锁的锁文件）；锁被占 ⇒ 打印一行「另一实例在跑，本轮跳过」
+    + **exit 0**（本轮没干活、也不是新故障，不让 systemd 记红）；`--dry-run` 不加锁；`flock` 缺失
+    （Windows 侧直接跑）⇒ 告警一行后继续（写操作仍是收敛式）。
+  - `mustRun` / `gh` / `git` / `dsh-adapt` 失败：摘要改成 **首行 + `…` + 末 3 行**，完整输出落
+    `<state-dir>/<tool>.detail.log`（`git.detail.log` / `gh.detail.log` / `dsh-adapt.detail.log` …，工具名取被调命令），错误文案里打印该路径。`--dry-run` 不落盘（它承诺"不写任何东西"）。
+  - `dsh-adapt` 第 7 步的 detail 现在逐个列出**失败套件的 raw 命令名**（`2/33 套失败：node scripts/test-a.mjs；…`），
+    autopilot 转发 adapt 输出时也保留 `      FAIL <套件命令>` 行（以前过滤后只剩「N/N 套失败」汇总行）。
+  - 闸门：`node scripts/test-autopilot-release-resume.mjs` 的第 11/12 组（真起一个持锁进程 ⇒ 第二个实例
+    exit 0 且零 gh 调用；多行 ssh 错误 ⇒ 文案含首行 + `detail.log` 落盘）。负向对照：把 75 分支的
+    `exit(0)` 改成 1、或把 `tail()` 改回只留末 3 行、或让 `persistDetail` 直接返回 null，对应断言必须变红。
+- **别做的事**：① 不要为了"手工跑得动"去 `systemctl --user stop` timer 或删锁文件 —— 锁是进程退出自动
+  释放的，被跳过就说明 timer 正在干活，等它跑完即可（只读复现用 `--dry-run`，它不加锁）。② 不要把
+  `flock` 缺失降级成**静默**继续（现在显式告警一行）：静默会让人以为互斥生效了。③ 不要把失败摘要改回
+  "只留末尾几行"，也不要把 detail.log 换成"往日志里打印全文"：`dsh-adapt` 的完整输出可达数 MB，
+  控制台日志不是 dump 的地方。④ 不要把「锁被占」的退出码改成非零 —— systemd 会把它记成红失败并触发
+  `Restart` 退避，反而掩盖真正的故障。
 
 ## 7. 纪律（硬规则，别绕过）
 
@@ -631,7 +671,7 @@ git push -u origin <branch>
 | 缺口 | 影响 / 应对 |
 |---|---|
 | **canary 默认关** | 定时器给不了「窗口期内新启动 dev 壳」的前提；`--require-canary` 只给有人值守的窗口 |
-| **autopilot 的适配段（②–⑤）只真机跑通过一次** | 2026-11-16 首次全自动端到端（0.2.2-rc.1 → v0.24.2，见 §9）；历史轮次"都停在 ②"的真实原因是两处**门禁假红**（§6.15 / §6.16），不是适配逻辑。仍未覆盖：`next`/alpha 通道（策略上只跟踪）、`--require-canary`、升级（非全新）布局、写域/冲突失败路径。桩仍在：`test-autopilot-release-resume.mjs`（10 组 / 47 条断言，`GH_BIN`/`GIT_BIN`/`NODE_BIN`/`DSH_AUTOPILOT_WATCH_JSON` 注入） |
+| **autopilot 的适配段（②–⑤）只真机跑通过一次** | 2026-11-16 首次全自动端到端（0.2.2-rc.1 → v0.24.2，见 §9）；历史轮次"都停在 ②"的真实原因是两处**门禁假红**（§6.15 / §6.16），不是适配逻辑。仍未覆盖：`next`/alpha 通道（策略上只跟踪）、`--require-canary`、升级（非全新）布局、写域/冲突失败路径。桩仍在：`test-autopilot-release-resume.mjs`（12 组 / 64 条断言，`GH_BIN`/`GIT_BIN`/`NODE_BIN`/`DSH_AUTOPILOT_WATCH_JSON` 注入） |
 | **`dsh-rehearse` 只覆盖全新安装** | 空 runtime ⇒ `dshInstalled()=false`。**升级覆盖**分支、isolated→hoisted 布局迁移、兼容闸门（已装 < 地板）都没走到 |
 | **rehearse 只到探针** | 在 `launching dsh web` 处按进程组终止 ⇒ 「装完 dsh web 能否真起来」仍靠真机验收 |
 | **`release` 的 `needs` 不含 smoke** | `needs: [windows, linux]` ⇒ `linux-smoke` 红**不会**阻止出包。刚恢复的 canary 要先连续绿几轮才升格 |
@@ -661,7 +701,7 @@ git push -u origin <branch>
     `✅ 本轮无新版，但已收尾停摆版本 PR：v0.22.0`。
   - **v0.23.0**：版本 PR #244 → 21:54:22Z 合并 → build run 41134480089 **job 级全绿**（check/test/windows/linux/
     linux-smoke/release）→ 3 个资产齐 → 22:04:33Z 日志同样的 `✅`；autopilot 状态 `healthy`。
-  - 闸门：`node scripts/test-autopilot-release-resume.mjs` ⇒ **0（10 组 / 47 条断言）**；
+  - 闸门：`node scripts/test-autopilot-release-resume.mjs` ⇒ **0（12 组 / 64 条断言）**；
     `test-automation-gates --only watch` ⇒ **41 条断言全绿**（含 A12 正向/幂等/--dry-run/负向四例）。
 - 心跳现场（2026-10-31 06:23 CST = 2026-10-30T22:23Z）：`dsh-doctor` **系统轮次 PASS 7/7**（评论 PATCH / label /
   关闭重开 / last-ok 全 ✓，canary `last-ok=2026-10-30T22:23:23.255Z`）——证明 §6.14「工作树切回 main」真的生效。
