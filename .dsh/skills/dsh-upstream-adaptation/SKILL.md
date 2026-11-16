@@ -527,9 +527,16 @@ git push -u origin <branch>
 
 - **判据**：`node scripts/test-manifest-consistency.mjs` 打印
   `版本不一致: {"package.json":"0.20.0",…,"Cargo.lock":"0.19.0"}`。
-- **成因**：release-please 只改 `package.json` / `tauri.conf.json` / `Cargo.toml`，**不动 `Cargo.lock`**；
+- **成因**：release-please 只改 `package.json` / `tauri.conf.json` / `Cargo.toml`，**不动 `Cargo.lock`**
+  （其 `extra-files` 对 Cargo.lock 的过滤式 jsonpath 实测不生效，见 sync 脚本头注释）；
   CI 的 `test` 作业因此在 `npm test` **之前**先跑 `node scripts/sync-cargo-lock-version.mjs`。
   本机与 `dsh-adapt`/`dsh-rehearse` 的克隆里没有这一步 ⇒ 第 7 步连带 `test-controls` 一起红。
+- **2026-11-16 起自愈**：`.github/workflows/release-please.yml` 在 release-please 建/更新版本 PR 后，
+  检出该 PR 分支、跑一次 sync、把 `src-tauri/Cargo.lock` 的同步提交推回 PR（提交信息
+  `chore(release): 同步 Cargo.lock…`）⇒ 版本 PR 合并后 main 上四处版本**本来就是一致的**，
+  不再需要每个人先手动 sync。CI 里那步 sync 保留，作为历史 clone / 手动更新的兜底。
+  因此：如果在 `main` 或干净克隆里仍看到这条红，先看`git log --oneline -- src-tauri/Cargo.lock`——
+  最后一次 sync 提交应该跟在该 tag 的 release PR 后面；没有就说明版本 PR 是手动改的，跑一次 sync 即可。
 - **处理**：`node scripts/sync-cargo-lock-version.mjs` 后再跑（实测 `FIXED: 0.19.0 → 0.20.0`，
   `test-manifest-consistency` 立刻 exit 0；**注意它把工作树改成脏的** ⇒ 会跳过 `test-controls` 的三个
   可信度对照）。
