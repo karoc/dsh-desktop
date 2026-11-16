@@ -21,6 +21,13 @@
 >
 > 详情见 `.agents/notes/implemented/bug-fix/2026-09-08-legacy-uninstaller-name-kill.md`。
 
+## [0.25.0](https://github.com/karoc/dsh-desktop/compare/v0.24.5...v0.25.0) (2026-11-16)
+
+
+### Features
+
+* **shell:** 托盘显示会话聚合状态（运行中 / 待你处理 / 已完成未查看） ([#255](https://github.com/karoc/dsh-desktop/issues/255)) ([c5f122a](https://github.com/karoc/dsh-desktop/commit/c5f122af5e7cccc808e53e4702c413c766e1ada7))
+
 ## [0.24.5](https://github.com/karoc/dsh-desktop/compare/v0.24.4...v0.24.5) (2026-11-16)
 
 
