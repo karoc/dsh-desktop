@@ -36,6 +36,7 @@
 | [archive/2026-09-09-pending-cards-solutions.md](archive/2026-09-09-pending-cards-solutions.md) | 待办卡解决方案汇总 | 已分派完成 |
 | [archive/2026-09-17-a-level-plans.md](archive/2026-09-17-a-level-plans.md) | A 级改进方案 v2 | 已全部实施 |
 | [archive/2026-09-17-a-level-plan-audit.md](archive/2026-09-17-a-level-plan-audit.md) | A 级方案审计 | 已完成（结论已并入实施） |
+| [archive/2026-11-02-tray-notification-status-report.md](archive/2026-11-02-tray-notification-status-report.md) | 托盘会话聚合 + 通知链路状态报告 | **功能可用，4 项限制未解决**（通知中心点击延迟、per-toast 会话、审计 P1×4、二次启动清卡） |
 | [archive/2026-09-17-a-level-plan-audit-compat-cost.md](archive/2026-09-17-a-level-plan-audit-compat-cost.md) | A 级方案兼容性/成本审计 | 已完成 |
 | [archive/2026-09-17-official-desktop-takeaways.md](archive/2026-09-17-official-desktop-takeaways.md) | 官方桌面端可取做法 | 已被 2026-09-25 对比报告取代 |
 | [archive/2026-09-20-webview2-cookie-431-fix-plan.md](archive/2026-09-20-webview2-cookie-431-fix-plan.md) | 431/cookie 修复方案 | 已实施（P0/P1/P2） |

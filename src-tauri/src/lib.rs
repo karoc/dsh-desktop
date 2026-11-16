@@ -230,6 +230,57 @@ static SERVICE_JOB: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUs
 
 /// Session id of the most recent notification — a toast click re-opens it.
 static LAST_SESSION: Mutex<Option<String>> = Mutex::new(None);
+
+/// The last notified session, persisted so it survives a cold start.
+///
+/// Windows activates a toast from the Action Center by LAUNCHING the app, and
+/// the args it passes carry no `-ToastActivated` marker (verified in
+/// dsh-desktop-session.log: `activated(plain launch)` five seconds after a
+/// notification, with the session only reachable through FOCUS_OPEN's TTL).
+/// In-memory `LAST_SESSION` is empty at that point, so without this file a
+/// click from the notification centre can never reopen the session.
+///
+/// Format: `<unix seconds>\n<session id>`. Read only within
+/// `LAST_SESSION_TTL` so a stale file cannot hijack an unrelated launch.
+const LAST_SESSION_FILE: &str = "last-session.txt";
+const LAST_SESSION_TTL: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
+fn persist_last_session(app: &AppHandle, sid: &str) {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    // 这份文件只是通知中心激活的兜底：内存 LAST_SESSION 才是真源，读侧还带 30min TTL。
+    // fail-open-ok: 写失败仅让"从通知中心点旧卡片找回会话"降级，不能因此阻断弹通知 / 激活主路径。
+    let _ = std::fs::write(dir.join(LAST_SESSION_FILE), format!("{now}\n{sid}"));
+}
+
+/// The persisted session id, if it was written within `LAST_SESSION_TTL`.
+fn load_recent_session(app: &AppHandle) -> Option<String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let raw = std::fs::read_to_string(dir.join(LAST_SESSION_FILE)).ok()?;
+    let mut lines = raw.lines();
+    let at: u64 = lines.next()?.trim().parse().ok()?;
+    let sid = lines.next()?.trim().to_string();
+    if sid.is_empty() {
+        return None;
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    if now.saturating_sub(at) > LAST_SESSION_TTL.as_secs() {
+        return None;
+    }
+    Some(sid)
+}
 /// Session id waiting to be revealed in the UI (set on app activation, cleared
 /// once the client page reads it via /pending-open).
 static PENDING_OPEN: Mutex<Option<String>> = Mutex::new(None);
@@ -237,7 +288,82 @@ static PENDING_OPEN: Mutex<Option<String>> = Mutex::new(None);
 /// clicks do not relaunch the exe (no single-instance callback) — they merely
 /// activate/restore the window, so the focus event is the only observable
 /// signal of "user clicked the toast and came back".
-static FOCUS_OPEN: Mutex<Option<String>> = Mutex::new(None);
+/// Session staged for "the toast was just clicked" — paired with the moment it
+/// was armed and only honoured for `FOCUS_OPEN_TTL`.
+///
+/// Without the TTL this fired on ANY Focused(true) while the entry sat there:
+/// tray double-click, tray menu「显示」, alt-tab, closing the settings window —
+/// all of them would open whatever session had been notified last. The window
+/// is the only signal Windows gives us for a toast click that does not arrive
+/// through the in-process activator, so we keep it, but bounded.
+static FOCUS_OPEN: Mutex<Option<(String, std::time::Instant)>> = Mutex::new(None);
+
+/// How long a staged toast-click stays eligible (see FOCUS_OPEN).
+const FOCUS_OPEN_TTL: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// 最近一次写入托盘的 tooltip 文本。client 插件在聚合**变化时**才上报，
+/// 这里再按"文本未变"短路一次：Windows 每次 set_tooltip 都会重建 tooltip，
+/// 无变化的重复写入没有意义。`None` = 尚未收到任何上报（页面还没挂载）。
+static SESSION_AGGREGATE: Mutex<Option<String>> = Mutex::new(None);
+
+/// 主窗口**真实**焦点状态（由 Tauri 的 `WindowEvent::Focused` 维护）。
+///
+/// 页面侧的 `document.hasFocus()` 在 WebView2 里不可信：窗口被推到别的应用
+/// 后面之后它仍然返回 true，于是通知插件以为用户在看 UI，把所有 toast 都
+/// 抑制掉了（2026-11-01 用户实测：dev 窗口已后置，日志仍记 "suppressed
+/// window focused"）。焦点只能由壳说了算：事件发生时 eval 一个全局，页面
+/// 加载完再通过 `GET /window/focused` 拉一次初始值。
+static WINDOW_FOCUSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+
+/// 主窗口是否真的是前台窗口（Win32 权威判定）。
+///
+/// WebView2 下 `document.hasFocus()`、Tauri 的 `is_focused()`、以及
+/// `WindowEvent::Focused(false)` 三者都不可靠：前两者会把"窗口已被推后"
+/// 报成聚焦，后者压根不触发。通知抑制必须建立在真实前台判定上。
+#[cfg(windows)]
+fn main_window_is_foreground(app: &AppHandle) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{GetAncestor, GetForegroundWindow, GetWindowThreadProcessId, GA_ROOT};
+    let Some(w) = app.get_webview_window("main") else {
+        return false;
+    };
+    let Ok(hwnd) = w.hwnd() else {
+        return false;
+    };
+    unsafe {
+        let fg = GetForegroundWindow();
+        if fg.0.is_null() {
+            return false;
+        }
+        // HWND 比较不可靠（Tauri 窗口是多层句柄，GetAncestor 也未必归一）。
+        // 改用"前台窗口属于本进程"这个无歧义判定。
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(fg, Some(&mut pid));
+        if pid == std::process::id() {
+            return true;
+        }
+        let root = GetAncestor(fg, GA_ROOT);
+        root == hwnd || fg == hwnd
+    }
+}
+
+#[cfg(not(windows))]
+fn main_window_is_foreground(app: &AppHandle) -> bool {
+    app.get_webview_window("main")
+        .and_then(|w| w.is_focused().ok())
+        .unwrap_or(false)
+}
+
+/// 把真实焦点状态推给页面（`window.__DSH_SHELL_FOCUSED__`）。
+fn push_window_focus(app: &AppHandle, focused: bool) {
+    WINDOW_FOCUSED.store(focused, std::sync::atomic::Ordering::SeqCst);
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.eval(format!(
+            "globalThis.__DSH_SHELL_FOCUSED__ = {};",
+            if focused { "true" } else { "false" }
+        ));
+    }
+}
 
 /// Whether the "dsh 有更新" toast has already been shown this process launch
 /// (the manager reports update-status at boot and on demand — remind once).
@@ -500,13 +626,208 @@ fn activate_window(app: &AppHandle) {
     }
 }
 
-fn show_toast(app: &AppHandle, title: String, body: String) {
+
+
+/// Minimal XML text escaping for toast payloads (WinRT toast XML only).
+#[cfg(windows)]
+fn xml_escape(input: &str) -> String {
+    input
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
+/// 已发出的 toast 对象。`ToastNotification.Activated` 的处理器随对象析构失效——
+/// 不持有的话，卡片进入通知中心后点击只能落到系统级 COM 激活（`-Embedding`），
+/// 表现为 30–60 秒延迟。这里保留最近若干条以便观察该假设是否成立。
+#[cfg(windows)]
+static TOAST_KEEPALIVE: Mutex<Vec<windows::UI::Notifications::ToastNotification>> =
+    Mutex::new(Vec::new());
+
+/// Toast group name used for every notification this shell raises.
+#[cfg(windows)]
+const TOAST_GROUP: &str = "dsh";
+
+/// Tag prefix inside the toast `launch` argument, so an Action Center click can
+/// tell us WHICH notification was activated (in-memory LAST_SESSION cannot).
+const TOAST_LAUNCH_PREFIX: &str = "dsh-session=";
+
+/// Raise a toast through WinRT directly so it carries Tag + Group.
+///
+/// `tauri-winrt-notification` (used by notify-rust) exposes no tag/group, which
+/// is exactly what `History.RemoveGroupedTagWithId(tag, group, app_id)` needs
+/// (Stack Overflow #44544624). Building the toast ourselves also lets the
+/// `launch` argument carry the session id, so clicking an older card opens the
+/// session that card belonged to rather than "whatever was notified last".
+///
+/// Returns false when WinRT is unavailable so the caller can fall back to
+/// notify-rust.
+#[cfg(windows)]
+fn show_winrt_toast(app: &AppHandle, title: &str, body: &str, session_id: Option<&str>) -> bool {
+    use windows::core::HSTRING;
+    use windows::Data::Xml::Dom::XmlDocument;
+    use windows::UI::Notifications::{ToastNotification, ToastNotificationManager};
+
+    let app_id = app.config().identifier.clone();
+    let launch = match session_id {
+        Some(sid) => format!("{TOAST_LAUNCH_PREFIX}{sid}"),
+        None => "dsh-desktop".to_string(),
+    };
+    let xml_str = format!(
+        concat!(
+            r#"<toast activationType="foreground" launch="{}">"#,
+            r#"<visual><binding template="ToastGeneric">"#,
+            "<text>{}</text><text>{}</text>",
+            r#"</binding></visual></toast>"#
+        ),
+        xml_escape(&launch),
+        xml_escape(title),
+        xml_escape(body)
+    );
+    // windows 0.61 里这些调用都已是安全函数（clippy::unnecessary_unsafe 实测），
+    // 这里保留作用域块只为限定临时变量，不再是 unsafe 边界。
+    {
+        let xml = match XmlDocument::new() {
+            Ok(x) => x,
+            Err(_) => return false,
+        };
+        if xml.LoadXml(&HSTRING::from(xml_str.as_str())).is_err() {
+            return false;
+        }
+        let toast = match ToastNotification::CreateToastNotification(&xml) {
+            Ok(t) => t,
+            Err(_) => return false,
+        };
+        if let Some(sid) = session_id {
+            let _ = toast.SetTag(&HSTRING::from(sid));
+            let _ = toast.SetGroup(&HSTRING::from(TOAST_GROUP));
+        }
+        // 进程内激活回调：点击时直接在这里响应，不走 COM。
+        {
+            let app_h = app.clone();
+            let sid_h = session_id.map(|s| s.to_string());
+            use windows::core::Interface as _;
+            let handler = windows::Foundation::TypedEventHandler::new(
+                // TypedEventHandler hands us `windows_core::Ref<T>` (Deref to
+                // `Option<T>`), so let inference drive and borrow through it.
+                move |_sender, insp| {
+                    let args: &Option<windows::core::IInspectable> = &insp;
+                    let arg = args
+                        .as_ref()
+                        .and_then(|i| {
+                            i.cast::<windows::UI::Notifications::ToastActivatedEventArgs>().ok()
+                        })
+                        .and_then(|a| a.Arguments().ok())
+                        .map(|h| h.to_string())
+                        .unwrap_or_default();
+                    let data = app_h
+                        .path()
+                        .app_data_dir()
+                        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+                    log_line(
+                        &data,
+                        &format!("toast in-process activated: arg={arg} sid={sid_h:?}"),
+                    );
+                    if let Some(sid) = &sid_h {
+                        *PENDING_OPEN.lock().unwrap() = Some(sid.clone());
+                    }
+                    clear_toast_history_via_powershell(&app_h, None);
+                    activate_window(&app_h);
+                    Ok(())
+                },
+            );
+            let _ = toast.Activated(&handler);
+        }
+        if let Ok(mut keep) = TOAST_KEEPALIVE.lock() {
+            keep.push(toast.clone());
+            if keep.len() > 16 {
+                keep.remove(0);
+            }
+        }
+        let notifier = match ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(app_id.as_str())) {
+            Ok(n) => n,
+            Err(_) => return false,
+        };
+        if notifier.Show(&toast).is_err() {
+            return false;
+        }
+    }
+    true
+}
+
+#[cfg(not(windows))]
+fn show_winrt_toast(_app: &AppHandle, _title: &str, _body: &str, _session_id: Option<&str>) -> bool {
+    false
+}
+
+/// Clear this app's Action Center entries through PowerShell.
+///
+/// The same WinRT call from Rust (`ToastNotificationManager::History()`)
+/// returns E_UNEXPECTED (0x8000FFFF) on this build, while an unpackaged
+/// PowerShell process performs it successfully — verified side by side. Rather
+/// than block the feature on figuring that discrepancy out, drive it from a
+/// short-lived PowerShell process; it costs a few hundred milliseconds on a
+/// click and actually removes the cards.
+#[cfg(windows)]
+fn clear_toast_history_via_powershell(app: &AppHandle, tag: Option<&str>) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    let app_id = app.config().identifier.clone();
+    let data = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+    // `RemoveGroupedTag` does not exist in this machine's projection
+    // (PowerShell reports "method not found", HResult 0x80131501), while
+    // `Clear(appId)` succeeds. The earlier script chained both inside one try,
+    // so the tag call threw and `Clear` never ran — that is why the card
+    // survived even though the path "executed".
+    let _ = tag;
+    let script = format!(
+        "$ErrorActionPreference='Stop'; $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType=WindowsRuntime]; $h = [Windows.UI.Notifications.ToastNotificationManager]::History; try {{ $h.Clear('{app_id}'); Write-Output 'ok' }} catch {{ Write-Output ('err ' + $_.Exception.HResult) }}"
+    );
+    match std::process::Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+    {
+        Ok(out) => {
+            let msg = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            log_line(&data, &format!("toast-card(powershell): {msg}"));
+        }
+        Err(e) => log_line(&data, &format!("toast-card(powershell): spawn failed: {e}")),
+    }
+}
+
+#[cfg(not(windows))]
+fn clear_toast_history_via_powershell(_app: &AppHandle, _tag: Option<&str>) {}
+
+fn show_toast(app: &AppHandle, title: String, body: String, session_id: Option<String>) {
     let data = app
         .path()
         .app_data_dir()
         .unwrap_or_else(|_| std::path::PathBuf::from("."));
     log_line(&data, &format!("notification: {title} - {body}"));
     eprintln!("[dsh-desktop] notification: {title} - {body}");
+
+    // Send path: our own WinRT toast first. It carries Tag/Group AND registers an
+    // in-process `Activated` handler, and the `ToastNotification` object is kept
+    // alive in TOAST_KEEPALIVE — dropping it is what let Action Center clicks fall
+    // through to COM activation (`-Embedding`) and take 30–60s. (Whether a held
+    // object really makes OLD Action Center cards fire `Activated` is still
+    // unverified on real hardware — see the P2 toast-activation card.)
+    // If any WinRT step fails, fall back to notify-rust: it registers its own
+    // in-process activator so popup clicks stay immediate; only its cards lack
+    // Tag/Group. Card removal never needs those tags: `History.Clear(appId)`
+    // works on its own (see clear_toast_history_via_powershell).
+    if show_winrt_toast(app, &title, &body, session_id.as_deref()) {
+        log_line(&data, &format!("toast: winrt+handler (session={session_id:?})"));
+        return;
+    }
+    log_line(&data, "toast: winrt unavailable, falling back to notify-rust");
 
     // Show via notify-rust DIRECTLY so we keep the NotificationHandle and can
     // listen for the in-process COM activation callback (tauri-winrt-
@@ -524,6 +845,7 @@ fn show_toast(app: &AppHandle, title: String, body: String) {
             .unwrap_or_else(|_| std::path::PathBuf::from("."));
         log_line(&data, &format!("toast-clicked pending-open={last:?}"));
         eprintln!("[dsh-desktop] toast-clicked pending-open={last:?}");
+        clear_toast_history_via_powershell(app, None);
         activate_window(app);
     };
 
@@ -566,6 +888,77 @@ fn show_toast(app: &AppHandle, title: String, body: String) {
                 }
             }
         }
+    }
+}
+
+/// Windows 托盘 tooltip 的硬上限：`NOTIFYICONDATAW.szTip` 是 `[u16; 128]`，
+/// tray-icon 写入时用 `min(128)` **静默截断**（tray-icon 0.24.2
+/// `platform_impl/windows/mod.rs`）。这里主动收敛到 127 个字符，让截断落在
+/// 我们手里——至少能保证不会把一个标题切成半行、也不会吞掉末尾的数。
+const TRAY_TOOLTIP_MAX_CHARS: usize = 127;
+
+/// 拼托盘 tooltip：产品名 + 每个会话一行（`● 待处理 · 标题` / `▶ 标题` / `○ 标题`）。
+///
+/// 全 0 时只回产品名，不留一条"0 个运行中"这种无信息量的文字。纯文本无法
+/// 着色，状态只能靠符号形状区分（`●` 待处理 / `▶` 运行中 / `○` 完成）。
+/// 超出字符预算时**整行**丢弃，绝不截半行——半条标题比少一条更糟。
+fn build_tray_tooltip(
+    base: &str,
+    running: u32,
+    pending: u32,
+    done: u32,
+    items: &[(String, String)],
+) -> String {
+    if running + pending + done == 0 {
+        return base.to_string();
+    }
+    let mut lines: Vec<String> = vec![base.to_string()];
+    // 已用字符数（含每行结尾的换行符，保守计入）。
+    let mut used = base.chars().count() + 1;
+    for (kind, title) in items {
+        let (mark, label) = match kind.as_str() {
+            "pending" => ("●", "待处理 · "),
+            "running" => ("▶", ""),
+            _ => ("○", ""),
+        };
+        // mark + 空格 + label + 内容 + 换行
+        let overhead = 2 + label.chars().count() + 1;
+        let remaining = TRAY_TOOLTIP_MAX_CHARS.saturating_sub(used + overhead);
+        if remaining < 4 {
+            break;
+        }
+        let truncated: String = title.chars().take(remaining).collect();
+        let line = format!("{mark} {label}{truncated}");
+        used += line.chars().count() + 1;
+        lines.push(line);
+    }
+    lines.join("\r\n")
+}
+
+/// 把 client 上报的会话聚合写进托盘 tooltip。
+///
+/// 用户切走后不必打开窗口就能知道"哪个会话在跑、哪个在等我、哪个跑完了还
+/// 没看"。文案只在**内容变化**时改（见 SESSION_AGGREGATE 的说明）。
+fn apply_session_aggregate(
+    app: &AppHandle,
+    running: u32,
+    pending: u32,
+    done: u32,
+    items: Vec<(String, String)>,
+) {
+    let base = app.package_info().name.clone();
+    let text = build_tray_tooltip(&base, running, pending, done, &items);
+    {
+        let mut guard = SESSION_AGGREGATE.lock().unwrap();
+        if guard.as_deref() == Some(text.as_str()) {
+            return;
+        }
+        *guard = Some(text.clone());
+    }
+    // 托盘可能尚未创建（早期启动）或已被移除：两处都要静默跳过，托盘状态
+    // 属于诊断信息，绝不能让一条 tooltip 失败影响桥的响应。
+    if let Some(tray) = app.tray_by_id("dsh-tray") {
+        let _ = tray.set_tooltip(Some(text.as_str()));
     }
 }
 
@@ -1371,7 +1764,7 @@ mod danger_action_tests {
             assert!(!action.title.is_empty() && !action.detail.is_empty(), "{path} 文案不能为空");
         }
         // 非危险端点与只读方法一律不拦
-        for path in ["/window/state", "/window/drag", "/alive", "/log", "/notify", "/pending-open", "/shell/state", "/shell/status", "/devtools"] {
+        for path in ["/window/state", "/window/drag", "/alive", "/log", "/notify", "/state", "/pending-open", "/shell/state", "/shell/status", "/devtools"] {
             assert!(dangerous_bridge_action("POST", path).is_none(), "{path} 不应被拦");
             assert!(dangerous_bridge_action("GET", path).is_none(), "GET {path} 不应被拦");
         }
@@ -2187,7 +2580,7 @@ fn toggle_gpu_accel_impl(app: &AppHandle) -> Result<serde_json::Value, String> {
             "已开启（页面渲染流畅），重启应用后生效".into()
         } else {
             "已关闭（软件渲染，排查黑屏用），重启应用后生效".into()
-        },
+        }, None,
     );
     Ok(serde_json::json!({ "gpu": !on }))
 }
@@ -2205,7 +2598,7 @@ fn toggle_titlebar_contract_impl(app: &AppHandle) -> Result<serde_json::Value, S
             "已开启（顶栏交给 Web 客户端布局）：刷新页面后生效；若观感异常请关掉".into()
         } else {
             "已关闭：恢复壳自绘顶栏 + 自己推挤高度".into()
-        },
+        }, None,
     );
     log_line(
         &app_data_dir(app),
@@ -2759,6 +3152,18 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
 
     let (status, resp_body) = match (method, path) {
         ("OPTIONS", _) => ("204 No Content", String::new()),
+        // 页面侧 `document.hasFocus()` 在 WebView2 里不可信（见 WINDOW_FOCUSED），
+        // 页面加载后用它拉一次初始焦点；之后由 Focused 事件 eval 推更新。
+        ("GET", "/window/focused") => {
+            // 实时问 Win32，而不是读事件或 Tauri 的 is_focused()：实测
+            // `WindowEvent::Focused(false)` 不随"窗口被推到后台"触发，而
+            // `is_focused()` 在 WebView2 上恒为 false（连带到前台也不变）。
+            // 唯一可靠的是 GetForegroundWindow 与窗口 HWND 的比较。
+            let focused = main_window_is_foreground(app);
+            WINDOW_FOCUSED.store(focused, std::sync::atomic::Ordering::SeqCst);
+            let body = serde_json::json!({ "focused": focused }).to_string();
+            ("200 OK", body)
+        }
         ("GET", "/pending-open") => {
             let sid = PENDING_OPEN.lock().unwrap().take();
             // Log only real handoffs — the 1.2s poll would otherwise flood the
@@ -2824,18 +3229,48 @@ fn handle_bridge_conn(stream: &mut TcpStream, app: &AppHandle) {
                     .unwrap_or_else(|_| ("dsh".into(), body.clone(), None));
             if let Some(s) = &sid {
                 *LAST_SESSION.lock().unwrap() = Some(s.clone());
+                persist_last_session(app, s);
                 // A notify only happens while the window is unfocused (the
                 // client suppresses focused toasts) — so the next focus event
                 // is almost certainly the user clicking this toast. Stage the
                 // session to open on that focus.
-                *FOCUS_OPEN.lock().unwrap() = Some(s.clone());
+                *FOCUS_OPEN.lock().unwrap() = Some((s.clone(), std::time::Instant::now()));
                 let data = app
                     .path()
                     .app_data_dir()
                     .unwrap_or_else(|_| std::path::PathBuf::from("."));
                 log_line(&data, &format!("notification session={s}"));
             }
-            show_toast(app, title, body2);
+            show_toast(app, title, body2, sid.clone());
+            ("200 OK", String::new())
+        }
+        // 会话聚合（运行中 / 待你处理 / 已完成未查看 + 各自的会话标题）。
+        // client 插件只在内容变化时发一次；这里只做落库 + 托盘 tooltip，
+        // 不打扰、不弹窗。
+        ("POST", "/state") => {
+            let parsed = serde_json::from_str::<serde_json::Value>(&body).ok();
+            let field = |name: &str| -> u32 {
+                parsed
+                    .as_ref()
+                    .and_then(|v| v.get(name))
+                    .and_then(|x| x.as_u64())
+                    .unwrap_or(0) as u32
+            };
+            let items: Vec<(String, String)> = parsed
+                .as_ref()
+                .and_then(|v| v.get("items"))
+                .and_then(|x| x.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|it| {
+                            let kind = it.get("kind")?.as_str()?.to_string();
+                            let title = it.get("title")?.as_str()?.to_string();
+                            Some((kind, title))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            apply_session_aggregate(app, field("running"), field("pending"), field("done"), items);
             ("200 OK", String::new())
         }
         ("GET", "/update-status") => {
@@ -3434,7 +3869,7 @@ fn start_server(app: &AppHandle) -> Result<(), String> {
                                     "{} → {}，点托盘「有更新」可一键更新；升级后无法回退读取新数据，建议先备份数据目录",
                                     current.as_deref().unwrap_or("?"),
                                     latest.as_deref().unwrap_or("?"),
-                                ),
+                                ), None,
                             );
                         }
                     }
@@ -4719,7 +5154,7 @@ fn toggle_dev_mode_impl(app: &AppHandle) -> Result<serde_json::Value, String> {
             "已开启（dsh 更新冻结、devtools 可用），重启服务后生效".into()
         } else {
             "已关闭，重启服务后生效".into()
-        },
+        }, None,
     );
     Ok(serde_json::json!({ "devMode": !on }))
 }
@@ -4894,18 +5329,55 @@ pub fn run() {
             // 上次的左边位置"）。主窗口仍保留位置/大小/最大化记忆。
             .with_denylist(&["settings", "confirm"])
             .build())
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            // Toast click / external activation: remember the session to
-            // reopen, then bring the existing window forward. Never spawn a
-            // second manager behind the same runtime.
-            let last = LAST_SESSION.lock().unwrap().clone();
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            // Only a toast activation may stage a session. A plain second
+            // launch (user double-clicks the desktop icon) must just raise the
+            // window — staging there would jump to whatever was notified last.
+            let data0 = app
+                .path()
+                .app_data_dir()
+                .unwrap_or_else(|_| std::path::PathBuf::from("."));
+            log_line(&data0, &format!("activated args: {args:?}"));
+            let marked = args.iter().any(|a| a.contains("-ToastActivated"));
             let data = app
                 .path()
                 .app_data_dir()
                 .unwrap_or_else(|_| std::path::PathBuf::from("."));
-            log_line(&data, &format!("activated: pending-open={last:?}"));
-            eprintln!("[dsh-desktop] activated: pending-open={last:?}");
-            *PENDING_OPEN.lock().unwrap() = last;
+            // Action Center activation passes NO marker, so fall back to the
+            // persisted recent session. A genuinely unrelated second launch is
+            // still protected by LAST_SESSION_TTL.
+            // A toast we raised ourselves carries its session id in the
+            // `launch` argument, so clicking an OLDER card opens the right
+            // session (LAST_SESSION can only hold the most recent one).
+            let launch_sid = args
+                .iter()
+                .find_map(|a| a.split(TOAST_LAUNCH_PREFIX).nth(1))
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            let staged = launch_sid
+                .clone()
+                .or_else(|| LAST_SESSION.lock().unwrap().clone())
+                .or_else(|| load_recent_session(app));
+            let reason = if launch_sid.is_some() {
+                "toast launch arg"
+            } else if marked {
+                "toast marker"
+            } else if staged.is_some() {
+                "recent notification"
+            } else {
+                "plain launch"
+            };
+            log_line(&data, &format!("activated({reason}): pending-open={staged:?}"));
+            if staged.is_some() {
+                *PENDING_OPEN.lock().unwrap() = staged.clone();
+            }
+            // Remove the card that was actually clicked (needs Tag+Group, which
+            // is why our toasts are built through WinRT directly).
+            // `History()` returned E_UNEXPECTED on the activation thread; the
+            // WinRT toast manager needs the main (STA) apartment, so hop there.
+            // Rust-side WinRT History() returns E_UNEXPECTED here, so the
+            // PowerShell path is what actually removes the card (verified).
+            clear_toast_history_via_powershell(app, staged.as_deref());
             activate_window(app);
         }))
         .manage(ServerState {
@@ -5012,6 +5484,25 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            // ── 冷启动的 toast 激活：Action Center 在壳已退出时会重新启动
+            // 应用，并把 toast 的 `launch` 串作为命令行参数传入。此时页面还
+            // 没加载，所以只把待打开会话放进入 PENDING_OPEN，等桥就绪后由
+            // 页面轮询取走。
+            {
+                let launch_sid = std::env::args()
+                    // `args()` yields owned Strings, so the slice must be
+                    // converted inside the closure before `a` is dropped.
+                    .find_map(|a| a.split(TOAST_LAUNCH_PREFIX).nth(1).map(|s| s.trim().to_string()))
+                    .filter(|s| !s.is_empty());
+                if let Some(sid) = launch_sid {
+                    let data = app
+                        .path()
+                        .app_data_dir()
+                        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+                    log_line(&data, &format!("cold-start: toast launch session={sid}"));
+                    *PENDING_OPEN.lock().unwrap() = Some(sid);
+                }
+            }
             // ── 品牌统一数据迁移（必须最先、在任何服务启动前）────────
             // identifier 已统一为 dsh.smoothly.desktop；老版本（dev.dsh.desktop
             // 系）已装用户的旧数据目录在此整体迁入新目录，否则升级即"数据丢失"。
@@ -5197,12 +5688,12 @@ pub fn run() {
                     }
                     "dev-mode" => {
                         if let Err(e) = toggle_dev_mode_impl(app) {
-                            show_toast(app, "开发者模式".into(), format!("切换失败：{e}"));
+                            show_toast(app, "开发者模式".into(), format!("切换失败：{e}"), None);
                         }
                     }
                     "gpu-accel" => {
                         if let Err(e) = toggle_gpu_accel_impl(app) {
-                            show_toast(app, "GPU 加速".into(), format!("切换失败：{e}"));
+                            show_toast(app, "GPU 加速".into(), format!("切换失败：{e}"), None);
                         }
                     }
                     "data" => {
@@ -5246,8 +5737,13 @@ pub fn run() {
                             let _ = w.minimize();
                         }
                     }
-                    tauri::WindowEvent::Focused(true) => {
-                        if let Some(sid) = FOCUS_OPEN.lock().unwrap().take() {
+                    tauri::WindowEvent::Focused(focused) => {
+                        // 真实焦点是通知抑制的唯一依据（见 WINDOW_FOCUSED）。
+                        push_window_focus(&handle, *focused);
+                        if *focused {
+                            let staged = FOCUS_OPEN.lock().unwrap().take();
+                            let staged = staged.filter(|(_, at)| at.elapsed() <= FOCUS_OPEN_TTL);
+                            if let Some((sid, _)) = staged {
                             *PENDING_OPEN.lock().unwrap() = Some(sid.clone());
                             let data = handle
                                 .path()
@@ -5255,6 +5751,7 @@ pub fn run() {
                                 .unwrap_or_else(|_| std::path::PathBuf::from("."));
                             log_line(&data, &format!("focus-open: {sid}"));
                             eprintln!("[dsh-desktop] focus-open: {sid}");
+                            }
                         }
                     }
                     _ => {}

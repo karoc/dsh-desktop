@@ -86,18 +86,33 @@ window.__ModuleLoader__.load({
       return item.sessionId || item.id || undefined
     }
 
-    function show(title, body, item) {
+    // ── window focus (Bug 2) ───────────────────────────────────────────────
+    // `document.hasFocus()` is NOT trustworthy in WebView2: after the window is
+    // pushed behind another app it keeps returning true, so the shell logged
+    // "suppressed / window focused" while the user was in a different program
+    // and every notification was silently dropped. The shell now listens for
+    // Tauri's `WindowEvent::Focused` and evals `window.__DSH_SHELL_FOCUSED__`;
+    // that value is the only authority. When it is absent (older shell that
+    // does not push it yet) fall back to the old document check rather than
+    // muting every notification.
+    function shellSaysFocused() {
+      const pushed = globalThis.__DSH_SHELL_FOCUSED__
+      if (pushed === true || pushed === false) return pushed
       try {
-        if (
-          typeof document !== 'undefined' &&
-          typeof document.hasFocus === 'function' &&
-          document.hasFocus() &&
-          !document.hidden
-        ) {
-          logEvent('suppressed', item, 'window focused')
-          return // user is looking at the UI; do not nag
-        }
-      } catch { /* keep going */ }
+        return typeof document !== 'undefined'
+          && typeof document.hasFocus === 'function'
+          && document.hasFocus()
+          && !document.hidden
+      } catch {
+        return false
+      }
+    }
+
+    function show(title, body, item) {
+      if (shellSaysFocused()) {
+        logEvent('suppressed', item, 'window focused (shell state)')
+        return // user is looking at the UI; do not nag
+      }
       const payload = { title, body }
       const sid = idOf(item)
       if (sid) payload.sessionId = sid
@@ -164,45 +179,100 @@ window.__ModuleLoader__.load({
       show(label.title, `「${titleOf(item)}」${label.body}`, item)
     }
     let polling = false
+    let disposed = false
     function pollPendingOpen(ctx) {
       if (polling) return
       if (!BRIDGE_PORT || BRIDGE_PORT.startsWith('__DSH')) return
       polling = true
       const sched = () => {
+        if (disposed) return
         const h = setTimeout(tick, 1200)
         // Browser: no-op. Node (behavioral tests): don't pin the loop open.
         if (h && typeof h.unref === 'function') h.unref()
       }
+      // A hung fetch would otherwise freeze the poll forever (`polling` is a
+      // one-shot latch), and every later click would be ignored.
+      const withTimeout = (promise, ms) => Promise.race([
+        promise,
+        new Promise((_, reject) => {
+          const t = setTimeout(() => reject(new Error('timeout')), ms)
+          if (t && typeof t.unref === 'function') t.unref()
+        }),
+      ])
       const tick = async () => {
+        if (disposed) return // a tick already scheduled at dispose time must not run
         try {
-          const res = await fetch(`http://127.0.0.1:${BRIDGE_PORT}/pending-open`)
+          const res = await withTimeout(fetch(`http://127.0.0.1:${BRIDGE_PORT}/pending-open`), 3000)
           const data = await res.json()
           if (data && data.sessionId) {
             const sid = String(data.sessionId)
+            // Open target lives in uiWorkspace; `ctx.sessions.open` does NOT
+            // exist on dsh 0.2.x (it disappeared at 0.1.6). The old else-if
+            // wrote a field that no one reads and logged success — that is why
+            // clicking a toast brought the window forward but never switched
+            // sessions, silently.
             try {
-              if (ctx.sessions && typeof ctx.sessions.open === 'function') {
-                ctx.sessions.open(sid)
-                post('/log', { tag: 'open', sessionId: sid, detail: 'ctx.sessions.open' })
-              } else if (ctx.sessions && ctx.sessions.list && typeof ctx.sessions.list.update === 'function') {
-                ctx.sessions.list.update((draft) => { draft.current = sid })
-                post('/log', { tag: 'open', sessionId: sid, detail: 'store.current' })
+              const ws = ctx.uiWorkspace
+              if (!ws || typeof ws.openSession !== 'function') {
+                throw new Error('ctx.uiWorkspace.openSession unavailable')
               }
+              ws.openSession(sid)
+              post('/log', { tag: 'open', sessionId: sid, detail: 'uiWorkspace.openSession' })
             } catch (err) {
-              console.warn('[dsh-desktop] open session failed', sid, err)
-              post('/log', { tag: 'open-error', sessionId: sid, detail: String(err && err.message || err) })
+              post('/log', { tag: 'open-error', sessionId: sid, detail: String((err && err.message) || err) })
             }
           }
-        } catch { /* bridge briefly unavailable; ignore */ }
+        } catch { /* bridge briefly unavailable / timeout; ignore */ }
         sched()
       }
       sched()
+      return () => { disposed = true }
     }
 
     return {
       name: 'desktop-notifications',
-      inject: ['sessions', 'connection'],
+      // `uiSession` is the only place the UI status lives: the session-LIST
+      // snapshot row (`SessionSummary`) has NO pendingInteraction field — it
+      // only carries running/blank/origin/updatedAt. Reading `item.pending`
+      // off that row silently yields undefined forever (that bug is why the
+      // 「需要你」 toast and the tray's ● row never worked). UiSession exposes
+      // `sessionStatus` publicly and other plugins read it exactly this way.
+      inject: ['sessions', 'connection', 'uiSession', 'uiWorkspace'],
       apply(ctx) {
         const seen = new Map() // sessionId -> { pending?, running, completed, ended }
+
+        /** Live UI status for one session, or undefined when unavailable. */
+        let statusDiag = false
+        function statusOf(id) {
+          try {
+            const ui = ctx.uiSession
+            if (!ui) {
+              if (!statusDiag) { statusDiag = true; logEvent('status-missing', null, 'ctx.uiSession undefined') }
+              return undefined
+            }
+            const obs = ui.sessionStatus
+            if (!obs || typeof obs.getSnapshot !== 'function') {
+              if (!statusDiag) {
+                statusDiag = true
+                logEvent('status-missing', null, 'sessionStatus=' + (obs === undefined ? 'undefined' : typeof obs))
+              }
+              return undefined
+            }
+            const snap = obs.getSnapshot()
+            const st = snap && typeof snap.get === 'function' ? snap.get(id) : undefined
+            if (!statusDiag) {
+              statusDiag = true
+              logEvent('status-probe', null, 'kind=' + (snap && snap.constructor && snap.constructor.name) +
+                ' size=' + (snap && typeof snap.size === 'number' ? snap.size : '?') +
+                ' hit=' + (st ? 'yes' : 'no') +
+                ' st=' + (st ? JSON.stringify(st) : 'undefined'))
+            }
+            return st
+          } catch (e) {
+            if (!statusDiag) { statusDiag = true; logEvent('status-error', null, String((e && e.message) || e)) }
+            return undefined
+          }
+        }
         // Defensive: the sessions store's canonical shape is { ids, byId }
         // (dsh-client-runtime/service.d.ts); accept the UI-projection shape
         // { items } too so a future shape change can never silently kill us.
@@ -228,6 +298,79 @@ window.__ModuleLoader__.load({
           if (!shapeReported) { shapeReported = true; reportShape('unrecognized') }
           return null
         }
+        // ── aggregate state for the shell (tray tooltip) ────────────────────
+        // What a user needs without opening the window: which sessions are
+        // working, which wait on them, which finished unviewed — with titles,
+        // because "2 running" says nothing about WHAT is running. Posted only
+        // when the aggregate CHANGES (the snapshot fires on every event; a
+        // steady state must not keep the bridge warm).
+        //
+        // Row rules (same source as the toast suppression):
+        //   - subagent rows never contribute a work/done entry (one parent turn
+        //     covers their lifecycle) but their PENDING interaction still needs
+        //     a person, so it gets an entry of its own;
+        //   - blank rows (created, never used) contribute nothing;
+        //   - `completed` only means "finished while not selected", so a session
+        //     the user has already opened drops out by itself.
+        // Entries are pre-sorted by urgency; the shell truncates to its 128-char
+        // tooltip budget, so the cap here only avoids shipping junk.
+        const AGGREGATE_MAX_ITEMS = 8
+        let lastAggregateKey = null
+        function reportAggregate(shaped) {
+          const entries = []
+          for (const id of shaped.ids) {
+            const item = shaped.byId[id]
+            if (!item || item.blank === true) continue
+            // Live status comes from uiSession, not from the list row.
+            const st = statusOf(id) || {}
+            const running = st.running === undefined ? item.running === true : st.running === true
+            const unread = st.completionUnread === undefined
+              ? item.completed === true
+              : st.completionUnread === true
+            if (st.pendingInteraction) {
+              entries.push({ kind: 'pending', title: titleOf(item) })
+              continue
+            }
+            if (item.origin === 'subagent') continue
+            if (running) entries.push({ kind: 'running', title: titleOf(item) })
+            else if (unread) entries.push({ kind: 'done', title: titleOf(item) })
+          }
+          const rank = { pending: 0, running: 1, done: 2 }
+          entries.sort((a, b) => rank[a.kind] - rank[b.kind])
+          const running = entries.reduce((n, e) => n + (e.kind === 'running' ? 1 : 0), 0)
+          const pending = entries.reduce((n, e) => n + (e.kind === 'pending' ? 1 : 0), 0)
+          const done = entries.reduce((n, e) => n + (e.kind === 'done' ? 1 : 0), 0)
+          // Titles are part of the identity: a rename must refresh the tooltip.
+          const key = entries.map((e) => `${e.kind}\u0000${e.title}`).join('\u0001')
+          if (key === lastAggregateKey) return
+          lastAggregateKey = key
+          logEvent('aggregate', null, `${running}/${pending}/${done}`)
+          post('/state', {
+            running,
+            pending,
+            done,
+            items: entries.slice(0, AGGREGATE_MAX_ITEMS),
+          })
+        }
+
+        // One-shot full dump: every session's live status, so a mismatch
+        // between the UI dot and this store is visible in the shell log.
+        setTimeout(() => {
+          try {
+            const obs = ctx.uiSession && ctx.uiSession.sessionStatus
+            const snap = obs && typeof obs.getSnapshot === 'function' ? obs.getSnapshot() : null
+            if (!snap || typeof snap.forEach !== 'function') {
+              logEvent('status-dump', null, 'no snapshot')
+              return
+            }
+            const rows = []
+            snap.forEach((v, k) => rows.push(String(k).slice(-6) + '=' + JSON.stringify(v)))
+            logEvent('status-dump', null, rows.join(' | ').slice(0, 900))
+          } catch (e) {
+            logEvent('status-dump', null, 'error: ' + String((e && e.message) || e))
+          }
+        }, 4000)
+
         const scan = () => {
           let snap
           try {
@@ -257,11 +400,16 @@ window.__ModuleLoader__.load({
             // still raise 「需要你」 (pending branch below fires for every row).
             const isSubagentRow = item.origin === 'subagent'
             const before = seen.get(id)
-            const pending = item.pendingInteraction
+            // The list row has no pendingInteraction field — it must come from
+            // uiSession (see the inject comment). `completed` likewise only
+            // means "ended while unselected"; completionUnread is the real
+            // "finished and not yet acknowledged".
+            const st = statusOf(id) || {}
+            const pending = st.pendingInteraction
             // Completion signal: dsh's `completed` only means "finished while
             // NOT selected" (it never flips for a selected session, even when
             // the window is minimized). The universal edge is running true→false.
-            const running = item.running === true
+            const running = st.running === undefined ? item.running === true : st.running === true
             const completed = item.completed === true
             if (before) {
               if (!before.pending && pending) {
@@ -317,18 +465,58 @@ window.__ModuleLoader__.load({
               lastErrorToastAt.delete(id)
             }
           }
+          reportAggregate(shaped)
         }
         const list = ctx.sessions.list
         const unsubscribe = list && typeof list.subscribe === 'function'
           ? list.subscribe(scan)
           : undefined
+        // CRITICAL: pendingInteraction lives in uiSession.sessionStatus, a
+        // SEPARATE observable from sessions.list. A session entering "waiting
+        // for approval" changes NO list row, so subscribing to the list alone
+        // meant scan() never re-ran — the tray stayed on ▶ and the 「需要你」
+        // toast never fired, even though the UI showed the orange dot. Both
+        // sources must drive the scan.
+        const unsubscribeStatus = (() => {
+          try {
+            const obs = ctx.uiSession && ctx.uiSession.sessionStatus
+            if (obs && typeof obs.subscribe === 'function') return obs.subscribe(scan)
+          } catch { /* fall through: list-only behaviour */ }
+          return undefined
+        })()
         scan() // record baseline; never notify for pre-existing state
         // Diagnostic canary: tells the shell this module loaded and the bridge
         // is reachable (no toast, no tauri dependency).
         post('/alive', { loaded: true })
-        pollPendingOpen(ctx)
+        // The shell only pushes focus on Focused events, which do NOT fire for
+        // a window that was already focused when the page loaded (e.g. after a
+        // reload). Pull the initial value once so the first suppression
+        // decision is not made against a missing global.
+        // Poll rather than trust the push: on Windows the shell's
+        // `WindowEvent::Focused(false)` does not fire when the window is merely
+        // pushed behind another app, so the eval-driven global would stay stale
+        // at `true` and mute every toast. A loopback GET every few seconds is
+        // cheap and is the only signal that tracks reality.
+        const FOCUS_POLL_MS = 5000
+        function refreshFocus() {
+          if (!BRIDGE_PORT || String(BRIDGE_PORT).startsWith('__DSH')) return
+          fetch(`http://127.0.0.1:${BRIDGE_PORT}/window/focused`)
+            .then((r) => r.json())
+            .then((d) => {
+              if (d && typeof d.focused === 'boolean') globalThis.__DSH_SHELL_FOCUSED__ = d.focused
+            })
+            .catch(() => {})
+        }
+        refreshFocus()
+        {
+          const h = setInterval(refreshFocus, FOCUS_POLL_MS)
+          if (h && typeof h.unref === 'function') h.unref()
+        }
+        const stopPolling = pollPendingOpen(ctx)
         return () => {
           if (unsubscribe) unsubscribe()
+          if (unsubscribeStatus) unsubscribeStatus()
+          if (stopPolling) stopPolling()
         }
       },
     }
