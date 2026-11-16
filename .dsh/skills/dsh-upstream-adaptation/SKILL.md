@@ -388,6 +388,21 @@ GH_BIN=$PWD/scripts/gh node scripts/dsh-release-autopilot.mjs --dry-run
 `dsh-autopilot.log` 里出现 `[FAIL] …` 且退出码 3 时，先按 §6.1/§6.2 查心跳与网络；**不要把
 「探测失败」当成「没有新版」**。
 
+### 心跳入口（2026-11-17 起：专用 checkout，不再跑工作树）
+
+本机四个 service 的 `ExecStart` 都是
+`%h/dsh-automation/scripts/automation-runner.sh <node> %h/dsh-automation/scripts/<tool>.mjs`：
+
+- `~/dsh-automation` 是**常驻 `origin/main`** 的独立 checkout（不是开发工作树，也不是 git worktree）；
+- runner 每次先 `git fetch --no-tags origin main`（**节流 300s**，多个 10 分钟心跳共享一次）→
+  `git reset --hard origin/main` → 再 `exec run-with-proxy.sh`；
+- fetch/reset 失败**不判失败**，只告警并沿用当前 checkout（自动化不能因为一次网络抖动停摆）；
+  沿用旧代码那条告警在日志里是 `[automation] …可能是旧代码`，同时脚本自身的 tree-guard 会独立告警；
+- 一次失败即「线上跑旧代码」的问题从结构上消失：开发工作树切到任何分支都不再影响心跳。
+
+一次性准备 / 迁移见 `docs/2026-10-17-dsh-upgrade-automation-plan.md` 的 systemd 小节；
+判据（日志里每轮一行）：`[automation] checkout=<sha> <subject>`。
+
 ## 5. 标准操作：分步人工（autopilot 不可用 / `--stage1` / 收尾）
 
 顺序固定，**上一环没验完不进下一环**：
@@ -596,6 +611,13 @@ git push -u origin <branch>
   沙箱 shell 里通常看不到，排障要用服务自己的日志/state，不要靠翻 /tmp。
 
 ### 6.14 心跳跑的是**工作树**脚本（「修完了却不生效」的真实原因）
+
+> **已结构性解决（2026-11-17）**：本机心跳改为跑 `~/dsh-automation`（常驻 `origin/main` 的独立
+> checkout）+ `scripts/automation-runner.sh`（每轮 fetch + `reset --hard`，300s 节流），见 §4 的
+> 「心跳入口」。**下面这段保留为历史与其他机器的判据**：判定标准仍是「timer 的 `ExecStart` 是不是
+> 指向某棵具体工作树」——指向工作树就有这个缺陷，指向专用 checkout + runner 才没有。
+> 2026-11-17 前的实测：工作树 30 天内切了 **516** 次分支，并在 `feat/tray-session-aggregate` 上连续停过
+> **15.5 天**（2026-11-01→11-16，正好覆盖 0.2.2-rc.1 的 278h 适配停摆）。
 
 - **判据**：四个 timer 的 `ExecStart` 都是 `run-with-proxy.sh node $ROOT/scripts/<tool>.mjs`
   （`$ROOT=/home/karoc/dsh-desktop`）。**工作树停在哪个分支/提交，线上心跳就跑哪份代码** ——

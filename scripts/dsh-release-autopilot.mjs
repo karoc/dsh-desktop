@@ -143,11 +143,15 @@
 //
 //     [Service]
 //     Type=oneshot
-//     WorkingDirectory=%h/dsh-desktop
+//     Restart=no              # 2026-11-16：timer 驱动的 oneshot 不要 Restart 退避（见技能 §6.19）
+//     # 2026-11-17：**不要**指向开发工作树。用常驻 origin/main 的专用 checkout +
+//     # scripts/automation-runner.sh（每轮 fetch + reset --hard，300s 节流；失败只告警不判失败）。
+//     # 一次性准备：git clone git@github.com:karoc/dsh-desktop.git %h/dsh-automation
+//     WorkingDirectory=%h/dsh-automation
 //     # 合并必须用项目 PAT 包装（CI 的 GITHUB_TOKEN 不能 --admin）；仓库脚本缺省已解析到 scripts/gh，
 //     # 这里显式写死是为了 systemd 下不依赖实现细节（演练仍可用 GH_BIN 指向桩）。
 //     Environment=GH_BIN=%h/dsh-desktop/scripts/gh
-//     ExecStart=/usr/bin/node %h/dsh-desktop/scripts/dsh-release-autopilot.mjs
+//     ExecStart=%h/dsh-automation/scripts/automation-runner.sh /usr/bin/node %h/dsh-automation/scripts/dsh-release-autopilot.mjs
 //     TimeoutStartSec=2h
 //     Nice=10
 //

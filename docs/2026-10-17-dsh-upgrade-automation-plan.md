@@ -625,8 +625,19 @@ best-effort（可 `--sla-hours` / `--best-effort-hours` 覆盖，标题与正文
 ### systemd user unit（模板）
 
 本仓库**不**改你机器上的 systemd；模板在 `scripts/dsh-release-autopilot.mjs` 头注释（service + timer）。
-要点：`Type=oneshot`、`OnUnitInactiveSec=30min`（不会重入）、`Environment=GH_BIN=%h/dsh-desktop/scripts/gh`、
+要点：`Type=oneshot`、`OnUnitInactiveSec=30min`（不会重入）、`Environment=GH_BIN=%h/dsh-automation/scripts/gh`、
 `TimeoutStartSec=2h`。启用由用户执行 `systemctl --user daemon-reload && systemctl --user enable --now dsh-release-autopilot.timer`。
+
+> **2026-11-17 补（心跳入口：专用 checkout，不要指向开发工作树）**：本机四个 service 的 `ExecStart` 改为
+> `%h/dsh-automation/scripts/automation-runner.sh <node> %h/dsh-automation/scripts/<tool>.mjs`，
+> `WorkingDirectory=%h/dsh-automation`；`~/dsh-automation` 是常驻 `origin/main` 的独立 checkout。
+> runner（仓库内 `scripts/automation-runner.sh`）每轮先 `git fetch --no-tags origin main`（节流 300s，
+> 多个 10 分钟心跳共享一次）→ `git reset --hard origin/main` → 再 `exec run-with-proxy.sh`；
+> fetch/reset 失败只告警（日志 `[automation] …可能是旧代码`）不判失败，脚本自身的 tree-guard 独立告警。
+> **为什么**：工作树 30 天内切了 516 次分支、并在 feature 分支上连续停 15.5 天；timer 指向工作树 ⇒
+> 线上长期跑旧代码（2026-10-24→10-30 的旧 dsh-doctor、2026-11-01→11-16 的旧 dsh-watch/dsh-adapt）。
+> 一次性准备：`git clone git@github.com:karoc/dsh-desktop.git ~/dsh-automation && git -C ~/dsh-automation checkout main`，
+> 然后改 unit + `daemon-reload` + `restart timer`。判据：日志每轮一行 `[automation] checkout=<sha> <subject>`。
 
 > **2026-11-16 补（timer 驱动的 oneshot 不要加 `Restart=`）**：本机三份 unit 曾用
 > `Restart=on-failure` + `RestartSteps=4` + `RestartMaxDelaySec=3600`，实测一轮失败后 unit 卡在
