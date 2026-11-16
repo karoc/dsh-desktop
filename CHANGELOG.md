@@ -21,6 +21,15 @@
 >
 > 详情见 `.agents/notes/implemented/bug-fix/2026-09-08-legacy-uninstaller-name-kill.md`。
 
+## [0.24.2](https://github.com/karoc/dsh-desktop/compare/v0.24.1...v0.24.2) (2026-11-16)
+
+
+### Bug Fixes
+
+* **dsh:** 适配上游 dsh 0.2.2-rc.1（autopilot） ([#263](https://github.com/karoc/dsh-desktop/issues/263)) ([ba2cd86](https://github.com/karoc/dsh-desktop/commit/ba2cd86b0ab70a3255f6a852df6e92c4259aafae))
+* **gates:** test-proxy-e2e 不再继承宿主的（小写）代理变量 ([#262](https://github.com/karoc/dsh-desktop/issues/262)) ([4afd4da](https://github.com/karoc/dsh-desktop/commit/4afd4dabd6334e1daf17a9f4efd1db9725dd0aec))
+* **gates:** 适配期门禁不再依赖仓库地板（0.2.2-rc.1 每轮被判 2/33 的根因） ([#260](https://github.com/karoc/dsh-desktop/issues/260)) ([0fe2cd7](https://github.com/karoc/dsh-desktop/commit/0fe2cd7a67a24014059ea776d25763796af06863))
+
 ## [0.24.1](https://github.com/karoc/dsh-desktop/compare/v0.24.0...v0.24.1) (2026-10-31)
 
 
