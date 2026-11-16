@@ -28,7 +28,7 @@ In the default DSH web UI, the official turn rail historically showed only the *
 | 🎯 **Jump to any turn** | Precise `scrollTop` targeting (no `scrollIntoView` fights); out-of-window jumps extend the window on demand with a "Locating turn N…" pulse + bubble; the oldest-turn jump loads to the **true first turn** (`hasMore = false`) |
 | 👁️ **Follow-scroll highlight** | The capsule of the turn at the reading line is tinted as you scroll — and the rail's own viewport keeps the active turn in view |
 | ⬆️⬇️ **Scroll buttons** | Click or hover-hold to scroll the rail; greyed out when there is nothing to scroll |
-| 🎛️ **Rail mode switch** | Settings → General → *Turn navigation*: `DSH official` / `Smoothly TN` (default) / `Hide all` — persisted across reloads, so the official rail can finally be **turned off** |
+| 🎛️ **Rail mode switch** | Plugins → dsh-turn-navigator → *Turn navigation*: `DSH official` / `Smoothly TN` (default) / `Hide all` — persisted across reloads, so the official rail can finally be **turned off** |
 | 🔌 **Pure external plugin** | No DSH source code modified; no host changes; no new dependencies; no conversation writes (the only DOM writes are an injected `style` tag, one `body` class and a transient jump highlight) |
 
 ## vs. the official DSH turn rail
@@ -48,7 +48,7 @@ The official built-in `TurnNavigator` has **no off-switch** and is always render
 | Scroll buttons (click / hover-hold) | ❌ (wheel + gradient fade) | ✅ click / hover-hold |
 | Rail height | Dynamic band (natural height … 420px) | Auto-sized (≤30vh), internal hidden scrollbar |
 | Narrow viewport (<900px) | Auto-hidden | Auto-hidden (mirrors official) |
-| **Hide / switch rail** | ❌ no off-switch | ✅ Settings → General → 3 modes; `Hide all` hides both |
+| **Hide / switch rail** | ❌ no off-switch | ✅ Plugins → dsh-turn-navigator → 3 modes; `Hide all` hides both |
 | Keyboard accessibility | ✅ focus ring + `aria-current`/`aria-busy`/`aria-describedby` | ✅ same pattern: the accessible **name is the action** (`Jump to turn N` / `Load and jump to turn N` for a turn still outside the window) with `aria-current`/`aria-busy`, and the preview is linked through `aria-describedby` → `role="tooltip"`; **tabbing to a capsule shows the preview** (no pointer required) |
 | Source | Built-in, cannot be disabled | External plugin, **can be replaced/disabled** |
 
@@ -88,7 +88,7 @@ dsh web
 
 ## Usage
 
-0. **Choose which rail to show** (Settings → General → **Turn navigation**): `DSH official` (the built-in rail), `Smoothly TN` (this plugin's rail — **default**), or `Hide all`. The official rail has no off-switch, so choosing Smoothly TN hides it with a stylesheet override and our rail takes over the right-edge center position. The choice persists across reloads.
+0. **Choose which rail to show** (Plugins → dsh-turn-navigator → **Turn navigation**): `DSH official` (the built-in rail), `Smoothly TN` (this plugin's rail — **default**), or `Hide all`. The official rail has no off-switch, so choosing Smoothly TN hides it with a stylesheet override and our rail takes over the right-edge center position. The choice persists across reloads.
 1. Open any conversation with at least one completed turn.
 2. A vertical rail of grey capsules appears on the right edge (one per turn). It **auto-sizes** — short conversations get a short rail, long ones hit the 30vh cap and scroll internally (hidden scrollbar, no layout jitter).
 3. **Hover** a capsule: it glows, widens in a wave, and shows the turn's **number, timestamp, prompt, and response preview** in a tooltip to the left of the rail (a turn with no human prompt shows its turn number plus the response preview).
@@ -102,7 +102,7 @@ The plugin registers **two additive slots** — **no DSH source code is modified
 | Slot | Scope | Role |
 |------|-------|------|
 | `conversation.session.header.utilities` | session | The floating turn rail (renders `position: fixed`; reads the live chat snapshot via the framework `useChat`/`useSession` kit) |
-| `settings.general.item` | root | The *Turn navigation* mode switch in Settings → General |
+| `plugins.bundle.config` | root | The *Turn navigation* rail-mode switch on the bundle's Plugins page (keyed `dsh-turn-navigator`) |
 
 - **Full history as data**: on dsh 0.1.2+ the rail pages the same persisted log the official window reads, through the Typert Remote `session/page` channel (`ctx.remote.session` — mounted by the base web assembly; **no host changes, no new dependencies**). On older dsh it uses the `sessions.history` RPC. Every turn is derived from raw `turn/start` / `user/message` / `turn/end` events as plain data.
 - **On-demand jumps**: clicking a turn already in the window scrolls directly; for a turn outside it, the rail extends the window page by page through the official session store (`loadOlder`, with the authoritative `hasMore` as the loop terminator) until the target is in view — the only path that touches the flow, and it runs only when you click.
@@ -113,8 +113,8 @@ The plugin registers **two additive slots** — **no DSH source code is modified
 ## Compatibility
 
 - DeepSeek Harness (dsh) with the web client (`dsh web`); developed and verified against dsh 0.1.2+ and **verified against dsh 0.1.3-alpha.1** (Playwright re-test, 2026-09-06: full-history rail, jumps, follow highlight, mode switch, and the official-rail stylesheet takeover all passing).
-- Requires the `conversation.session.header.utilities` and `settings.general.item` slot declarations (present in current DSH).
-- Client contract re-checked against **dsh 0.1.6-alpha.2** (2026-09-22): the `conversation.session.header.utilities` and `settings.general.item` slot declarations, the `ui-primitives` exports the rail uses, and the `--dsw-alias-*` tokens it references all still exist. The interactive Playwright re-test was **not** re-run on 0.1.6 (the 2026-09-06 run remains the last interactive verification).
+- Requires the `conversation.session.header.utilities` slot declaration and the plugin manager's `plugins.bundle.config` seam (dsh 0.2.x).
+- Client contract re-checked against **dsh 0.2.1-rc.5** (2026-10-31): the `conversation.session.header.utilities` and `plugins.bundle.config` slot declarations, the `ui-primitives` exports the rail uses, and the `--dsw-alias-*` tokens it references all still exist. The interactive Playwright re-test was **not** re-run on 0.1.6 (the 2026-09-06 run remains the last interactive verification).
 - Default `Smoothly TN` mode hides the official rail (stylesheet override) and centers our rail in its place; `DSH official` mode shows the built-in rail instead; `Hide all` hides both. Both rails auto-hide below 900px width.
 - Coexists with DSH global panels (e.g. the kanban board): a panel takes over the `main` slot entry, so the conversation view (and this rail with it) is swapped out rather than layered under.
 - **Known limitation (DOM fallback)**: when there is no session store to read (older hosts), the rail extends the window by clicking the flow's own paging control, and that path recognises only the control's **Chinese and English** labels (idle and in-flight) — on a third-language shell it cannot extend the window. The primary journal path (dsh 0.1.2+) does not read labels at all.

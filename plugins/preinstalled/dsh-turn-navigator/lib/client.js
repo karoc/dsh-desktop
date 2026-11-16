@@ -974,9 +974,10 @@ window.__ModuleLoader__.load({
 		/**
 		* Settings → General row: WHICH turn-navigation rail to show.
 		*
-		* Registered into `settings.general.item` (root scope) by the plugin's apply;
-		* the General section renders each contribution as one row, so this component
-		* draws its own title, description, and a three-way selector:
+		* Registered into `plugins.bundle.config` (keyed by the bundle name) by the
+		* plugin's apply; the Plugins page renders it on this bundle's detail page
+		* (`view: 'page'`), so this component draws its own title, description, and a
+		* three-way selector:
 		*
 		*   DSH official | Smoothly TN (Smoothly Turn Nav) | Hide all
 		*
@@ -999,7 +1000,8 @@ window.__ModuleLoader__.load({
 			}
 		];
 		/** Render the rail display-mode preference row. */
-		function SettingsNavModeRow({ t }) {
+		function SettingsNavModeRow({ t, view }) {
+			if (view === "summary") return null;
 			const mode = (0, react.useSyncExternalStore)(subscribeRailMode, getRailMode);
 			const [open, setOpen] = (0, react.useState)(false);
 			const selectedLabel = OPTIONS.find((option) => option.id === mode)?.label ?? "modeSTN";
@@ -1437,10 +1439,9 @@ body.tn-hide-official [data-conversation-scroll] nav {
 				}
 			};
 			resolveHandles();
-			ctx.slots.inject("settings.general.item", () => ctx.slots.register({
-				name: "settings.general.item",
-				id: "dsh-turn-navigator-mode",
-				order: 30,
+			ctx.slots.inject("plugins.bundle.config", () => ctx.slots.register({
+				name: "plugins.bundle.config",
+				key: "dsh-turn-navigator",
 				locale: NS,
 				inject: () => ({ t })
 			}, SettingsNavModeRow));
