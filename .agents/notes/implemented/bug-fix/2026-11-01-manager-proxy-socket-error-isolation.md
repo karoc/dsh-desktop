@@ -12,7 +12,7 @@ Status: implemented
 
 负向保证（明确的「不做」）：不加全局 `uncaughtException`/`unhandledRejection` 兜底去吞异常；manager 的 fail-fast（写 `manager-exception-*.txt` + node report 后 exit 1）语义不变；`connect … failed:` 日志与按主机路由语义不变（loopback 永远直连、上游指回自己视为禁用）；proxy.json 的格式与热生效不变。
 
-回归门禁：`scripts/test-proxy.mjs` 新增 scenario 13（socket 层 error 隔离），用 `process.on('uncaughtException')` 把「会不会崩」变成显式断言，覆盖 CONNECT 握手窗口 RST（+ 之后同一实例仍能建隧道）、隧道建立后源站 RST 不得写出 502、上游/直连两条普通 HTTP 响应体中途 RST、客户端 abort 后的迟到响应；`finally` 里摘监听器，保证失败是 exit 1 而不是挂到超时。红→绿已双向验证：还原 proxy.mjs 时输出 `read ECONNRESET | at TCP.onStreamRead`（与线上栈一致、exit 1），修复后 PASS（13 scenarios）。Windows + 宿主同款 node v24.18.0 上另用独立探针复跑同一场景：修前 exit 1、栈坐标 `stream_base_commons:216:20` 与线上完全一致；修后 exit 0、代理仍可服务。
+回归门禁：`scripts/test-proxy.mjs` 新增 scenario 13（socket 层 error 隔离），用 `process.on('uncaughtException')` 把「会不会崩」变成显式断言，覆盖 CONNECT 握手窗口 RST（+ 之后同一实例仍能建隧道）、隧道建立后源站 RST 不得写出 502、上游/直连两条普通 HTTP 响应体中途 RST、客户端 abort 后的迟到响应；`finally` 里摘监听器，保证失败是 exit 1 而不是挂到超时。红→绿已双向验证：还原 proxy.mjs 时输出 `read ECONNRESET | at TCP.onStreamRead`（与线上栈一致、exit 1），修复后 PASS（13 scenarios）。Windows + 宿主同款 node v24.18.0 上另用独立探针复跑同一场景：修前 exit 1、栈坐标 `stream_base_commons:216:20` 与线上完全一致；修后 exit 0、代理仍可服务。跨套件机制化：`scripts/test-controls.mjs` 新增第 ⑦ 条注入对照（删掉 `connect` 监听器第一行的 `clientSocket.on('error', …)` ⇒ `test-proxy.mjs` 必须变红、还原后必须变绿），把「有人手滑删掉这条监听器」也纳入门禁可信度自证。
 ## Alternatives considered
 
 **全局 `uncaughtException` 兜底 / 按错误码吞掉 ECONNRESET**：最省事，但会把真正的编程缺陷变成静默，且 manager 的 fail-fast + 取证（2026-09-14 那次事故后建立的机制）正是靠退出事件触发；吞掉等于拆掉自己的诊断能力。
@@ -28,7 +28,7 @@ Status: implemented
 
 代价：`connect` 监听器里多了三个状态变量（`pending`/`tunneled`/`clientGone`）和两处所有权移交，读代码要理解「阶段归属」才能改对；测试场景从 12 涨到 13、单次跑多约 2 秒（有界等待）。买到的：任何客户端在 CONNECT 建连窗口内 RST 都只会让那一条连接被清理，manager 继续服务；被终止的工具子进程 / 取消的模型请求不再能打死整个应用；新增的回归门禁会在有人删掉早期 error 监听时立刻变红（已做定向变异对照验证）。
 
-遗留（已登记、未修）：① `openUpstreamTunnel` 没有取消机制，客户端在 upstream 握手期消失后上游 socket 要等 10s 超时才销毁（不崩，但上游故障时可能堆积 ≤10s 半开连接）；② `proxy.json` 字段类型非法（如 `proxiedHosts: {}`）会让 `shouldProxy().some` 抛 TypeError，属非 socket 层的同类 uncaught，需单独做配置校验；③ `scripts/test-controls.mjs` 还没把「删早期 error 监听」纳入注入对照（本套件已能独立抓红，但缺跨套件机制化）；④ 历史文档 `docs/2026-10-23-official-client-adoption-review.md` 仍写「12 场景」（日期快照，未回改）。
+遗留（已登记、未修）：① `openUpstreamTunnel` 没有取消机制，客户端在 upstream 握手期消失后上游 socket 要等 10s 超时才销毁（不崩，但上游故障时可能堆积 ≤10s 半开连接）；② `proxy.json` 字段类型非法（如 `proxiedHosts: {}`）会让 `shouldProxy().some` 抛 TypeError，属非 socket 层的同类 uncaught，需单独做配置校验；③ 历史文档 `docs/2026-10-23-official-client-adoption-review.md` 仍写「12 场景」（日期快照，未回改）。
 
 交叉链接：`../feature/2026-08-17-shell-builtin-forward-proxy.md`（代理的设计与出口定位）、`../bug-fix/2026-09-14-manager-crash-forensics-and-guard-startup-race.md`（manager 崩溃取证机制，本次正是它第一次抓到真实异常栈）、`../testing/2026-10-30-test-proxy-hermetic-env.md`（test-proxy 的环境隔离）。
 
