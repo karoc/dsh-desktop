@@ -539,10 +539,14 @@ function groupWatch() {
     `${r.stdout.includes('24h 截止')}|${!r.stdout.includes('6h 截止')}`)
 
   // rc → 正式版转正：0.2.1 在同号 rc 之后，必须被探到（P0，2026-10-19 修）
-  r = watch({ pack: P('0.2.1', '2026-10-18T12:00:00Z'), args: ['--now', '2026-10-19T00:00:00Z'] })
+  // **地板必须显式注入（2026-11-16 修）**：适配克隆里 dsh-adapt 第 2 步已把 MIN_DSH_VERSION 抬到**目标版本**，
+  // 而下面两条断言的期望值写死了 0.2.1 / 0.2.2-rc.1 ⇒ 目标版本 >= 0.2.2-rc.1 时若读仓库地板，
+  // 两条都会退化成 target=null（真实适配因此每轮被判门禁红：0.2.2-rc.1 自 2026-11-08 起全部卡在第 7 步）。
+  // 断言本身要验的是"通道选择判据"，不是"当前仓库地板是多少"，故注入固定地板 0.2.1-rc.2。
+  r = watch({ pack: P('0.2.1', '2026-10-18T12:00:00Z'), args: ['--floor', '0.2.1-rc.2', '--now', '2026-10-19T00:00:00Z'] })
   check('watch', 'latest 由同号 rc 转正（0.2.1 vs 地板 0.2.1-rc.2）⇒ target 落到 latest、走 6h 硬指标', '0.2.1|6',
     `${r.report?.target}|${r.report?.threshold}`)
-  r = watch({ pack: packument({ latest: '0.1.9', next: '0.2.2-rc.1' }, { '0.2.2-rc.1': '2026-10-18T12:00:00Z' }), args: ['--now', '2026-10-19T00:00:00Z'] })
+  r = watch({ pack: packument({ latest: '0.1.9', next: '0.2.2-rc.1' }, { '0.2.2-rc.1': '2026-10-18T12:00:00Z' }), args: ['--floor', '0.2.1-rc.2', '--now', '2026-10-19T00:00:00Z'] })
   check('watch', 'latest 落后、next 超前 ⇒ target=next、门槛 24h（best-effort 通道）', '0.2.2-rc.1|24',
     `${r.report?.target}|${r.report?.threshold}`)
 
