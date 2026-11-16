@@ -21,6 +21,13 @@
 >
 > 详情见 `.agents/notes/implemented/bug-fix/2026-09-08-legacy-uninstaller-name-kill.md`。
 
+## [0.24.5](https://github.com/karoc/dsh-desktop/compare/v0.24.4...v0.24.5) (2026-11-16)
+
+
+### Bug Fixes
+
+* **proxy:** 客户端在 CONNECT 握手窗口 RST 不再打死 manager（socket 层 error 隔离） ([#276](https://github.com/karoc/dsh-desktop/issues/276)) ([05e6849](https://github.com/karoc/dsh-desktop/commit/05e6849c944c3ddc6d4067a9fe66055757e07053))
+
 ## [0.24.4](https://github.com/karoc/dsh-desktop/compare/v0.24.3...v0.24.4) (2026-11-16)
 
 
