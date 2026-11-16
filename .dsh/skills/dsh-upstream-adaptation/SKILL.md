@@ -181,9 +181,13 @@ null 读成「非 RED」⇒ 探针崩溃也假绿）。步骤文案会打印 `re
 「版本已一致」**。修前该分支不可达：target≠floor 的 install 演练 100% 红，autopilot ② 因此结构性阻塞
 （rc.3/rc.4/rc.5 三期未适配）。修后实测 rc.5：`结论: GREEN`、install 22.4s（热 store + 已有 runtime）、
 探针 `GREEN`（red 0 / yellow 0 / info 16），报告 `rehearsal=true`、`assumed={floor:"0.2.1-rc.5",fixture:"0.2.1-rc.5"}`。
-在沙箱/CI 里跑要做两件事：给 `npm_config_cache` 一个**可写**目录（否则 npm 查询 latest 直接
-`EROFS: read-only file system, open '<home>/.npm/_cacache/tmp/…'`），并且**不要**继承宿主的
-`NODE_USE_ENV_PROXY=1`（它会让 `test-proxy` 崩在 `proxy.mjs` 的 Host/authority 校验上）。
+在沙箱/CI 里跑要做一件事：给 `npm_config_cache` 一个**可写**目录（否则 npm 查询 latest 直接
+`EROFS: read-only file system, open '<home>/.npm/_cacache/tmp/…'`）。
+
+**代理环境不再需要人工避开（2026-11-16 起）**：以前要求"不要继承宿主的 `NODE_USE_ENV_PROXY=1`"，
+`test-proxy-e2e` 现在会把宿主的大小写代理变量一起清掉再喂子进程（§6.16），所以**继承与不继承都过**；
+但**只导出大写**、漏掉小写 `http_proxy`/`https_proxy`/`all_proxy` 的启动脚本仍会改变子进程行为 ⇒
+给 timer 写 unit 时两套一起导出（本机 `run-with-proxy.sh` 就是这么做的）。
 
 ### 3.4 一条命令适配（抬地板）
 
@@ -587,6 +591,22 @@ git push -u origin <branch>
   目标版本，再跑 `node scripts/test-automation-gates.mjs --only watch`。
 - **别做的事**：不要把第 7 步改成"跳过门禁"/`|| true`，也不要把 main 的地板压回低于目标来"让门禁过"——
   那会把真实适配判据一起废掉。
+
+### 6.16 适配红在「7 全量门禁 1/33」，且只有 `test-proxy-e2e` 红
+
+- **症状**：修完 §6.15 后仍剩 1 套红：`node scripts/test-proxy-e2e.mjs` 报
+  `AssertionError: proxied fetch succeeds end to end, 1 !== 0`。**交互 shell 里手跑同一份代码全绿**，
+  systemd 轮次稳定红（实录 2026-11-16，0.2.2-rc.1）。
+- **判据**：在克隆里手工跑链并**打印失败套件的 stderr**（autopilot 日志只留汇总行，看不到套件名）。
+  复现：`http_proxy=… https_proxy=… node scripts/test-proxy-e2e.mjs` ⇒ 红；`env -u http_proxy -u https_proxy` ⇒ 绿。
+  根因：测试给子进程设的是**大写** `HTTP_PROXY`/`HTTPS_PROXY`，却原样继承了宿主的**小写**
+  `http_proxy`/`https_proxy`；undici 的 env-proxy 认小写那套 ⇒ 子进程把请求发给宿主的代理，
+  而不是 manager 的内置代理。交互 shell 通常没有小写变量，于是"人肉绿 / 定时器红"。
+- **处理（2026-11-16 已修）**：`test-proxy-e2e` 加 `cleanProxyEnv()`，manager 与 fetch 子进程都用它
+  （清掉大小写 `http(s)_proxy`/`all_proxy`/`no_proxy`）。三组复核：有小写代理变量、无小写、
+  autopilot 风格全套 env ⇒ 全 PASS。
+- **别做的事**：不要在 unit 里"只导出大写"来绕过（那只是让本机绿，别的机器照样红），也不要
+  `skip` 这条 e2e —— 它验的是内置代理链路的端到端行为，吞掉就没了。
 
 ## 7. 纪律（硬规则，别绕过）
 
