@@ -302,8 +302,8 @@ T0 = `time[该壳版本随包地板]`（可能是预发布），终点 = 首个�
   = 原有 `adapt` 字段，旧报表印成"适配"）与 合计（`total`，门禁判它），末行给**两段中位/最大**。
   ⚠️ **找不到对应 issue ⇒ 检测记为 unknown 并在表格里显式打印「未检测到」，绝不当 0**（"没有判断 = 没有验证"）。
 - **实时信号（2026-10-22 加）**：报表开头是「当前状态」——最新 watch issue（标题 / `createdAt` / 距今多久 / 是否未关闭）、
-  上游 `latest`/`next`/`alpha` 及其发布时间、壳地板（当前 HEAD 的 `scripts/server-manager.mjs`）、**有没有未关闭的跟踪
-  issue**，以及"上游最新是否已晚于壳地板（按**发布时间**先后作版本先后的代理，不养第二套 semver）且是否已被发现"。
+  上游 `latest`/`next`/`alpha` 及其发布时间、壳地板（**真源 `origin/main` 的 `scripts/server-manager.mjs`**，取不到才
+  回退工作树；来源见 JSON `currentStatus.floorSource` 与人读的「真源 …」）、**有没有未关闭的跟踪 issue**，以及"上游最新是否已晚于壳地板（按**发布时间**先后作版本先后的代理，不养第二套 semver）且是否已被发现"。
   地板在 packument 里查不到时间戳时明写"无法比较先后（不猜）"，不默认"无欠账"。
 - **取数（实际）**：npm registry 的 `time`（上游发布时间，经 `curl`；`--registry` 可指向 stub）+ `gh api
   repos/<repo>/releases?per_page=100`（我们的发布时间）+ 上面那条 issue 查询（检测延迟）。**配对规则是"tag 树里的地板"**：

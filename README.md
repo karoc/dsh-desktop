@@ -663,7 +663,8 @@ MIT
   发布时间起算"——**该地板很可能是预发布**（如 `0.2.2-rc.1`），因为地板长期高于 npm `latest`；终点 = 该地板的
   **首个稳定 Release** 的 `publishedAt`。
   报表开头的**当前状态**是实时信号：最新 watch issue（标题 / 开单时间 / 距今多久 / 是否未关闭）、上游各通道最新版本
-  及其发布时间、壳地板（当前 HEAD 的 `scripts/server-manager.mjs`）、**有没有未关闭的跟踪 issue**，以及"上游最新是否
+  及其发布时间、壳地板（**真源 `origin/main` 的 `scripts/server-manager.mjs`**，取不到才回退工作树；JSON
+  `currentStatus.floorSource` 与人读的「真源 …」都标明来源）、**有没有未关闭的跟踪 issue**，以及"上游最新是否
   已晚于壳地板（**语义化比较**：共享 `scripts/lib/version-compare.mjs`，与 watch/probe/manager 三份一起受
   `test-version-compare-parity` 门禁约束；旧实现的发布时间代理会把"上游早发但版本更高"的 alpha 误判成套内）
   且是否已被发现"。紧跟两段表的「待适配版本的检测延迟」段列出**真正**还没被地板覆盖的版本；被更高地板跳过的

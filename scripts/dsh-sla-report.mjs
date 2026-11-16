@@ -6,6 +6,7 @@
 //   node scripts/dsh-sla-report.mjs [--json <out>] [--issue] [--fail-on-breach] [--recent 3]
 //                                   [--since 2026-10-19] [--registry <url>] [--repo <owner/name>] [--assignee <login>]
 //                                   [--now <iso>]（演练：钉住"现在"，只影响"距今多久"）
+//                                   [--floor <v>]（演练注入壳地板；与 dsh-watch 同语义：最高优先级、不读 git）
 //
 // ── 为什么**不**接入 A6 的三态/退避状态机（2026-10-24 决定）───────────────────────
 //   它是**每周**一趟的报表 job（`.github/workflows/dsh-sla-report.yml`，周一 01:00 UTC），且 issue
@@ -70,13 +71,21 @@ import { earliestTrackingIssue, isTrackingIssue, parseIssueVersion, TRACKING_PRE
 import { classifyPendingVersions } from './lib/sla-pending.mjs'
 // 语义化版本比较（共享实现，parity 门禁覆盖）：报表判断「地板是否覆盖某版本」与「通道是否领先地板」。
 import { cmpVersion } from './lib/version-compare.mjs'
+// 壳地板真源（origin/main + 回退告警）：唯一实现，与 dsh-watch.mjs 共用（2026-11-16）。
+// 「当前状态」块以前按 HEAD/工作树读 ⇒ 工作树漂到 feature 分支时，同一台机器上两张表会给出两个地板。
+import { floorSourceLabel, resolveFloor } from './lib/floor-source.mjs'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
+// git 的唯一注入点：`GIT_BIN`（与 dsh-watch / dsh-release-autopilot 同一约定）。生产默认 PATH 上的 `git`；
+// 门禁/演练换成桩，避免报表每轮真去连远端（地板真源的 fetch 也走它）。
+const GIT = process.env.GIT_BIN ?? 'git'
 const argv = process.argv.slice(2)
 const arg = (n, d = null) => { const i = argv.indexOf(n); return i >= 0 ? argv[i + 1] : d }
 const OUT = arg('--json')
 const UPSERT_ISSUE = argv.includes('--issue')
 const FAIL_ON_BREACH = argv.includes('--fail-on-breach')
+// 演练/回放注入壳地板：与 dsh-watch 的 `--floor` 同一语义（最高优先级、此时不跑 git 不联网）。
+const FLOOR_ARG = arg('--floor')
 // --recent 必须是正整数：0 会退化成 `slice(0)` = 检查全部（"最近 0 个"却判绿是假绿），
 // NaN（如 abc）会退化成"检查全部"，负数会 slice 掉前面的行 —— 三种都**静默改变门禁口径**。
 const RECENT_RAW = arg('--recent', '3')
@@ -89,7 +98,7 @@ const REPO = arg('--repo') || process.env.GH_REPO || process.env.GITHUB_REPOSITO
   // issue 是 bot（GITHUB_TOKEN）创建的；GitHub 的推送默认只覆盖「参与中 / 被 @ 提及 / 被赋值」的线程
   // ⇒ 报表 issue 必须带 assignee + 正文 @提及。属主从 repo slug 推导；本机回退到 git remote origin。
   try {
-    const url = execFileSync('git', ['config', '--get', 'remote.origin.url'], { encoding: 'utf8' }).trim()
+    const url = execFileSync(GIT, ['config', '--get', 'remote.origin.url'], { encoding: 'utf8' }).trim()
     const m = /github\.com[:/]+([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/.exec(url)
     return m ? `${m[1]}/${m[2]}` : null
   } catch { return null }
@@ -126,10 +135,8 @@ if (Number.isNaN(NOW.getTime())) {
   console.error(`--now 不是合法时间：${NOW_ARG}（要 ISO 8601，例如 2026-10-22T00:00:00Z）—— 拒绝用坏时间戳静默算"距今"`)
   process.exit(2)
 }
-// 壳地板（当前 HEAD 的 `scripts/server-manager.mjs`）——"当前状态"块要它。读不到就显式说读不到，不猜。
-const HEAD_FLOOR = (() => {
-  try { return /MIN_DSH_VERSION\s*=\s*'([^']+)'/.exec(readFileSync(join(ROOT, 'scripts', 'server-manager.mjs'), 'utf8'))?.[1] ?? null } catch { return null }
-})()
+// 壳地板（"当前状态"块要它）的读取在 --check 之后：真源是 origin/main + 有界 fetch，
+// 门禁只读报表、不该为一次 --check 付一次联网成本。
 
 /** 该版本是否落在门禁口径内：**上游首发时间**晚于 since。 */
 const inScope = (r) => Boolean(r.t0) && new Date(r.t0).getTime() >= SINCE_MS
@@ -176,6 +183,23 @@ if (CHECK) {
   }
   process.exit(bad.length ? 1 : 0)
 }
+
+// ── 壳地板真源（2026-11-16）：origin/main 的 `scripts/server-manager.mjs` ─────────────────────
+// 与 `dsh-watch.mjs` 共用 `scripts/lib/floor-source.mjs`：有界 fetch（20s）→ `git show origin/main:<file>`
+// → `MIN_DSH_VERSION` 正则；取不到 ⇒ 回退工作树 + stderr 一行告警，`floorSource` 记为 `worktree`
+// （绝不把回退读数印得跟真源一样）。优先级：`--floor`（演练覆盖，最高；不跑 git）> origin/main > 工作树。
+// 放在 `--check` 之后是有意的：门禁只读报表文件，不给每次 --check 加一次 fetch/失败告警。
+const floorInfo = resolveFloor({
+  root: ROOT, git: GIT, floorArg: FLOOR_ARG,
+  worktreeFile: join(ROOT, 'scripts', 'server-manager.mjs'),
+  tool: 'dsh-sla-report',
+  reportHint: '本轮以 --json 报告的 currentStatus.floorSource="worktree" 为准',
+})
+const FLOOR = floorInfo.floor
+const FLOOR_SOURCE = floorInfo.floorSource
+const FLOOR_LABEL = floorSourceLabel(FLOOR_SOURCE)
+// 回退/降级告警由 lib 生成（文案只有一处）：这里只负责「一行一条打到 stderr」。
+for (const warning of floorInfo.warnings) console.error(warning)
 
 const sh = (cmd, args) => execFileSync(cmd, args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).trim()
 const hours = (a, b) => (new Date(b).getTime() - new Date(a).getTime()) / 3600000
@@ -250,7 +274,7 @@ for (const [tag, publishedAt] of rel) {
   if (!/^v\d+\.\d+\.\d+/.test(tag)) continue
   let floor = null
   try {
-    const dump = sh('git', ['show', tag + ':scripts/server-manager.mjs'])
+    const dump = sh(GIT, ['show', tag + ':scripts/server-manager.mjs'])
     const m = /MIN_DSH_VERSION\s*=\s*'([^']+)'/.exec(dump)
     floor = m ? m[1] : null
   } catch (e) { floor = null }
@@ -258,7 +282,7 @@ for (const [tag, publishedAt] of rel) {
   const t0 = times[floor]
   if (!t0) { rows.push({ tag: tag, floor: floor, skip: 'npm 上没有 ' + floor + ' 的发布时间' }); continue }
   let floorCommitAt = null
-  try { floorCommitAt = sh('git', ['log', `-GMIN_DSH_VERSION = '${floor}'`, '--format=%cI', '-1', tag]) || null } catch { /* ignore */ }
+  try { floorCommitAt = sh(GIT, ['log', `-GMIN_DSH_VERSION = '${floor}'`, '--format=%cI', '-1', tag]) || null } catch { /* ignore */ }
   const total = hours(t0, publishedAt)
   const adapt = floorCommitAt ? hours(t0, floorCommitAt) : null
   const release = floorCommitAt ? hours(floorCommitAt, publishedAt) : null
@@ -353,12 +377,12 @@ const issueAgeH = newestIssue ? (NOW.getTime() - new Date(newestIssue.createdAt)
 const channels = ['latest', 'next', 'alpha'].map((ch) => ({
   channel: ch, version: tags[ch] ?? null, publishedAt: utc(tags[ch] ? times[tags[ch]] : null),
 }))
-const headFloorAt = HEAD_FLOOR ? utc(times[HEAD_FLOOR]) : null
+const floorAt = FLOOR ? utc(times[FLOOR]) : null
 // 版本先后用**语义化比较**（共享 `scripts/lib/version-compare.mjs`，已纳入 parity 门禁）。
 // 2026-10-31 修：旧实现用发布时间作代理，实跑抓到反例 —— `0.2.2-alpha.2` 的发布时间早于
 // `0.2.1-rc.5`（alpha 线先切出来）⇒ 被误判成"不晚于壳地板"，而它语义上更高、仍是待适配版本。
-const cmpFloor = (v) => (HEAD_FLOOR ? cmpVersion(v, HEAD_FLOOR) : NaN)
-const ahead = HEAD_FLOOR
+const cmpFloor = (v) => (FLOOR ? cmpVersion(v, FLOOR) : NaN)
+const ahead = FLOOR
   ? channels.filter((c) => c.version && Number.isFinite(cmpFloor(c.version)) && cmpFloor(c.version) > 0)
   : []
 // ── 待适配版本的检测延迟（上游已发布 + 已有跟踪单，但还没有任何壳版本携带它）──────────
@@ -405,14 +429,14 @@ const coveredText = coveredPending.length ? [
   ...coveredPending.map((p) => `| \`${p.version}\` | ${utcCell(p.upstreamAt)} | #${p.issue} ${utcCell(p.issueAt)}（共 ${p.issueCount} 条） | **${fmt(p.detection)}** | ${p.coveredBy.shell}（floor \`${p.coveredBy.floor}\`） |`),
 ].join('\n') : ''
 const statusLines = []
-statusLines.push(`- **壳地板**（当前 HEAD 的 \`scripts/server-manager.mjs\`）：${HEAD_FLOOR ? `\`${HEAD_FLOOR}\`（上游发布 ${headFloorAt ? utcCell(headFloorAt) : '时间未知'}）` : '⚠️ 读不到 `MIN_DSH_VERSION` ⇒ 无法判断当前地板'}`)
+statusLines.push(`- **壳地板**（真源 ${FLOOR_LABEL}${FLOOR_SOURCE === 'arg' ? '' : ' 的 `scripts/server-manager.mjs`'}）：${FLOOR ? `\`${FLOOR}\`（上游发布 ${floorAt ? utcCell(floorAt) : '时间未知'}）` : '⚠️ 读不到 `MIN_DSH_VERSION` ⇒ 无法判断当前地板'}`)
 statusLines.push(`- **上游最新各通道**：${channels.map((c) => (c.version ? `${c.channel}=\`${c.version}\`（${c.publishedAt ? utcCell(c.publishedAt) : '发布时间未知'}）` : `${c.channel}=—`)).join('、')}`)
 statusLines.push(newestIssue
   ? `- **最新 watch issue**：#${newestIssue.number}「${newestIssue.title}」（开于 ${utcCell(utc(newestIssue.createdAt))}，距今 **${Number.isFinite(issueAgeH) ? `${issueAgeH.toFixed(2)}h` : '—'}**，${newestIssue.closedAt ? '已关闭' : '**未关闭**'}；标题版本 ${newestIssue.parsed.version ? `\`${newestIssue.parsed.version}\`` : `解析不出（${newestIssue.parsed.how}）`}）`
   : `- **最新 watch issue**：**未检测到**（标题前缀 ${TRACKING_PREFIXES.map((p) => `\`${p}\``).join(' / ')} 在 --state all 下一条都没有；不是"最近没有"，是"从来没有人开过单"）`)
 statusLines.push(`- **未关闭的跟踪 issue**：${openIssues.length ? `${openIssues.length} 条（${openIssues.map((i) => `#${i.number}`).join('、')}）` : '**无**'}`)
-if (!HEAD_FLOOR) statusLines.push('- **待适配判定**：⚠️ 壳地板读不到 ⇒ 无法判断（不猜）')
-else if (!Number.isFinite(cmpVersion(HEAD_FLOOR, HEAD_FLOOR))) statusLines.push(`- **待适配判定**：⚠️ 壳地板 \`${HEAD_FLOOR}\` 解析不出版本语义 ⇒ 无法比较（不猜）`)
+if (!FLOOR) statusLines.push('- **待适配判定**：⚠️ 壳地板读不到 ⇒ 无法判断（不猜）')
+else if (!Number.isFinite(cmpVersion(FLOOR, FLOOR))) statusLines.push(`- **待适配判定**：⚠️ 壳地板 \`${FLOOR}\` 解析不出版本语义 ⇒ 无法比较（不猜）`)
 else if (!ahead.length) statusLines.push('- **待适配判定**：各通道最新版本都不高于壳地板（语义化比较）⇒ 当前没有待适配的上游版本')
 else statusLines.push(`- **待适配判定**：${ahead.map((c) => {
   // 与检测段同口径：**最早**那条未关闭 issue（不是列表里的第一条），这样这里点名的编号与「待适配版本」段一致。
@@ -507,7 +531,9 @@ if (OUT) {
       floorSegment: { measured: flo.n, median: Number.isFinite(flo.median) ? flo.median : null, max: Number.isFinite(flo.max) ? flo.max : null },
     },
     currentStatus: {
-      floor: HEAD_FLOOR, floorPublishedAt: headFloorAt, floorSource: 'scripts/server-manager.mjs（当前 HEAD 工作树）',
+      // floorSource 是机器可读的三取值枚举（arg / origin/main / worktree）：读的是真源还是回退，
+      // 消费方必须能直接判断。人读文案在 floorSourceLabel（回退时写明"取不到 origin/main"）。
+      floor: FLOOR, floorPublishedAt: floorAt, floorSource: FLOOR_SOURCE, floorSourceLabel: FLOOR_LABEL,
       channels: Object.fromEntries(channels.map((c) => [c.channel, { version: c.version, publishedAt: c.publishedAt }])),
       newestWatchIssue: newestIssue ? {
         number: newestIssue.number, title: newestIssue.title, createdAt: utc(newestIssue.createdAt),

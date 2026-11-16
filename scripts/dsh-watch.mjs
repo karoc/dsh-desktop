@@ -121,6 +121,9 @@ import {
 // 运行时守卫：ROOT 工作树是否偏离 origin/main（与 dsh-release-autopilot / dsh-doctor 共用唯一实现）。
 // 纯逻辑模块 —— 不 exit、不打印；是否停跑由下面的 --strict-tree / DSH_TREE_GUARD 决定。
 import { checkTreeDrift, formatTreeDrift } from './lib/tree-guard.mjs'
+// 壳地板真源（origin/main）+ 回退告警：唯一实现在 lib/floor-source.mjs，
+// 与 dsh-sla-report.mjs 的「当前状态」块共用（否则两张表会给出两个「壳地板」）。
+import { floorSourceLabel, resolveFloor } from './lib/floor-source.mjs'
 
 const SELF = fileURLToPath(import.meta.url)
 const ROOT = join(dirname(SELF), '..')
@@ -492,92 +495,23 @@ function npmPackument() {
 }
 
 // ── 地板真源（2026-11-16）：`origin/main` 的 scripts/server-manager.mjs ─────────────
-// 优先级：--floor（演练/回放，最高） > origin/main（发布状态的真源） > 工作树文件（回退 + stderr 告警）。
+// 唯一实现已抽到 `scripts/lib/floor-source.mjs`（与 dsh-sla-report 的「当前状态」共用，否则两张表会给出
+// 两个「壳地板」）：优先级 --floor（演练/回放，最高；不跑 git、不联网）> origin/main（发布状态的真源）
+// > 工作树文件（回退 + stderr 一行告警，绝不静默）。
 // 为什么不是工作树：工作树是"谁在开发什么"的现场，不是"发布到哪一步"的事实；它一漂到 feature 分支
 // （2026-11-16 实测：main 地板 0.2.2-rc.1、工作树 0.2.1-rc.5），地板就落后于已适配的状态 ⇒ 每轮把
 // **已关闭**的跟踪单当"未适配"去 edit（#259），autopilot 也吃同一份读数。工作树该不该在 main 由
 // tree-guard（运行时守卫）负责告警；读数不该跟着漂。
-// 取法：有界 fetch（超时/失败只跳过 fetch，不阻塞）→ `git show origin/main:<file>` → 现有正则。
-// fetch 只更新远端跟踪 ref（FETCH_HEAD / refs/remotes/origin/main），不碰工作树与 index；
+// 取法（lib 内）：有界 fetch（20s 超时；超时/失败只跳过 fetch，不阻塞）→ `git show origin/main:<file>`
+// → 现有正则。fetch 只更新远端跟踪 ref（FETCH_HEAD / refs/remotes/origin/main），不碰工作树与 index；
 // --dry-run 的「不写 issue / 不写状态文件」契约不变（它本来就联网读 npm dist-tags）。
 const FLOOR_ARG = arg('--floor')
-const FLOOR_REF = 'origin/main'
-const FLOOR_FILE = 'scripts/server-manager.mjs'
-const FLOOR_RE = /MIN_DSH_VERSION\s*=\s*'([^']+)'/
-// 有界：心跳每 10 分钟一轮，一次 fetch 卡住不能把整轮拖死；离线/无凭据时快速失败后走回退。
-const GIT_TIMEOUT_MS = 20_000
-// 与 tree-guard 同口径：不信任调用方环境里的 GIT_DIR / GIT_WORK_TREE 等（systemd / 测试注入可能残留），
-// 否则"读 origin/main"可能读的是**另一个仓库**。GIT_TERMINAL_PROMPT=0 防 fetch 卡在凭据提示上。
-const GIT_HIJACKING_ENV = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY']
-const floorOf = (text) => FLOOR_RE.exec(String(text ?? ''))?.[1] ?? null
-/** 跑一条只读 git 命令；任何失败都折成 {ok:false, error}，不抛（地板读不到不该把整轮打崩）。 */
-function runGit(args) {
-  const env = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_PAGER: 'cat' }
-  for (const key of GIT_HIJACKING_ENV) delete env[key]
-  let r
-  try {
-    r = spawnSync(GIT, args, { cwd: ROOT, encoding: 'utf8', timeout: GIT_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024, env })
-  } catch (e) {
-    return { ok: false, stdout: '', error: `git 启动失败：${e.message}` }
-  }
-  if (r.error) {
-    const code = r.error.code
-    return {
-      ok: false,
-      stdout: '',
-      error: code === 'ENOENT' ? `PATH 里找不到 git 可执行文件（GIT_BIN=${GIT}）` : String(r.error.message ?? code ?? '未知错误'),
-    }
-  }
-  if (typeof r.status !== 'number') return { ok: false, stdout: '', error: 'git 进程没有正常退出（超时或被信号杀掉？）' }
-  if (r.status !== 0) {
-    const first = String(r.stderr ?? '').split('\n').map((s) => s.trim()).filter(Boolean)[0]
-    return { ok: false, stdout: '', error: first ?? `git ${args[0]} 退出码 ${r.status}` }
-  }
-  return { ok: true, stdout: String(r.stdout ?? ''), error: null }
-}
-/** origin/main 那份（真源）。fetch 失败不阻塞：仍用本地已有的 origin/main ref 读（可能不是最新，告警一行）。 */
-function readFloorFromOriginMain() {
-  const fetched = runGit(['fetch', '--no-tags', 'origin', 'main'])
-  const shown = runGit(['show', `${FLOOR_REF}:${FLOOR_FILE}`])
-  if (!shown.ok) {
-    return { ok: false, floor: null, error: `取不到 ${FLOOR_REF}:${FLOOR_FILE}（${shown.error}）` + (fetched.ok ? '' : `；fetch 也失败（${fetched.error}）`) }
-  }
-  const f = floorOf(shown.stdout)
-  if (!f) return { ok: false, floor: null, error: `${FLOOR_REF}:${FLOOR_FILE} 里解析不到 MIN_DSH_VERSION` }
-  return { ok: true, floor: f, error: null, fetchError: fetched.ok ? null : fetched.error }
-}
-/** 工作树文件（回退路径；不是真源）。读不到也返回 null，由告警把原因说清楚。 */
-function readFloorFromWorktree() {
-  try { return { floor: floorOf(readFileSync(MANAGER, 'utf8')), error: null } } catch (e) {
-    return { floor: null, error: `读不到工作树文件 ${MANAGER}：${e.message}` }
-  }
-}
+const floorInfo = resolveFloor({ root: ROOT, git: GIT, floorArg: FLOOR_ARG, worktreeFile: MANAGER, tool: 'dsh-watch' })
+const floor = floorInfo.floor
+const floorSource = floorInfo.floorSource
+// 回退/降级告警由 lib 生成（文案只有一处）：这里只负责「一行一条打到 stderr」。
+for (const warning of floorInfo.warnings) console.error(warning)
 
-let floor = null
-let floorSource = null
-if (FLOOR_ARG) {
-  // --floor 是最高优先级覆盖：**不跑 git、不联网**（演练/回放要能完全离线复刻，且不能被工作树/远端影响）。
-  floor = FLOOR_ARG
-  floorSource = 'arg'
-} else {
-  const fromMain = readFloorFromOriginMain()
-  if (fromMain.ok) {
-    floor = fromMain.floor
-    floorSource = FLOOR_REF
-    if (fromMain.fetchError) {
-      // 不是回退，但读数可能是旧的：说清楚，别让"真源 origin/main"读成"刚拉过最新"。
-      console.error(`!! dsh-watch：git fetch origin main 失败（${fromMain.fetchError}）—— 改用本地已有的 origin/main 读数（${floor}），它可能不是最新；检查网络/凭据后重跑即可`)
-    }
-  } else {
-    // 回退：一行告警（真源 + 原因 + 读数），绝不静默 —— 这一读数可能落后于发布状态。
-    const wt = readFloorFromWorktree()
-    floor = wt.floor
-    floorSource = 'worktree'
-    console.error(`!! dsh-watch：地板真源回退到工作树（读 ${MANAGER}）—— ${fromMain.error}${wt.error ? `；${wt.error}` : ''}；`
-      + `读数 ${floor ?? '（读不到 MIN_DSH_VERSION）'}。工作树漂到 feature 分支时这一读数会落后于发布状态（把已适配版本当未适配）；`
-      + `修法：git -C ${ROOT} fetch origin main；本轮以 --json 报告的 floorSource="worktree" 为准`)
-  }
-}
 const pkg = npmPackument()
 const tags = pkg['dist-tags'] ?? {}
 const time = pkg.time ?? {}
@@ -622,11 +556,7 @@ if (target && threshold !== null) {
 
 // 人读输出同样带真源：只写"地板是多少"会让"读的是工作树（旧）"看起来和"读的是 origin/main"一模一样
 // —— 那正是这次事故的歧义来源。三种取值分别渲染成 --floor / origin/main / worktree（回退）。
-const FLOOR_SOURCE_LABEL = {
-  arg: '--floor（演练覆盖）',
-  [FLOOR_REF]: FLOOR_REF,
-  worktree: `worktree·回退：取不到 ${FLOOR_REF}`,
-}[floorSource] ?? String(floorSource)
+const FLOOR_SOURCE_LABEL = floorSourceLabel(floorSource)
 const lines = [
   '### dsh-watch',
   '',
