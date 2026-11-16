@@ -21,6 +21,13 @@
 >
 > 详情见 `.agents/notes/implemented/bug-fix/2026-09-08-legacy-uninstaller-name-kill.md`。
 
+## [0.24.4](https://github.com/karoc/dsh-desktop/compare/v0.24.3...v0.24.4) (2026-11-16)
+
+
+### Bug Fixes
+
+* **sla-report:** 壳地板真源统一到 origin/main（抽出 scripts/lib/floor-source.mjs） ([#273](https://github.com/karoc/dsh-desktop/issues/273)) ([458d1bc](https://github.com/karoc/dsh-desktop/commit/458d1bc8741186aec5b6c3d44c6525534b17bb94))
+
 ## [0.24.3](https://github.com/karoc/dsh-desktop/compare/v0.24.2...v0.24.3) (2026-11-16)
 
 
