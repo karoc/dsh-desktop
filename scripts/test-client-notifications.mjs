@@ -12,6 +12,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import assert from 'node:assert/strict'
+import { collectDshFloors, planPluginGuard, satisfies } from './plugin-floor.mjs'
 
 const root = dirname(fileURLToPath(import.meta.url))
 const clientJs = readFileSync(join(root, '..', 'plugins', 'dsh-client-notifications', 'client.js'), 'utf8')
@@ -51,7 +52,12 @@ assert.ok(windowStub.__handoff, '__ModuleLoader__.load must be called')
 assert.equal(windowStub.__handoff.id, '@dsh-desktop/client-notifications')
 
 const plugin = windowStub.__handoff.factory()
-assert.deepEqual(plugin.inject, ['sessions', 'connection', 'uiSession', 'uiWorkspace'], 'must inject uiSession (status) and uiWorkspace (open target)')
+// P1-4: NO required inject. cordis 4.1's Inject has no "optional" form — every
+// declared service is required, and a plugin whose service never appears keeps
+// its fiber pending ⇒ dsh web boot fail-closes the WHOLE UI ("Failed to load
+// plugins"). One upstream seam rename would therefore become a white screen.
+// Services are resolved lazily instead (see the svc() scenarios below).
+assert.deepEqual(plugin.inject, [], 'must NOT require services: a missing seam may not wedge dsh boot')
 assert.equal(typeof plugin.apply, 'function')
 
 // ── sessions list store stub (mirrors SnapshotStore<SessionListState>) ──────
@@ -576,5 +582,89 @@ assert.ok(
 pendingOpenSid = null
 disposeOpen()
 
-console.log('PASS — notification plugin behavioral test (23 notification + 9 aggregate + 1 open-path scenarios)')
+// ── scenario 34 (P1-4): NO services at all — activation must not throw, must
+// not go silent, and must not be able to stop dsh from booting. A required
+// inject list would leave this plugin's fiber pending and dsh fail-closes the
+// whole UI; instead /alive still fires and a READABLE `degraded` event names
+// what is missing. Services registered AFTER activation must be picked up by
+// the retry loop (no restart, no reload).
+state = { ids: [], byId: {}, current: undefined, phase: 'ready', subagentsByParent: {}, jobsBySession: {}, currentAddress: undefined }
+allPosts = []
+calls = []
+globalThis.__DSH_NOTIFY_READY_TIMEOUT_MS__ = 60
+// eslint-disable-next-line no-eval
+eval(clientJs)
+const bareCtx = {} // no sessions / uiSession / uiWorkspace / connection
+let disposeBare
+assert.doesNotThrow(() => { disposeBare = windowStub.__handoff.factory().apply(bareCtx) },
+  'P1-4: activation must never throw when services are missing')
+await new Promise((r) => setTimeout(r, 400))
+assert.ok(allPosts.some((e) => String(e[0]).includes('/alive')),
+  'the /alive canary must still fire without services (module really loaded)')
+const degraded = allPosts
+  .filter((e) => String(e[0]).includes('/log'))
+  .map((e) => JSON.parse(e[1].body))
+  .filter((p) => p.tag === 'degraded')
+assert.ok(degraded.some((p) => String(p.detail).includes('sessions service unavailable')),
+  'P1-4: a missing sessions service must be reported readably, not swallowed')
+assert.ok(degraded.some((p) => String(p.detail).includes('uiSession.sessionStatus unavailable')),
+  'P1-4: a missing sessionStatus must be reported readably, not swallowed')
+bareCtx.sessions = { list }
+bareCtx.uiSession = uiSession
+bareCtx.uiWorkspace = { openSession: (t) => openedSessions.push(t) }
+await new Promise((r) => setTimeout(r, 400))
+introduce('late-A')
+mutate({ ids: ['late-A'], byId: { 'late-A': session('late-A', { pendingInteraction: 'question' }) } })
+assert.equal(calls.length, 1, 'P1-4: services registered after activation must be wired (retry, no reload)')
+disposeBare()
+
+// ── scenario 35 (P1-4): only the NEWER seam is missing. Losing uiSession must
+// cost the tray ●/○ + 「需要你」 features, never the turn-end notifier.
+state = { ids: [], byId: {}, current: undefined, phase: 'ready', subagentsByParent: {}, jobsBySession: {}, currentAddress: undefined }
+allPosts = []
+calls = []
+globalThis.__DSH_NOTIFY_READY_TIMEOUT_MS__ = 60
+// eslint-disable-next-line no-eval
+eval(clientJs)
+const partialCtx = { sessions: { list }, uiWorkspace: { openSession: () => {} } }
+const disposePartial = windowStub.__handoff.factory().apply(partialCtx)
+introduce('part-A')
+mutate({ ids: ['part-A'], byId: { 'part-A': session('part-A', { running: true, title: '无状态源' }) } })
+mutate({ ids: ['part-A'], byId: { 'part-A': session('part-A', { running: false, title: '无状态源' }) } })
+await flush()
+assert.equal(calls.length, 1, 'P1-4: turn-end notification must survive a missing uiSession')
+assert.deepEqual(calls[0][1], { title: 'dsh 任务完成', body: '「无状态源」已完成', sessionId: 'part-A' })
+disposePartial()
+
+// ── scenario 36 (P1-4): the peer floor must be a REAL constraint. The old
+// declaration (\`@deepseek-ai/dsh-client-runtime >=0.1.0-rc.5\`) named a package
+// that does not exist in dsh 0.2.x (npm registry: versions end at 0.1.1-rc.2)
+// and a bound every 0.2.x trivially satisfies — so the floor guard could never
+// isolate this plugin, and an upstream seam removal stayed a white screen.
+delete globalThis.__DSH_NOTIFY_READY_TIMEOUT_MS__
+const pkgJson = JSON.parse(readFileSync(join(root, '..', 'plugins', 'dsh-client-notifications', 'package.json'), 'utf8'))
+assert.ok(!('@deepseek-ai/dsh-client-runtime' in (pkgJson.peerDependencies || {})),
+  'P1-4: the fictitious dsh-client-runtime floor must be gone')
+const floors = collectDshFloors(pkgJson)
+assert.ok(floors.length >= 1, 'P1-4: must declare at least one REAL dsh floor')
+assert.ok(floors.every((f) => satisfies('0.0.1-rc.1', f.range) === false),
+  'P1-4: every declared floor must reject a dsh that predates the seams (a floor nothing fails constrains nothing)')
+assert.ok(floors.some((f) => f.name === '@deepseek-ai/dsh-client-ui-session' && satisfies('0.1.6-alpha.2', f.range)),
+  'P1-4: the ui-session floor must accept 0.1.6-alpha.2 — the first release with sessionStatus (npm-verified)')
+const guardOnOldDsh = planPluginGuard({
+  installedDsh: '0.1.5',
+  bundled: [{ name: pkgJson.name, version: pkgJson.version, pkgJson }],
+  enabled: [pkgJson.name],
+})
+assert.equal(guardOnOldDsh.quarantine.length, 1, 'P1-4: the floor guard must isolate the plugin on a dsh without the seams')
+assert.equal(guardOnOldDsh.skipInstall.length, 1, 'P1-4: and must refuse to install it there')
+const guardOnSupported = planPluginGuard({
+  installedDsh: '0.2.2-rc.1',
+  bundled: [{ name: pkgJson.name, version: pkgJson.version, pkgJson }],
+  enabled: [pkgJson.name],
+})
+assert.deepEqual(guardOnSupported, { skipInstall: [], quarantine: [], warnings: [] },
+  'P1-4: a supported dsh must not be quarantined (no false positive)')
+
+console.log('PASS — notification plugin behavioral test (23 notification + 9 aggregate + 1 open-path + 3 P1-4 boot-safety scenarios)')
 process.exit(0)
