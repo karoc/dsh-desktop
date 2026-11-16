@@ -314,7 +314,9 @@ Windows 的 NSIS 安装行为、toast 渲染、AUMID、事件投递——Linux s
   无需重启 dsh；首次安装 dsh 前需先配好代理（manager 启动先起代理再装 dsh，安装流量已骑在代理上）。
 - **防自环两重**：loopback 目标永远直连（upstream 不得代理本机流量）；upstream 指向本代理端口视为
   禁用；代理自身用 raw net/http，永远不经过 undici env-proxy。
-- **测试**：test-proxy.mjs（11 场景）、test-proxy-e2e.mjs（真实 undici→manager 代理→假上游）、
+- **测试**：test-proxy.mjs（13 场景；scenario 13 = socket 层 error 隔离：CONNECT 握手窗口客户端 RST / 隧道
+  建立后源站 RST 不得被写回 502 / 普通 HTTP 响应体中途 RST / 客户端 abort 后的迟到响应，每条都用进程级
+  uncaughtException 断言，是 2026-11-01 两次线上 manager 崩溃的回归）、test-proxy-e2e.mjs（真实 undici→manager 代理→假上游）、
   test-control-plane.mjs（假 dsh 探测 env 断言注入）、test-launcher-settings.mjs（vm 加载真实
   src/settings.js + 最小 DOM 桩验证独立设置窗口；注意 vm 跨 realm 数组的 assert.deepEqual 因原型
   不同必失败，先 `[...arr]` 展开再比）。
