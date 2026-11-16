@@ -91,8 +91,10 @@ const NATIVE_BUILD_PKGS = [
  * 2026-10-30 抬到 0.2.1-rc.5：夹具重采（--update-fixture，临时 runtime 实装 rc.5，190 → 191 id）；
  * 探针 GREEN（red 0 / yellow 0：客户端 seam / CLI 开关 / native 白名单 / 四个预装 peer），全量门禁 29 套
  * 通过；README 地板数值同步。dev 实机验收（--canary）要求窗口内新启动的 dev 壳，截至发版尚未执行。
+ * 2026-11-16 抬到 0.2.2-rc.1：夹具重采（--update-fixture，runtime 实测 0.2.2-rc.1），
+ * README 地板数值同步，预装 bundle 的 peer 由 test-plugin-dsh-compat 校验（地板与 bundle 同批）。
  */
-const MIN_DSH_VERSION = '0.2.1-rc.5'
+const MIN_DSH_VERSION = '0.2.2-rc.1'
 
 // ── args ───────────────────────────────────────────────────────────────────
 function parseArgs(argv) {
