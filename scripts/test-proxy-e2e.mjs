@@ -21,6 +21,18 @@ const resources = join(repoRoot, 'src-tauri', 'resources')
 const work = mkdtempSync(join(tmpdir(), 'dsh-e2e-'))
 const runtime = join(work, 'runtime')
 
+// 宿主代理变量必须先清掉再喂子进程（2026-11-16 修）：undici 的 env-proxy 认小写
+// `http_proxy`/`https_proxy`/`all_proxy`，而它和"只设大写"的期望并不一致。宿主要是有小写那套
+// （本机 systemd 的 run-with-proxy.sh 同时导出大小写两份），子进程会把请求发到**宿主的**代理，
+// 而不是 manager 的内置代理 ⇒ 断言 "proxied fetch succeeds end to end" 稳定失败。
+// 交互 shell 通常没有小写变量 ⇒ 人肉跑全绿、定时器里稳定红（真实事故：适配每轮被判 1/33）。
+const cleanProxyEnv = () => {
+  const env = { ...process.env }
+  for (const k of ['http_proxy', 'https_proxy', 'all_proxy', 'no_proxy',
+    'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY', 'NODE_USE_ENV_PROXY']) delete env[k]
+  return env
+}
+
 // ── fake dsh (prints a url line, stays alive) ───────────────────────────────
 const dshDir = join(runtime, 'node_modules', '@deepseek-ai', 'dsh')
 mkdirSync(join(dshDir, 'lib'), { recursive: true })
@@ -49,7 +61,7 @@ const originPort = origin.address().port
 const child = spawn(process.execPath, [
   manager, '--runtime-dir', runtime, '--resource-dir', resources,
   '--patch', join(work, 'patch.yml'), '--cwd', work,
-], { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, DSH_DESKTOP_NO_UPDATE: '1' }, windowsHide: true })
+], { stdio: ['pipe', 'pipe', 'pipe'], env: { ...cleanProxyEnv(), DSH_DESKTOP_NO_UPDATE: '1' }, windowsHide: true })
 
 const events = []
 let buf = ''
@@ -83,7 +95,7 @@ writeFileSync(join(runtime, 'proxy.json'), JSON.stringify({
 const fetchChild = (script) => new Promise((res) => {
   const c = spawn(process.execPath, ['-e', script], {
     env: {
-      ...process.env,
+      ...cleanProxyEnv(),
       NODE_USE_ENV_PROXY: '1',
       HTTP_PROXY: `http://127.0.0.1:${proxyPort}`,
       HTTPS_PROXY: `http://127.0.0.1:${proxyPort}`,
