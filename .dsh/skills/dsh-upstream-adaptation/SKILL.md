@@ -142,8 +142,9 @@ GH_BIN=$PWD/scripts/gh node scripts/dsh-watch.mjs --dry-run --json /tmp/watch.js
 人读输出也带一句（`壳地板 0.2.2-rc.1（真源 origin/main）`；回退时是 `（真源 worktree·回退：取不到 origin/main）`）。
 `--dry-run` 的契约不变（不写 issue / 不写退避状态；fetch 只更新远端跟踪 ref，不碰工作树与 index）。
 门禁/演练用 **`GIT_BIN`** 注入 git 桩（与 autopilot 同一约定，见 `scripts/test-automation-gates.mjs`
-watch 组）。**为什么不是工作树**：发布状态的真源是 main；工作树漂到 feature 分支时读数落后于发布状态，
-已关闭的跟踪单会被每轮当成「未适配」静默更新（§6.18）。
+watch / sla 组）。**为什么不是工作树**：发布状态的真源是 main；工作树漂到 feature 分支时读数落后于发布状态，
+已关闭的跟踪单会被每轮当成「未适配」静默更新（§6.18）。**同一实现**由 `scripts/lib/floor-source.mjs`
+提供：`dsh-sla-report` 的「当前状态」块也用它（§3.7），两边地板与回退告警只有一处口径。
 
 **已适配跟踪单会自动关闭（A12，2026-10-30 起）**：每轮（有 target 与无 target 都算）扫 open 跟踪单，凡标题里
 `dsh <版本>` 锚点取到的版本 **<= 当前壳地板**的，执行 `issue close --reason completed` + 一条
@@ -330,7 +331,16 @@ JSON 里是 `null`。**不许**把它当 0 分钟写进结论，也不许用它�
 `since` 窗口（检测延迟量的是「机器是否开着」，不是我们的响应能力）。
 `--check <json>` 需要**同一次运行**产出的报表：读不到 / 无 `slaHours` / `perVersion` 为空 ⇒ **判红**
 （「量不出来」不等于「达标」）。其它：`--fail-on-breach`（最近 N 个超 6h 即非零）、`--recent <n>`
-（必须正整数）、`--registry`、`--now <iso>`（钉住「现在」，演练用）。
+（必须正整数）、`--registry`、`--now <iso>`（钉住「现在」，演练用）、`--floor <v>`（演练注入壳地板，
+与 `dsh-watch` 同语义：最高优先级、不读 git）。
+
+**壳地板真源 = `origin/main`，与 `dsh-watch` 同源（2026-11-16 起）**：「当前状态」块的壳地板由
+`scripts/lib/floor-source.mjs` 统一读取（有界 fetch 20s → `git show origin/main:scripts/server-manager.mjs`
+→ `MIN_DSH_VERSION`；取不到才回退工作树并在 stderr 打一行告警）。JSON 里 `currentStatus.floorSource`
+是 `origin/main` / `worktree` / `arg` 三取值（另有 `floorSourceLabel` 人读文案），人读那行写
+`（真源 origin/main …）`；回退时写 `（真源 worktree·回退：取不到 origin/main …）`。**不要**改回按 HEAD/工作树
+读：工作树漂到 feature 分支时，报表会与 `dsh-watch` 给出两个不同的「壳地板」（同一口径的回归门禁在
+`test-automation-gates.mjs` 的 sla 组）。`--check` 不读地板、也不跑 fetch（它只消费报表 JSON）。
 
 **待适配 vs 已被更高地板覆盖（2026-10-31 修）**：报表把「已开单」的版本分两类 —— `detectionStats.pending`
 （真欠账：还没有任何地板**语义上 ≥** 它）与 `detectionStats.pendingCovered`（被更高地板跳过，例如 rc.3/rc.4 被
@@ -679,13 +689,17 @@ git push -u origin <branch>
   ② `dsh-watch --dry-run --json /tmp/w.json` 的 `floor` 与
   `git show origin/main:scripts/server-manager.mjs | grep MIN_DSH_VERSION` 不一致；
   ③ 报告里的 `floorSource` 是 `worktree`（不是 `origin/main`）—— 2026-11-16 之前的版本**没有**
-  这个字段（旧实现没有「真源」概念，默认就是读工作树）。
+  这个字段（旧实现没有「真源」概念，默认就是读工作树）；SLA 报表里同一读数在
+  `currentStatus.floorSource`（2026-11-16 起也走真源，见下面「口径边界」）。
 - **处理**：升级到含本改动的 `dsh-watch`（真源 = `origin/main`；`--floor` 仍可覆盖），然后确认
   人读输出那行是 `壳地板 <v>（真源 origin/main）`、JSON 里 `floorSource: "origin/main"`。
   被误 edit 的已关闭单**不用再动**（edit 不改状态）；真要重开才人工 `./scripts/gh issue reopen`。
   工作树该不该切回 main 是 tree-guard 那条线（§6.14）：**真源修正不会替你修工作树漂移**，也不会
-  让线上心跳跑到新代码。口径边界：`dsh-sla-report` 的「当前状态」块仍按 HEAD 读地板（它回答的是
-  「这棵树的地板」），与 watch 的发布地板可能不同 —— 以 `floorSource` / 报表自己的标注为准。
+  让线上心跳跑到新代码。口径边界（2026-11-16 起两边同源）：`dsh-sla-report` 的「当前状态」块也走
+  `scripts/lib/floor-source.mjs`（同一套有界 fetch + `git show origin/main:scripts/server-manager.mjs` +
+  回退告警），JSON 的 `currentStatus.floorSource` 与人读那行的「真源 …」都标明来源；回退时同样记
+  `worktree` 并打 stderr 告警。**不再存在**「watch 一个地板、报表另一个地板」的口径分叉（此前报表
+  按 HEAD 读，见 §3.7 的 2026-11-16 修正）。
 - **别做的事**：① 别把「手动把工作树切回 main」当修复 —— 治的是这一次，下次开分支开发又复发；
   ② 别给 `dsh-watch` 加「自动切分支 / 自动 pull」—— 那是自动改写用户的 WIP 工作树；
   ③ 别把回退路径静默化（fetch 失败就 `|| true` 悄悄读工作树）—— 那正是本事故的形态；回退必须留

@@ -8,7 +8,8 @@
 //   1. probe   `scripts/dsh-compat-probe.mjs`：版本三方一致 / seam / peer / overlay 目标行 —— 该红时红，
 //              该 FATAL（exit 2）时 FATAL；native 白名单与 CLI 开关**只算 YELLOW**（已知缺口，见下）。
 //   2. sla     `scripts/dsh-sla-report.mjs --check`：最近 N 个超 6h 判红、窗口外不判红、**没有数据判红**
-//              （旧实现在 perVersion 缺失/为空时 0/0 ⇒ exit 0，是假绿）。
+//              （旧实现在 perVersion 缺失/为空时 0/0 ⇒ exit 0，是假绿）。2026-11-16 起另含「当前状态」
+//              的地板真源：origin/main > 工作树回退（与 watch 组同一套 git 桩、同一份 lib/floor-source.mjs）。
 //   3. watch   `scripts/dsh-watch.mjs`：违约判定在门槛前后（5.998h/6.002h）、未来时间戳、坏输入、
 //              取不到 npm 发布时间戳时是否 fail-closed（旧实现三处静默判"未违约"）；
 //              **2026-10-24 事故 #201–#217 的回归面**：确定性去重（不依赖 label）的幂等性、
@@ -46,6 +47,8 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 // 「待适配 vs 已被更高地板覆盖」分类（2026-10-31）：纯函数单测放在 sla 组，避免只靠报表输出目测。
 import { classifyPendingVersions } from './lib/sla-pending.mjs'
+// 地板真源的共享实现（2026-11-16）：sla 组要断言 fetch 是有界的（20s），且 watch/sla 用的是同一份。
+import { GIT_TIMEOUT_MS } from './lib/floor-source.mjs'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const SELF = fileURLToPath(import.meta.url)
@@ -251,6 +254,41 @@ if (args[0] === 'issue' && args[1] === 'close') {
 if (args[0] === 'api') { process.stdout.write(process.env.FAKE_GH_API || ''); process.exit(0) }
 process.exit(0)
 `)
+
+// ── 地板真源的 git 桩（2026-11-16）──────────────────────────────────────────
+// `dsh-watch` / `dsh-sla-report` 的 git 唯一注入点都是 `GIT_BIN`（与 autopilot 同一约定）。桩只接管两件事：
+//   · `fetch` ⇒ 立即返回（**测试绝不联网**；FAKE_GIT_FETCH_FAIL=1 时模拟 fetch 失败）
+//   · `show origin/main:<file>` ⇒ 回 FAKE_GIT_SHOW_FILE 的内容（FAKE_GIT_SHOW_FAIL=1 时失败）
+// 其余命令原样交给真 git（GIT_REAL）—— GIT_SLUG / tree-guard / tag 读取的行为不受影响，日志里可看到真实调用。
+// watch 组与 sla 组共用同一个桩：这样"地板到底从哪儿读"才是可控变量 —— 桩里 show 返回的地板与工作树那份
+// **故意不同**，实现若仍读工作树，两组的断言必红（负向对照不靠"再加一条恒真断言"）。
+const GIT_REAL = (() => {
+  const g = spawnSync('bash', ['-c', 'command -v git'], { encoding: 'utf8' })
+  const p = (g.stdout ?? '').trim()
+  return p || null
+})()
+const GIT_STUB = mkStub('git-floor', `#!/usr/bin/env node
+const { spawnSync } = require('node:child_process')
+const { appendFileSync, existsSync, readFileSync } = require('node:fs')
+const args = process.argv.slice(2)
+if (process.env.GIT_CALLS) appendFileSync(process.env.GIT_CALLS, args.join(' ') + '\\n')
+const die = (msg) => { process.stderr.write(msg + '\\n'); process.exit(128) }
+if (args.includes('fetch')) {
+if (process.env.FAKE_GIT_FETCH_FAIL === '1') die('fatal: unable to access origin（FAKE_GIT_FETCH_FAIL）')
+process.exit(0)
+}
+if (args.includes('show') && args.some((a) => a.startsWith('origin/main:'))) {
+if (process.env.FAKE_GIT_SHOW_FAIL === '1') die("fatal: path 'scripts/server-manager.mjs' does not exist in 'origin/main'")
+const f = process.env.FAKE_GIT_SHOW_FILE
+if (!f || !existsSync(f)) die('fatal: 假 git：没有可用的 FAKE_GIT_SHOW_FILE')
+process.stdout.write(readFileSync(f, 'utf8')); process.exit(0)
+}
+const real = process.env.GIT_REAL
+if (!real) process.exit(0)   // 没有真 git 时其它命令一律"空成功"（tree-guard 会自己报 unknown，不影响本组断言）
+const r = spawnSync(real, args, { stdio: 'inherit' })
+process.exit(typeof r.status === 'number' ? r.status : 1)
+`)
+const GIT_FLOOR_ENV = { GIT_BIN: GIT_STUB, GIT_REAL }
 
 // ── 合成 runtime（探针/适配的夹具；只在临时目录里造）──────────────────────
 const SEAMS = ['settings.section', 'configForms', '__ModuleLoader__', 'settings.general.item', 'settings.plugins.tab', 'conversation.chat.reasoning.body']
@@ -478,6 +516,69 @@ function groupSla() {
     (() => { const p = classifyPendingVersions({ versions: ['0.2.1-rc.5'], measured: measuredRows, carriedFloors: new Set(['0.2.1-rc.5']) }); return `${p.pending.length}|${p.covered.length}` })())
   check('sla', '空输入安全', '0|0',
     (() => { const p = classifyPendingVersions({}); return `${p.pending.length}|${p.covered.length}` })())
+  // ── 地板真源 = origin/main（2026-11-16，与 dsh-watch 同源）──────────────────
+  // 事故 #259 的同一形态：watch 读工作树时地板落后于发布状态；而 sla-report 的「当前状态」块当时仍按
+  // HEAD 读 ⇒ 工作树漂到 feature 分支后，同一台机器上两张表给出两个「壳地板」。下面用与 watch 组
+  // 同一套 git 桩（GIT_FLOOR_ENV）构造负向对照：桩里 origin/main 那份与工作树**故意不同** ⇒
+  // 实现若退回读工作树，断言必红（不靠再加一条恒真断言）。
+  const SLA_WT_FLOOR = floorOfManager(ROOT)
+  const SLA_ORIGIN_FLOOR = SLA_WT_FLOOR === '9.9.9-origin' ? '9.9.8-origin' : '9.9.9-origin'
+  const slaOriginManager = join(SLA, 'origin-main-server-manager.mjs')
+  writeFileSync(slaOriginManager, "const MIN_DSH_VERSION = '" + SLA_ORIGIN_FLOOR + "'")
+  const slaPackument = join(SLA, 'packument.json')
+  writeFileSync(slaPackument, JSON.stringify({
+    'dist-tags': { latest: '0.2.1' }, time: { '0.2.1': '2026-10-18T12:00:00Z' },
+  }))
+  // gh 桩回放空 issue / 空 release（本组只验地板取数；--check 路径不经过这里，也不该付 fetch 成本）。
+  const slaFloor = (name, extra = [], env = {}) => {
+    const out = join(SLA, 'floor-' + name + '.json')
+    const r = cmd(process.execPath, [join(ROOT, 'scripts/dsh-sla-report.mjs'), '--json', out, '--repo', 'karoc/dsh-desktop', ...extra], {
+      env: {
+        ...privateTmpEnv, PATH: PATH_WITH_STUBS, FAKE_PACKUMENT: slaPackument,
+        GH_BIN: GH_STUB, FAKE_GH_ISSUES: '', FAKE_GH_API: '',
+        ...GIT_FLOOR_ENV, ...env,
+      },
+    })
+    return { ...r, json: jsonOf(out) }
+  }
+  const slaGitCalls = join(SLA, 'git-calls.log')
+  const resetSlaGitCalls = () => writeFileSync(slaGitCalls, '')
+  const slaGitCallsText = () => (existsSync(slaGitCalls) ? readFileSync(slaGitCalls, 'utf8') : '')
+
+  resetSlaGitCalls()
+  let fr = slaFloor('origin', [], { FAKE_GIT_SHOW_FILE: slaOriginManager, GIT_CALLS: slaGitCalls })
+  check('sla', '地板 (a) 工作树与 origin/main 不同 ⇒ 报表取 origin/main（真源不是工作树）', SLA_ORIGIN_FLOOR + '|origin/main',
+    `${fr.json?.currentStatus?.floor}|${fr.json?.currentStatus?.floorSource}`)
+  check('sla', '  ⇒ 负向对照成立：两份地板确实不同（否则本断言无效）', 'true', String(SLA_WT_FLOOR !== SLA_ORIGIN_FLOOR))
+  check('sla', '  ⇒ 真的做了有界 fetch + git show origin/main:<file>（不是 readFileSync 工作树）', 'true|true',
+    `${slaGitCallsText().includes('fetch --no-tags origin main')}|${slaGitCallsText().includes('show origin/main:scripts/server-manager.mjs')}`)
+  check('sla', '地板 (d) 人读输出带「真源 origin/main」+ 读到的文件名', 'true|true',
+    `${fr.stdout.includes('真源 origin/main')}|${fr.stdout.includes('scripts/server-manager.mjs')}`)
+  const slaOriginSrc = fr.json?.currentStatus?.floorSource
+
+  fr = slaFloor('fallback', [], { GIT_BIN: '/bin/false' })
+  const slaFallbackWarn = fr.stderr.split('\n').filter((l) => l.includes('地板真源回退到工作树'))
+  check('sla', '地板 (b) git 取不到（GIT_BIN=/bin/false）⇒ 回退工作树，floorSource=worktree', 'worktree|' + SLA_WT_FLOOR,
+    `${fr.json?.currentStatus?.floorSource}|${fr.json?.currentStatus?.floor}`)
+  check('sla', '  ⇒ stderr 恰好一行告警（工具名 + 真源 + 原因 + 读数），人读输出标回退', '1|true|true|true',
+    `${slaFallbackWarn.length}|${slaFallbackWarn[0]?.startsWith('!! dsh-sla-report：地板真源回退到工作树')}|${slaFallbackWarn[0]?.includes('取不到 origin/main:scripts/server-manager.mjs')}|${fr.stdout.includes('真源 worktree·回退：取不到 origin/main')}`)
+  const slaWorktreeSrc = fr.json?.currentStatus?.floorSource
+
+  resetSlaGitCalls()
+  fr = slaFloor('arg', ['--floor', '0.1.2'], { GIT_CALLS: slaGitCalls, FAKE_GIT_SHOW_FILE: slaOriginManager })
+  check('sla', '地板 (c) --floor 是最高优先级：覆盖真源、floorSource=arg、且不跑 git', 'true|true|true',
+    `${fr.json?.currentStatus?.floorSource === 'arg'}|${fr.json?.currentStatus?.floor === '0.1.2'}|${!slaGitCallsText().includes('fetch') && !slaGitCallsText().includes('show origin/main')}`)
+  const slaArgSrc = fr.json?.currentStatus?.floorSource
+  check('sla', '地板 (c) JSON floorSource 三种取值各有一例：arg / origin/main / worktree', 'arg,origin/main,worktree',
+    [slaArgSrc, slaOriginSrc, slaWorktreeSrc].sort().join(','))
+
+  fr = slaFloor('fetchfail', [], { FAKE_GIT_FETCH_FAIL: '1', FAKE_GIT_SHOW_FILE: slaOriginManager })
+  check('sla', '地板 (e) fetch 失败不阻塞：仍用本地 origin/main，并告警可能不是最新', SLA_ORIGIN_FLOOR + '|origin/main|true',
+    `${fr.json?.currentStatus?.floor}|${fr.json?.currentStatus?.floorSource}|${fr.stderr.includes('git fetch origin main 失败')}`)
+
+  const floorLibSrc = readFileSync(join(ROOT, 'scripts/lib/floor-source.mjs'), 'utf8')
+  check('sla', '地板 fetch 有界：GIT_TIMEOUT_MS=20000 且真的传给 spawnSync', '20000|true',
+    `${GIT_TIMEOUT_MS}|${floorLibSrc.includes('timeout: GIT_TIMEOUT_MS')}`)
 }
 
 // ══ 3. watch ═══════════════════════════════════════════════════════════════
@@ -505,40 +606,6 @@ function groupWatch() {
   const P = (version, iso) => packument({ latest: version }, { [version]: iso })
   const TARGET = ['--force-target', '0.2.1']
 
-  // ── 地板真源的 git 桩（2026-11-16）──────────────────────────────────────────
-  // `dsh-watch` 的 git 唯一注入点是 `GIT_BIN`（与 autopilot 同一约定）。桩只接管两件事：
-  //   · `fetch` ⇒ 立即返回（**测试绝不联网**；FAKE_GIT_FETCH_FAIL=1 时模拟 fetch 失败）
-  //   · `show origin/main:<file>` ⇒ 回 FAKE_GIT_SHOW_FILE 的内容（FAKE_GIT_SHOW_FAIL=1 时失败）
-  // 其余命令原样交给真 git（GIT_REAL）—— GIT_SLUG / tree-guard 的行为不受影响，日志里可看到真实调用。
-  // 这样"地板到底从哪儿读"才是可控变量：桩里 show 返回的地板与工作树那份**故意不同**，
-  // 实现若仍读工作树，断言必红（负向对照不靠"再加一条恒真断言"）。
-  const GIT_REAL = (() => {
-    const g = spawnSync('bash', ['-c', 'command -v git'], { encoding: 'utf8' })
-    const p = (g.stdout ?? '').trim()
-    return p || null
-  })()
-  const GIT_STUB = mkStub('git-floor', `#!/usr/bin/env node
-const { spawnSync } = require('node:child_process')
-const { appendFileSync, existsSync, readFileSync } = require('node:fs')
-const args = process.argv.slice(2)
-if (process.env.GIT_CALLS) appendFileSync(process.env.GIT_CALLS, args.join(' ') + '\\n')
-const die = (msg) => { process.stderr.write(msg + '\\n'); process.exit(128) }
-if (args.includes('fetch')) {
-  if (process.env.FAKE_GIT_FETCH_FAIL === '1') die('fatal: unable to access origin（FAKE_GIT_FETCH_FAIL）')
-  process.exit(0)
-}
-if (args.includes('show') && args.some((a) => a.startsWith('origin/main:'))) {
-  if (process.env.FAKE_GIT_SHOW_FAIL === '1') die("fatal: path 'scripts/server-manager.mjs' does not exist in 'origin/main'")
-  const f = process.env.FAKE_GIT_SHOW_FILE
-  if (!f || !existsSync(f)) die('fatal: 假 git：没有可用的 FAKE_GIT_SHOW_FILE')
-  process.stdout.write(readFileSync(f, 'utf8')); process.exit(0)
-}
-const real = process.env.GIT_REAL
-if (!real) process.exit(0)   // 没有真 git 时其它命令一律"空成功"（tree-guard 会自己报 unknown，不影响本组断言）
-const r = spawnSync(real, args, { stdio: 'inherit' })
-process.exit(typeof r.status === 'number' ? r.status : 1)
-`)
-  const GIT_FLOOR_ENV = { GIT_BIN: GIT_STUB, GIT_REAL }
 
   let r = watch({ pack: P('0.2.1', '2026-10-18T18:00:06Z'), args: [...TARGET, '--force-published', '2026-10-18T18:00:06Z', '--now', '2026-10-19T00:00:00Z', '--sla-hours', '6'] })
   check('watch', 'published 距今 5.998h（门槛 6h）⇒ breached=false', 'false', String(r.report?.breached))
@@ -1188,6 +1255,16 @@ const MUTATIONS = [
     from: 'if (perVersion.length === 0) {',
     to: 'if (false) {',
     expect: 'perVersion 缺失 ⇒ exit 1',
+  },
+  {
+    group: 'sla',
+    // 2026-11-16：地板真源统一到 origin/main 后，这条变异把「取真源」的分支短路掉
+    // ⇒ 报表退回工作树读数，sla 组的 (a)(c)(d)(e) 四条地板断言必须变红。
+    name: '「当前状态」的地板真源退回工作树（origin/main 分支不再被采用）',
+    file: 'scripts/lib/floor-source.mjs',
+    from: 'if (fromMain.ok) {',
+    to: 'if (false) {',
+    expect: '地板 (a) 工作树与 origin/main 不同 ⇒ 报表取 origin/main',
   },
   {
     group: 'drift',
