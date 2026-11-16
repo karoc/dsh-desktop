@@ -21,6 +21,14 @@
 >
 > 详情见 `.agents/notes/implemented/bug-fix/2026-09-08-legacy-uninstaller-name-kill.md`。
 
+## [0.24.3](https://github.com/karoc/dsh-desktop/compare/v0.24.2...v0.24.3) (2026-11-16)
+
+
+### Bug Fixes
+
+* **automation:** autopilot 加 flock 单实例 + 失败诊断不再截断 ([#266](https://github.com/karoc/dsh-desktop/issues/266)) ([2c69a08](https://github.com/karoc/dsh-desktop/commit/2c69a08aae45c402267b3aee83b2f69a18a6466f))
+* **watch:** 地板真源改为 origin/main（修复已关闭跟踪单被反复更新） ([#267](https://github.com/karoc/dsh-desktop/issues/267)) ([ee8ff7c](https://github.com/karoc/dsh-desktop/commit/ee8ff7ceb48cd93f28dc3d05f097af5de9726a9b))
+
 ## [0.24.2](https://github.com/karoc/dsh-desktop/compare/v0.24.1...v0.24.2) (2026-11-16)
 
 
