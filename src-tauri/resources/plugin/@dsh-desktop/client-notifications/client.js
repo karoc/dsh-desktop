@@ -47,6 +47,27 @@ window.__ModuleLoader__.load({
     // Manager replaces the literal token with the live bridge port.
     const BRIDGE_PORT = globalThis.__DSH_BRIDGE_PORT__ || '__DSH_BRIDGE_PORT__'
 
+    // ── service resolution WITHOUT required inject (P1-4) ────────────────────
+    // cordis 4.1's `Inject` type is `string[] | { [name]: interceptConfig }` —
+    // there is NO "optional" form: every declared service is REQUIRED, and a
+    // plugin whose service never appears keeps its fiber pending. dsh's web boot
+    // is fail-closed on pending entries ("Failed to load plugins"), so ONE
+    // upstream rename (uiSession / uiWorkspace are 0.1.6-era seams) would turn
+    // this plugin into a WHITE SCREEN — the whole UI, not just notifications.
+    // Hence: declare no required services, resolve them here instead, and let
+    // `ctx.get()` see services that are registered AFTER this plugin activates.
+    // Everything degrades visibly (a /log `degraded` event + a shell log line)
+    // instead of wedging boot.
+    function svc(ctx, name) {
+      try {
+        if (ctx && typeof ctx.get === 'function') {
+          const v = ctx.get(name)
+          if (v !== undefined && v !== null) return v
+        }
+      } catch { /* service lookup must never throw into boot */ }
+      try { return ctx ? ctx[name] : undefined } catch { return undefined }
+    }
+
     function post(path, payload) {
       if (!BRIDGE_PORT || BRIDGE_PORT.startsWith('__DSH')) return Promise.resolve()
       return fetch(`http://127.0.0.1:${BRIDGE_PORT}${path}`, {
@@ -142,7 +163,7 @@ window.__ModuleLoader__.load({
       let kind = 'completed'
       let errMsg = ''
       try {
-        const conn = ctx.connection ?? (typeof ctx.get === 'function' ? ctx.get('connection') : undefined)
+        const conn = svc(ctx, 'connection')
         const api = conn && conn.api
         if (api && api.sessions && typeof api.sessions.history === 'function') {
           const res = await api.sessions.history({ sessionId: idOf(item), maxMessages: HISTORY_TAIL })
@@ -212,7 +233,7 @@ window.__ModuleLoader__.load({
             // clicking a toast brought the window forward but never switched
             // sessions, silently.
             try {
-              const ws = ctx.uiWorkspace
+              const ws = svc(ctx, 'uiWorkspace')
               if (!ws || typeof ws.openSession !== 'function') {
                 throw new Error('ctx.uiWorkspace.openSession unavailable')
               }
@@ -231,13 +252,16 @@ window.__ModuleLoader__.load({
 
     return {
       name: 'desktop-notifications',
-      // `uiSession` is the only place the UI status lives: the session-LIST
-      // snapshot row (`SessionSummary`) has NO pendingInteraction field — it
-      // only carries running/blank/origin/updatedAt. Reading `item.pending`
-      // off that row silently yields undefined forever (that bug is why the
-      // 「需要你」 toast and the tray's ● row never worked). UiSession exposes
-      // `sessionStatus` publicly and other plugins read it exactly this way.
-      inject: ['sessions', 'connection', 'uiSession', 'uiWorkspace'],
+      // NO required inject — see the `svc()` comment above. A required
+      // `['sessions','connection','uiSession','uiWorkspace']` made this plugin
+      // the whole site's single point of failure: any one of those service names
+      // disappearing upstream left the fiber pending ⇒ dsh boot fail-closed ⇒
+      // "Failed to load plugins" (white screen, dsh's own plugin page included).
+      // All four are now resolved lazily via `svc()`: missing `sessions` ⇒ the
+      // notifier idles; missing `uiSession` ⇒ tray ●/○ and 「需要你」 toasts
+      // degrade; missing `uiWorkspace` ⇒ click-to-open reports a readable
+      // error. None of them can stop dsh from booting.
+      inject: [],
       apply(ctx) {
         const seen = new Map() // sessionId -> { pending?, running, completed, ended }
 
@@ -245,7 +269,7 @@ window.__ModuleLoader__.load({
         let statusDiag = false
         function statusOf(id) {
           try {
-            const ui = ctx.uiSession
+            const ui = svc(ctx, 'uiSession')
             if (!ui) {
               if (!statusDiag) { statusDiag = true; logEvent('status-missing', null, 'ctx.uiSession undefined') }
               return undefined
@@ -357,7 +381,8 @@ window.__ModuleLoader__.load({
         // between the UI dot and this store is visible in the shell log.
         setTimeout(() => {
           try {
-            const obs = ctx.uiSession && ctx.uiSession.sessionStatus
+            const ui = svc(ctx, 'uiSession')
+            const obs = ui && ui.sessionStatus
             const snap = obs && typeof obs.getSnapshot === 'function' ? obs.getSnapshot() : null
             if (!snap || typeof snap.forEach !== 'function') {
               logEvent('status-dump', null, 'no snapshot')
@@ -374,8 +399,9 @@ window.__ModuleLoader__.load({
         const scan = () => {
           let snap
           try {
-            snap = ctx.sessions && ctx.sessions.list && typeof ctx.sessions.list.getSnapshot === 'function'
-              ? ctx.sessions.list.getSnapshot()
+            const sessions = svc(ctx, 'sessions')
+            snap = sessions && sessions.list && typeof sessions.list.getSnapshot === 'function'
+              ? sessions.list.getSnapshot()
               : null
           } catch { return }
           const shaped = shapeOf(snap)
@@ -467,24 +493,75 @@ window.__ModuleLoader__.load({
           }
           reportAggregate(shaped)
         }
-        const list = ctx.sessions.list
-        const unsubscribe = list && typeof list.subscribe === 'function'
-          ? list.subscribe(scan)
-          : undefined
+        // ── readiness (P1-4): services may arrive AFTER this plugin activates ──
+        // No required inject means the notifier waits for what it needs without
+        // blocking boot. `sessions.list` and `uiSession.sessionStatus` are waited
+        // for INDEPENDENTLY: the status store is the newer seam, and losing it
+        // must cost the tray ●/○ + 「需要你」 toast, not the turn-end notifier.
+        // Both waits degrade with a readable /log event instead of going silent.
+        const READY_RETRY_MS = 200
+        // Test hook: the acceptance test cannot sit through the 20 s production
+        // window; behaviour is unchanged when the global is unset.
+        const READY_TIMEOUT_MS = Number(globalThis.__DSH_NOTIFY_READY_TIMEOUT_MS__) > 0
+          ? Number(globalThis.__DSH_NOTIFY_READY_TIMEOUT_MS__)
+          : 20000
+        const readyStart = Date.now()
+        let unsubscribe = null
+        let unsubscribeStatus = null
+        let listReady = false
+        let statusReady = false
+        let listDegraded = false
+        let statusDegraded = false
+        let listTimer = null
+        let statusTimer = null
+
+        function wireList() {
+          if (disposed || listReady) return
+          const sessions = svc(ctx, 'sessions')
+          const l = sessions && sessions.list
+          if (l && typeof l.getSnapshot === 'function') {
+            listReady = true
+            if (typeof l.subscribe === 'function') unsubscribe = l.subscribe(scan)
+            scan() // record baseline; never notify for pre-existing state
+            logEvent('ready', null, 'sessions.list wired')
+            return
+          }
+          if (!listDegraded && Date.now() - readyStart > READY_TIMEOUT_MS) {
+            listDegraded = true
+            logEvent('degraded', null, 'sessions service unavailable → notifications idle (dsh seam renamed?); the UI is NOT affected')
+          }
+          listTimer = setTimeout(wireList, READY_RETRY_MS)
+          if (listTimer && typeof listTimer.unref === 'function') listTimer.unref()
+        }
+
         // CRITICAL: pendingInteraction lives in uiSession.sessionStatus, a
         // SEPARATE observable from sessions.list. A session entering "waiting
         // for approval" changes NO list row, so subscribing to the list alone
         // meant scan() never re-ran — the tray stayed on ▶ and the 「需要你」
         // toast never fired, even though the UI showed the orange dot. Both
         // sources must drive the scan.
-        const unsubscribeStatus = (() => {
+        function wireStatus() {
+          if (disposed || statusReady) return
           try {
-            const obs = ctx.uiSession && ctx.uiSession.sessionStatus
-            if (obs && typeof obs.subscribe === 'function') return obs.subscribe(scan)
-          } catch { /* fall through: list-only behaviour */ }
-          return undefined
-        })()
-        scan() // record baseline; never notify for pre-existing state
+            const ui = svc(ctx, 'uiSession')
+            const obs = ui && ui.sessionStatus
+            if (obs && typeof obs.subscribe === 'function') {
+              unsubscribeStatus = obs.subscribe(scan)
+              statusReady = true
+              logEvent('ready', null, 'uiSession.sessionStatus wired')
+              return
+            }
+          } catch { /* retry below */ }
+          if (!statusDegraded && Date.now() - readyStart > READY_TIMEOUT_MS) {
+            statusDegraded = true
+            logEvent('degraded', null, 'uiSession.sessionStatus unavailable → tray ●/○ and 「需要你」 toasts disabled; turn-end notifications keep working')
+          }
+          statusTimer = setTimeout(wireStatus, READY_RETRY_MS)
+          if (statusTimer && typeof statusTimer.unref === 'function') statusTimer.unref()
+        }
+
+        wireList()
+        wireStatus()
         // Diagnostic canary: tells the shell this module loaded and the bridge
         // is reachable (no toast, no tauri dependency).
         post('/alive', { loaded: true })
@@ -514,8 +591,11 @@ window.__ModuleLoader__.load({
         }
         const stopPolling = pollPendingOpen(ctx)
         return () => {
+          disposed = true
           if (unsubscribe) unsubscribe()
           if (unsubscribeStatus) unsubscribeStatus()
+          if (listTimer) clearTimeout(listTimer)
+          if (statusTimer) clearTimeout(statusTimer)
           if (stopPolling) stopPolling()
         }
       },
