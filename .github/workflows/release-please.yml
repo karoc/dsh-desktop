@@ -8,6 +8,12 @@
 # 对「Release 存在但资产 <3 且该 tag 尚无构建运行」的版本执行 workflow_dispatch。
 # 旧注释写的 "The v* tag then triggers the existing build.yml" 与行为不符，已删。
 # 零 secret 是刻意选择（引入 PAT 属凭证面扩张，2026-09-22 已明文否决）。
+#
+# ⚠️ 2026-11-16：版本 PR 里补上 Cargo.lock 的同步提交（见文件末尾两步）。
+# release-please 的 extra-files 对 Cargo.lock 的过滤式 jsonpath 实测不生效（sync 脚本头注释有记录），
+# 而 src-tauri/Cargo.lock 里 dsh-desktop 的 version 是 Cargo.toml 的**派生物** ⇒ 不补就每次发版后
+# main 上「四处版本」差一档（2026-11-16 实测：lock 0.24.1 vs package.json/tauri/Cargo.toml 0.24.3），
+# 别人 clone 后本地 `npm test` 必红，CI 只是靠 build.yml 先跑 sync 掩盖。
 name: release-please
 on:
   push:
@@ -24,7 +30,31 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: googleapis/release-please-action@v4
+        id: release
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+      # 只在「本轮有 release PR（新建或更新）」时补同步；没有 PR（纯 docs 提交等）直接跳过。
+      - name: 检出 release-please 的版本 PR 分支
+        if: steps.release.outputs.prs != '' && steps.release.outputs.prs != '[]'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ fromJson(steps.release.outputs.prs)[0].headBranchName }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 把 Cargo.lock 的同步提交补进版本 PR
+        if: steps.release.outputs.prs != '' && steps.release.outputs.prs != '[]'
+        run: |
+          set -euo pipefail
+          node scripts/sync-cargo-lock-version.mjs
+          if git diff --quiet -- src-tauri/Cargo.lock; then
+            echo 'Cargo.lock 已与 Cargo.toml 一致，无需提交'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src-tauri/Cargo.lock
+          git commit -m 'chore(release): 同步 Cargo.lock（Cargo.toml 的派生物，随版本 PR 一起合并）'
+          git push
