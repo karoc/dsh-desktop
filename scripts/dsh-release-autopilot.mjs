@@ -113,6 +113,27 @@
 //   位置在退避跳过 / `--reset-state` 之后：那些轮次本来就不干活，不该因为守卫判红；守卫也**不写**退避或
 //   心跳记录 ——「这棵树不该跑」要让反向心跳因心跳文件陈旧而报警，才是"有人必须来看"的正确信号。
 //
+// ── 单实例 flock（2026-11-16，与 dsh-watch 同一套语义）──────────────────────
+//   症状：手工起一轮排查、timer 的 10 分钟轮次同时起来 ⇒ 两轮各自 clone / 装 runtime / 推同一 target，
+//   门禁因资源竞争假红（当天实测白花 1-2h 分辨"真失败"与"两轮打架"）。
+//   实现是最小侵入的 re-exec：`flock -n -E 75 <lock> node <self> <原参数…>`，子进程靠
+//   DSH_AUTOPILOT_LOCK_HELD=1 认自己已在锁内（避免无限递归）。锁文件
+//   `<state-dir>/locks/dsh-release-autopilot.lock`（默认 ~/.dsh），靠**进程退出自动释放**——
+//   不用 `open('wx')` 那种崩溃后会留永久死锁的锁文件。语义：
+//     * `--dry-run` **不加锁**（只读轮没有互斥需求，且它承诺"不写任何东西"）；
+//     * 锁被占（flock 退出码 75）⇒ 打印一行「另一实例在跑，本轮跳过」并 **exit 0**
+//       （本轮没干活、也不是新故障，不能让 systemd 记成红）；
+//     * flock 缺失（util-linux 未装 / Windows 侧直接跑）⇒ 告警一行后继续：失去"同一台机器只有一个
+//       实例"的保证，但所有写操作仍是收敛式（确定性键 + 对账）。
+//
+// ── 失败诊断不再截断（2026-11-16）────────────────────────────────────────────
+//   旧 `tail()` 只留 stderr **末 3 行**，把 ssh/根因首行截掉（当天排障多花 1-2h：真正的
+//   `ssh: connect to host github.com …` 在第一行，日志里只剩后面的 `fatal:` 尾巴）。
+//   现在：摘要 = **首行 + 中间 `…` + 末 3 行**；完整 stdout/stderr 同时落到
+//   `<state-dir>/<tool>.detail.log`（128KB 截断，同 dsh-watch 的 detail.log 做法），错误文案里打印该路径。
+//   `--dry-run` 不落盘（"不写任何东西"是字面承诺）。`dsh-adapt` 的失败输出同样落盘，并把第 7 步
+//   每条 `FAIL <套件命令>` 原样转发（以前只剩 `N/N 套失败` 汇总，套件名丢失）。
+//
 // ── systemd user timer 模板（本仓库**不**改你机器上的 systemd；只给模板）──────
 //   ~/.config/systemd/user/dsh-release-autopilot.service
 //     [Unit]
@@ -153,7 +174,7 @@
 import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import {
-  existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync,
+  appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync,
 } from 'node:fs'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -166,7 +187,8 @@ import {
 // 运行时守卫：ROOT 工作树是否偏离 origin/main（与 dsh-watch / dsh-doctor 共用唯一实现，纯逻辑不 exit）。
 import { checkTreeDrift, formatTreeDrift } from './lib/tree-guard.mjs'
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
+const SELF = fileURLToPath(import.meta.url)
+const ROOT = join(dirname(SELF), '..')
 const T0 = Date.now()
 
 // ══ 参数 ═══════════════════════════════════════════════════════════════════
@@ -180,7 +202,7 @@ const USAGE = `usage: node scripts/dsh-release-autopilot.mjs [--dry-run] [--stag
   ③ push auto/dsh-<target> + PR → ④ 等 CI → ⑤ --admin 合并 → ⑥ 合并 release-please 版本 PR →
   ⑦ 派发 build + 等 3 个资产 → ⑧ issue 结构化回帖。
 
-  --dry-run         只探测 + 打印计划，不写任何东西、不 push（无新版时打印「无需适配」exit 0）
+  --dry-run         只探测 + 打印计划，不写任何东西、不 push、**不加 flock 锁**（无新版时打印「无需适配」exit 0）
   --stage1          ⑤ 之后停下（不合并版本 PR）；默认全自动
   --require-canary  ⑤ 之前要求 dsh-adapt --canary 通过（需要真实 dev 壳在窗口期内新启动）
   --issue <n>       指定回帖 issue（缺省按 target 查找/新建）
@@ -192,7 +214,8 @@ const USAGE = `usage: node scripts/dsh-release-autopilot.mjs [--dry-run] [--stag
   --assignee <login> 新 issue 的 assignee（缺省=仓库 owner）
   --canary-timeout s 透传 dsh-adapt（默认 180）
   --dev-log/--manager-log  --require-canary 用的真实 dev 壳日志路径
-  --state-dir <dir>  退避状态目录（默认 ~/.dsh；状态文件 = <dir>/state/dsh-release-autopilot.json）
+  --state-dir <dir>  状态目录（默认 ~/.dsh）：状态文件 <dir>/state/dsh-release-autopilot.json、
+                     单实例锁 <dir>/locks/dsh-release-autopilot.lock、失败明细 <dir>/<tool>.detail.log
   --state-file <p>   直接指定退避状态文件
   --failure-threshold <n>  连续失败几次进入 broken（默认 3）
   --reset-state      重置本地退避状态为 healthy（不写 GitHub）后退出
@@ -200,7 +223,7 @@ const USAGE = `usage: node scripts/dsh-release-autopilot.mjs [--dry-run] [--stag
   --no-release-resume 关闭「无新版时仍合并停摆的 release-please 版本 PR」兜底（默认开）
   --strict-tree      ROOT 工作树偏离 origin/main 时停跑（exit 1）；默认只告警一行后照常干活
 
-退出码：0 完成 / 1 失败 / 2 用法 / 3 前置不满足。详见脚本头注释。`
+退出码：0 完成（含「另一实例持锁 ⇒ 本轮跳过」）/ 1 失败 / 2 用法 / 3 前置不满足。详见脚本头注释。`
 
 class UsageError extends Error {}
 
@@ -343,6 +366,10 @@ const TOOL = 'dsh-release-autopilot'
 const STATE_DIR = resolve(opts.stateDir ?? process.env.DSH_STATE_DIR ?? join(homedir(), '.dsh'))
 const STATE_FILE = resolve(opts.stateFile ?? join(STATE_DIR, 'state', `${TOOL}.json`))
 const HEARTBEAT_FILE = heartbeatFileFor(STATE_FILE)
+// 单实例锁：**必须在任何写操作之前**拿到（位置见下面的 flock re-exec 段）。`--state-file` 只改状态文件，
+// 不搬锁 —— 锁永远跟着 `--state-dir`，手工轮次与 timer 轮次才共享同一把。
+const LOCK_FILE = join(STATE_DIR, 'locks', `${TOOL}.lock`)
+const UNDER_LOCK = process.env.DSH_AUTOPILOT_LOCK_HELD === '1'
 const STATE_WRITES_OK = !opts.dryRun
 const PERSISTENT_STATE = Boolean(opts.stateDir || opts.stateFile || process.env.DSH_STATE_DIR)
 const NOTIFY_TRANSITIONS = !(process.env.GITHUB_ACTIONS === 'true' && !PERSISTENT_STATE)
@@ -452,6 +479,36 @@ if (opts.noBackoff) {
   }
 }
 
+// ── 单实例锁（flock re-exec）────────────────────────────────────────────────
+// 语义与 dsh-watch 的 A2 完全一致（那边有更长的背景说明）：非 --dry-run 的整个进程包在
+// `flock -n -E 75 <lock> node <self> <原参数…>` 里，进程退出即释放。拿不到锁 ⇒ flock 以 75 退出 ⇒
+// 打印一行后 exit 0：本轮没干活、也不是新故障，让 systemd 记红只会制造假失败。
+if (!opts.dryRun && !UNDER_LOCK) {
+  try { mkdirSync(dirname(LOCK_FILE), { recursive: true }) } catch (err) {
+    log(`[warn] 无法创建锁目录 ${dirname(LOCK_FILE)}：${err.message} —— 放弃本机互斥继续（写操作仍是收敛式）`)
+  }
+  const child = spawnSync('flock', ['-n', '-E', '75', LOCK_FILE, process.execPath, SELF, ...process.argv.slice(2)], {
+    stdio: 'inherit',
+    env: { ...process.env, DSH_AUTOPILOT_LOCK_HELD: '1' },
+  })
+  if (child.error?.code === 'ENOENT') {
+    log('[warn] 找不到 flock（util-linux）：无法保证本机单实例 ⇒ 继续执行；'
+      + '手工轮次与 timer 轮次并发时仍可能互相干扰（写操作仍是收敛式，下一轮对账）')
+  } else if (child.status === 75) {
+    log(`已跳过本轮（skipped by lock）：另一实例在跑（持有 ${LOCK_FILE}）—— 本轮跳过：单实例纪律，`
+      + '手工轮次与 timer 轮次同一时刻只跑一个')
+    STATE.stage = 'skipped-lock'
+    emitJson(0)
+    process.exit(0)
+  } else if (typeof child.status !== 'number') {
+    log(`[warn] flock 执行失败（${child.error?.message ?? '未知原因'}）—— 本轮放弃（不带着未知的互斥状态去写）`)
+    process.exit(1)
+  } else {
+    process.exit(child.status)
+  }
+}
+if (UNDER_LOCK) log(`[info] 已获取本机独占锁（flock ${LOCK_FILE}）`)
+
 // ── 运行时守卫：真正干活（flow）之前先确认"这棵树"没偏离 origin/main ──────────────────
 // 判据/理由见 scripts/lib/tree-guard.mjs 与头注释「运行时守卫」段。位置在退避跳过与 --reset-state 之后：
 // 那些轮次本来就不干活，不必为此判红。告警走 log()（`--json` 不带文件时自动改走 stderr，保住纯 JSON）。
@@ -512,22 +569,68 @@ function run(cmd, args, { cwd = ROOT, timeout = 10 * 60 * 1000, env = process.en
     cmd: [cmd, ...args].map((a) => (String(a).includes(' ') ? JSON.stringify(a) : a)).join(' '),
   }
 }
-function tail(text, n = 500) {
+/**
+ * 子进程输出摘要：**首行 + 中间 `…` + 末 3 行**。
+ * 旧实现只留末 3 行 —— 2026-11-16 排障实测：真正的根因 `ssh: connect to host github.com …` 在第一行，
+ * 日志里只剩后面的 `fatal:` 尾巴，多花 1-2h。中间省略用 `…` 明确标出（不假装这是全部输出）；
+ * 完整输出走 persistDetail()，摘要本身仍按 n 字符截断（错误文案另有短上限）。
+ */
+function tail(text, n = 700) {
   const lines = String(text ?? '').trim().split('\n').filter((l) => l.trim())
-  return short(redact(lines.slice(-3).join(' | ')), n)
+  const picked = lines.length <= 4 ? lines : [lines[0], '…', ...lines.slice(-3)]
+  return short(redact(picked.join(' | ')), n)
+}
+/** `<state-dir>/<tool>.detail.log` 的 128KB 上限（同 dsh-watch：涨过就只留尾部 400 行）。 */
+const DETAIL_MAX_BYTES = 128 * 1024
+/**
+ * 工具名 → 明细文件名。node 跑脚本时用脚本名（`dsh-adapt` / `dsh-watch`），其余用命令名（`git` / `gh`）。
+ * 于是 `<state-dir>/git.detail.log` 恒是"最近一次 git 失败"的完整现场，排障时不用猜是哪一轮。
+ */
+function detailToolName(cmd, args = []) {
+  const list = args.map(String)
+  const script = list.find((a) => /\.(mjs|cjs|js)$/i.test(a) && !a.startsWith('-'))
+  let raw = String(cmd ?? 'command')
+  if (/(^|[\\/])node(\.exe)?$/i.test(raw) && script) raw = script
+  // Windows 路径在 Linux 上 basename 不认反斜杠 ⇒ 先归一化，避免明细名变成 C__x_gh 这种。
+  const base = basename(String(raw).replace(/\\/g, '/')).replace(/\.(mjs|cjs|js|exe)$/i, '')
+  return base.replace(/[^A-Za-z0-9._-]+/g, '_') || 'command'
+}
+/**
+ * 失败诊断落盘：完整 stdout/stderr 追加到 `<state-dir>/<tool>.detail.log`，返回路径
+ * （写不进去返回 null —— 诊断丢失不该改变退出码）。`--dry-run` 不落盘：头注释里"不写任何东西"是字面承诺。
+ */
+function persistDetail(tool, r) {
+  if (opts.dryRun) return null
+  const file = join(STATE_DIR, `${tool}.detail.log`)
+  const stderr = String(r.stderr ?? '')
+  const block = `\n──── ${new Date().toISOString()} ${r.cmd}（exit=${r.status}${r.signal ? ` signal=${r.signal}` : ''}）────\n`
+    + `# stderr\n${stderr}${stderr.endsWith('\n') || stderr === '' ? '' : '\n'}# stdout\n${String(r.stdout ?? '')}\n`
+  try {
+    mkdirSync(STATE_DIR, { recursive: true })
+    appendFileSync(file, block, { mode: 0o600 })
+    if (statSync(file).size > DETAIL_MAX_BYTES) {
+      writeFileSync(file, readFileSync(file, 'utf8').split('\n').slice(-400).join('\n'), { mode: 0o600 })
+    }
+    return file
+  } catch {
+    return null
+  }
+}
+/** 子进程失败的唯一出口：摘要（首行 + 末 3 行）+ 完整输出落盘路径。 */
+function failChild(code, label, r, tool) {
+  const why = r.error ? `spawn error: ${r.error}` : `exit=${r.status}${r.signal ? ` signal=${r.signal}` : ''}`
+  const detail = persistDetail(tool, r)
+  fail(code, `${label} 失败（${why}）：${tail(r.stderr || r.stdout)}${detail ? `（完整输出：${detail}）` : ''}`)
 }
 function mustRun(cmd, args, label, { code = 1, ...runOpts } = {}) {
   const r = run(cmd, args, runOpts)
-  if (r.status !== 0) {
-    const why = r.error ? `spawn error: ${r.error}` : `exit=${r.status}${r.signal ? ` signal=${r.signal}` : ''}`
-    fail(code, `${label} 失败（${why}）：${tail(r.stderr || r.stdout)}`)
-  }
+  if (r.status !== 0) failChild(code, label, r, detailToolName(cmd, args))
   return r
 }
 function gh(args, { allowFail = false, timeout = 120 * 1000 } = {}) {
   const r = run(GH, args, { timeout })
   if (!allowFail && r.status !== 0) {
-    fail(1, `gh ${args[0]}${args[1] ? ' ' + args[1] : ''} 失败（exit=${r.status}）：${tail(r.stderr || r.stdout)}`)
+    failChild(1, `gh ${args[0]}${args[1] ? ' ' + args[1] : ''}`, r, detailToolName(GH, args))
   }
   return r
 }
@@ -541,7 +644,7 @@ function ghJson(args, opts = {}) {
 }
 function git(args, { code = 3, allowFail = false, cwd = ROOT, timeout = 10 * 60 * 1000 } = {}) {
   const r = run(GIT, args, { cwd, timeout })
-  if (!allowFail && r.status !== 0) fail(code, `git ${args[0]} 失败（exit=${r.status}）：${tail(r.stderr || r.stdout)}`)
+  if (!allowFail && r.status !== 0) failChild(code, `git ${args[0]}`, r, detailToolName(GIT, args))
   return r
 }
 const ghRepoArgs = () => (STATE.repo ? ['--repo', STATE.repo] : [])
@@ -816,7 +919,8 @@ function prepareRuntime(target) {
   const r = run(NODE, [join(ROOT, 'scripts', 'dsh-rehearse.mjs'), '--scenario', 'install',
     '--version', target, '--keep', '--json', jsonPath, '--timeout', '300'], { timeout: 15 * 60 * 1000 })
   if (!existsSync(jsonPath)) {
-    fail(3, `dsh-rehearse install 没有产出 JSON（exit=${r.status}）：${tail(r.stderr || r.stdout)}`)
+    const detail = persistDetail('dsh-rehearse', r)
+    fail(3, `dsh-rehearse install 没有产出 JSON（exit=${r.status}）：${tail(r.stderr || r.stdout)}${detail ? `（完整输出：${detail}）` : ''}`)
   }
   let info
   try { info = JSON.parse(readFileSync(jsonPath, 'utf8')) } catch (err) {
@@ -853,12 +957,18 @@ function runAdapt(cloneDir, runtimeDir, target, { canary = false } = {}) {
   }
   const r = run(NODE, args, { cwd: cloneDir, timeout: 60 * 60 * 1000 })
   const text = `${r.stdout}\n${r.stderr}`
+  // 转发哪些行：① 每步汇总 `[ ok ]/[skip]/[FAIL]`；② **第 7 步失败的套件名**（`      FAIL node scripts/x.mjs`）
+  // 与汇总段的 `  ✗ …`；③ 汇总标题。旧实现只有 ①③ ⇒ autopilot 日志里只剩"N/N 套失败"，看不到是哪套
+  // （2026-11-16 排障实测：还得回 /tmp 克隆里手工重跑整条链才拿到套件名）。
+  const keepAdaptLine = (line) => /^\[( ok|skip|FAIL)\s*\]/.test(line)
+    || /^\s*FAIL\s+\S/.test(line) || /^\s*✗\s/.test(line) || line.startsWith('—— 汇总')
   for (const line of r.stdout.split('\n')) {
-    if (/^\[( ok|skip|FAIL)\s*\]/.test(line) || line.startsWith('—— 汇总')) log(`      adapt| ${line}`)
+    if (keepAdaptLine(line)) log(`      adapt| ${line}`)
   }
   if (r.status !== 0) {
     const why = r.error ? r.error : `exit=${r.status}${r.signal ? ` signal=${r.signal}` : ''}`
-    fail(1, `dsh-adapt 失败（${why}）：${tail(text, 600)}`)
+    const detail = persistDetail('dsh-adapt', r)
+    fail(1, `dsh-adapt 失败（${why}）：${tail(text, 700)}${detail ? `（完整输出：${detail}）` : ''}`)
   }
   const verdict = /verdict=([A-Za-z]+)/.exec(text)?.[1]?.toUpperCase() ?? null
   const gates = Number(/全量门禁[^\n]*?(\d+)\s*套通过/.exec(text)?.[1] ?? NaN)
