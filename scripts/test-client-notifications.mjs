@@ -172,7 +172,7 @@ Object.entries(pendingLabels).forEach(([kind, body], i) => {
   mutate({ ids: [id], byId: { [id]: session(id, { pendingInteraction: kind }) } })
   assert.equal(calls.length, 1, `${kind} transition must notify once`)
   assert.ok(calls[0][0].endsWith('/notify'), 'must POST to the bridge /notify endpoint')
-  assert.deepEqual(calls[0][1], { title: 'dsh 需要你', body, sessionId: id })
+  assert.deepEqual(calls[0][1], { title: 'dsh 需要你', body: `「${id}」${body}`, sessionId: id })
 })
 
 // ── scenario 3: running true→false, completed -> "task done" ────────────────
@@ -183,7 +183,7 @@ assert.equal(calls.length, 0, 'starting a run must not notify')
 mutate({ ids: ['sess-A'], byId: { 'sess-A': session('sess-A', { running: false, completed: true, title: '写周报' }) } })
 await flush()
 assert.equal(calls.length, 1, 'running→done transition must notify once')
-assert.deepEqual(calls[0][1], { title: 'dsh 任务完成', body: '「写周报」已完成', sessionId: 'sess-A' })
+assert.deepEqual(calls[0][1], { title: 'dsh 任务已结束', body: '「写周报」已结束', sessionId: 'sess-A' })
 
 // ── scenario 3b: running true→false WITHOUT completed (selected session
 // finishing — can't be a focused manual stop, which is suppressed) still
@@ -194,7 +194,7 @@ mutate({ ids: ['sess-A2'], byId: { 'sess-A2': session('sess-A2', { running: true
 mutate({ ids: ['sess-A2'], byId: { 'sess-A2': session('sess-A2', { running: false, completed: false, title: '清理' }) } })
 await flush()
 assert.equal(calls.length, 1, 'running edge fires even when completed stays false (selected session)')
-assert.deepEqual(calls[0][1], { title: 'dsh 任务完成', body: '「清理」已完成', sessionId: 'sess-A2' })
+assert.deepEqual(calls[0][1], { title: 'dsh 任务已结束', body: '「清理」已结束', sessionId: 'sess-A2' })
 
 // ── scenario 4: no duplicate while state stays put ──────────────────────────
 calls = []
@@ -244,7 +244,7 @@ mutate({ ids: ['sess-E'], byId: { 'sess-E': session('sess-E', { running: true })
 mutate({ ids: ['sess-E'], byId: { 'sess-E': session('sess-E', { running: false, completed: true, title: '部署' }) } })
 await flush()
 assert.equal(calls.length, 1, 'bridge path works after remount')
-assert.deepEqual(calls[0][1], { title: 'dsh 任务完成', body: '「部署」已完成', sessionId: 'sess-E' })
+assert.deepEqual(calls[0][1], { title: 'dsh 任务已结束', body: '「部署」已结束', sessionId: 'sess-E' })
 dispose3()
 
 // ── scenarios 9-11: fresh audit instance (the first plugin was disposed in
@@ -260,7 +260,7 @@ calls = []
 mutate({ ids: ['sess-F'], byId: { 'sess-F': session('sess-F', { running: false, completed: true, title: '快任务' }) } })
 await flush()
 assert.equal(calls.length, 1, 'completed-appearing fallback must notify')
-assert.deepEqual(calls[0][1], { title: 'dsh 任务完成', body: '「快任务」已完成', sessionId: 'sess-F' })
+assert.deepEqual(calls[0][1], { title: 'dsh 任务已结束', body: '「快任务」已结束', sessionId: 'sess-F' })
 
 // ── scenario 10: fallback must not re-fire on later identical snapshots ─────
 calls = []
@@ -274,7 +274,7 @@ mutate({ ids: ['sess-G'], byId: { 'sess-G': session('sess-G', { running: true, t
 mutate({ ids: ['sess-G'], byId: { 'sess-G': session('sess-G', { running: false, completed: false, title: '停止后' }) } })
 await flush()
 assert.equal(calls.length, 1, '已完成 toasted on the running edge')
-assert.equal(calls[0][1].title, 'dsh 任务完成')
+assert.equal(calls[0][1].title, 'dsh 任务已结束')
 mutate({ ids: ['sess-G'], byId: { 'sess-G': session('sess-G', { running: false, completed: true, title: '停止后' }) } })
 assert.equal(calls.length, 1, 'completed-appearing later must NOT toast again (same episode)')
 disposeA()
@@ -317,7 +317,7 @@ introduce('sess-I', { running: true, title: '带问题结束' })
 calls = []
 mutate({ ids: ['sess-I'], byId: { 'sess-I': session('sess-I', { running: false, pendingInteraction: 'question', title: '带问题结束' }) } })
 assert.equal(calls.length, 1, 'completion+pending same snapshot notifies once')
-assert.deepEqual(calls[0][1], { title: 'dsh 需要你', body: '有一个问题需要你回答', sessionId: 'sess-I' })
+assert.deepEqual(calls[0][1], { title: 'dsh 需要你', body: '「带问题结束」有一个问题需要你回答', sessionId: 'sess-I' })
 // The suppressed episode must not re-toast as completed on later snapshots.
 mutate({ ids: ['sess-I'], byId: { 'sess-I': session('sess-I', { running: false, completed: true, title: '带问题结束' }) } })
 assert.equal(calls.length, 1, 'suppressed episode must not fire a later completion')
@@ -348,7 +348,7 @@ calls = []
 mutate({ ids: ['sess-J'], byId: { 'sess-J': session('sess-J', { running: false, completed: true, title: '干净任务' }) } })
 await flush()
 assert.equal(calls.length, 1, 'clean completion still notifies once')
-assert.deepEqual(calls[0][1], { title: 'dsh 任务完成', body: '「干净任务」已完成', sessionId: 'sess-J' })
+assert.deepEqual(calls[0][1], { title: 'dsh 任务已结束', body: '「干净任务」已结束', sessionId: 'sess-J' })
 
 // ── scenario 17: answered-then-finished (pending cleared + running ends in
 // the same snapshot) still notifies completion once ───────────────────────────
@@ -357,7 +357,7 @@ calls = []
 mutate({ ids: ['sess-K'], byId: { 'sess-K': session('sess-K', { running: false, pendingInteraction: undefined, title: '回答后完成' }) } })
 await flush()
 assert.equal(calls.length, 1, 'answered-then-finished notifies completion once')
-assert.equal(calls[0][1].title, 'dsh 任务完成')
+assert.equal(calls[0][1].title, 'dsh 任务已结束')
 
 // ── scenario 18: fork child (parentId, no origin) completes → its own toast ──
 // Fork children are independent tasks the user drove; only rows with the host
@@ -378,64 +378,37 @@ calls = []
 mutate({ ids: ['sess-G2'], byId: { 'sess-G2': session('sess-G2', { running: false, completed: true, origin: 'subagent', parentId: 'gone', cwd: '/work' }) } })
 assert.equal(calls.length, 0, 'subagent row completion is always silent (parent covers it)')
 
-// ── scenarios 20-23: turn/end reason classification + error-retry cooldown ──
-// Root cause being covered: dsh flips session `running` to false on EVERY
-// turn/end, including turn/end with reason error — the old code announced a
-// provider network failure as 「任务完成」, and the auto-retry turn that also
-// failed re-popped the same toast ~a minute later ("推送了两次").
+// ── scenarios 20-22 (P1-2): the turn/end reason is NOT reachable on dsh 0.2.x.
+// Root cause locked down here: the old code read `ctx.connection.api.sessions.
+// history` — a path that does not exist (ConnectionHandle has no `api`; the
+// connection package's typings carry no session history/events API), so every
+// end — error / aborted / blocked — was announced as 「已完成」 (production log:
+// 155/155 notify-classified = completed, 0 error, 0 classify-error). The fix is
+// NEUTRAL wording, and these assertions go red if anyone reintroduces either the
+// "completed" claim or the dead probe.
 
-// ── scenario 20: reason error → 「任务出错」with the provider message ────────
+// ── scenario 20: an end is announced NEUTRALLY, never as 已完成 ──────────────
 introduce('sess-Err', { running: true, title: '网络波动任务' })
-historyReason = 'error'
-historyErrorMsg = 'Provider finish_reason: network_error'
 historyCalls.length = 0
 calls = []
 mutate({ ids: ['sess-Err'], byId: { 'sess-Err': session('sess-Err', { running: false, completed: false, title: '网络波动任务' }) } })
 await flush()
-assert.equal(calls.length, 1, 'error turn/end notifies once')
-assert.equal(calls[0][1].title, 'dsh 任务出错', 'error turn is announced as 出错, never 已完成')
-assert.ok(calls[0][1].body.includes('出错了'), 'body says 出错了')
-assert.ok(calls[0][1].body.includes('network_error'), 'body carries the provider message')
-assert.deepEqual(historyCalls, ['sess-Err'], 'classification probed the session tail')
+assert.equal(calls.length, 1, 'an end always notifies once')
+assert.equal(calls[0][1].title, 'dsh 任务已结束', 'P1-2: end wording is neutral — it must never claim a completion')
+assert.ok(calls[0][1].body.includes('已结束'), 'body says 已结束')
+assert.deepEqual(historyCalls, [], 'P1-2: the unreachable connection.api.sessions.history probe must be GONE (no dead call)')
 
-// ── scenario 21: auto-retry burst error within cooldown → suppressed ─────────
-// Same session re-runs and errors again ~60s later (dsh auto-retry after a
-// failed turn): this is the "double push". The second ERROR toast is dropped.
+// ── scenario 21: a fresh run that ends again notifies again ──────────────────
+// No reason-based cooldown may swallow a real second run: the reason is unknown,
+// so suppressing on it would be a guess.
 calls = []
 mutate({ ids: ['sess-Err'], byId: { 'sess-Err': session('sess-Err', { running: true, title: '网络波动任务' }) } })
-mutate({ ids: ['sess-Err'], byId: { 'sess-Err': session('sess-Err', { running: false, completed: false, title: '网络波动任务' }) } })
+mutate({ ids: ['sess-Err'], byId: { 'sess-Err': session('sess-Err', { running: false, title: '网络波动任务' }) } })
 await flush()
-assert.equal(calls.length, 0, 'retry burst error toast suppressed by cooldown')
+assert.equal(calls.length, 1, 'a second real run/end edge notifies again')
 
-// ── scenario 22: completed edge right after an error → STILL notifies ────────
-// A retry that genuinely finishes must not be swallowed by the error cooldown.
-historyReason = 'completed'
-calls = []
-mutate({ ids: ['sess-Err'], byId: { 'sess-Err': session('sess-Err', { running: true, title: '网络波动任务' }) } })
-mutate({ ids: ['sess-Err'], byId: { 'sess-Err': session('sess-Err', { running: false, completed: true, title: '网络波动任务' }) } })
-await flush()
-assert.equal(calls.length, 1, 'completed edge after error still notifies (no over-suppression)')
-assert.equal(calls[0][1].title, 'dsh 任务完成')
-
-// ── scenario 23: error again after cooldown expiry (3+ min) → notifies again ─
-// The cooldown must not silence a genuinely later failure.
-const realNow = Date.now
-let fakeNow = realNow()
-Date.now = () => fakeNow
-try {
-  historyReason = 'error'
-  historyErrorMsg = 'Provider finish_reason: network_error'
-  fakeNow += 4 * 60 * 1000 // jump 4 min past the last error toast
-  calls = []
-  mutate({ ids: ['sess-Err'], byId: { 'sess-Err': session('sess-Err', { running: true, title: '网络波动任务' }) } })
-  mutate({ ids: ['sess-Err'], byId: { 'sess-Err': session('sess-Err', { running: false, completed: false, title: '网络波动任务' }) } })
-  await flush()
-  assert.equal(calls.length, 1, 'error after cooldown expiry notifies again')
-  assert.equal(calls[0][1].title, 'dsh 任务出错')
-} finally {
-  Date.now = realNow
-  historyReason = 'completed'
-}
+// ── scenario 22: forked rows get the same neutral wording ────────────────────
+assert.equal(calls[0][1].title, 'dsh 任务已结束')
 
 disposeB()
 
@@ -633,7 +606,7 @@ mutate({ ids: ['part-A'], byId: { 'part-A': session('part-A', { running: true, t
 mutate({ ids: ['part-A'], byId: { 'part-A': session('part-A', { running: false, title: '无状态源' }) } })
 await flush()
 assert.equal(calls.length, 1, 'P1-4: turn-end notification must survive a missing uiSession')
-assert.deepEqual(calls[0][1], { title: 'dsh 任务完成', body: '「无状态源」已完成', sessionId: 'part-A' })
+assert.deepEqual(calls[0][1], { title: 'dsh 任务已结束', body: '「无状态源」已结束', sessionId: 'part-A' })
 disposePartial()
 
 // ── scenario 36 (P1-4): the peer floor must be a REAL constraint. The old
@@ -666,5 +639,60 @@ const guardOnSupported = planPluginGuard({
 assert.deepEqual(guardOnSupported, { skipInstall: [], quarantine: [], warnings: [] },
   'P1-4: a supported dsh must not be quarantined (no false positive)')
 
-console.log('PASS — notification plugin behavioral test (23 notification + 9 aggregate + 1 open-path + 3 P1-4 boot-safety scenarios)')
+// ── scenario 37 (P1-3): the tray's ○ must not depend on dsh's completionUnread.
+// dsh only flips completionUnread for sessions that were NOT the main view, so
+// the tray's flagship case — hide the window, let the CURRENT session finish —
+// never produced ○. The plugin now records the running→false edge itself.
+state = { ids: [], byId: {}, current: undefined, phase: 'ready', subagentsByParent: {}, jobsBySession: {}, currentAddress: undefined }
+statusMap = new Map()
+allPosts = []
+calls = []
+// eslint-disable-next-line no-eval
+eval(clientJs)
+const disposeUnread = windowStub.__handoff.factory().apply(ctx)
+introduce('unread-A')
+mutate({ ids: ['unread-A'], byId: { 'unread-A': session('unread-A', { running: true, title: '托盘里结束' }) } })
+// dsh's own flag stays false (this WAS the main view) — the plugin must not care.
+statusMap = new Map([['unread-A', { running: true, completionUnread: false }]])
+mutate({ ids: ['unread-A'], byId: { 'unread-A': session('unread-A', { running: false, title: '托盘里结束' }) } })
+assert.deepEqual(
+  aggPosts().at(-1).items,
+  [{ kind: 'done', title: '托盘里结束' }],
+  'P1-3: an ended-unviewed session must show ○ even when dsh leaves completionUnread false',
+)
+// A new run clears it (the session is no longer "ended").
+mutate({ ids: ['unread-A'], byId: { 'unread-A': session('unread-A', { running: true, title: '托盘里结束' }) } })
+assert.deepEqual(
+  aggPosts().at(-1).items,
+  [{ kind: 'running', title: '托盘里结束' }],
+  'P1-3: a new run must clear the ○',
+)
+disposeUnread()
+
+// ── scenario 38 (P2-4): pendingInteraction is an OBJECT ({key,kind,sessionId}).
+// Looking it up in PENDING_LABELS as a string never matched, so every interaction
+// showed the generic body without a session title.
+state = { ids: [], byId: {}, current: undefined, phase: 'ready', subagentsByParent: {}, jobsBySession: {}, currentAddress: undefined }
+statusMap = new Map()
+calls = []
+// eslint-disable-next-line no-eval
+eval(clientJs)
+const disposePend = windowStub.__handoff.factory().apply(ctx)
+introduce('pend-A', { title: '等你批准' })
+mutateStatus(new Map([['pend-A', { running: true, pendingInteraction: { key: 'req-1', kind: 'approval', sessionId: 'pend-A' } }]]))
+assert.equal(calls.length, 1, 'P2-4: object-shaped pendingInteraction must notify')
+assert.deepEqual(
+  calls[0][1],
+  { title: 'dsh 需要你', body: '「等你批准」有一个操作正在等待你批准', sessionId: 'pend-A' },
+  'P2-4: the object kind must resolve the label and the body must name the session',
+)
+// An unknown kind degrades to the generic sentence — never "[object Object]".
+calls = []
+mutateStatus(new Map([['pend-A', { running: true, pendingInteraction: undefined }]]))
+mutateStatus(new Map([['pend-A', { running: true, pendingInteraction: { key: 'req-2', kind: 'brand-new-kind', sessionId: 'pend-A' } }]]))
+assert.equal(calls.length, 1, 'P2-4: an unknown kind still notifies')
+assert.ok(!String(calls[0][1].body).includes('[object'), 'P2-4: must never stringify the object into the body')
+disposePend()
+
+console.log('PASS — notification plugin behavioral test (23 notification + 9 aggregate + 1 open-path + 3 P1-4 boot-safety + 3 P1-2/P1-3/P2-4 regression scenarios)')
 process.exit(0)
