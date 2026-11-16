@@ -628,6 +628,13 @@ best-effort（可 `--sla-hours` / `--best-effort-hours` 覆盖，标题与正文
 要点：`Type=oneshot`、`OnUnitInactiveSec=30min`（不会重入）、`Environment=GH_BIN=%h/dsh-desktop/scripts/gh`、
 `TimeoutStartSec=2h`。启用由用户执行 `systemctl --user daemon-reload && systemctl --user enable --now dsh-release-autopilot.timer`。
 
+> **2026-11-16 补（timer 驱动的 oneshot 不要加 `Restart=`）**：本机三份 unit 曾用
+> `Restart=on-failure` + `RestartSteps=4` + `RestartMaxDelaySec=3600`，实测一轮失败后 unit 卡在
+> `activating (auto-restart)` 最长 1h，期间 10 分钟一次的 timer 触发被整段吞掉（systemd 不会给已
+> active/activating 的 unit 再起 start job）⇒ 心跳退化成 ~1h/轮。现三份 unit 均为 `Restart=no`，
+> 退避只在脚本内（`~/.dsh/state/*.json`）。对照实验与更正理由见
+> `docs/2026-10-24-alerting-and-idempotency-patterns.md` §6.2 的 2026-11-16 更正块。
+
 ## 演练覆盖：install / bump / upgrade（2026-10-24 补 upgrade）
 
 **背景（为什么现在补）**：`scripts/dsh-rehearse.mjs` 原来只有 `install`（空 runtime → 全新安装）与 `bump`

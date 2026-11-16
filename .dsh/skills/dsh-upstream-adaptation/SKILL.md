@@ -685,6 +685,23 @@ git push -u origin <branch>
   stderr 一行告警且 `floorSource=worktree`；④ 别把 `--floor` 当生产配置来钉地板（它只服务演练/回放，
   真源一旦被参数覆盖，「地板落后于发布状态」就再也测不出来了）。
 
+### 6.19 心跳突然从 10 分钟退化成 ~1 小时一轮（systemd Restart 吞掉 timer 触发）
+
+- **症状**：timer 明明 `*:3/10` 在跑，但日志里一整段只有每小时 1 条真实轮次；两轮之间全是
+  「still broken … next retry in 60m」。更隐蔽的形态是：日志里根本没有新轮次的 Starting。
+- **判据**：`systemctl --user status dsh-autopilot.service` 显示 **`activating (auto-restart)`** 而不是
+  `inactive/done`。systemd 不会给已 active/activating 的 unit 再起 start job ⇒ 期间每一次 timer 触发
+  都是 no-op；`RestartMaxDelaySec` 有多长，心跳就被吞多久。2026-11-16 实录：08:22 失败后 08:23/08:33
+  的触发全部无效，直到 1h 后才重试（叠加脚本自身退避 ⇒ 实际 ~1h/轮）。
+- **处理（2026-11-16 本机已改）**：timer 驱动的 oneshot 一律 **`Restart=no`**，删掉 `RestartSec` /
+  `RestartSteps` / `RestartMaxDelaySec` 与无意义的 `StartLimit*`；退避只放脚本内部
+  （`~/.dsh/state/*.json` 三态机）。三份 unit（autopilot/watch/tagdispatch）已改并验证：失败轮次结束后
+  unit 回到 `failed`，下一次 timer 能正常起新轮次。对照实验（`ExecStart=exit 3` 的两个临时 unit）：
+  旧配置第二次 start 被合并（journal 1 条 Starting），`Restart=no` 则 2 条 Starting。
+- **别做的事**：① 不要用「调小 `RestartMaxDelaySec`」来缓解——只要 `Restart=` 在，失败轮次就会把两次
+  timer 触发合并，只是时长变短；② 不要把退避搬到 timer（`OnUnitInactiveSec` 会丢掉墙钟对齐）；
+  ③ 不要在 unit 里加 `Restart=always` 处理「脚本没跑」——那由反向心跳（canary 陈旧）负责。
+
 ## 7. 纪律（硬规则，别绕过）
 
 1. **一律 `./scripts/gh`**（项目 PAT）；跑脚本显式 `GH_BIN=$PWD/scripts/gh`。禁止裸 `gh`。

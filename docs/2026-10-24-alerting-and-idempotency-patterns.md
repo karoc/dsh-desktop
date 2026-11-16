@@ -584,6 +584,19 @@ systemd 254+ 的 `RestartSteps=` + `RestartMaxDelaySec=` 就是指数退避：
 
 本仓的 service 目前是 `Restart=on-failure` + `RestartSec=60` [已验证: `~/.config/systemd/user/dsh-watch.service:8-9`]，失败后每 60 秒硬重试——PAT 权限错误这种“重试不会好”的失败会变成热循环（日志里 #217 的 updateIssue 反复失败就是证据）。本机是 systemd 255 [已验证: `systemctl --version` → `systemd 255 (255.4-1ubuntu8.18)`]，已支持 254+ 的 `RestartSteps`/`RestartMaxDelaySec`；应改成 `RestartSteps` + `RestartMaxDelaySec`，或把“不可重试错误”直接转成 broken 状态并停手。
 
+> **2026-11-16 更正（本仓实测，覆盖上面这条建议）**：对**timer 驱动的 oneshot** unit，systemd 的
+> `Restart` 退避是有害的，不能用。实测（§A6 的 `RestartSteps=4` + `RestartMaxDelaySec=3600`）：
+> 一轮失败后 unit 进入 `activating (auto-restart)`，而 systemd 不会给已 active/activating 的 unit 再起
+> start job ⇒ **10 分钟一次的 timer 触发被整段吞掉**，实际重试退化成 ~1h/轮（2026-11-16 08:22 实录：
+> 08:23/08:33 的 timer 触发全部无效；当天 dsh 适配 SLA 事故的放大因素之一）。
+> 对照实验（两个临时 unit，ExecStart=`exit 3`）：旧配置 → `activating/auto-restart` 且第二次 start
+> 被合并（journal 只有 1 条 Starting）；`Restart=no` → 直接 `failed`，下一次 start 正常拉起新轮次
+> （2 条 Starting）。
+> **结论**：timer 驱动的 oneshot 一律 `Restart=no`，退避只放在**脚本内部**（`~/.dsh/state/*.json` 的
+> 三态机 + 跃迁通知）。牺牲的是“systemd 层自动重启”，换来的是心跳节奏不被吞；脚本级退避缺失时
+> 由反向心跳（canary 陈旧）兜底报警。详见 Agent Note
+> `.agents/notes/implemented/process/2026-11-16-timer-driven-oneshot-restart-policy.md`。
+
 ### 6.3 状态机：Argo CD 的 health 模型
 
 Argo CD 把资源健康度定义为有限状态：
