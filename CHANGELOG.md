@@ -21,6 +21,13 @@
 >
 > 详情见 `.agents/notes/implemented/bug-fix/2026-09-08-legacy-uninstaller-name-kill.md`。
 
+## [0.25.1](https://github.com/karoc/dsh-desktop/compare/v0.25.0...v0.25.1) (2026-11-16)
+
+
+### Bug Fixes
+
+* **notifications:** 去掉 required inject（白屏单点）+ 真实 peer 地板（P1-4） ([#279](https://github.com/karoc/dsh-desktop/issues/279)) ([da0fab1](https://github.com/karoc/dsh-desktop/commit/da0fab19e765a80b841cd9291becc1bd10ba3ae4))
+
 ## [0.25.0](https://github.com/karoc/dsh-desktop/compare/v0.24.5...v0.25.0) (2026-11-16)
 
 
