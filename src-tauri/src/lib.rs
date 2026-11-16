@@ -254,6 +254,8 @@ fn persist_last_session(app: &AppHandle, sid: &str) {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
+    // 这份文件只是通知中心激活的兜底：内存 LAST_SESSION 才是真源，读侧还带 30min TTL。
+    // fail-open-ok: 写失败仅让"从通知中心点旧卡片找回会话"降级，不能因此阻断弹通知 / 激活主路径。
     let _ = std::fs::write(dir.join(LAST_SESSION_FILE), format!("{now}\n{sid}"));
 }
 
@@ -356,7 +358,7 @@ fn main_window_is_foreground(app: &AppHandle) -> bool {
 fn push_window_focus(app: &AppHandle, focused: bool) {
     WINDOW_FOCUSED.store(focused, std::sync::atomic::Ordering::SeqCst);
     if let Some(w) = app.get_webview_window("main") {
-        let _ = w.eval(&format!(
+        let _ = w.eval(format!(
             "globalThis.__DSH_SHELL_FOCUSED__ = {};",
             if focused { "true" } else { "false" }
         ));
@@ -626,7 +628,8 @@ fn activate_window(app: &AppHandle) {
 
 
 
-/// Minimal XML text escaping for toast payloads.
+/// Minimal XML text escaping for toast payloads (WinRT toast XML only).
+#[cfg(windows)]
 fn xml_escape(input: &str) -> String {
     input
         .replace('&', "&amp;")
@@ -644,6 +647,7 @@ static TOAST_KEEPALIVE: Mutex<Vec<windows::UI::Notifications::ToastNotification>
     Mutex::new(Vec::new());
 
 /// Toast group name used for every notification this shell raises.
+#[cfg(windows)]
 const TOAST_GROUP: &str = "dsh";
 
 /// Tag prefix inside the toast `launch` argument, so an Action Center click can
@@ -682,7 +686,9 @@ fn show_winrt_toast(app: &AppHandle, title: &str, body: &str, session_id: Option
         xml_escape(title),
         xml_escape(body)
     );
-    unsafe {
+    // windows 0.61 里这些调用都已是安全函数（clippy::unnecessary_unsafe 实测），
+    // 这里保留作用域块只为限定临时变量，不再是 unsafe 边界。
+    {
         let xml = match XmlDocument::new() {
             Ok(x) => x,
             Err(_) => return false,
@@ -756,66 +762,6 @@ fn show_winrt_toast(_app: &AppHandle, _title: &str, _body: &str, _session_id: Op
     false
 }
 
-/// Remove the Action Center card belonging to `session_id`.
-#[cfg(windows)]
-fn remove_toast_card(app: &AppHandle, session_id: &str) {
-    use windows::core::HSTRING;
-    use windows::UI::Notifications::ToastNotificationManager;
-    let data = app
-        .path()
-        .app_data_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let app_id = HSTRING::from(app.config().identifier.as_str());
-    let tag = HSTRING::from(session_id);
-    let group = HSTRING::from(TOAST_GROUP);
-    unsafe {
-        match ToastNotificationManager::History() {
-            Ok(history) => match history.RemoveGroupedTagWithId(&tag, &group, &app_id) {
-                Ok(()) => log_line(&data, &format!("toast-card: removed tag={session_id}")),
-                Err(e) => log_line(&data, &format!("toast-card: remove failed: {e}")),
-            },
-            Err(e) => log_line(&data, &format!("toast-card: history unavailable: {e}")),
-        }
-    }
-}
-
-#[cfg(not(windows))]
-fn remove_toast_card(_app: &AppHandle, _session_id: &str) {}
-
-/// Drop this app's toasts from the Action Center once one has been acted on.
-///
-/// notify-rust only registers an in-process activator; it never marks the entry
-/// as handled, so the card stays in the notification centre and can be clicked
-/// again. Repeated clicks then go through Windows' activation re-entry path,
-/// which is what made the second click take tens of seconds. Clearing the
-/// history makes the first click the only one.
-#[cfg(windows)]
-fn clear_toast_history(app: &AppHandle) {
-    use windows::core::HSTRING;
-    use windows::UI::Notifications::ToastNotificationManager;
-    let data = app
-        .path()
-        .app_data_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from("."));
-    // `GetDefault()` only works for packaged (UWP) identity — for a desktop
-    // binary it errors out, which is why the first attempt silently did
-    // nothing and the card stayed in the Action Center. The static
-    // `History()` plus an explicit app id is the desktop-correct path.
-    let app_id = HSTRING::from(app.config().identifier.as_str());
-    unsafe {
-        match ToastNotificationManager::History() {
-            Ok(history) => match history.ClearWithId(&app_id) {
-                Ok(()) => log_line(&data, "toast-history: cleared"),
-                Err(e) => log_line(&data, &format!("toast-history: clear failed: {e}")),
-            },
-            Err(e) => log_line(&data, &format!("toast-history: unavailable: {e}")),
-        }
-    }
-}
-
-#[cfg(not(windows))]
-fn clear_toast_history(_app: &AppHandle) {}
-
 /// Clear this app's Action Center entries through PowerShell.
 ///
 /// The same WinRT call from Rust (`ToastNotificationManager::History()`)
@@ -867,13 +813,16 @@ fn show_toast(app: &AppHandle, title: String, body: String, session_id: Option<S
     log_line(&data, &format!("notification: {title} - {body}"));
     eprintln!("[dsh-desktop] notification: {title} - {body}");
 
-    // notify-rust is the send path on purpose: it registers a
-    // `ToastNotification.Activated` handler in-process, so clicking the POPUP
-    // reacts immediately. Our own WinRT toast (`show_winrt_toast`, kept below
-    // for reference) carries Tag/Group but no Activated handler, so clicks fell
-    // through to COM activation (`-Embedding`) and felt slow — a regression.
-    // Card removal does not need those tags: `History.Clear(appId)` works on
-    // its own (see clear_toast_history_via_powershell).
+    // Send path: our own WinRT toast first. It carries Tag/Group AND registers an
+    // in-process `Activated` handler, and the `ToastNotification` object is kept
+    // alive in TOAST_KEEPALIVE — dropping it is what let Action Center clicks fall
+    // through to COM activation (`-Embedding`) and take 30–60s. (Whether a held
+    // object really makes OLD Action Center cards fire `Activated` is still
+    // unverified on real hardware — see the P2 toast-activation card.)
+    // If any WinRT step fails, fall back to notify-rust: it registers its own
+    // in-process activator so popup clicks stay immediate; only its cards lack
+    // Tag/Group. Card removal never needs those tags: `History.Clear(appId)`
+    // works on its own (see clear_toast_history_via_powershell).
     if show_winrt_toast(app, &title, &body, session_id.as_deref()) {
         log_line(&data, &format!("toast: winrt+handler (session={session_id:?})"));
         return;
