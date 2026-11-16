@@ -123,12 +123,27 @@ GH_BIN=$PWD/scripts/gh node scripts/dsh-watch.mjs --dry-run --json /tmp/watch.js
 无需适配（地板不落后于任何通道）
 ```
 
+（上面是 2026-10-23 的原始输出；**2026-11-16 起第一行还带真源**：`壳地板 0.2.2-rc.1（真源 origin/main）`，
+见下方「地板真源」段。）
+
 `--dry-run` 的语义 = 不写 issue（**不是**「不联网」）。无 `--dry-run` 时会开/更新 issue。
 退出码**恒 0**，除非真故障（拿不到 npm packument ⇒ exit 1 且 stderr 明写「这是**真故障**」——
 这句是判据：`exit 1` 不许读成「今天没新版」）。
 其它参数：`--force-target <v>`（把某版本强制当作需适配，配 `--dry-run` 零副作用走全路径）、
 `--registry <url>` / `--floor <v>`（演练注入点）、`--now <iso>`、`--repo <o/r>`、`--assignee <login>`
 （属主解析不到时**报错而不是静默跳过**）。
+
+**地板真源（2026-11-16 起）= `origin/main` 的 `scripts/server-manager.mjs`，不是工作树**：先做一次
+**有界** `git fetch --no-tags origin main`（20s 超时；超时/失败只跳过 fetch、不阻塞），再
+`git show origin/main:scripts/server-manager.mjs` 用现有正则取 `MIN_DSH_VERSION`。**读不到/解析不到**
+（不是 git 树 / 没有 `origin/main` / fetch 后仍取不到）⇒ **回退到工作树文件**并在 stderr 打**一行**告警
+（真源 + 回退原因 + 读数），绝不静默。优先级：`--floor`（最高，此时**不跑 git、不联网**）>
+`origin/main` > 工作树（回退）。`--json` 报告新增 `floorSource: "arg" | "origin/main" | "worktree"`，
+人读输出也带一句（`壳地板 0.2.2-rc.1（真源 origin/main）`；回退时是 `（真源 worktree·回退：取不到 origin/main）`）。
+`--dry-run` 的契约不变（不写 issue / 不写退避状态；fetch 只更新远端跟踪 ref，不碰工作树与 index）。
+门禁/演练用 **`GIT_BIN`** 注入 git 桩（与 autopilot 同一约定，见 `scripts/test-automation-gates.mjs`
+watch 组）。**为什么不是工作树**：发布状态的真源是 main；工作树漂到 feature 分支时读数落后于发布状态，
+已关闭的跟踪单会被每轮当成「未适配」静默更新（§6.18）。
 
 **已适配跟踪单会自动关闭（A12，2026-10-30 起）**：每轮（有 target 与无 target 都算）扫 open 跟踪单，凡标题里
 `dsh <版本>` 锚点取到的版本 **<= 当前壳地板**的，执行 `issue close --reason completed` + 一条
@@ -647,6 +662,28 @@ git push -u origin <branch>
   "只留末尾几行"，也不要把 detail.log 换成"往日志里打印全文"：`dsh-adapt` 的完整输出可达数 MB，
   控制台日志不是 dump 的地方。④ 不要把「锁被占」的退出码改成非零 —— systemd 会把它记成红失败并触发
   `Restart` 退避，反而掩盖真正的故障。
+### 6.18 已关闭的跟踪单被反复更新 / 地板数字骗人（读的是工作树，不是 `origin/main`）
+
+- **症状**：`dsh-watch` 每轮日志写「跟踪 issue 已静默更新：#259」，可 #259 早已
+  `completed` 关闭（`./scripts/gh issue view 259 --json state,updatedAt` 能看到它被反复 edit）；
+  同时「壳地板」比 `origin/main` 那份旧一档（实录 2026-11-16：工作树 `0.2.1-rc.5`、
+  `origin/main` `0.2.2-rc.1`），`dsh-release-autopilot` 也跟着把已适配的版本当「未适配」重跑。
+- **判据**（三条同时成立）：① 工作树不在 `main`（`git -C <ROOT> status -sb` 第一行是 `feat/...`）；
+  ② `dsh-watch --dry-run --json /tmp/w.json` 的 `floor` 与
+  `git show origin/main:scripts/server-manager.mjs | grep MIN_DSH_VERSION` 不一致；
+  ③ 报告里的 `floorSource` 是 `worktree`（不是 `origin/main`）—— 2026-11-16 之前的版本**没有**
+  这个字段（旧实现没有「真源」概念，默认就是读工作树）。
+- **处理**：升级到含本改动的 `dsh-watch`（真源 = `origin/main`；`--floor` 仍可覆盖），然后确认
+  人读输出那行是 `壳地板 <v>（真源 origin/main）`、JSON 里 `floorSource: "origin/main"`。
+  被误 edit 的已关闭单**不用再动**（edit 不改状态）；真要重开才人工 `./scripts/gh issue reopen`。
+  工作树该不该切回 main 是 tree-guard 那条线（§6.14）：**真源修正不会替你修工作树漂移**，也不会
+  让线上心跳跑到新代码。口径边界：`dsh-sla-report` 的「当前状态」块仍按 HEAD 读地板（它回答的是
+  「这棵树的地板」），与 watch 的发布地板可能不同 —— 以 `floorSource` / 报表自己的标注为准。
+- **别做的事**：① 别把「手动把工作树切回 main」当修复 —— 治的是这一次，下次开分支开发又复发；
+  ② 别给 `dsh-watch` 加「自动切分支 / 自动 pull」—— 那是自动改写用户的 WIP 工作树；
+  ③ 别把回退路径静默化（fetch 失败就 `|| true` 悄悄读工作树）—— 那正是本事故的形态；回退必须留
+  stderr 一行告警且 `floorSource=worktree`；④ 别把 `--floor` 当生产配置来钉地板（它只服务演练/回放，
+  真源一旦被参数覆盖，「地板落后于发布状态」就再也测不出来了）。
 
 ## 7. 纪律（硬规则，别绕过）
 

@@ -498,12 +498,47 @@ function groupWatch() {
     // 测试绝不能去碰真实目录（否则可能被本机 timer 的锁挤掉，或在真实 PAUSE 存在时静默零写）。
     const sd = join(W, 'sd', `run-${seq}`)
     const r = cmd(process.execPath, [join(ROOT, 'scripts/dsh-watch.mjs'), ...(out ? ['--dry-run', '--json', o] : []), '--state-dir', sd, ...args], {
-      env: { PATH_WITH_STUBS: undefined, ...privateTmpEnv, PATH: PATH_WITH_STUBS, FAKE_PACKUMENT: pack, GH_BIN: GH_STUB, ...env },
+      env: { PATH_WITH_STUBS: undefined, ...privateTmpEnv, PATH: PATH_WITH_STUBS, FAKE_PACKUMENT: pack, GH_BIN: GH_STUB, ...GIT_FLOOR_ENV, ...env },
     })
     return { ...r, report: jsonOf(o), outPath: o }
   }
   const P = (version, iso) => packument({ latest: version }, { [version]: iso })
   const TARGET = ['--force-target', '0.2.1']
+
+  // ── 地板真源的 git 桩（2026-11-16）──────────────────────────────────────────
+  // `dsh-watch` 的 git 唯一注入点是 `GIT_BIN`（与 autopilot 同一约定）。桩只接管两件事：
+  //   · `fetch` ⇒ 立即返回（**测试绝不联网**；FAKE_GIT_FETCH_FAIL=1 时模拟 fetch 失败）
+  //   · `show origin/main:<file>` ⇒ 回 FAKE_GIT_SHOW_FILE 的内容（FAKE_GIT_SHOW_FAIL=1 时失败）
+  // 其余命令原样交给真 git（GIT_REAL）—— GIT_SLUG / tree-guard 的行为不受影响，日志里可看到真实调用。
+  // 这样"地板到底从哪儿读"才是可控变量：桩里 show 返回的地板与工作树那份**故意不同**，
+  // 实现若仍读工作树，断言必红（负向对照不靠"再加一条恒真断言"）。
+  const GIT_REAL = (() => {
+    const g = spawnSync('bash', ['-c', 'command -v git'], { encoding: 'utf8' })
+    const p = (g.stdout ?? '').trim()
+    return p || null
+  })()
+  const GIT_STUB = mkStub('git-floor', `#!/usr/bin/env node
+const { spawnSync } = require('node:child_process')
+const { appendFileSync, existsSync, readFileSync } = require('node:fs')
+const args = process.argv.slice(2)
+if (process.env.GIT_CALLS) appendFileSync(process.env.GIT_CALLS, args.join(' ') + '\\n')
+const die = (msg) => { process.stderr.write(msg + '\\n'); process.exit(128) }
+if (args.includes('fetch')) {
+  if (process.env.FAKE_GIT_FETCH_FAIL === '1') die('fatal: unable to access origin（FAKE_GIT_FETCH_FAIL）')
+  process.exit(0)
+}
+if (args.includes('show') && args.some((a) => a.startsWith('origin/main:'))) {
+  if (process.env.FAKE_GIT_SHOW_FAIL === '1') die("fatal: path 'scripts/server-manager.mjs' does not exist in 'origin/main'")
+  const f = process.env.FAKE_GIT_SHOW_FILE
+  if (!f || !existsSync(f)) die('fatal: 假 git：没有可用的 FAKE_GIT_SHOW_FILE')
+  process.stdout.write(readFileSync(f, 'utf8')); process.exit(0)
+}
+const real = process.env.GIT_REAL
+if (!real) process.exit(0)   // 没有真 git 时其它命令一律"空成功"（tree-guard 会自己报 unknown，不影响本组断言）
+const r = spawnSync(real, args, { stdio: 'inherit' })
+process.exit(typeof r.status === 'number' ? r.status : 1)
+`)
+  const GIT_FLOOR_ENV = { GIT_BIN: GIT_STUB, GIT_REAL }
 
   let r = watch({ pack: P('0.2.1', '2026-10-18T18:00:06Z'), args: [...TARGET, '--force-published', '2026-10-18T18:00:06Z', '--now', '2026-10-19T00:00:00Z', '--sla-hours', '6'] })
   check('watch', 'published 距今 5.998h（门槛 6h）⇒ breached=false', 'false', String(r.report?.breached))
@@ -517,6 +552,53 @@ function groupWatch() {
   check('watch', '--floor / --registry 注入进报告（演练可完全离线复刻）', '0.2.1-rc.2|http://127.0.0.1:9',
     `${r.report?.floor}|${r.report?.registry}`)
 
+  // ══ 2026-11-16：地板真源 = origin/main（#259「已关闭跟踪单被反复更新」的根因）════════════
+  // 事故：默认读**工作树** scripts/server-manager.mjs。工作树漂到 feature 分支时地板落后于发布状态
+  // （实测 main=0.2.2-rc.1 / 工作树=0.2.1-rc.5）⇒ 每轮把已适配的版本当"未适配"、去 edit 已关闭的
+  // #259；autopilot 吃同一份读数。下面四组断言都靠 GIT_BIN 桩构造，**不联网、不碰真仓库**：
+  // 桩里 origin/main 那份 server-manager.mjs 的地板与工作树**故意不同** ⇒ 实现若还读工作树，断言必红。
+  const wtFloor = floorOfManager(ROOT)
+  const originFloor = wtFloor === '9.9.9-origin' ? '9.9.8-origin' : '9.9.9-origin'
+  const originManager = join(W, 'origin-main-server-manager.mjs')
+  writeFileSync(originManager, `const MIN_DSH_VERSION = '${originFloor}'\n`)
+  const gitCalls = join(W, 'git-calls.log')
+  const resetGitCalls = () => writeFileSync(gitCalls, '')
+  const gitCallsText = () => readFileSync(gitCalls, 'utf8')
+
+  resetGitCalls()
+  r = watch({ pack: P('0.2.1', '2026-10-18T12:00:00Z'), args: ['--now', '2026-10-19T00:00:00Z'],
+    env: { FAKE_GIT_SHOW_FILE: originManager, GIT_CALLS: gitCalls } })
+  check('watch', '(a) 工作树与 origin/main 的地板不同 ⇒ 取 origin/main（真源不是工作树）', `${originFloor}|origin/main|true`,
+    `${r.report?.floor}|${r.report?.floorSource}|${String(wtFloor !== originFloor)}`)
+  check('watch', '  ⇒ 真去做了有界 fetch 且用 git show 取文件（不是 readFileSync 工作树）', 'true|true|true',
+    `${gitCallsText().includes('fetch --no-tags origin main')}|${gitCallsText().includes('show origin/main:scripts/server-manager.mjs')}|${r.stdout.includes('（真源 origin/main）')}`)
+  const originSrc = r.report?.floorSource
+
+  resetGitCalls()
+  r = watch({ pack: P('0.2.1', '2026-10-18T12:00:00Z'), args: ['--now', '2026-10-19T00:00:00Z'], env: { GIT_BIN: '/bin/false' } })
+  const fallbackWarn = r.stderr.split('\n').filter((l) => l.includes('地板真源回退到工作树'))
+  check('watch', '(b) git 取不到（GIT_BIN=/bin/false）⇒ 回退工作树，floorSource=worktree', `worktree|${wtFloor}`,
+    `${r.report?.floorSource}|${r.report?.floor}`)
+  check('watch', '  ⇒ stderr 恰好一行明确告警（真源 + 原因 + 读数），人读输出也标"回退"', '1|true|true|true',
+    `${fallbackWarn.length}|${fallbackWarn[0]?.startsWith('!! dsh-watch：地板真源回退到工作树')}|${fallbackWarn[0]?.includes('取不到 origin/main:scripts/server-manager.mjs')}|${r.stdout.includes('（真源 worktree·回退：取不到 origin/main）')}`)
+  const worktreeSrc = r.report?.floorSource
+
+  resetGitCalls()
+  r = watch({ pack: P('0.2.1', '2026-10-18T12:00:00Z'), args: ['--floor', '0.1.2', '--now', '2026-10-19T00:00:00Z'],
+    env: { FAKE_GIT_SHOW_FILE: originManager, GIT_CALLS: gitCalls } })
+  check('watch', '(c) --floor 仍是最高优先级：覆盖真源、且不 fetch/show（floorSource=arg）', 'true|true|true',
+    `${r.report?.floorSource === 'arg'}|${r.report?.floor === '0.1.2'}|${!gitCallsText().includes('fetch') && !gitCallsText().includes('show origin/main')}`)
+  const argSrc = r.report?.floorSource
+
+  check('watch', '(d) floorSource 三种取值各有一例：arg / origin/main / worktree', 'arg,origin/main,worktree',
+    [argSrc, originSrc, worktreeSrc].sort().join(','))
+
+  resetGitCalls()
+  r = watch({ pack: P('0.2.1', '2026-10-18T12:00:00Z'), args: ['--now', '2026-10-19T00:00:00Z'],
+    env: { FAKE_GIT_FETCH_FAIL: '1', FAKE_GIT_SHOW_FILE: originManager, GIT_CALLS: gitCalls } })
+  check('watch', '(e) fetch 失败但本地已有 origin/main ⇒ 仍用 origin/main，并告警"可能不是最新"', `${originFloor}|origin/main|true`,
+    `${r.report?.floor}|${r.report?.floorSource}|${r.stderr.includes('git fetch origin main 失败')}`)
+
   r = watch({ pack: P('0.2.1', '2026-10-19T01:00:00Z'), args: [...TARGET, '--force-published', '2026-10-19T01:00:00Z', '--now', '2026-10-19T00:00:00Z'] })
   check('watch', 'published 在未来 1h ⇒ elapsed=-1、breached=false（未到点不违约）', '-1|false', `${r.report?.elapsed}|${r.report?.breached}`)
 
@@ -529,8 +611,10 @@ function groupWatch() {
     `${r.report?.pubUnknown}|${r.report?.breached}|${r.report?.deadline}`)
   check('watch', '  （KNOWN_GAP 已修：期限未知时按违约处理，不再落进"永远不违约"）', 'true', String(r.report?.breached), { gap: false })
 
+  // 地板显式注入（2026-11-16）：这条断言验的是"取不到发布时间戳 ⇒ fail-closed"，不是"当前地板是多少"；
+  // 不注入就会随真源（origin/main）或工作树地板漂移 —— 与 §6.15 那两条同一类耦合。
   const noTime = packument({ latest: '0.2.2' }, {})
-  r = watch({ pack: noTime, args: ['--now', '2026-10-19T00:00:00Z'] })
+  r = watch({ pack: noTime, args: ['--floor', '0.2.1-rc.2', '--now', '2026-10-19T00:00:00Z'] })
   check('watch', 'target 在 npm packument 里没有发布时间戳 ⇒ deadline=\'?\' 且 breached=true（fail-closed）', '?|true',
     `${r.report?.deadline}|${r.report?.breached}`)
 
@@ -612,7 +696,7 @@ function groupWatch() {
     '--now', '2026-10-24T00:00:00Z', '--state-dir', stateDir, ...extra]
   const idemEnv = (stateFile, extra = {}) => ({
     PATH_WITH_STUBS: undefined, ...privateTmpEnv, PATH: PATH_WITH_STUBS, FAKE_PACKUMENT: PACK_IDEM,
-    GH_BIN: GH_STATE_STUB, FAKE_GH_STATE: stateFile, GH_CALLS: callsFor(stateFile), ...extra,
+    GH_BIN: GH_STATE_STUB, FAKE_GH_STATE: stateFile, GH_CALLS: callsFor(stateFile), ...GIT_FLOOR_ENV, ...extra,
   })
   const runIdem = (stateFile, { env = {}, extra = [], json = false, stateDir = null } = {}) => {
     const sd = stateDir ?? join(S, `sd-${++idemSeq}`)
@@ -739,7 +823,7 @@ function groupWatch() {
     const r = cmd(process.execPath, args, {
       env: {
         ...privateTmpEnv, PATH: PATH_WITH_STUBS, FAKE_PACKUMENT: pack,
-        GH_BIN: GH_STATE_STUB, FAKE_GH_STATE: stateFile, GH_CALLS: callsFor(stateFile), ...env,
+        GH_BIN: GH_STATE_STUB, FAKE_GH_STATE: stateFile, GH_CALLS: callsFor(stateFile), ...GIT_FLOOR_ENV, ...env,
       },
     })
     return { ...r, report: o ? jsonOf(o) : null, sid: sd }

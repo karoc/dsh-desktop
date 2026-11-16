@@ -211,6 +211,10 @@ function integration() {
         ...process.env,
         PATH: `${BIN}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH ?? ''}`,
         GH_BIN: gh,
+        // 地板真源（2026-11-16）：dsh-watch 默认做一次有界 `git fetch origin main` 读 origin/main。
+        // 本套件只测退避/三态，不该联网、也不该被工作树/远端状态影响 ⇒ 让 git 立即失败，走"回退工作树"
+        // 路径（dsh-watch 会在 stderr 多一行地板真源告警；本文件只对 stdout 做行数断言，故不受影响）。
+        GIT_BIN: '/bin/false',
         FAKE_PACKUMENT: okPkg,
         FAKE_CURL_FAIL: fail ? '1' : '0',
         FAKE_GH_ISSUES: issues,
@@ -324,6 +328,7 @@ function negativeControl() {
         ...process.env,
         PATH: `${BIN}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH ?? ''}`,
         GH_BIN: gh,
+        GIT_BIN: '/bin/false',   // 同上：不联网读 origin/main，走回退路径
         FAKE_PACKUMENT: join(W, 'x.json'),
         FAKE_CURL_FAIL: '1',
         FAKE_GH_ISSUES: issues,
