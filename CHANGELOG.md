@@ -21,6 +21,13 @@
 >
 > 详情见 `.agents/notes/implemented/bug-fix/2026-09-08-legacy-uninstaller-name-kill.md`。
 
+## [0.26.2](https://github.com/karoc/dsh-desktop/compare/v0.26.1...v0.26.2) (2026-11-17)
+
+
+### Bug Fixes
+
+* **preinstalled:** 随包 dsh-kanban 0.2.14（修 dsh 0.2.x 看板路由 400 空体）+ 预装版本追平 ([#288](https://github.com/karoc/dsh-desktop/issues/288)) ([04fc452](https://github.com/karoc/dsh-desktop/commit/04fc452c34ed42c08fa5df2d36ec3403e2c61bcc))
+
 ## [0.26.1](https://github.com/karoc/dsh-desktop/compare/v0.26.0...v0.26.1) (2026-11-17)
 
 
