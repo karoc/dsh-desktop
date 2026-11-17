@@ -21,6 +21,13 @@
 >
 > 详情见 `.agents/notes/implemented/bug-fix/2026-09-08-legacy-uninstaller-name-kill.md`。
 
+## [0.26.6](https://github.com/karoc/dsh-desktop/compare/v0.26.5...v0.26.6) (2026-11-17)
+
+
+### Bug Fixes
+
+* **shell:** dump 保留按内嵌时间戳排序（pid 在前导致新 dump 被当最旧删掉） ([#298](https://github.com/karoc/dsh-desktop/issues/298)) ([c77a247](https://github.com/karoc/dsh-desktop/commit/c77a247ca55605903bc5cfb70a42cd1fa74d4564))
+
 ## [0.26.5](https://github.com/karoc/dsh-desktop/compare/v0.26.4...v0.26.5) (2026-11-17)
 
 
