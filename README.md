@@ -165,7 +165,7 @@ npm run test:chrome-bootstrap   # 同一条链路的**纯 Node 门禁**（进 `n
                             # 删契约的 `if (rootEl)` 守卫 ⇒ 极早时序变红；删自愈的 observe 注册 ⇒ 自愈变红。
                             # 做不到的：顶栏"真的在视口顶部"、菜单尺寸/滚动条仍归 test:chrome-real（本套件的
                             # getBoundingClientRect 是桩常量，不对几何下结论）
-npm run test:control     # manager 控制面（11 场景，含版本地板闸门）
+npm run test:control     # manager 控制面（12 场景，含版本地板闸门）
 npm run test:proxy       # 内置正向代理（13 场景，含「客户端 RST 不得打死 manager」的回归）
 npm run test:launcher-settings  # 代理设置窗口（6 场景）
 npm run test:shell-chrome       # 壳顶栏契约（菜单 id ↔ ACTIONS ↔ lib.rs 桥/命令）
@@ -323,6 +323,7 @@ Web 侧边栏有 **Plugins** 页（安装 / 卸载 / 启用 / 停用 / bundle �
 
 - **预装插件（随壳自带，默认关闭）**：`dsh-kanban`（看板）、`dsh-model-reasoning`（按模型推理档位）、`dsh-turn-navigator`（会话轮次导航）、`@karoc/dsh-smoothly-opencode-session`（OpenCode 会话头，无它会 `400 MissingSessionID`）。它们随安装包发布、被复制进运行时并**版本锁定**（离线可用）；在 dsh 的 **Plugins** 页打开开关即可启用。
 - **用户自装插件**：在 dsh 的 **Plugins** 页按包名 / Git 地址 / tarball / 本地路径安装与卸载（走壳内置 pnpm，壳已把 pnpm shim 挂到 `dsh web` 子进程的 PATH）。
+- **地板守卫（每次拉起 dsh 前自动跑）**：插件自己声明的 dsh peer 地板若高于**已装** dsh（回退旧版、`devMode` 冻结地板升级、离线装不上新版），它的 fiber 会 pending，而 dsh 的 web boot 对未激活条目 fail-closed → **整站白屏**（不是"少个功能"）。机制与处置：预装插件的地板不满足 ⇒ **不装进 runtime**、已启用的从 profile bundles 摘掉（先备份 manifest）；**`--patch` 注入的插件（通知插件）同样纳入校验** ⇒ 本次从注入清单里摘掉（改交一份受控 overlay，仓库里的原 overlay 与其它条目——如浏览器页覆盖——一字不改）。两者都**不删文件**，dsh 回到地板以上后下一轮守卫自动恢复；判定写进 `dsh.json`（`preinstalledSkipped` / `quarantinedPlugins` / `quarantinedPatchPlugins`），启动页日志区会打印一行 `plugin-floor: 隔离 <插件>@<版本>（要求 <peer> "<范围>"，已装 dsh <版本> 不满足）—— …`。
 - **能力边界（相对已移除的壳内控制台）**：① dsh 起不来时无法在图形界面里管理插件（改用壳菜单「停用全部第三方插件…」，它不依赖 dsh）；② 新管理器没有"更新到新版本"操作——需要时用 `dsh plugin --profile web update <包名>`，或卸载后重装；③ 预装插件不再支持"从 npm 升级 / 恢复出厂"，版本随壳发布走。
 - **dsh 更新**：壳菜单「检查更新…」弹窗显示当前/可升版本。稳定版（`latest` tag）随时可一键升；若 npm 有更新的**预发布**（`next`/`alpha` tag）也会提示「（预发布）」可升，想升才升，不点就保持原版本。**版本地板**：dsh < `0.2.2-rc.1` 时启动会自动升到地板（0.1.6-alpha.2 起才有自带插件管理；预装插件要能被兼容门禁放行；0.2.0-rc.1 / rc.2 / 0.2.1-alpha.2 均已全面回归，见方案 §15；alpha.3 静态契约核对通过、已随 v0.18.0 发布并核验），失败会如实提示并继续启动；`dsh.json` 的 `devMode` 会冻结这一自动升级。**地板迁移史**：`0.1.7-rc.2`（2026-09-25）→ `0.2.0-rc.1`（2026-09-29）→ `0.2.0-rc.2`（2026-10-05）→ `0.2.1-alpha.2`（2026-10-09，dev 全面验证后随 v0.17.0 发布）→ `0.2.2-rc.1`（2026-10-30 抬升：静态契约核对 + 安装链路演练通过，dev 实机验收待补）；patch 目标 id fixture 随之逐版重采，**当前值以 `scripts/fixtures/dsh-web-app-patch-ids.json` 为准**（该文件的 `dshVersion` 与 `ids` 是权威，别抄文档里的数；2026-10-29 实测：`dshVersion=0.2.2-rc.1`、191 个 id）。
 - 代理设置入口在**顶栏菜单「代理设置…」**（独立设置窗口，托盘菜单同样可达）。

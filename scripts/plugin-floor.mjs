@@ -101,6 +101,17 @@ export const collectDshFloors = (pkgJson) =>
     .filter(([name]) => /^@deepseek-ai\/dsh($|-)/.test(name))
     .map(([name, range]) => ({ name, range }))
 
+/** 单个插件的地板判定（纯函数；预装插件与 `--patch` 注入插件共用同一套语义）。
+ *  未声明地板 ⇒ floors 为空、unsatisfied 为 null（没有证据就绝不动它）。 */
+export const judgeDshFloor = (installedDsh, pkgJson) => {
+  const floors = collectDshFloors(pkgJson)
+  if (floors.length === 0) return { floors, unsatisfied: null }
+  const bad = floors.find(({ range }) => {
+    try { return !satisfies(installedDsh, range) } catch { return false }
+  })
+  return { floors, unsatisfied: bad ?? null }
+}
+
 /**
  * 生成运行时守卫计划（纯函数）。
  * @param {{installedDsh: string|null, bundled: Array<{name:string, version?:string, pkgJson?:object}>, enabled: string[]}} input
@@ -117,17 +128,10 @@ export const planPluginGuard = ({ installedDsh, bundled = [], enabled = [] }) =>
     // dsh 还没装或版本不可解析：没有可比的基准，什么都不动（避免误伤）
     return { skipInstall, quarantine, warnings: ['dsh 版本未知 → 跳过地板守卫'] }
   }
-  const judge = (name, pkgJson) => {
-    const floors = collectDshFloors(pkgJson)
-    if (floors.length === 0) return { floors, unsatisfied: null }
-    const bad = floors.find(({ range }) => {
-      try { return !satisfies(installedDsh, range) } catch { return false }
-    })
-    return { floors, unsatisfied: bad ?? null }
-  }
+  const judge = (pkgJson) => judgeDshFloor(installedDsh, pkgJson)
   // ① 预装插件：地板不满足就不要装进 runtime（装了也不激活）
   for (const item of bundled) {
-    const { unsatisfied } = judge(item.name, item.pkgJson)
+    const { unsatisfied } = judge(item.pkgJson)
     if (unsatisfied) {
       skipInstall.push({ name: item.name, version: item.version ?? null, floor: unsatisfied.range, requires: unsatisfied.name })
     }
@@ -137,7 +141,7 @@ export const planPluginGuard = ({ installedDsh, bundled = [], enabled = [] }) =>
     if (name.startsWith('@deepseek-ai/')) continue // dsh 自身，永不隔离
     const item = bundled.find((b) => b.name === name)
     if (!item) continue // 用户自装插件：我们不知道它的地板声明（未随壳分发），不动
-    const { floors, unsatisfied } = judge(name, item.pkgJson)
+    const { floors, unsatisfied } = judge(item.pkgJson)
     if (!unsatisfied) {
       if (floors.length === 0) warnings.push(`${name} 未声明 dsh 地板 → 无法判断兼容性，保持启用`)
       continue
@@ -145,6 +149,169 @@ export const planPluginGuard = ({ installedDsh, bundled = [], enabled = [] }) =>
     quarantine.push({ name, version: item.version ?? null, floor: unsatisfied.range, requires: unsatisfied.name })
   }
   return { skipInstall, quarantine, warnings }
+}
+
+
+// ── `--patch` 注入的插件（2026-11-17） ────────────────────────────────────
+//
+// 背景：壳把 @dsh-desktop/client-notifications 注进 dsh 的 loader roster 的唯一路径是
+// `dsh web --patch <overlay>`，而 applyPluginFloorGuard 只拿 resources/preinstalled 当输入
+// ⇒「插件 peer 地板 > 已装 dsh ⇒ dsh web boot fail-closed ⇒ 整站白屏」这条防线对 patch
+// 注入的插件**完全失效**（W2 在 #279 用 planPluginGuard 证明了 0.1.5 时它会被判
+// quarantine，只是没人把它的 package.json 递进守卫）。
+//
+// 这里的处置与预装插件的 quarantine 同语义、机制不同：
+//   预装插件：从 profile bundles 摘掉（manifest 备份后原子写回）；
+//   patch 插件：把**目标 insert 条目**从 overlay 里摘掉，另存一份受控 overlay 再传给 dsh。
+// 两种都"不删文件"：插件包仍在 node_modules，dsh 升到地板以上后下一轮守卫不再摘，
+// 注入自动恢复（守卫每次拉起 dsh 都重算，覆盖 manager 生命周期内的升级/回退）。
+//
+// 只认壳自己产出的 overlay 形状（test-plugin-floor 对真实 patch yml 逐条断言），
+// 不做通用 YAML：
+//   - insert 块：`- insert:` 下的缩进列表项，每项可带 `id:` / `name:`；
+//     带 `name:` 的项才是"注入一个插件包"，是本守卫的判定对象。
+//   - 覆盖块：`- id: <row>` + 缩进字段（如 `disabled: false`）—— **永不改动**。
+// 摘除是**行级手术**：只删目标 insert 项的行，其余条目/注释/空行逐字节保留。
+// 曾考虑"解析成结构再序列化"，那会改写注释与上游格式（test-patch-targets 的契约行也
+// 可能跟着变形）；也曾考虑"摘不干净就整份丢弃"，那会把 ui-sidebar-browser 覆盖一起
+// 弄丢（壳会失去浏览器页）—— post-condition 检查到摘不干净时宁可 fail-open 并响亮告警。
+
+/** overlay 里的 YAML 标量取值（去引号/去行尾注释；只覆盖本仓会写的形状）。 */
+const yamlScalar = (raw) => {
+  const v = String(raw ?? '').trim()
+  for (const quote of ["'", '"']) {
+    if (v.startsWith(quote)) {
+      const end = v.indexOf(quote, 1)
+      if (end > 0) return v.slice(1, end)
+    }
+  }
+  const hash = v.indexOf(' #')
+  return (hash >= 0 ? v.slice(0, hash) : v).trim()
+}
+
+/**
+ * 解析 `--patch` overlay 文本，找出 insert 注入的插件条目与各顶层块的行范围。
+ * 纯函数，不读文件。返回 { blocks, insertPlugins }：
+ *   blocks       ：[{ kind: 'insert'|'override', startLine, endLine, id?, items }]
+ *   insertPlugins：[{ name, id, startLine, endLine }]（只有带 name 的 insert 项）
+ */
+export const parsePatchOverlay = (text) => {
+  const lines = String(text ?? '').split(/\r?\n/)
+  const blocks = []
+  const insertPlugins = []
+  let block = null
+  let item = null
+  const closeItem = () => {
+    if (item && item.name) insertPlugins.push({ name: item.name, id: item.id, startLine: item.startLine, endLine: item.endLine })
+    item = null
+  }
+  const closeBlock = () => {
+    if (block) blocks.push(block)
+    block = null
+  }
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i]
+    const trimmed = line.trim()
+    // 顶层条目（列 0 的 `- `）才切换块；缩进的 `- ` 是块的子项。
+    if (line.startsWith('- ')) {
+      closeItem()
+      closeBlock()
+      const isInsert = /^-\s+insert:\s*(?:#.*)?$/.test(line)
+      block = { kind: isInsert ? 'insert' : 'override', startLine: i, endLine: i, items: [] }
+      if (!isInsert) {
+        const id = /^-\s+id:\s*(.+)$/.exec(line)
+        if (id) block.id = yamlScalar(id[1])
+      }
+      continue
+    }
+    if (!block) continue // 文件头注释/空行，不属于任何条目
+    if (trimmed === '' || trimmed.startsWith('#')) continue // 块尾注释与空行：不属于任何条目
+    if (!/^\s/.test(line)) continue // 非顶层、未缩进：格式超出支持子集 → 不当作条目内容
+    block.endLine = i
+    if (block.kind !== 'insert') continue
+    const nested = /^(\s+)-\s/.exec(line)
+    if (nested) {
+      closeItem()
+      item = { startLine: i, endLine: i, indent: nested[1].length, id: null, name: null }
+      const inlineId = /^\s+-\s+id:\s*(.+)$/.exec(line)
+      if (inlineId) item.id = yamlScalar(inlineId[1])
+      block.items.push(item)
+      continue
+    }
+    if (!item) continue
+    item.endLine = i
+    const name = /^\s+name:\s*(.+)$/.exec(line)
+    if (name && item.name === null) item.name = yamlScalar(name[1])
+    const id = /^\s+id:\s*(.+)$/.exec(line)
+    if (id && item.id === null) item.id = yamlScalar(id[1])
+  }
+  closeItem()
+  closeBlock()
+  return { blocks, insertPlugins }
+}
+
+/**
+ * 生成"摘掉指定 patch 插件后的 overlay 文本"（纯函数，行级手术）。
+ * 保留其它 insert 项、覆盖条目、注释与空行；insert 块被摘空时连 `- insert:` 行一起删
+ * （空的 `insert:` 在 YAML 里是 null，语义与"没有这条 insert"不同）。
+ * @returns {{text: string, removed: string[], missing: string[], residual: string[]}}
+ *   removed  ：确实摘掉的插件名
+ *   missing  ：点名要摘但 overlay 里没有（调用方据此判断"输入已变"）
+ *   residual ：摘完后**仍能解析到**的点名插件（非空 ⇒ 本次手术没生效，调用方必须 fail-open + 告警）
+ */
+export const stripPatchPlugins = (text, names = []) => {
+  const wanted = new Set(names)
+  const { blocks } = parsePatchOverlay(text)
+  const lines = String(text ?? '').split(/\r?\n/)
+  const dropLines = new Set()
+  const removed = []
+  for (const block of blocks) {
+    if (block.kind !== 'insert') continue
+    const hits = block.items.filter((it) => it.name && wanted.has(it.name))
+    if (hits.length === 0) continue
+    for (const it of hits) {
+      for (let i = it.startLine; i <= it.endLine; i += 1) dropLines.add(i)
+      removed.push(it.name)
+    }
+    // 整块都被摘掉（且块内没有非插件项）⇒ 连 openers 行一起删，避免留下空的 `- insert:`
+    if (hits.length === block.items.length) dropLines.add(block.startLine)
+  }
+  const next = lines.filter((_, i) => !dropLines.has(i)).join('\n')
+  const missing = [...wanted].filter((name) => !removed.includes(name))
+  const residual = parsePatchOverlay(next).insertPlugins
+    .filter((p) => wanted.has(p.name))
+    .map((p) => p.name)
+  return { text: next, removed: [...new Set(removed)], missing, residual: [...new Set(residual)] }
+}
+
+/**
+ * 判定 `--patch` 注入的插件是否必须摘掉（纯函数）。
+ * @param {{installedDsh: string|null, plugins: Array<{name: string, version?: string|null, pkgJson?: object|null}>}} input
+ *   plugins[].pkgJson 为 null/undefined ⇒ 找不到包清单，无法判定 ⇒ 只告警，不摘（没有证据）。
+ * @returns {{drop: Array<{name, version, requires, floor}>, warnings: string[]}}
+ */
+export const planPatchPluginGuard = ({ installedDsh, plugins = [] }) => {
+  const drop = []
+  const warnings = []
+  if (!installedDsh || !parse(installedDsh)) {
+    // 与预装插件同语义：没有可比基准就什么都不动（避免误伤）
+    return { drop, warnings: ['dsh 版本未知 → 跳过地板守卫（--patch 注入的插件）'] }
+  }
+  for (const plugin of plugins) {
+    const name = plugin.name
+    if (!name || name.startsWith('@deepseek-ai/')) continue // dsh 自身，永不摘
+    if (!plugin.pkgJson) {
+      warnings.push(`${name}: 找不到 package.json → 无法校验地板，保持注入`)
+      continue
+    }
+    const { floors, unsatisfied } = judgeDshFloor(installedDsh, plugin.pkgJson)
+    if (!unsatisfied) {
+      if (floors.length === 0) warnings.push(`${name} 未声明 dsh 地板 → 无法判断兼容性，保持注入`)
+      continue
+    }
+    drop.push({ name, version: plugin.version ?? null, floor: unsatisfied.range, requires: unsatisfied.name })
+  }
+  return { drop, warnings }
 }
 
 /** 自检（被门禁与单测调用；不自证：这些是 semver 的既有语义）。 */

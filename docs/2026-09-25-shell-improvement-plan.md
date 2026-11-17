@@ -667,6 +667,8 @@ node scripts/sync-preinstalled-plugin.mjs dsh-model-reasoning 0.2.6 --check   # 
 
 **仍未做（登记）**：把 `quarantinedPlugins` 呈现到界面（当前只在 `dsh.json` + manager 日志里）；不一致态下的守卫 E2E 实测（需在 dev runtime 装回 dsh 0.1.6 + `devMode: true` 冻结地板）。
 
+**2026-11-17 扩展（已实现，补上上一节登记的第一处缺口）**：`applyPluginFloorGuard` 只拿 `resources/preinstalled` 当输入，而 `@dsh-desktop/client-notifications` 是 `dsh web --patch` 注入的 ⇒「peer 地板不足 ⇒ 白屏」这条防线对 patch 插件原本失效（W2 在 #279 已证明 `planPluginGuard` 能对 0.1.5 判 quarantine，缺的是接线）。现在 `scripts/plugin-floor.mjs` 增加 overlay 解析/摘除/判定（`parsePatchOverlay` / `stripPatchPlugins` / `planPatchPluginGuard`），manager 在 **每次拉起 dsh 前**（`materializePatchOverlay`，放在 `launchDsh` 开头）按已装 dsh 重算：命中时把目标 insert 条目从 overlay 摘掉、另存 `<runtime>/plugin-floor/dsh-desktop.patch.yml` 再传给 dsh（原 overlay 不改、其它条目如 `ui-sidebar-browser` 覆盖逐字节保留），并记录 `dsh.json` 的 `quarantinedPatchPlugins`。负向保证：不动 `@deepseek-ai/*`、不动未声明地板/找不到包清单的插件（只告警）、不删文件、摘不干净时 **fail-open**（照用原 overlay + 响亮告警，绝不整份丢弃）。验证：`scripts/test-plugin-floor.mjs` 新增 overlay 纯函数用例 + **manager 接线 E2E**（假 dsh 把实际收到的 overlay 写进 probe），两条注入对照进 `scripts/test-controls.mjs`（整份丢弃 ⇒ 红；去掉守卫输入 ⇒ 红）。仍未做：`quarantinedPatchPlugins` 的界面呈现（与上面登记同一条）。
+
 ### 13.11 发布后复核结果（2026-09-26，用户已发布 0.2.6）
 
 - registry：`dsh-model-reasoning@0.2.6` **已发布**（`dist-tags.latest = 0.2.6`，发布于 `2026-09-26T15:18:36.728Z`）。
