@@ -127,15 +127,19 @@ setTimeout(() => { console.log('BUSY-TIMEOUT'); process.exit(3) }, budget + 8000
   try { & $node $driver $wsUrl $seconds } finally { Remove-Item $driver -Force -ErrorAction SilentlyContinue }
 }
 
-# Session-log bytes written since the given offset (UTF-8, BOM-less).
-function Get-SessionTextSince([long]$offset) {
-  if (-not (Test-Path $sessionLog)) { return "" }
-  $fs = [IO.File]::Open($sessionLog, 'Open', 'Read', 'ReadWrite')
+# Bytes written to a log since the given offset (UTF-8, BOM-less).
+function Get-TextSince([string]$path, [long]$offset) {
+  if (-not (Test-Path $path)) { return "" }
+  $fs = [IO.File]::Open($path, 'Open', 'Read', 'ReadWrite')
   try {
     $fs.Seek($offset, 'Begin') | Out-Null
     $sr = New-Object IO.StreamReader($fs, [Text.Encoding]::UTF8)
     return $sr.ReadToEnd()
   } finally { $fs.Dispose() }
+}
+
+function Get-SessionTextSince([long]$offset) {
+  return Get-TextSince $sessionLog $offset
 }
 
 function Get-DumpNames {
@@ -204,6 +208,12 @@ switch ($Action) {
     if (-not $url) { Write-Output "NO-LIVE-URL"; exit 1 }
     $pid2 = Get-DshWebPid $url
     if ($pid2 -le 0) { Write-Output "NO-PID-FOR-PORT"; exit 1 }
+    # Record where this run starts so `check` can never match stale log lines from
+    # an earlier incident (a whole-file match once let a PASS ride on an old line).
+    $mgrOffset = 0; if (Test-Path $managerLog) { $mgrOffset = (Get-Item $managerLog).Length }
+    $sessOffset = 0; if (Test-Path $sessionLog) { $sessOffset = (Get-Item $sessionLog).Length }
+    $marker = Join-Path $runtime ".verify-hang-offset"
+    Set-Content -Path $marker -Value ($mgrOffset.ToString() + "|" + $sessOffset.ToString() + "|" + $url) -Encoding ASCII
     $p = Get-Process -Id $pid2
     $rc = [Native.Nt]::NtSuspendProcess($p.Handle)
     Write-Output ("SUSPENDED pid=" + $pid2 + " rc=" + $rc + " url=" + $url + " at=" + (Get-Date).ToString("o"))
@@ -232,8 +242,14 @@ switch ($Action) {
   }
   "check" {
     Start-Sleep -Seconds $WaitSec
-    $sess = if (Test-Path $sessionLog) { [IO.File]::ReadAllText($sessionLog, [Text.Encoding]::UTF8) } else { "" }
-    $mgr = if (Test-Path $managerLog) { [IO.File]::ReadAllText($managerLog, [Text.Encoding]::UTF8) } else { "" }
+    $mgrOffset = 0; $sessOffset = 0; $hangUrl = $null
+    $marker = Join-Path $runtime ".verify-hang-offset"
+    if (Test-Path $marker) {
+      $parts = (Get-Content $marker -Raw).Trim() -split "\|"
+      if ($parts.Count -ge 3) { $mgrOffset = [long]$parts[0]; $sessOffset = [long]$parts[1]; $hangUrl = $parts[2] }
+    }
+    $sess = Get-TextSince $sessionLog $sessOffset
+    $mgr = Get-TextSince $managerLog $mgrOffset
     Say ($sess -match "dsh web probe miss 3/3") "session.log saw 3 consecutive probe misses"
     Say ($sess -match "dsh web hang: dump saved") "shell reports the dump as saved"
     $dumps = @(Get-ChildItem $reports -Filter "dshweb-hang-*.dmp" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime)
@@ -247,7 +263,15 @@ switch ($Action) {
     # The manager log line contains a U+2014 em dash; build it from an escape so
     # this file stays pure ASCII (PowerShell 5.1 ANSI decoding).
     $dash = [regex]::Unescape("\u2014")
-    Say ($mgr -match ("dump ready " + $dash + " restarting dsh")) "manager waited for the dump ack, then restarted dsh"
+    # Two legitimate manager paths: the shell acked the dump first ("dump ready"),
+    # or the shell had already dumped and the probe still timed out ("still
+    # UNRESPONSIVE after dump (...) - restarting dsh"). Both restart dsh.
+    $restart = ($mgr -match ("dump ready " + $dash + " restarting dsh")) -or ($mgr -match ("still UNRESPONSIVE after dump .*restarting dsh"))
+    Say $restart "manager restarted dsh after the dump"
+    if ($hangUrl) {
+      $liveUrl = Get-LiveUrl
+      Say (($liveUrl) -and ($liveUrl -ne $hangUrl)) "dsh web restarted: live url changed"
+    }
     $app = @(Get-Process -Name (Get-ShellProcessName) -ErrorAction SilentlyContinue)
     Say ($app.Count -ge 1) "shell process is still alive after the hang"
     if ($script:fail -gt 0) { Write-Output ("RESULT FAIL (" + $script:fail + ")"); exit 1 }
