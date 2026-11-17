@@ -424,10 +424,18 @@ const mgrCopy = readFileSync(join(root, 'src-tauri', 'resources', 'manager', 'se
 for (const [name, src] of [['scripts/server-manager.mjs', mgrRs], ['resources/manager copy', mgrCopy]]) {
   assert.ok(!src.includes('comsvcs.dll'), `${name} no longer calls comsvcs (proven broken on this machine)`)
   assert.ok(!src.includes('spawnSync'), `${name} no longer blocks on spawnSync`)
-  assert.ok(src.includes('WATCHDOG_STARTUP_GRACE_MS'), `${name} has the watchdog startup grace`)
+  assert.ok(src.includes('decideWatchdogRestart'), `${name} decides through the shared watchdog policy`)
+  assert.ok(src.includes('STARTUP_MUTE_MS'), `${name} keeps the startup mute window`)
   assert.ok(src.includes("t: 'dump-web'"), `${name} asks the shell for the dump`)
   assert.ok(src.includes("case 'dump-done'"), `${name} waits for the shell's dump ack before restarting`)
 }
+// 看护阈值集中在 scripts/lib/watchdog-policy.mjs（启动宽限 / dump 前长窗口），
+// 它随 manager 模块图进 resources/manager，两处都要存在且字节一致。
+const policySrc = readFileSync(join(root, 'scripts', 'lib', 'watchdog-policy.mjs'), 'utf8')
+const policyCopy = readFileSync(join(root, 'src-tauri', 'resources', 'manager', 'lib', 'watchdog-policy.mjs'), 'utf8')
+assert.ok(policySrc.includes('STARTUP_GRACE_MS'), 'watchdog policy has the startup grace')
+assert.ok(policySrc.includes('PRE_DUMP_PATIENCE_MS'), 'watchdog policy has the pre-dump patience window')
+assert.strictEqual(policyCopy, policySrc, 'resources/manager/lib/watchdog-policy.mjs is byte-identical (run: npm run sync:resources)')
 // 真源/副本必须逐字节一致：上面是逐项子串检查，新增内容漏同步时仍然全绿——而 tauri
 // 打包只带 resources/manager 副本，漂移会让新命令在安装包里不存在（0.5.0/0.6.0 事故同类）。
 assert.strictEqual(mgrCopy, mgrRs, 'resources/manager/server-manager.mjs is byte-identical to scripts/server-manager.mjs (run: npm run sync:resources)')

@@ -28,6 +28,7 @@ import { allowsVersionSwitch, nextUpgradeMarker, upgradeMarkerPath } from './upg
 import { planPluginGuard } from './plugin-floor.mjs'
 import { planShellPluginCleanup } from './shell-plugins.mjs'
 import { bakeBridgePortSource, checkScriptSyntax } from './bake-port.mjs'
+import { decideWatchdogRestart, PRE_DUMP_PATIENCE_MS, STARTUP_MUTE_MS, WATCHDOG_TICK_MS } from './lib/watchdog-policy.mjs'
 
 const PACKAGE = '@deepseek-ai/dsh'
 
@@ -1390,9 +1391,12 @@ let pendingTask = null
 // ── liveness watchdog ──────────────────────────────────────────────────────
 // dsh web can EVENT-LOOP HANG (black page, refresh dead) without exiting, so
 // the supervisor's normal child-exit path never fires. Poll the reported URL:
-// after WATCHDOG_MISS_LIMIT silent misses the child gets a best-effort memory
-// dump; then the URL is probed ONCE MORE — only a service that is still dead is
-// killed + re-spawned (same recovery as the tray's 重启服务). A dsh that already
+// after the streak threshold decided by scripts/lib/watchdog-policy.mjs the child
+// gets a best-effort memory dump, but first one PATIENT probe (PRE_DUMP_PATIENCE_MS)
+// must still fail — a bounded synchronous stall (Plugins page first open in dsh
+// 0.2.2) answers again within that window and is left alone, without a dump.
+// After the dump the URL is probed ONCE MORE — only a service that is still dead
+// is killed + re-spawned (same recovery as the tray's 重启服务). A dsh that already
 // recovered while the dump was being written (2026-10-23 05:54 incident) is left
 // alone. Evidence lands in <runtime>/reports (same dir as node --report reports).
 let watchdogUrl = null
@@ -1402,11 +1406,10 @@ let watchdogMisses = 0
 let watchdogFirstMissAt = 0
 let watchdogTimer = null
 let watchdogRecovering = false
-const WATCHDOG_MS = 3000
-const WATCHDOG_MISS_LIMIT = 3
-// 启动/重载宽限：URL 刚出现时 dsh web 可能仍在加载插件/建索引，慢响应不算
-// 挂起（2026-09-05 重启风暴的同类误判）。
-const WATCHDOG_STARTUP_GRACE_MS = 30000
+// 判定阈值（启动宽限内 5 miss/15s、宽限外 3 miss/9s、dump 前耐心再探 15s）
+// 全部集中在 scripts/lib/watchdog-policy.mjs：本文件只把事实喂进去、按结论执行，
+// 避免阈值散落在 supervisor 循环里再次漂移。
+const WATCHDOG_MS = WATCHDOG_TICK_MS
 // 触发后先请壳抓现场，最多等这么久再重启（壳不在时按上限继续）。
 const WATCHDOG_DUMP_WAIT_MS = 30000
 
@@ -1464,11 +1467,19 @@ async function watchdogTick(hooks = {}) {
   const killChild = hooks.kill ?? ((pid) => { restartRequested = true; killTree(pid) })
   const first = await probe(watchdogUrl)
   if (first.ok) { watchdogMisses = 0; watchdogFirstMissAt = 0; return }
-  if (Date.now() - watchdogArmedAt < WATCHDOG_STARTUP_GRACE_MS) return
+  if (Date.now() - watchdogArmedAt < STARTUP_MUTE_MS) return
   if (watchdogMisses === 0) watchdogFirstMissAt = Date.now()
   watchdogMisses += 1
-  writeLog(`watchdog: dsh web miss ${watchdogMisses}/${WATCHDOG_MISS_LIMIT} (${logSafeUrl(watchdogUrl)})`)
-  if (watchdogMisses >= WATCHDOG_MISS_LIMIT) {
+  // 判据走纯逻辑模块：启动宽限内要 5 miss（≈15s），宽限外维持 3 miss（≈9s）。
+  // 窗口按「miss 次数 × 探针间隔」计（名义下限）；真实经过时间只进日志给人看。
+  const decision = decideWatchdogRestart({
+    elapsedSinceStartMs: Date.now() - watchdogArmedAt,
+    consecutiveMisses: watchdogMisses,
+    missIntervalMs: WATCHDOG_MS,
+  })
+  const windowSec = ((Date.now() - watchdogFirstMissAt) / 1000).toFixed(1)
+  writeLog(`watchdog: dsh web miss ${watchdogMisses}/${decision.missLimit} (${decision.phase}, ${windowSec}s without an answer) (${logSafeUrl(watchdogUrl)})`)
+  if (decision.restart) {
     const stuckUrl = watchdogUrl
     const missCount = watchdogMisses
     const firstMissAt = watchdogFirstMissAt || Date.now()
@@ -1476,6 +1487,24 @@ async function watchdogTick(hooks = {}) {
     watchdogArmed = false
     watchdogUrl = null
     watchdogMisses = 0
+    // 3 次 miss 只证明「连续约 9s 没应答」，不证明进程已死：dsh 0.2.2 的插件页首开
+    // 会让事件循环同步扫盘 2-12s（上游 pluginManager/listBundles、listPlugins、
+    // pluginInventory/list 三条 RPC 各跑一遍 metaOf→dictionariesOf 的
+    // readdirSync/resolveSync/readFileSync，且无缓存），随后自行恢复。
+    // 在付出「数百 MB 现场 dump + 挂起目标进程」之前，先用长窗口再探一次；真挂起
+    // 只是多等这个窗口，随后仍然 dump + 重启（安全边界不变）。
+    const patient = await probe(stuckUrl, PRE_DUMP_PATIENCE_MS)
+    if (patient.ok) {
+      watchdogMisses = 0
+      watchdogFirstMissAt = 0
+      watchdogUrl = stuckUrl
+      watchdogArmed = true
+      // 恢复后重新给启动静默期，避免下一拍又按宽限内/外的新阈值判挂起。
+      watchdogArmedAt = Date.now()
+      watchdogRecovering = false
+      writeLog(`watchdog: dsh web slow but alive after ${missCount} miss(es) (probe ${patient.status}, ${Date.now() - firstMissAt}ms) — no dump, no restart`)
+      return
+    }
     // 现场由壳负责：壳用 MiniDumpWriteDump 直接抓（旧的 rundll32 comsvcs 路径
     // 在本机 20s 超时且零产出，既没证据又把一次挂起拖成重启风暴，已移除）。
     // 这里发一条 dump-web 协议行，等壳回 dump-done（或等待上限）后再做最终判定。
@@ -1515,34 +1544,70 @@ function killTree(pid) {
 }
 
 // ── watchdog self-test (--self-test-watchdog) ──────────────────────────────
-// 用桩把探活结果**按顺序**喂给同一个 watchdogTick（不是另写一份判定），覆盖两条
+// 用桩把探活结果**按顺序**喂给同一个 watchdogTick（不是另写一份判定），覆盖五条
 // 负向对照：① 3 次 miss → dump 窗口内恢复 ⇒ 记 recovered、不得 kill/restart；
-// ② dump 后仍无响应 ⇒ 必须 kill + restart（安全边界没被堵死）。
+// ② dump 后仍无响应 ⇒ 必须 kill + restart（安全边界没被堵死）；
+// ③ 长窗口耐心探针恢复 ⇒ 不得 dump、不得 kill（插件页首开型同步卡顿）；
+// ④ 启动宽限内 4 次 miss 不达阈值 ⇒ 不得 dump/kill；
+// ⑤ 启动宽限内 5 次 miss 达阈值 ⇒ 仍然 dump + restart。
 // 由 scripts/test-watchdog-recovery.mjs 调用，并对本文件做变异自证（见该脚本）。
 async function runWatchdogSelfTest() {
   const saved = {
     watchdogUrl, watchdogArmed, watchdogArmedAt, watchdogMisses, watchdogFirstMissAt,
     watchdogRecovering, currentChildPid, restartRequested,
   }
+  // ticks：驱动 tick 数；armedAtAgoMs：判据相位（60s ⇒ 启动宽限内，0 ⇒ 宽限外）；
+  // wantDumps 逐场景断言，宽容路径（慢探针盘活 / 宽限内未达阈）必须为 0。
+  const miss = { ok: false, error: 'TimeoutError' }
   const scenarios = [
     {
       name: '3 次 miss → dump 窗口内恢复',
-      probes: [
-        { ok: false, error: 'TimeoutError' }, { ok: false, error: 'TimeoutError' },
-        { ok: false, error: 'TimeoutError' }, { ok: true, status: 200 },
-      ],
+      probes: [miss, miss, miss, miss, { ok: true, status: 200 }],
+      ticks: 3,
+      armedAtAgoMs: 300000,
       wantKills: 0,
+      wantDumps: 1,
       wantLog: /watchdog: dsh web recovered after 3 miss\(es\)/,
       wantRearmed: true,
     },
     {
       name: 'dump 后仍无响应',
-      probes: [
-        { ok: false, error: 'TimeoutError' }, { ok: false, error: 'TimeoutError' },
-        { ok: false, error: 'TimeoutError' }, { ok: false, error: 'TimeoutError' },
-      ],
+      probes: [miss, miss, miss, miss, miss],
+      ticks: 3,
+      armedAtAgoMs: 300000,
       wantKills: 1,
+      wantDumps: 1,
       wantLog: /watchdog: dsh web still UNRESPONSIVE after dump .* — restarting dsh/,
+      wantRearmed: false,
+    },
+    {
+      name: 'slow but alive after patient probe',
+      probes: [miss, miss, miss, { ok: true, status: 303 }],
+      ticks: 3,
+      armedAtAgoMs: 300000,
+      wantKills: 0,
+      wantDumps: 0,
+      wantLog: /watchdog: dsh web slow but alive after 3 miss\(es\) .* — no dump, no restart/,
+      wantRearmed: true,
+    },
+    {
+      name: 'startup grace: 4 misses stay below the threshold',
+      probes: [miss, miss, miss, miss],
+      ticks: 4,
+      armedAtAgoMs: 60000,
+      wantKills: 0,
+      wantDumps: 0,
+      wantLog: /watchdog: dsh web miss 4\/5 \(startup, /,
+      wantRearmed: true,
+    },
+    {
+      name: 'startup grace: 5 misses still dump and restart',
+      probes: [miss, miss, miss, miss, miss, miss, miss],
+      ticks: 5,
+      armedAtAgoMs: 60000,
+      wantKills: 1,
+      wantDumps: 1,
+      wantLog: /watchdog: dsh web still UNRESPONSIVE after dump/,
       wantRearmed: false,
     },
   ]
@@ -1562,7 +1627,7 @@ async function runWatchdogSelfTest() {
       // 起点 = "第 1 次 miss 之前"：已 arm、已过启动宽限、无历史 miss。
       watchdogUrl = 'http://127.0.0.1:12345/?token=SELF-TEST-SECRET'
       watchdogArmed = true
-      watchdogArmedAt = 0
+      watchdogArmedAt = Date.now() - (scenario.armedAtAgoMs ?? 0)
       watchdogMisses = 0
       watchdogFirstMissAt = 0
       watchdogRecovering = false
@@ -1576,12 +1641,13 @@ async function runWatchdogSelfTest() {
         kill: (pid) => { kills.push(pid); restartRequested = true },
       }
       console.log(`watchdog self-test: ${scenario.name}`)
-      for (let tick = 0; tick < WATCHDOG_MISS_LIMIT; tick++) await watchdogTick(hooks)
+      for (let tick = 0; tick < scenario.ticks; tick++) await watchdogTick(hooks)
       for (const line of logs) console.log(`  log: ${line}`)
       const problems = []
       if (kills.length !== scenario.wantKills) problems.push(`kill 次数 ${kills.length}，期望 ${scenario.wantKills}`)
       if (!logs.some((line) => scenario.wantLog.test(line))) problems.push(`缺少期望日志 ${scenario.wantLog}`)
-      if (dumps.length !== 1) problems.push(`dump-web 应发 1 次，实际 ${dumps.length}`)
+      const wantDumps = scenario.wantDumps ?? 1
+      if (dumps.length !== wantDumps) problems.push(`dump-web 应发 ${wantDumps} 次，实际 ${dumps.length}`)
       if (watchdogArmed !== scenario.wantRearmed) problems.push(`watchdogArmed=${watchdogArmed}，期望 ${scenario.wantRearmed}`)
       if (logs.some((line) => line.includes('SELF-TEST-SECRET') || line.includes('token='))) {
         problems.push('日志泄露了 token / 完整 URL')

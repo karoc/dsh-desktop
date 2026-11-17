@@ -94,7 +94,7 @@ for (const name of managerModules) {
   assertSameFile(join(managerSrcDir, name), join(managerCopyDir, name),
     `manager 模块图成员 ${name} 必须在 resources/manager 里且字节一致（跑 npm run sync:resources）`)
 }
-for (const name of readdirSync(managerCopyDir)) {
+for (const name of walk(managerCopyDir)) {
   if (!name.endsWith('.mjs')) continue
   if (!managerModules.has(name)) fail(`resources/manager/${name} 不在 manager 模块图里（残留副本，应删除）`)
 }
