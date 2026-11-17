@@ -18,6 +18,10 @@ window.__ModuleLoader__.load({
 		const listeners = /* @__PURE__ */ new Set();
 		let counts = { open: 0 };
 		let pollTimer = null;
+		/** Monotonic request sequence: only the latest response may publish a count. */
+		let requestSeq = 0;
+		/** Trailing coalescing timer for workspace-feed triggers. */
+		let coalesceTimer = null;
 		/** Subscribe to count changes; returns an unsubscribe. */
 		function subscribeCounts(fn) {
 			listeners.add(fn);
@@ -31,9 +35,11 @@ window.__ModuleLoader__.load({
 		}
 		/** Fetch the open-item count for one workspace and publish it. */
 		async function refreshCounts(cwd) {
+			const seq = ++requestSeq;
 			try {
 				const response = await fetch(`/kanban/counts?cwd=${encodeURIComponent(cwd)}`);
 				const body = await response.json();
+				if (seq !== requestSeq) return;
 				if (response.ok && body.ok === true && typeof body.open === "number") {
 					counts = { open: body.open };
 					for (const fn of listeners) fn();
@@ -65,8 +71,12 @@ window.__ModuleLoader__.load({
 		* for the next poll interval).
 		*/
 		function triggerCountsPoll() {
-			const cwd = latestResolveCwd?.();
-			if (cwd !== void 0 && cwd !== "") refreshCounts(cwd);
+			if (coalesceTimer !== null) return;
+			coalesceTimer = setTimeout(() => {
+				coalesceTimer = null;
+				const cwd = latestResolveCwd?.();
+				if (cwd !== void 0 && cwd !== "") refreshCounts(cwd);
+			}, 250);
 		}
 		/** Stop polling; keeps the last published count. */
 		function stopCountsPolling() {
@@ -75,6 +85,139 @@ window.__ModuleLoader__.load({
 				pollTimer = null;
 			}
 			latestResolveCwd = void 0;
+		}
+		//#endregion
+		//#region src/client/board-view.ts
+		/** Column order, left to right. */
+		const STATUS_ORDER = [
+			"todo",
+			"in_progress",
+			"done"
+		];
+		/** Locale-independent string ordering (deterministic across machines). */
+		function compareText(left, right) {
+			return left < right ? -1 : left > right ? 1 : 0;
+		}
+		/**
+		* Order the board: status bucket first, then the card touched most recently.
+		*
+		* `updatedAt` decides within a status (a done card is read by its finish day),
+		* `createdAt` breaks ties (a card edited in the same millisecond), and the id
+		* makes the order total so a poll that returns the same board cannot reshuffle
+		* the DOM and drop the reader's scroll position.
+		* @param cards - the cards as served by the host route.
+		* @returns a new array; the input is never mutated.
+		*/
+		function sortCards(cards) {
+			const rank = {
+				todo: 0,
+				in_progress: 1,
+				done: 2
+			};
+			return [...cards].sort((left, right) => {
+				const byStatus = rank[left.status] - rank[right.status];
+				if (byStatus !== 0) return byStatus;
+				const byUpdated = right.updatedAt - left.updatedAt;
+				if (byUpdated !== 0) return byUpdated;
+				const byCreated = right.createdAt - left.createdAt;
+				if (byCreated !== 0) return byCreated;
+				return compareText(left.id, right.id);
+			});
+		}
+		/** The searchable text of one card (every field the page can show). */
+		function searchableText(card) {
+			return [
+				card.id,
+				card.title,
+				card.description ?? "",
+				card.summary ?? "",
+				card.rationale ?? "",
+				card.rejected ?? "",
+				card.tags.join(" ")
+			].join("\n").toLowerCase();
+		}
+		/**
+		* Does a card match a free-text query?
+		*
+		* Case-insensitive; every whitespace-separated term must appear somewhere in the
+		* card (id, title, description, what/why/rejected, tags), so "0.2.14 search"
+		* finds the card that mentions both without caring about field boundaries.
+		* @param card - one card.
+		* @param query - raw user input; empty/blank matches everything.
+		*/
+		function cardMatchesQuery(card, query) {
+			const terms = query.toLowerCase().split(/\s+/).filter((term) => term !== "");
+			if (terms.length === 0) return true;
+			const haystack = searchableText(card);
+			return terms.every((term) => haystack.includes(term));
+		}
+		/**
+		* Apply the status + tag + query filters.
+		* @param cards - any card list.
+		* @param filters - current filter state.
+		* @returns the matching cards, input order preserved.
+		*/
+		function filterCards(cards, filters) {
+			return cards.filter((card) => (filters.status === "all" || card.status === filters.status) && (filters.tag === void 0 || card.tags.includes(filters.tag)) && cardMatchesQuery(card, filters.query));
+		}
+		/**
+		* Tag index for the filter chips: most-used first, then alphabetical.
+		* @param cards - usually the unfiltered board, so chips do not vanish as you filter.
+		*/
+		function collectTags(cards) {
+			const counts = /* @__PURE__ */ new Map();
+			for (const card of cards) for (const tag of card.tags) counts.set(tag, (counts.get(tag) ?? 0) + 1);
+			return [...counts.entries()].map(([tag, count]) => ({
+				tag,
+				count
+			})).sort((left, right) => right.count - left.count || compareText(left.tag, right.tag));
+		}
+		/**
+		* How many done cards one page step shows.
+		* @param total - matching done cards.
+		* @param pages - 1-based page count (the page starts at 1 and grows by one click).
+		*/
+		function doneVisibleCount(total, pages) {
+			return Math.min(total, (Number.isFinite(pages) ? Math.max(1, Math.trunc(pages)) : 1) * 20);
+		}
+		/**
+		* Is the done window in force? A query or a tag narrows the board, and then the
+		* matching done cards are all shown: a search result that still hides its hit
+		* behind "load more" is not a search result.
+		* @param filters - current filter state.
+		*/
+		function doneWindowActive(filters) {
+			return filters.query.trim() === "" && filters.tag === void 0;
+		}
+		/**
+		* Build the render model: order, filter, group, then window the done column.
+		* @param cards - the cards as served by the host route.
+		* @param filters - current filter state.
+		* @param pages - done-column page count (ignored while a filter narrows the board).
+		*/
+		function buildBoardView(cards, filters, pages) {
+			const matching = filterCards(sortCards(cards), filters);
+			const groups = {
+				todo: [],
+				in_progress: [],
+				done: []
+			};
+			for (const card of matching) groups[card.status].push(card);
+			const totals = {
+				todo: groups.todo.length,
+				in_progress: groups.in_progress.length,
+				done: groups.done.length
+			};
+			const visible = doneWindowActive(filters) ? doneVisibleCount(totals.done, pages) : totals.done;
+			const doneHidden = totals.done - visible;
+			if (doneHidden > 0) groups.done = groups.done.slice(0, visible);
+			return {
+				groups,
+				totals,
+				doneHidden,
+				tags: collectTags(cards),
+				narrowed: filters.query.trim() !== "" || filters.tag !== void 0
+			};
 		}
 		//#endregion
 		//#region src/client/BoardPage.tsx
@@ -89,24 +232,10 @@ window.__ModuleLoader__.load({
 		* so the page matches the native DSH look; only layout lives in the plugin's
 		* own token-based styles.
 		*/
-		const STATUSES = [
-			"todo",
-			"in_progress",
-			"done"
-		];
-		/** Sort cards so done trails the open ones, and newest first within a status. */
-		function sortCards(cards) {
-			return [...cards].sort((left, right) => {
-				const order = {
-					todo: 0,
-					in_progress: 1,
-					done: 2
-				};
-				const d = order[left.status] - order[right.status];
-				if (d !== 0) return d;
-				return right.createdAt - left.createdAt;
-			});
-		}
+		/** The columns, in render order (the view model owns the ordering rules). */
+		const STATUSES = STATUS_ORDER;
+		/** The status chips of the filter bar, including the "every column" option. */
+		const STATUS_FILTERS = ["all", ...STATUS_ORDER];
 		/** Status label for a board status (locale-aware). */
 		function statusLabel(status, t) {
 			if (status === "todo") return t("statusTodo");
@@ -159,11 +288,19 @@ window.__ModuleLoader__.load({
 			const [draftRejected, setDraftRejected] = (0, react.useState)("");
 			const [archivedNotice, setArchivedNotice] = (0, react.useState)(void 0);
 			const [workspacePickerOpen, setWorkspacePickerOpen] = (0, react.useState)(false);
+			const [query, setQuery] = (0, react.useState)("");
+			const [statusFilter, setStatusFilter] = (0, react.useState)("all");
+			const [tagFilter, setTagFilter] = (0, react.useState)(void 0);
+			const [donePages, setDonePages] = (0, react.useState)(1);
 			const [selectedWorkspace, setSelectedWorkspace] = (0, react.useState)(workspace);
 			const lastSignature = (0, react.useRef)(null);
+			const requestSeq = (0, react.useRef)(0);
+			const cwdRef = (0, react.useRef)(void 0);
 			const cwd = selectedWorkspace?.cwd;
+			cwdRef.current = cwd;
 			const refresh = (0, react.useCallback)(async (opts) => {
 				if (cwd === void 0) return;
+				const seq = ++requestSeq.current;
 				const silent = opts?.silent ?? false;
 				if (!silent) {
 					setLoading(true);
@@ -171,6 +308,7 @@ window.__ModuleLoader__.load({
 				}
 				try {
 					const board = await api.get(cwd);
+					if (seq !== requestSeq.current) return;
 					const sorted = sortCards(board.cards);
 					const signature = JSON.stringify(sorted);
 					setLastUpdated(Date.now());
@@ -185,6 +323,12 @@ window.__ModuleLoader__.load({
 				}
 			}, [api, cwd]);
 			(0, react.useEffect)(() => {
+				lastSignature.current = null;
+				setArchivedNotice(void 0);
+				setQuery("");
+				setStatusFilter("all");
+				setTagFilter(void 0);
+				setDonePages(1);
 				refresh();
 			}, [refresh]);
 			(0, react.useEffect)(() => {
@@ -194,34 +338,39 @@ window.__ModuleLoader__.load({
 				return () => clearInterval(timer);
 			}, [refresh]);
 			const applyMutation = (0, react.useCallback)(async (body) => {
-				if (cwd === void 0) return;
+				if (cwd === void 0) return false;
 				setError(void 0);
 				try {
 					const board = await api.mutate({
 						...body,
 						cwd
 					});
+					if (cwdRef.current !== cwd) return false;
 					setCards(sortCards(board.cards));
 					setPath(board.path);
 					setArchivedNotice(board.archived);
+					return true;
 				} catch (cause) {
 					setError(cause instanceof Error ? cause.message : String(cause));
+					return false;
 				}
 			}, [api, cwd]);
 			const addCard = (0, react.useCallback)(() => {
 				const title = draftTitle.trim();
 				if (title === "" || cwd === void 0) return;
-				applyMutation({
-					op: "add",
-					title,
-					...draftSummary.trim() !== "" ? { summary: draftSummary.trim() } : {},
-					...draftRationale.trim() !== "" ? { rationale: draftRationale.trim() } : {},
-					...draftRejected.trim() !== "" ? { rejected: draftRejected.trim() } : {}
-				});
-				setDraftTitle("");
-				setDraftSummary("");
-				setDraftRationale("");
-				setDraftRejected("");
+				(async () => {
+					if (!await applyMutation({
+						op: "add",
+						title,
+						...draftSummary.trim() !== "" ? { summary: draftSummary.trim() } : {},
+						...draftRationale.trim() !== "" ? { rationale: draftRationale.trim() } : {},
+						...draftRejected.trim() !== "" ? { rejected: draftRejected.trim() } : {}
+					})) return;
+					setDraftTitle("");
+					setDraftSummary("");
+					setDraftRationale("");
+					setDraftRejected("");
+				})();
 			}, [
 				applyMutation,
 				cwd,
@@ -243,15 +392,37 @@ window.__ModuleLoader__.load({
 					id
 				});
 			}, [applyMutation]);
-			const grouped = (0, react.useMemo)(() => {
-				const groups = {
-					todo: [],
-					in_progress: [],
-					done: []
-				};
-				for (const card of cards) groups[card.status].push(card);
-				return groups;
-			}, [cards]);
+			const filters = (0, react.useMemo)(() => ({
+				query,
+				status: statusFilter,
+				tag: tagFilter
+			}), [
+				query,
+				statusFilter,
+				tagFilter
+			]);
+			const view = (0, react.useMemo)(() => buildBoardView(cards, filters, donePages), [
+				cards,
+				filters,
+				donePages
+			]);
+			(0, react.useEffect)(() => {
+				setDonePages(1);
+			}, [
+				query,
+				statusFilter,
+				tagFilter
+			]);
+			const toggleTag = (0, react.useCallback)((tag) => {
+				setTagFilter((current) => current === tag ? void 0 : tag);
+			}, []);
+			const clearFilters = (0, react.useCallback)(() => {
+				setQuery("");
+				setStatusFilter("all");
+				setTagFilter(void 0);
+			}, []);
+			const columns = statusFilter === "all" ? STATUSES : [statusFilter];
+			const visibleMatches = columns.reduce((total, status) => total + view.totals[status], 0);
 			if (selectedWorkspace === void 0) return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 				className: "kb-panel",
 				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(BoardHeader, {
@@ -315,39 +486,101 @@ window.__ModuleLoader__.load({
 							className: "kb-loading",
 							children: t("loading")
 						}) : /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [
+							/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+								className: "kb-toolbar",
+								children: [
+									/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Input, {
+										className: "kb-toolbar-search",
+										value: query,
+										placeholder: t("searchPlaceholder"),
+										"aria-label": t("searchPlaceholder"),
+										onChange: (event) => setQuery(event.target.value)
+									}),
+									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+										className: "kb-toolbar-filters",
+										role: "group",
+										"aria-label": t("filterStatusLabel"),
+										children: STATUS_FILTERS.map((filter) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Pill, {
+											active: statusFilter === filter,
+											onClick: () => setStatusFilter(filter),
+											children: filter === "all" ? t("filterAll") : statusLabel(filter, t)
+										}, filter))
+									}),
+									tagFilter !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(_deepseek_ai_dsh_client_ui_primitives.Pill, {
+										active: true,
+										onClick: () => toggleTag(tagFilter),
+										title: t("filterClearTag"),
+										children: [
+											"#",
+											tagFilter,
+											" ×"
+										]
+									}),
+									(view.narrowed || statusFilter !== "all") && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+										variant: "ghost",
+										size: "sm",
+										onClick: clearFilters,
+										children: t("filterClear")
+									})
+								]
+							}),
 							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-								className: "kb-columns",
-								children: STATUSES.map((status) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("section", {
+								className: `kb-columns${statusFilter === "all" ? "" : " kb-columns-single"}`,
+								children: columns.map((status) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("section", {
 									className: "kb-column",
 									"data-status": status,
-									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-										className: "kb-column-head",
-										children: [
-											/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { className: `kb-dot kb-dot-${status}` }),
-											/* @__PURE__ */ (0, react_jsx_runtime.jsx)("h3", {
-												className: "kb-column-title",
-												children: statusLabel(status, t)
-											}),
-											/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-												className: "kb-column-count",
-												children: t("counts", { n: String(grouped[status].length) })
-											})
-										]
-									}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-										className: "kb-column-cards",
-										children: grouped[status].map((card) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(Card, {
-											card,
-											t,
-											onMove: moveCard,
-											onRemove: removeCard,
-											onOpenSession: openSession
-										}, card.id))
-									})]
+									children: [
+										/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+											className: "kb-column-head",
+											children: [
+												/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { className: `kb-dot kb-dot-${status}` }),
+												/* @__PURE__ */ (0, react_jsx_runtime.jsx)("h3", {
+													className: "kb-column-title",
+													children: statusLabel(status, t)
+												}),
+												/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+													className: "kb-column-count",
+													children: t("counts", { n: String(view.totals[status]) })
+												})
+											]
+										}),
+										/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+											className: "kb-column-cards",
+											children: view.groups[status].map((card) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(Card, {
+												card,
+												t,
+												onMove: moveCard,
+												onRemove: removeCard,
+												onOpenSession: openSession,
+												onTagClick: toggleTag,
+												activeTag: tagFilter
+											}, card.id))
+										}),
+										status === "done" && view.totals.done > 20 && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+											className: "kb-column-foot",
+											children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+												className: "kb-column-foot-note",
+												children: t("doneShowing", {
+													shown: String(view.groups.done.length),
+													total: String(view.totals.done)
+												})
+											}), view.doneHidden > 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+												variant: "outline",
+												size: "sm",
+												onClick: () => setDonePages((pages) => pages + 1),
+												children: t("loadMore", { n: String(view.doneHidden) })
+											})]
+										})
+									]
 								}, status))
 							}),
 							cards.length === 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
 								className: "kb-empty",
 								children: t("empty")
+							}),
+							cards.length > 0 && visibleMatches === 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+								className: "kb-empty",
+								children: t("noMatches")
 							}),
 							/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 								className: "kb-composer",
@@ -359,8 +592,12 @@ window.__ModuleLoader__.load({
 										placeholder: t("addPlaceholder"),
 										onChange: (event) => setDraftTitle(event.target.value),
 										onKeyDown: (event) => {
-											if (event.key === "Enter") addCard();
-										}
+											if (event.key !== "Enter") return;
+											const native = event.nativeEvent;
+											if (native.isComposing || native.keyCode === 229) return;
+											addCard();
+										},
+										"aria-label": t("addPlaceholder")
 									}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
 										variant: "primary",
 										size: "md",
@@ -642,7 +879,7 @@ window.__ModuleLoader__.load({
 		* the three what/why/rejected fields form the clickable region that opens the
 		* detail dialog; the action row is deliberately outside it. */
 		const Card = (0, react.memo)(function Card(props) {
-			const { card, t, onMove, onRemove, onOpenSession } = props;
+			const { card, t, onMove, onRemove, onOpenSession, onTagClick, activeTag } = props;
 			const [statusOpen, setStatusOpen] = (0, react.useState)(false);
 			const [confirmDelete, setConfirmDelete] = (0, react.useState)(false);
 			const [detailOpen, setDetailOpen] = (0, react.useState)(false);
@@ -664,7 +901,7 @@ window.__ModuleLoader__.load({
 					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 						role: "button",
 						tabIndex: 0,
-						"aria-label": t("detailHint"),
+						"aria-label": `${card.title} — ${t("detailHint")}`,
 						"aria-haspopup": "dialog",
 						className: "kb-card-hit",
 						onClick: openDetail,
@@ -711,7 +948,9 @@ window.__ModuleLoader__.load({
 						children: [card.tags.length > 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 							className: "kb-card-meta",
 							children: card.tags.map((tag) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Pill, {
-								active: true,
+								active: activeTag === tag,
+								onClick: () => onTagClick(tag),
+								title: t("filterByTag", { tag }),
 								children: tag
 							}, tag))
 						}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
@@ -1102,7 +1341,16 @@ window.__ModuleLoader__.load({
 			detailUpdated: "Updated {time}",
 			detailEmpty: "No further details on this card.",
 			autoUpdatedAt: "auto-refreshed {time}",
-			missingFields: "missing: {fields}"
+			missingFields: "missing: {fields}",
+			searchPlaceholder: "Search cards (title, body, tags)…",
+			filterAll: "All",
+			filterStatusLabel: "Filter by status",
+			filterByTag: "Filter by tag {tag}",
+			filterClearTag: "Clear the tag filter",
+			filterClear: "Clear filters",
+			noMatches: "No card matches the current filters.",
+			doneShowing: "showing {shown} of {total}",
+			loadMore: "Load more ({n} more)"
 		};
 		/** Chinese strings (same keys as {@link en}). */
 		const zh = {
@@ -1159,7 +1407,16 @@ window.__ModuleLoader__.load({
 			detailUpdated: "更新于 {time}",
 			detailEmpty: "这张卡片没有更多详情。",
 			autoUpdatedAt: "自动更新于 {time}",
-			missingFields: "缺字段：{fields}"
+			missingFields: "缺字段：{fields}",
+			searchPlaceholder: "搜索卡片（标题、正文、标签）…",
+			filterAll: "全部",
+			filterStatusLabel: "按状态过滤",
+			filterByTag: "按标签 {tag} 过滤",
+			filterClearTag: "清除标签过滤",
+			filterClear: "清除过滤",
+			noMatches: "没有符合当前过滤条件的卡片。",
+			doneShowing: "显示 {shown} / {total}",
+			loadMore: "加载更多（还有 {n} 张）"
 		};
 		//#endregion
 		//#region src/client/styles.ts
@@ -1260,6 +1517,28 @@ window.__ModuleLoader__.load({
   max-height: 350px; overflow-y: auto;
 }
 .kb-column-head { display: flex; align-items: center; gap: 8px; flex: none; }
+/* Done-column footer: "showing 20 of 80" + the load-more step. Pinned under the
+   scrolling card area so the button does not travel with the list. */
+.kb-column-foot {
+  display: flex; flex-direction: column; gap: 6px; align-items: stretch;
+  flex: none;
+  border-top: 1px solid var(--dsw-alias-border-l2);
+  padding-top: 8px;
+}
+.kb-column-foot-note { margin: 0; font-size: 11px; line-height: 16px; color: var(--dsw-alias-label-tertiary); text-align: center; }
+/* Search + filter toolbar above the columns: one row that wraps on narrow
+   widths. The search field grows, the chips stay at their natural size. */
+.kb-toolbar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin: 0 0 16px;
+}
+.kb-toolbar-search { flex: 1 1 220px; min-width: 160px; }
+.kb-toolbar-filters { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.kb-toolbar-label { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-tertiary); }
+/* Filtering to one status shows that column alone, full width: a 20-card page
+   reads better across the panel than inside a third of it. */
+.kb-columns-single { grid-template-columns: minmax(0, 1fr); }
+.kb-columns-single .kb-column-cards { max-height: none; }
 .kb-column-title { margin: 0; font-size: 13px; line-height: 18px; font-weight: 600; }
 .kb-column-count {
   font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-tertiary);
@@ -1304,7 +1583,18 @@ window.__ModuleLoader__.load({
 .kb-card-hit:focus-visible .kb-card-detail-icon {
   color: var(--dsw-alias-label-primary);
 }
-.kb-card-desc { margin: 0; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); word-break: break-word; }
+/* A card's description is clamped to two lines with an ellipsis, like the
+   what/why/rejected fields below it: one real card carried a 2,528-character
+   description (a ~755px card), which pushed a single row past a full screen and
+   made scanning impossible. The untruncated text lives in the detail dialog. */
+.kb-card-desc {
+  margin: 0; font-size: 12px; line-height: 18px;
+  color: var(--dsw-alias-label-secondary); word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 .kb-card-fields { display: flex; flex-direction: column; gap: 4px; }
 /* Each what/why/rejected field is clamped to at most two lines with an
    ellipsis (webkit-line-clamp); the full text lives in the detail dialog. */
@@ -1559,7 +1849,8 @@ body .kb-detail-modal { width: min(560px, 100%); }
 				return {
 					path: body.path,
 					cards: body.cards,
-					counts: body.counts
+					counts: body.counts,
+					...body.archived === void 0 ? {} : { archived: body.archived }
 				};
 			};
 			const mutate = async (payload) => {
@@ -1573,7 +1864,8 @@ body .kb-detail-modal { width: min(560px, 100%); }
 				return {
 					path: body.path,
 					cards: body.cards,
-					counts: body.counts
+					counts: body.counts,
+					...body.archived === void 0 ? {} : { archived: body.archived }
 				};
 			};
 			const getSpec = async (cwd) => {
@@ -1666,10 +1958,8 @@ body .kb-detail-modal { width: min(560px, 100%); }
 				},
 				t,
 				openSession: (sessionId) => {
-					const sessions = ctx.get("sessions");
-					if (sessions === void 0) return;
 					ctx.get("layout")?.selectPanel?.(null);
-					sessions.open(sessionId);
+					ctx.get("uiWorkspace")?.openSession?.(sessionId);
 				}
 			});
 			ctx.slots.inject("main", () => ctx.slots.register({

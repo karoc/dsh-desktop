@@ -1,6 +1,6 @@
 {
   "name": "dsh-turn-navigator",
-  "version": "0.4.8",
+  "version": "0.5.0",
   "description": "Smoothly Turn Nav (Smoothly TN): full-history piano-key turn rail for DeepSeek Harness (dsh) web conversations — see every turn at a glance, hover to preview, click to jump anywhere, and replace the official (non-disableable) turn rail.",
   "type": "module",
   "main": "lib/index.js",
@@ -30,11 +30,9 @@
     },
     "client": {
       "inject": [
-        "@deepseek-ai/dsh-client-connection",
         "@deepseek-ai/dsh-client-locale",
-        "@deepseek-ai/dsh-client-ui-conversation",
-        "@deepseek-ai/dsh-client-ui-layout",
         "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-plugin-manager",
         "@deepseek-ai/dsh-api-remotes"
       ],
       "platform": "web"

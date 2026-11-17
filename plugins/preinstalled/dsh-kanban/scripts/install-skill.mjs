@@ -25,7 +25,15 @@ import { dirname, join, resolve } from 'node:path'
 const args = process.argv.slice(2)
 const copy = args.includes('--copy')
 const destFlag = args.find(a => a.startsWith('--dest='))
-const destDir = resolve(destFlag ? destFlag.slice('--dest='.length) : join(homedir(), '.agents', 'skills'))
+const destIndex = args.indexOf('--dest')
+const destValue = destFlag !== undefined
+  ? destFlag.slice('--dest='.length)
+  : destIndex >= 0 ? args[destIndex + 1] : undefined
+if (destIndex >= 0 && args[destIndex + 1] === undefined) {
+  console.error('install-skill: --dest needs a directory')
+  process.exit(1)
+}
+const destDir = resolve(destValue !== undefined ? destValue : join(homedir(), '.agents', 'skills'))
 
 const root = resolve(import.meta.dirname, '..')
 const source = resolve(root, 'skills', 'kanban-use')
