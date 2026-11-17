@@ -70,6 +70,9 @@ pub(crate) struct ManagerExit {
     pub at: u64,
     pub detected_by: String,
     pub evidence_dir: Option<String>,
+    /// What bounded auto-recovery did after this exit ("restarted" / "stopped").
+    /// None for exits recorded before the policy ran (tests / intentional stops).
+    pub auto_restart: Option<String>,
 }
 
 /// Lifecycle bookkeeping shared by every manager spawn/stop.
@@ -87,6 +90,9 @@ pub(crate) struct ManagerGuard {
     /// EOF reader and the watchdog racing each other).
     pub reported_generation: u64,
     pub last_exit: Option<ManagerExit>,
+    /// Unix seconds of every UNEXPECTED exit this shell session observed.
+    /// Drives the bounded auto-recovery policy: see auto_restart_decision.
+    pub unexpected_exits: Vec<u64>,
 }
 
 impl Default for ManagerGuard {
@@ -98,7 +104,66 @@ impl Default for ManagerGuard {
             intentional: false,
             reported_generation: 0,
             last_exit: None,
+            unexpected_exits: Vec::new(),
         }
+    }
+}
+
+/// Auto-recovery policy (D1 revision, 2026-11-17).
+///
+/// The original D1 decision (2026-09-09) was "detect + capture evidence + prompt,
+/// NEVER auto-restart", because a restart overwrites the scene we are hunting.
+/// This revision keeps **evidence first** and adds a BOUNDED recovery:
+///   * an unexpected exit with no other one inside the previous
+///     AUTO_RESTART_WINDOW_SECS => restart the manager once, and say so on the
+///     launcher banner (the wording must NOT promise a fix);
+///   * a second unexpected exit inside that window => stop auto-restarting and
+///     hand back to the user (tray 重启服务 / launcher 重试);
+///   * once the window has passed, the next unexpected exit may auto-restart
+///     again -- a crash an hour later is a different incident.
+pub(crate) const AUTO_RESTART_WINDOW_SECS: u64 = 10 * 60;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AutoRestart {
+    /// Restart the manager once (evidence is already on disk).
+    Restart,
+    /// Do not restart: another unexpected exit happened inside the window.
+    Stop,
+}
+
+impl AutoRestart {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            AutoRestart::Restart => "restarted",
+            AutoRestart::Stop => "stopped",
+        }
+    }
+}
+
+/// Decide what bounded recovery does after an UNEXPECTED manager exit at `now`.
+///
+/// `unexpected_exits` holds unix seconds of the exits already observed in this
+/// shell session. Timestamps at/after `now` are ignored, so a caller may pass
+/// the list either before or after appending the exit being handled -- the
+/// current exit must never count as "a crash in the window".
+/// Launcher-banner note for the recovery action. Kept next to the policy so the
+/// "never promise a fix" rule is testable: auto-restart only restores the
+/// SERVICE; the defect that killed it is still there.
+pub(crate) fn recovery_note(action: AutoRestart) -> &'static str {
+    match action {
+        AutoRestart::Restart => "；服务将自动重启一次（仅恢复服务，不代表已修复）",
+        AutoRestart::Stop => "；10 分钟内第 2 次异常退出——已停止自动重启，请人工处理",
+    }
+}
+
+pub(crate) fn auto_restart_decision(now: u64, unexpected_exits: &[u64]) -> AutoRestart {
+    let recent = unexpected_exits
+        .iter()
+        .any(|&t| t < now && now.saturating_sub(t) < AUTO_RESTART_WINDOW_SECS);
+    if recent {
+        AutoRestart::Stop
+    } else {
+        AutoRestart::Restart
     }
 }
 
@@ -414,6 +479,44 @@ mod tests {
     }
 
     #[test]
+    fn auto_restart_is_bounded_to_one_attempt_per_window() {
+        let w = AUTO_RESTART_WINDOW_SECS;
+        // First unexpected exit in a quiet shell session => restart once.
+        assert_eq!(auto_restart_decision(10_000, &[]), AutoRestart::Restart);
+        // A second death anywhere inside the window => stop, hand back to user.
+        assert_eq!(auto_restart_decision(10_000 + w - 1, &[10_000]), AutoRestart::Stop);
+        // Exactly at the boundary is NOT "within 10 minutes" => allowed again.
+        assert_eq!(auto_restart_decision(10_000 + w, &[10_000]), AutoRestart::Restart);
+        // History outside the window must not block a fresh incident.
+        assert_eq!(auto_restart_decision(100_000, &[10_000, 20_000]), AutoRestart::Restart);
+        // Passing the exit being handled must not count as a crash in the window
+        // (robustness against either call order).
+        assert_eq!(auto_restart_decision(42, &[42]), AutoRestart::Restart);
+        // Clock skew (future timestamp) cannot wedge recovery either.
+        assert_eq!(auto_restart_decision(42, &[99]), AutoRestart::Restart);
+        // One second before the window starts still counts as "inside".
+        assert_eq!(auto_restart_decision(10_000, &[10_000 - w + 1]), AutoRestart::Stop);
+        assert_eq!(AutoRestart::Restart.as_str(), "restarted");
+        assert_eq!(AutoRestart::Stop.as_str(), "stopped");
+    }
+
+    #[test]
+    fn recovery_banner_never_promises_a_fix() {
+        // The banner may say WHAT happened; it must never claim the problem is
+        // solved — auto-restart only restores the service.
+        for action in [AutoRestart::Restart, AutoRestart::Stop] {
+            let note = recovery_note(action);
+            assert!(note.contains("自动重启"), "note must name the recovery action: {note}");
+            assert!(!note.contains("修复成功"), "note must not claim a fix: {note}");
+            assert!(!note.contains("已修复。"), "note must not claim a fix: {note}");
+            assert!(!note.contains("问题已解决"), "note must not claim a fix: {note}");
+        }
+        assert!(recovery_note(AutoRestart::Restart).contains("不代表已修复"));
+        assert!(recovery_note(AutoRestart::Stop).contains("停止自动重启"));
+        assert!(recovery_note(AutoRestart::Stop).contains("人工"));
+    }
+
+    #[test]
     fn hex_and_description_cover_known_codes() {
         assert_eq!(hex_code(Some(1)), "0x00000001");
         assert_eq!(hex_code(Some(2)), "0x00000002");
@@ -499,6 +602,7 @@ mod tests {
             at: 1_788_912_000,
             detected_by: "stdout-eof".into(),
             evidence_dir: None,
+            auto_restart: None,
         };
         let input = EvidenceInput {
             runtime: &runtime,

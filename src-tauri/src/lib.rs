@@ -4344,6 +4344,7 @@ fn handle_manager_exit(app: &AppHandle, generation: u64, detected_by: &str) {
         at: manager_guard::now_unix(),
         detected_by: detected_by.to_string(),
         evidence_dir: None,
+        auto_restart: None,
     };
     let runtime = runtime_dir(app);
     let webview_url = app
@@ -4359,10 +4360,22 @@ fn handle_manager_exit(app: &AppHandle, generation: u64, detected_by: &str) {
         version: env!("CARGO_PKG_VERSION"),
     };
     exit.evidence_dir = manager_guard::collect_evidence(&input).map(|p| p.display().to_string());
+    // D1 复议（2026-11-17）：**取证完成后**才决定是否做有界自动重启。顺序是硬约束——
+    // 先取证再重启，否则重启会覆盖现场（原 D1 只做到了前两步）。策略见
+    // manager_guard::auto_restart_decision（窗口内一次 / 第二次停手 / 超窗再允许）。
+    let auto_restart = {
+        let mut guard = state.guard.lock().unwrap();
+        let now = manager_guard::now_unix();
+        let decision = manager_guard::auto_restart_decision(now, &guard.unexpected_exits);
+        guard.unexpected_exits.push(now);
+        decision
+    };
+    exit.auto_restart = Some(auto_restart.as_str().to_string());
     let described = manager_guard::describe_exit(code);
+    let recovery_note = manager_guard::recovery_note(auto_restart);
     let summary = match &exit.evidence_dir {
-        Some(dir) => format!("服务异常退出（{described}）——证据已保存到 {dir}"),
-        None => format!("服务异常退出（{described}）——证据目录写入失败，完整日志见数据目录"),
+        Some(dir) => format!("服务异常退出（{described}）——证据已保存到 {dir}{recovery_note}"),
+        None => format!("服务异常退出（{described}）——证据目录写入失败，完整日志见数据目录{recovery_note}"),
     };
     *state.last_error.lock().unwrap() = Some(summary.clone());
     state.guard.lock().unwrap().last_exit = Some(exit.clone());
@@ -4384,6 +4397,7 @@ fn handle_manager_exit(app: &AppHandle, generation: u64, detected_by: &str) {
             "at": exit.at,
             "detectedBy": exit.detected_by,
             "evidenceDir": exit.evidence_dir,
+            "autoRestart": exit.auto_restart,
             "summary": summary,
             "upgrade": upgrade_marker_json(app),
         }),
@@ -4391,6 +4405,40 @@ fn handle_manager_exit(app: &AppHandle, generation: u64, detected_by: &str) {
     let _ = app.emit("server-down", ());
     *LIVE_DSH_URL.lock().unwrap() = None;
     navigate_back_to_launcher(app);
+    // 有界自动恢复（D1 复议）：启动页先渲染横幅/证据入口，再重启；第二次崩溃
+    // 不再重启，横幅文案如实说明"已停止自动重启，请人工处理"。
+    match auto_restart {
+        manager_guard::AutoRestart::Restart => {
+            log_line(
+                &data_dir,
+                "auto-restart: restarting manager once after unexpected exit (evidence captured first)",
+            );
+            let app2 = app.clone();
+            std::thread::spawn(move || {
+                // 给启动页一帧时间画出横幅与证据目录入口；再让用户看到"正在重启"。
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                if manager_guard::shutting_down() {
+                    return;
+                }
+                if let Err(e) = restart_server_from(&app2, "auto-recovery", "/auto-restart") {
+                    let data = app2
+                        .path()
+                        .app_data_dir()
+                        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+                    log_line(&data, &format!("auto-restart: failed: {e}"));
+                }
+            });
+        }
+        manager_guard::AutoRestart::Stop => {
+            log_line(
+                &data_dir,
+                &format!(
+                    "auto-restart: stopped — 2nd unexpected exit within {}s window; waiting for the user",
+                    manager_guard::AUTO_RESTART_WINDOW_SECS
+                ),
+            );
+        }
+    }
 }
 
 /// manager 看护线程：每 2s `try_wait` 一次。stdout EOF 是快路径，但孙进程继承
@@ -4589,6 +4637,7 @@ fn shell_status_json(app: &AppHandle, state: &ServerState) -> serde_json::Value 
             "at": e.at,
             "detectedBy": e.detected_by,
             "evidenceDir": e.evidence_dir,
+            "autoRestart": e.auto_restart,
             "summary": manager_guard::describe_exit(e.code),
             // 升级归因（S9）：启动页读的是本结构（get_shell_status / 桥 /shell/status），
             // 不是 manager-exit 事件负载 —— 只加到 emit 上等于死代码（2026-09-25 dev 实测：

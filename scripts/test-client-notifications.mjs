@@ -694,5 +694,14 @@ assert.equal(calls.length, 1, 'P2-4: an unknown kind still notifies')
 assert.ok(!String(calls[0][1].body).includes('[object'), 'P2-4: must never stringify the object into the body')
 disposePend()
 
-console.log('PASS — notification plugin behavioral test (23 notification + 9 aggregate + 1 open-path + 3 P1-4 boot-safety + 3 P1-2/P1-3/P2-4 regression scenarios)')
+// ── scenario 39 (D1): the launcher banner must render the bounded auto-restart
+// verdict, and must never claim a fix. STATIC contract check — src/app.js is
+// browser code evaluated by the launcher page, not importable here; the dynamic
+// half (policy + wording) is covered by Rust unit tests in manager_guard.rs.
+const appJs = readFileSync(join(root, '..', 'src', 'app.js'), 'utf8')
+assert.ok(appJs.includes('exit.autoRestart'), 'D1: launcher must read exit.autoRestart from /shell/status')
+assert.ok(appJs.includes('仅恢复服务，不代表问题已修复'), 'D1: banner must NOT promise a fix')
+assert.ok(appJs.includes('已停止自动重启'), 'D1: banner must state when auto-restart stopped')
+
+console.log('PASS — notification plugin behavioral test (23 notification + 9 aggregate + 1 open-path + 3 P1-4 boot-safety + 3 P1-2/P1-3/P2-4 regression + 1 D1 banner-contract scenarios)')
 process.exit(0)
