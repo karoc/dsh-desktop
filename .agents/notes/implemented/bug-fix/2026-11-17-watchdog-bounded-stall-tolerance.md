@@ -63,3 +63,51 @@ HangDump 状态机保持原样）、不改 proxy/安装/重启路径、不向上
 ERR_MODULE_NOT_FOUND（2026-09-25 同类事故）；test-shell-chrome.mjs 的契约断言从「manager 里有
 WATCHDOG_STARTUP_GRACE_MS」改为「manager 走 decideWatchdogRestart + policy 文件与副本字节一致」；
 README/CONTRIBUTING 的测试套数 34→35 与看护行为描述同步更新。
+
+## v2 追加（2026-11-18）：CPU-aware 有界耐心
+
+**新现场（宿主正式版 0.26.2 / dsh 0.2.2-rc.3，2026-11-17T16:28Z）**：manager.log 显示
+miss 3/3（steady, 6.0s）→ 15s 耐心探针仍失败（UNRESPONSIVE，21s）→ 再探仍超时（22.5s）→
+dump + restart；session.log 记 `dump saved … (663,431,650 bytes)`。即 #282 的 15s 窗口盖不住
+22.5s+ 的**忙**卡顿。根因不变（上游 metaOf/dictionariesOf 无缓存、三条 RPC 各跑一遍）。
+
+**Decision（v2）**：在首次 15s 耐心失败后进入 **CPU-aware 有界扩展循环**：
+
+- 每 5s 采样子进程累计 CPU（win32 `(Get-Process -Id <pid>).CPU` 两次求增量；linux
+  `/proc/<pid>/stat` 的 utime+stime，100Hz 换算；其余平台 null），同窗口再探一次（5s 超时）。
+- **busy（≥10% 单核，`STALL_MIN_BUSY_RATIO`）且 waited < `STALL_BUSY_CEILING_MS`（60s，自 first
+  miss 起算）** ⇒ 记 `watchdog: stalled but busy — extending patience (cpu N%, Ns/60s …)`，继续等。
+- 探针应答 ⇒ 走现有 `slow but alive … — no dump, no restart`（日志带 `+ Ns busy stall`）。
+- **idle（<10%）** ⇒ 立即走现有 dump+restart（**真挂起检测速度不退化**：死锁进程 CPU≈0）。
+- 到 ceiling / **CPU 采样不可用（null）** ⇒ 原边界（dump+restart）。
+- 判定仍是纯函数 `decidePatienceExtension`，阈值（ceiling/采样窗/探针超时/busy 比例）全部在
+  policy 模块；manager 只采样与执行。
+
+**可失败门禁**：`test-watchdog-policy.mjs` 增 5 组边界（busy=10% 恰好、idle、null/NaN/零窗口、
+ceiling 边界、负 CPU/多核 >100%、常数自洽）；`test-watchdog-recovery.mjs` 从 5 场景扩到 **8 场景**
+（新增：忙 25s 后应答不重启、空闲 25s 仍重启、忙过 60s ceiling 仍重启），变异自证 5 → **8**
+（新增：busy 阈值恒真 ⇒ 空闲场景必红；ceiling 缩到 15s ⇒ 忙场景必红；扩展循环应答分支恒假 ⇒ 忙场景必红）。
+自测通过 `hooks.now/sleep/sampleCpu` 注入假时钟（patient 探针按 15s 推进、扩展 sleep 推进），
+零等待且 ceiling 算术与真实时间线一致。
+
+**Alternatives（v2）**：
+
+- **无条件把耐心抬到 60s**：否 —— 真挂起的重启判定对所有场景都从 ~25s 拖到 ~65s，退化明显；
+  只有「CPU 忙」才值得等。
+- **靠壳的 dump-done 事件推断活跃**：否 —— 壳侧 watchdog 在 3 次 miss（≈13s）就自行 dump
+  （`src-tauri/src` 不在本任务写域），把 manager 判据绑到壳的相位上会引入新的跨进程耦合；
+  且 dump 期间进程被挂起（CPU≈0），反而会读成 idle。
+- **单次探针超时直接抬到 60s**：否 —— 与 3s tick 重叠，且首判被拖长。
+- **只在启动宽限内扩展**：否 —— 本次事故发生在 URL 后 ~19 分钟（steady），宽限内扩展覆盖不到。
+
+**Consequences（v2）**：
+
+- 买到的：忙卡顿最长 60s 内不再 dump/重启（用户会话不丢）；真挂起（idle）判定时间基本不变
+  （首次 15s 耐心 + 一个 5s 采样窗 ≈ 26s）；新日志能直接区分「忙等待」「空闲判死」「到顶」。
+- 代价：Windows 上每轮 2 次 PowerShell 采样（每次 ~0.3–0.6s 启动开销，占 5s 窗口的一部分，但
+  那是 **manager** 的 CPU，不污染子进程读数）；忙卡顿最多让 UI 冻结 60s（仍好于重启丢会话）。
+- 已知边界：**壳侧 watchdog 仍会在它的 3 次 miss（≈13s）自行 dump**（663MB/357MB 量级），
+  dump 会短暂挂起目标进程 —— manager 的 CPU 采样窗口若整段落在挂起里会读成 idle 而重启。
+  这是本任务写域外的后续项（建议：壳侧 dump 前也用同一 CPU-aware 判据，或把 shell 的 dump 阈值
+  抬到 manager 扩展之后）。已在 PR 描述与看板卡登记为 follow-up。
+

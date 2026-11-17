@@ -100,3 +100,61 @@ export function decideWatchdogRestart({ elapsedSinceStartMs, consecutiveMisses, 
   else reason = phase + ': ' + misses + ' miss(es) over ' + windowMs + 'ms (threshold ' + missLimit + '/' + minWindowMs + 'ms)'
   return { restart, phase, missLimit, minWindowMs, windowMs, reason }
 }
+
+/**
+ * Ceiling for the CPU-aware extension, measured from the FIRST miss: a child that
+ * keeps burning CPU past this is not worth waiting for (60s of frozen UI is worse
+ * than a restart).
+ */
+export const STALL_BUSY_CEILING_MS = 60_000
+
+/** Wall window used to measure the child's CPU inside the extension loop. */
+export const STALL_SAMPLE_MS = 5_000
+
+/** Probe timeout used inside the extension loop (one probe per window). */
+export const STALL_PROBE_TIMEOUT_MS = 5_000
+
+/**
+ * A stall counts as CPU-busy when the child consumed at least this share of one
+ * core over the sample window. A deadlocked / suspended process sits near 0%;
+ * the upstream Plugins-page sweep measured ~60% on Windows.
+ */
+export const STALL_MIN_BUSY_RATIO = 0.1
+
+/**
+ * Decide what the extended (CPU-aware) patience loop does after one more probe
+ * window: keep waiting (busy child), stop and treat as dead (idle child), stop
+ * because the ceiling was reached, or stop because CPU cannot be sampled here.
+ *
+ * Only the policy decides; the supervisor samples and obeys.
+ * @param {object} facts
+ * @param {number} facts.waitedMs - milliseconds since the first miss, measured AFTER the window.
+ * @param {number|null|undefined} facts.cpuDeltaMs - child CPU consumed during the window, or null/unknown.
+ * @param {number} [facts.sampleWindowMs] - wall duration the CPU delta covers.
+ * @param {number} [facts.ceilingMs] - ceiling since the first miss.
+ * @param {number} [facts.minBusyRatio] - busy threshold (share of one core).
+ * @returns {{ action: 'extend' | 'idle' | 'ceiling' | 'unknown', cpuRatio: number|null, waitedMs: number, reason: string }}
+ */
+export function decidePatienceExtension({
+  waitedMs,
+  cpuDeltaMs,
+  sampleWindowMs = STALL_SAMPLE_MS,
+  ceilingMs = STALL_BUSY_CEILING_MS,
+  minBusyRatio = STALL_MIN_BUSY_RATIO,
+}) {
+  const waited = Number.isFinite(waitedMs) && waitedMs > 0 ? waitedMs : 0
+  const ratio = Number.isFinite(cpuDeltaMs) && Number.isFinite(sampleWindowMs) && sampleWindowMs > 0
+    ? Math.max(0, cpuDeltaMs) / sampleWindowMs
+    : null
+  if (waited >= ceilingMs) {
+    return { action: 'ceiling', cpuRatio: ratio, waitedMs: waited, reason: 'ceiling reached after ' + waited + 'ms' }
+  }
+  if (ratio === null) {
+    return { action: 'unknown', cpuRatio: null, waitedMs: waited, reason: 'child CPU unavailable on this platform' }
+  }
+  if (ratio < minBusyRatio) {
+    return { action: 'idle', cpuRatio: ratio, waitedMs: waited, reason: 'child idle (' + Math.round(ratio * 100) + '% of one core)' }
+  }
+  return { action: 'extend', cpuRatio: ratio, waitedMs: waited, reason: 'child busy (' + Math.round(ratio * 100) + '% of one core)' }
+}
+

@@ -142,7 +142,8 @@ npm test                 # 全量 35 套（34 条 node 直接可跑 + 1 条条�
                          #   （scripts/test-install-logrotate.mjs，7 条断言 + 4 变异）/ **插件备份只挪不删**
                          #   （scripts/test-plugin-backup-preserve.mjs，被打断/跑完但失败双场景 + 负向对照）
                          #   **挂起看护判据**（scripts/test-watchdog-policy.mjs 纯逻辑边界 + scripts/test-watchdog-recovery.mjs
-                         #   五场景自测，含 5 个变异自证：启动宽限 5 miss/15s、宽限外 3 miss/9s、dump 前长窗口盘活）
+                         #   八场景自测，含 8 个变异自证：启动宽限 5 miss/15s、宽限外 3 miss/9s、dump 前长窗口盘活、
+                         #   CPU-aware 有界扩展（忙继续等 / 空闲立刻重启 / 60s ceiling））
                          #   **gh 凭据纪律**（scripts/test-gh-bin-discipline.mjs：裸 gh 缺省扫描 + 消费者兜底 + unit 模板）
                          #   **PAT 过期元数据**（scripts/test-token-meta.mjs：五级分级/退出码、缺失与损坏 ⇒ 未知且
                          #   exit 0、meta 不含 token + 600、每日门控、跃迁式通知的 gh 桩，**含 3 条变异自证**）
@@ -217,8 +218,9 @@ node scripts/server-manager.mjs \
 - 关窗（含顶栏关闭键、Alt+F4、任务栏关闭）→ 隐藏到托盘：**Windows 上首次隐藏前会弹一次确认**（说明任务不会中断、可从托盘找回；确认一次后不再询问，标记在数据目录的 `background-close-confirmed`）；Linux 退化为最小化（GNOME 可能没有托盘）。顶栏/托盘"退出" → 杀掉整棵服务进程树并退出。
 - 点系统通知 → 窗口回到前台并打开对应会话（不重复启动第二个实例）。
 - **服务无响应看护（挂起自动恢复）**：manager 每 3s 探一次 dsh web（任意 2xx–4xx 都算"在听"，401/404 不算挂起）。阈值集中在 `scripts/lib/watchdog-policy.mjs`：URL 刚出现的前 30s 静默期不计 miss；**启动宽限（前 120s）内**要连续 5 次 miss（≈15s），**宽限外维持 3 次 miss（≈9s）**。达到阈值后、在**请壳抓数百 MB 内存 dump（会挂起目标进程）之前**，先用 15s 长窗口再探一次：上游 dsh 0.2.2 的插件页首开会让事件循环同步扫盘 2~12s（`metaOf→dictionariesOf` 三条 RPC 各跑一遍、无缓存），这种会自恢复的停顿记
-  `watchdog: dsh web slow but alive after N miss(es) (probe <status>, <耗时>ms) — no dump, no restart`，**不 dump、不杀、不重启**。只有长窗口仍无响应才请壳抓 dump，**抓完后、杀进程前再探一次**——若这期间已恢复就记
-  `watchdog: dsh web recovered after N miss(es) (probe 200, <耗时>ms, dump ready) — no restart`；仍失败才 `watchdog: dsh web still UNRESPONSIVE after dump … — restarting dsh`（安全边界：真挂起照旧 dump + 重启；代价是重启判定最多推迟约 15s）。日志 URL 只记 `scheme://host:port`，启动 token 不落日志。
+  `watchdog: dsh web slow but alive after N miss(es) (probe <status>, <耗时>ms) — no dump, no restart`，**不 dump、不杀、不重启**。
+  15s 也盖不住的长卡顿（2026-11-17 正式版实测 22.5s+）走 **CPU-aware 有界扩展**：每 5s 采样子进程 CPU + 再探一次（win32 `(Get-Process -Id <pid>).CPU` 两次求增量，linux `/proc/<pid>/stat`，其它平台不扩展）——**忙（≥10% 单核）且未到 60s ceiling（自 first miss 起算）**就记 `watchdog: stalled but busy — extending patience (cpu N%, Ns/60s …)` 继续等；**空闲**立刻按原边界走 dump+重启（真挂起检测不退化）；到 ceiling 或 CPU 采样不可用 ⇒ 原边界。只有扩展后仍无响应才请壳抓 dump，**抓完后、杀进程前再探一次**——若这期间已恢复就记
+  `watchdog: dsh web recovered after N miss(es) (probe 200, <耗时>ms, dump ready) — no restart`；仍失败才 `watchdog: dsh web still UNRESPONSIVE after dump … — restarting dsh`（安全边界：真挂起照旧 dump + 重启；代价是重启判定最多推迟 15s 或 CPU 忙时的 60s ceiling）。日志 URL 只记 `scheme://host:port`，启动 token 不落日志。
 - **退出/重启可追溯**：每次退出/重启都写来源——`quit requested by <tray|bridge|chrome|launcher> path=…`、`restart requested by …`；桥的**成功**危险请求也记 `bridge danger accepted: action=… source=… path=… origin=…`（不再只有 reject 才留痕），确认窗执行时沿用登记时的来源（`danger-action: … approved (source=… path=…)`）。
 
 ### 页面交互：文件拖放与外链（2026-10-23 起）
