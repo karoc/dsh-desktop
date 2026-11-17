@@ -29,7 +29,10 @@ const collectManagerModules = (file) => {
 }
 collectManagerModules('server-manager.mjs')
 for (const name of managerModules) {
-  cpSync(join(root, 'scripts', name), join(res, 'manager', name), { force: true })
+  // 保留相对子目录（如 lib/watchdog-policy.mjs），manager 的 import 路径与源码一致。
+  const dest = join(res, 'manager', name)
+  mkdirSync(dirname(dest), { recursive: true })
+  cpSync(join(root, 'scripts', name), dest, { force: true })
 }
 console.log(`manager modules synced: ${[...managerModules].sort().join(', ')}`)
 
