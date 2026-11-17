@@ -9,8 +9,10 @@
 //! 三档规则（顺序固定，保证同样的输入永远得到同样的删除集合）：
 //! 1. **时间**：`mtime` 早于 `now - max_age` 的删；`mtime` 读不到（元数据错误）**不删**
 //!    （没有判断 = 不能删）。
-//! 2. **份数**：按文件名（升序）只留最新 `keep_newest` 份 —— dump 文件名带单调时间戳，
-//!    名字序 == 时间序，且不依赖 `mtime` 的可信度。
+//! 2. **份数**：按**文件名内嵌的 epoch 秒**（`<prefix>-<pid>-<ts>.dmp` 的 `<ts>`）从旧到新
+//!    只留最新 `keep_newest` 份。注意 pid 在时间戳**前面**，所以不能直接按文件名排序：
+//!    2026-11-18 真机事故里 pid 3796 的新 dump 名字最小、被当成最旧立刻删掉（取证丢失）。
+//!    取不到内嵌时间戳时退回 `mtime`，再退回文件名。
 //! 3. **总量**：剩下的大小之和超过 `max_total_bytes` 时，从最旧的一份开始删到不超。
 //!
 //! 两个安全边界（都是"宁可留证据"）：
@@ -70,6 +72,32 @@ pub(crate) struct RetentionOutcome {
     pub kept_bytes: u64,
 }
 
+/// 从文件名尾部取出单调时间戳（`dshweb-hang-<pid>-<epoch-seconds>.dmp`）。
+///
+/// 为什么不能直接按文件名排序：dump 名是 `前缀-<pid>-<ts>.dmp`，**pid 在前、时间在后**，
+/// 名字序 ≠ 时间序（2026-11-18 真机事故：pid 3796 的新 dump 因名字最小被当成最旧，
+/// 刚写完就被 retains 规则删掉 ⇒ 取证证据丢失）。所以旧→新的排序键取尾部时间戳，
+/// 取不到再退回 mtime，最后才用文件名。
+pub(crate) fn embedded_timestamp(name: &str) -> Option<u64> {
+    let stem = name.rsplit_once('.').map(|(s, _)| s).unwrap_or(name);
+    let tail = stem.rsplit('-').next()?;
+    if tail.is_empty() || !tail.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    tail.parse().ok()
+}
+
+/// 从旧到新的稳定排序键：内嵌时间戳 → mtime → 文件名（同级时按名字兜底）。
+fn recency_key(c: &Candidate) -> (u64, u64, &str) {
+    let ts = embedded_timestamp(&c.name).unwrap_or(0);
+    let mtime_ms = c
+        .mtime
+        .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    (ts, mtime_ms, c.name.as_str())
+}
+
 /// 规则 1 的判据单独抽出来：`mtime` 读不到 ⇒ **保留**（没有判断不等于"很旧"）。
 pub(crate) fn is_older_than(mtime: Option<SystemTime>, now: SystemTime, max_age: Duration) -> bool {
     match (mtime, now.checked_sub(max_age)) {
@@ -88,8 +116,8 @@ pub(crate) fn plan(
     now: SystemTime,
 ) -> (Vec<Candidate>, Vec<Candidate>) {
     let mut sorted: Vec<Candidate> = candidates.to_vec();
-    // 文件名升序 = 从旧到新（dump 名里带单调时间戳）。同名不可能出现在同一目录。
-    sorted.sort_by(|a, b| a.name.cmp(&b.name));
+    // 从旧到新：先比文件名内嵌的 epoch 秒（pid 在前，名字序不可靠），再比 mtime。
+    sorted.sort_by(|a, b| recency_key(a).cmp(&recency_key(b)));
 
     let keep_newest = policy.keep_newest.max(1);
     let mut victims: Vec<Candidate> = Vec::new();
@@ -124,7 +152,11 @@ pub(crate) fn plan(
 
     // 安全边界：永不清空目录 —— 最新的一份必须留下。
     // （规则叠加后理论上仍可能把最新一份算进 victims：例如它的 mtime 也很旧。）
-    if let Some(newest_name) = candidates.iter().map(|c| c.name.clone()).max() {
+    let newest_name = candidates
+        .iter()
+        .max_by(|a, b| recency_key(a).cmp(&recency_key(b)))
+        .map(|c| c.name.clone());
+    if let Some(newest_name) = newest_name {
         let newest_is_a_victim = victims.iter().any(|v| v.name == newest_name);
         let newest_survives = rest.iter().any(|r| r.name == newest_name);
         if newest_is_a_victim && !newest_survives {
@@ -136,8 +168,8 @@ pub(crate) fn plan(
     }
 
     // 两个列表都按从旧到新返回（调用方据此从最旧开始删、日志/测试也可复现）。
-    victims.sort_by(|a, b| a.name.cmp(&b.name));
-    rest.sort_by(|a, b| a.name.cmp(&b.name));
+    victims.sort_by(|a, b| recency_key(a).cmp(&recency_key(b)));
+    rest.sort_by(|a, b| recency_key(a).cmp(&recency_key(b)));
     (victims, rest)
 }
 
@@ -386,6 +418,32 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         let outcome = prune(&dir, "dshweb-hang-", &HANG_DUMP_POLICY, now());
         assert_eq!(outcome, RetentionOutcome::default());
+    }
+
+    // ── 排序：内嵌时间戳，而不是 pid/文件名 ─────────────────────────────────
+    #[test]
+    fn embedded_timestamp_reads_the_trailing_epoch() {
+        assert_eq!(embedded_timestamp("dshweb-hang-3796-1794939539.dmp"), Some(1794939539));
+        assert_eq!(embedded_timestamp("dshweb-hang-73640-1794870000.dmp"), Some(1794870000));
+        assert_eq!(embedded_timestamp("dshweb-hang-01.dmp"), Some(1));
+        assert_eq!(embedded_timestamp("dshweb-hang-subdir.dmp"), None);
+        assert_eq!(embedded_timestamp("dshweb-hang-.dmp"), None);
+    }
+
+    // 2026-11-18 真机事故的形状：最新 dump 的 pid（3796）比旧 dump（73640）小得多，
+    // 按文件名排序会把它排到最旧、刚写完就被删掉（取证丢失）。必须按内嵌 epoch 秒排序。
+    #[test]
+    fn keep_newest_orders_by_embedded_timestamp_not_pid() {
+        let dir = tmp_base("order-by-ts");
+        write_file(&dir, "dshweb-hang-73640-1000.dmp", 4);
+        write_file(&dir, "dshweb-hang-3796-3000.dmp", 4); // 最新，但 pid 最小
+        write_file(&dir, "dshweb-hang-76256-2000.dmp", 4);
+        let out = prune(&dir, "dshweb-hang-", &policy(2, 14, u64::MAX), now());
+        assert_eq!(out.removed, 1);
+        assert!(!dir.join("dshweb-hang-73640-1000.dmp").exists(), "最旧（ts=1000）必须被删");
+        assert!(dir.join("dshweb-hang-3796-3000.dmp").exists(), "最新（ts=3000）必须保留：{out:?}");
+        assert!(dir.join("dshweb-hang-76256-2000.dmp").exists());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
