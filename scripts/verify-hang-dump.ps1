@@ -70,7 +70,8 @@ function Get-DshWebPid([string]$url) {
 
 # Shell process name for this identity (dev and prod shells coexist on one machine).
 function Get-ShellProcessName {
-  if ($Ident -like "*.dev") { return "dsh-desktop-dev" }
+  # dev identities: dsh.smoothly.desktop.dev, ...devw7 (verification instances).
+  if ($Ident -like "*.dev*") { return "dsh-desktop-dev" }
   return "dsh-desktop"
 }
 
@@ -247,7 +248,7 @@ switch ($Action) {
     # this file stays pure ASCII (PowerShell 5.1 ANSI decoding).
     $dash = [regex]::Unescape("\u2014")
     Say ($mgr -match ("dump ready " + $dash + " restarting dsh")) "manager waited for the dump ack, then restarted dsh"
-    $app = @(Get-Process -Name dsh-desktop-dev -ErrorAction SilentlyContinue)
+    $app = @(Get-Process -Name (Get-ShellProcessName) -ErrorAction SilentlyContinue)
     Say ($app.Count -ge 1) "shell process is still alive after the hang"
     if ($script:fail -gt 0) { Write-Output ("RESULT FAIL (" + $script:fail + ")"); exit 1 }
     Write-Output "RESULT PASS"
