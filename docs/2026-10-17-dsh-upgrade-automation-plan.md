@@ -420,7 +420,7 @@ push 前 `git ls-remote` 取期望值 + `git fetch` 建远端跟踪引用 + 显�
 - journald：本机上限 ~100M 且会 vacuum（`AGENTS.md`）⇒ journal 不能当长期取证源，关键日志落文件。
 - 退避状态/心跳/锁/PAUSE：可安全删除（删状态 = 忘掉退避历史，职能不丢），正规入口 `--reset-state`。
 - hang dump：**三档保留已在壳里落地**（采用清单 A9，2026-10-24）：策略单一定义在
-  `src-tauri/src/retention.rs` 的 `HANG_DUMP_POLICY` = **最新 3 份 + 14 天 + 总量 ≤1GiB**，
+  `src-tauri/src/retention.rs` 的 `HANG_DUMP_POLICY` = **最新 2 份 + 14 天 + 总量 ≤1GiB**（2026-11-18 由 3 降为 2），
   `web_dump::prune_dumps` 只是薄封装（每次 dump 与「清理缓存」各跑一次）。两条安全边界：
   **永不清空目录**（策略再严也只删到剩最新一份）与 `mtime` 读不到 ⇒ 保留（没有判断不能删）。
   验证：`retention.rs` 的 8 条单测（CI `check` job 的 `cargo test --lib`）+ 4 条变异对照

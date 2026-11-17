@@ -233,7 +233,7 @@ U="$PS -NoProfile -ExecutionPolicy Bypass -File"
 
 **`verify-hang-dump.ps1`** 用 `Add-Type` 内联 `NtSuspendProcess` 冻结真实 dsh web（免管理员、无需额外工具），
 断言 session.log 的 `probe miss 3/3` + `dump saved` + `dshweb-hang-*.dmp`（实测 313 MiB）+ manager 的
-`dump ready — restarting dsh`；`-Action state` 打印当前 URL/PID/壳状态。挂起 dump 全内存、体积大，壳内保留 3 份。
+`dump ready — restarting dsh`；`-Action state` 打印当前 URL/PID/壳状态。挂起 dump 全内存、体积大，壳内保留 2 份（2026-11-18 由 3 降为 2；单份实测可达 663MB）。
 
 **外部守护（G1，已装）**：`scripts/install-hang-guard.ps1 [-App prod|dev] [-AutoRestart] [-Uninstall]` 把
 `dsh-hang-guard.ps1` 拷到 `%LOCALAPPDATA%\dsh-hang-guard\` 并在当前用户启动文件夹建隐藏窗口快捷方式

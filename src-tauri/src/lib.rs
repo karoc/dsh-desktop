@@ -1578,7 +1578,7 @@ fn cleanup_legacy_install(app: AppHandle) -> serde_json::Value {
 /// 因此：
 ///   - `.pnpm-store` **保留**——暖 store 重建约 6s，删了要冷装（需联网、数分钟）；
 ///   - `reports` **保留**——它是崩溃/挂起取证目录，可能正是排障要的证据；
-///     仅清理其中超过保留策略（3 份 / 14 天 / 总量 ≤1GiB，见 `retention`）的历史 dump；
+///     仅清理其中超过保留策略（2 份 / 14 天 / 总量 ≤1GiB，见 `retention`）的历史 dump；
 ///   - `dsh-home` **保留**——会话、设置、凭据；
 ///   - 只删 `node_modules`（可重建；删除后首次启动需联网重装，UI 必须事先告知）。
 ///

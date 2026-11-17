@@ -910,7 +910,7 @@ MIT
     `--reset-state`。`.detail.log` 自带 128KB 触发 / 只留尾部 400 行的自截断，不参与 logrotate。
   - **dump / 备份**：hang dump 落在 `<应用数据目录>/runtime/reports/dshweb-hang-<pid>-<ts>.dmp`
     （全内存 dump 单个可达数百 MB）。**真实保留策略在壳里且是三维的**（采用清单 A9，2026-10-24）：
-    `src-tauri/src/retention.rs` 的 `HANG_DUMP_POLICY` = **最新 3 份 + 14 天 + 总量 ≤1GiB**，
+    `src-tauri/src/retention.rs` 的 `HANG_DUMP_POLICY` = **最新 2 份 + 14 天 + 总量 ≤1GiB**（2026-11-18 由 3 降为 2），
     由 `web_dump::prune_dumps` 在每次 dump 与「清理缓存」时执行（`cargo test --lib` 覆盖，
     "**永不清空目录**"是硬边界：策略再严也只删到剩最新一份）。**另一个仍然存在的边界**：`scripts/server-manager.mjs` **没有任何 dump 保留逻辑**（`grep -n dump` 只命中
     看护协议行：请壳抓 dump / 等 dump-done / 重启），所以"manager 管 dump"是误解 —— 它只发协议。
