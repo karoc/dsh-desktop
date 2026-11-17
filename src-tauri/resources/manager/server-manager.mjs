@@ -10,6 +10,9 @@
 //      needed — it has no runtime deps, only a peer typing);
 //   4. spawn `dsh web --port 0 --patch <plugin roster>` (and re-spawn it on
 //      request, without re-checking the registry or re-installing plugins);
+//      before every spawn the roster's inserted plugins go through the same dsh
+//      floor guard as the preinstalled bundles (a plugin that outruns the
+//      installed dsh makes dsh's web boot fail-closed → white window);
 //   5. emit machine-readable protocol lines on stdout:
 //        {"t":"url","url":"http://127.0.0.1:<port>"}
 //        {"t":"log","line":"..."}
@@ -25,7 +28,7 @@ import { dirname, delimiter as pathDelimiter, join, relative, resolve } from 'no
 import { fileURLToPath } from 'node:url'
 import { createForwardProxy, providerHostsFromProfileDocument, providerHostsFromSettings } from './proxy.mjs'
 import { allowsVersionSwitch, nextUpgradeMarker, upgradeMarkerPath } from './upgrade-marker.mjs'
-import { planPluginGuard } from './plugin-floor.mjs'
+import { parsePatchOverlay, planPatchPluginGuard, planPluginGuard, stripPatchPlugins } from './plugin-floor.mjs'
 import { planShellPluginCleanup } from './shell-plugins.mjs'
 import { bakeBridgePortSource, checkScriptSyntax } from './bake-port.mjs'
 import { decideWatchdogRestart, PRE_DUMP_PATIENCE_MS, STARTUP_MUTE_MS, WATCHDOG_TICK_MS } from './lib/watchdog-policy.mjs'
@@ -1277,6 +1280,104 @@ function applyPluginFloorGuard(runtimeDir, srcRoot) {
   return plan
 }
 
+/**
+ * `--patch` 注入插件的运行时地板守卫（patch 段见 plugin-floor.mjs）。
+ *
+ * 为什么在**每次拉起 dsh 前**重算而不是只在启动时算一次：dsh 的版本会在 manager
+ * 生命周期里变（壳菜单「检查更新」/兼容闸门会升级，用户也可能回退），而注入的
+ * client-notifications 声明了真实 peer 地板。地板不满足时它的 fiber 会 pending，
+ * dsh 的 web boot 对未激活条目 fail-closed ⇒ 整个界面停在「Failed to load plugins」
+ * 打不开（2026-09-25 真机事故的同族）。重算让"升级后自动恢复注入"成为默认行为，
+ * 不需要用户重启壳。
+ *
+ * 处置 = 把命中的 insert 条目从 overlay 里**摘掉**，另存一份受控副本到
+ * <runtime>/plugin-floor/dsh-desktop.patch.yml 再交给 dsh。原 overlay 不改、插件
+ * 包不删、其它 overlay 条目（如 ui-sidebar-browser 覆盖）逐字节保留。摘不干净
+ * （overlay 形状超出支持子集）时 fail-open：照用原 overlay 并响亮告警 —— 绝不
+ * 整份丢弃（那会连浏览器页覆盖一起弄丢）。
+ */
+function materializePatchOverlay(runtimeDir, patchPath) {
+  const guardedDir = join(runtimeDir, 'plugin-floor')
+  const guarded = join(guardedDir, 'dsh-desktop.patch.yml')
+  const dropGuardedCopy = () => {
+    // fail-open-ok: 旧副本清理失败不影响启动（下一次成功即覆盖写）
+    try { rmSync(guarded, { force: true }) } catch { /* fail-open-ok: 同上 */ }
+  }
+  // 记账要保持诚实：本轮没隔离 ⇒ 清掉上一轮留下的名单（否则诊断会说谎）。
+  const clearRecord = () => {
+    try {
+      const manifest = readShellManifest(runtimeDir)
+      if (!Array.isArray(manifest.quarantinedPatchPlugins) || manifest.quarantinedPatchPlugins.length === 0) return
+      manifest.quarantinedPatchPlugins = []
+      writeShellManifest(runtimeDir, manifest)
+    } catch (err) {
+      log(`plugin-floor: 清理 quarantinedPatchPlugins 记账失败（${err.message}）`) // 记账失败不影响启动
+    }
+  }
+  const settle = () => { dropGuardedCopy(); clearRecord(); return patchPath }
+
+  if (!patchPath || !existsSync(patchPath)) {
+    if (patchPath) log(`plugin-floor: patch overlay 不存在（${patchPath}）— 跳过注入插件的地板校验`)
+    return settle()
+  }
+  let text
+  try {
+    text = readFileSync(patchPath, 'utf8')
+  } catch (err) {
+    log(`plugin-floor: 读不到 patch overlay（${err.message}）— 跳过注入插件的地板校验`)
+    return settle()
+  }
+  const { insertPlugins } = parsePatchOverlay(text)
+  if (insertPlugins.length === 0) return settle()
+  // 包清单以 runtime 里的副本为准（ensurePlugin 已把它按包名落位；dsh 加载的就是这份），
+  // 找不到再回退到 resources 源（例如 ensurePlugin 中途失败）。
+  const plugins = insertPlugins.map(({ name }) => {
+    for (const pkgJsonPath of [join(runtimeDir, 'node_modules', name, 'package.json'), join(args.resourceDir, 'plugin', name, 'package.json')]) {
+      if (!existsSync(pkgJsonPath)) continue
+      try {
+        const pkgJson = JSON.parse(readFileSync(pkgJsonPath, 'utf8'))
+        return { name, version: pkgJson.version ?? null, pkgJson }
+      } catch (err) {
+        log(`plugin-floor: 读不了 ${name} 的 package.json（${err.message}）— 该插件无法校验地板`)
+        break
+      }
+    }
+    return { name, version: null, pkgJson: null }
+  })
+  const plan = planPatchPluginGuard({ installedDsh: installedVersion(runtimeDir), plugins })
+  for (const w of plan.warnings) log(`plugin-floor: ${w}`)
+  if (plan.drop.length === 0) return settle()
+  const dropped = plan.drop.map((p) => p.name)
+  const stripped = stripPatchPlugins(text, dropped)
+  const unresolved = [...new Set([...stripped.missing, ...stripped.residual])]
+  if (unresolved.length > 0) {
+    log(`plugin-floor: 摘不掉 ${unresolved.join(', ')}（overlay 形状超出守卫支持子集）— 仍按原 overlay 注入，白屏风险存在；请更新 scripts/plugin-floor.mjs 的解析`)
+    return settle()
+  }
+  try {
+    mkdirSync(guardedDir, { recursive: true })
+    writeFileSync(guarded, stripped.text)
+  } catch (err) {
+    log(`plugin-floor: 写受控 overlay 失败（${err.message}）— 仍用原 overlay，注入插件可能让 dsh 起不来`)
+    return settle()
+  }
+  const installedDsh = installedVersion(runtimeDir) ?? '?'
+  try {
+    const manifest = readShellManifest(runtimeDir)
+    manifest.quarantinedPatchPlugins = plan.drop.map((p) => ({
+      name: p.name, version: p.version, requires: p.requires, floor: p.floor, source: 'patch', overlay: patchPath, at: Date.now(),
+    }))
+    writeShellManifest(runtimeDir, manifest)
+    shellManifest = manifest
+  } catch (err) {
+    log(`plugin-floor: 记账失败（${err.message}）— 隔离照做，仅 dsh.json 缺记录`)
+  }
+  for (const plugin of plan.drop) {
+    log(`plugin-floor: 隔离 ${plugin.name}@${plugin.version ?? '?'}（要求 ${plugin.requires} "${plugin.floor}"，已装 dsh ${installedDsh} 不满足）—— 已从 --patch 注入清单摘掉：本次不加载该插件（文件保留、原 overlay 未改），dsh 升级到满足地板后自动恢复`)
+  }
+  return guarded
+}
+
 function ensurePreinstalled(runtimeDir, resourceDir) {
   const srcRoot = resolve(resourceDir, 'preinstalled')
   if (!existsSync(srcRoot)) {
@@ -1693,6 +1794,15 @@ function setPendingTask(task) {
 async function launchDsh(runtimeDir, patchPath, cwd) {
   const entry = dshEntry(runtimeDir)
   if (!existsSync(entry)) throw new Error(`${PACKAGE} not installed at ${entry}`)
+  // 注入插件的地板守卫：每次拉起都重算（dsh 可能在 manager 生命周期里被升降级），
+  // 命中时返回受控 overlay 副本；见 materializePatchOverlay 的长注释。
+  try {
+    patchPath = materializePatchOverlay(runtimeDir, patchPath)
+  } catch (err) {
+    // fail-open：守卫自己出错也绝不能挡住 dsh 启动（"起不来"比"白屏风险"更糟），
+    // 但要留一条能定位的日志。守卫内部的读写失败在函数里已各自兜住。
+    log(`plugin-floor: 注入插件的地板守卫异常（${err.message}）— 按原 overlay 启动`)
+  }
   // dsh CLI regression（0.1.2-rc.1 起）：--patch 参数如果含空格（安装目录
   // "DSH Smoothly Desktop"），overlay 以空白切分导致路径截断、启动失败
   // （0.1.1-rc.2 正常）。兼容处理：把 patch 复制到无空格路径

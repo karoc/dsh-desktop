@@ -92,6 +92,29 @@ const controls = [
     mutate: (s) => s.replace("clientSocket.on('error', () => { clientGone = true; dropPending() })", ''),
     suite: 'scripts/test-proxy.mjs',
   },
+  {
+    // 2026-11-17：`--patch` 注入插件的地板守卫。摘除是**行级手术** —— 若图省事"整份丢弃"
+    // （最省事的错误实现），ui-sidebar-browser 的覆盖会跟着消失（壳失去浏览器页），
+    // patch 插件的地板守卫就变成了"用一次更大的破坏换白屏"。
+    name: 'patch overlay 摘除改成整份丢弃 ⇒ 其它 overlay 条目丢失，地板守卫门禁必须红',
+    target: 'scripts/plugin-floor.mjs',
+    mutate: (s) => s.replace(
+      "  const next = lines.filter((_, i) => !dropLines.has(i)).join(",
+      "  const next = '' // mutation-control: 整份丢弃",
+    ),
+    suite: 'scripts/test-plugin-floor.mjs',
+  },
+  {
+    // 2026-11-17 同一处：守卫写了却没接线 = 本缺陷的原状（applyPluginFloorGuard 只扫预装目录）。
+    // 把 manager 侧新增的插件输入去掉，0.1.5 下 patch 插件不再被拦 ⇒ E2E 必须红。
+    name: '去掉 manager 的 patch 插件守卫输入 ⇒ 0.1.5 的注入插件不被拦，地板守卫门禁必须红',
+    target: 'scripts/server-manager.mjs',
+    mutate: (s) => s.replace(
+      'const plan = planPatchPluginGuard({ installedDsh: installedVersion(runtimeDir), plugins })',
+      'const plan = planPatchPluginGuard({ installedDsh: installedVersion(runtimeDir), plugins: [] }) // mutation-control',
+    ),
+    suite: 'scripts/test-plugin-floor.mjs',
+  },
 ]
 
 let failures = 0
