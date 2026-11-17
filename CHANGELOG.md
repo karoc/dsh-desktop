@@ -21,6 +21,13 @@
 >
 > 详情见 `.agents/notes/implemented/bug-fix/2026-09-08-legacy-uninstaller-name-kill.md`。
 
+## [0.26.4](https://github.com/karoc/dsh-desktop/compare/v0.26.3...v0.26.4) (2026-11-17)
+
+
+### Bug Fixes
+
+* **shell:** dump 前 CPU-aware 判忙闲（忙卡顿不抓 dump，真挂起仍 dump） ([#294](https://github.com/karoc/dsh-desktop/issues/294)) ([5bf38be](https://github.com/karoc/dsh-desktop/commit/5bf38be7799533dbb687ecac41567614432da82c))
+
 ## [0.26.3](https://github.com/karoc/dsh-desktop/compare/v0.26.2...v0.26.3) (2026-11-17)
 
 
