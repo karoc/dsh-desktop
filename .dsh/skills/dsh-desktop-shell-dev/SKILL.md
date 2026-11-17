@@ -235,6 +235,21 @@ U="$PS -NoProfile -ExecutionPolicy Bypass -File"
 断言 session.log 的 `probe miss 3/3` + `dump saved` + `dshweb-hang-*.dmp`（实测 313 MiB）+ manager 的
 `dump ready — restarting dsh`；`-Action state` 打印当前 URL/PID/壳状态。挂起 dump 全内存、体积大，壳内保留 2 份（2026-11-18 由 3 降为 2；单份实测可达 663MB）。
 
+**busy 卡顿不抓 dump（2026-11-18 起）**：dump 前先用 `GetProcessTimes` 取两次 CPU（2.5s 窗口）；
+忙（≥10% 单核）⇒ 记 `dsh web hang: busy stall (cpu N%) — skip dump` 并把 miss 清零（视为慢而非死）；
+空闲/采样失败才按原路径抓。判定是纯函数 `web_dump::decide_hang_action`（`cargo test --lib` 覆盖），
+`dump-web` 请求路径不变。真机验收两条：
+
+```powershell
+# 忙路径：inspector 忙循环 20s ⇒ 不得出现新 dump，日志有 busy stall，且 dsh web 未被重启
+"$U" 'D:\Dev\dsh-desktop-dev\scripts\verify-hang-dump.ps1' -Action busy -BusySeconds 20
+# 负向对照：壳用 DSH_HANG_BUSY_GATE=off 启动后，同样忙循环必须重新产生 dump
+"$U" 'D:\Dev\dsh-desktop-dev\scripts\verify-hang-dump.ps1' -Action busy-control -BusySeconds 20
+```
+
+忙路径的忙循环经 shell 自带 node + inspector（`process._debugProcess(pid)`）注入 `Runtime.evaluate`，
+脚本会先等过壳的 30s 启动宽限（否则是空测试），并断言确实出现过 `probe miss 3/3`——没有 miss 的通过不算通过。
+
 **外部守护（G1，已装）**：`scripts/install-hang-guard.ps1 [-App prod|dev] [-AutoRestart] [-Uninstall]` 把
 `dsh-hang-guard.ps1` 拷到 `%LOCALAPPDATA%\dsh-hang-guard\` 并在当前用户启动文件夹建隐藏窗口快捷方式
 （免管理员）。**改了守护脚本要重跑安装器刷新副本**。守护默认 detect-only，日志
