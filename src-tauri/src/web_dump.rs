@@ -180,14 +180,14 @@ mod tests {
             std::fs::write(dir.join(format!("dshweb-hang-{i:02}.dmp")), b"x").unwrap();
         }
         std::fs::write(dir.join("report.keep.json"), b"{}").unwrap();
-        // 策略 = 保留最新 3 份（份数维度）：01/02 被删，03/04/05 留下。
-        assert_eq!(prune_dumps(&dir, "dshweb-hang-").removed, 2);
+        // 策略 = 保留最新 2 份（份数维度）：01/02/03 被删，04/05 留下。
+        assert_eq!(prune_dumps(&dir, "dshweb-hang-").removed, 3);
         let left: Vec<String> = std::fs::read_dir(&dir)
             .unwrap()
             .filter_map(Result::ok)
             .map(|e| e.file_name().to_string_lossy().to_string())
             .collect();
-        assert!(left.contains(&"dshweb-hang-03.dmp".to_string()));
+        assert!(!left.contains(&"dshweb-hang-03.dmp".to_string()));
         assert!(left.contains(&"dshweb-hang-04.dmp".to_string()));
         assert!(left.contains(&"dshweb-hang-05.dmp".to_string()));
         assert!(!left.contains(&"dshweb-hang-01.dmp".to_string()));

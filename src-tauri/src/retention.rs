@@ -23,12 +23,13 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 /// 保留最近几份挂起 dump（全内存 dump 体积大）。
-pub(crate) const HANG_DUMP_KEEP: usize = 3;
+pub(crate) const HANG_DUMP_KEEP: usize = 2;
 /// 时间维度：超过 14 天的 dump 不再保留（README「dump / 备份」一节的实测口径）。
 pub(crate) const HANG_DUMP_MAX_AGE_DAYS: u64 = 14;
 /// 总量维度：所有 dump 加起来超过 1GiB 就从最旧的删起。
-/// 本机实测单个全内存 dump 可到数百 MB（2026-09-17：`reports` 1381MB 里最新一份就占大头），
-/// 3 份 × 数百 MB 已经接近 1GiB，再加时间维度就能同时挡住"份数少但单份巨大"的策略漏洞。
+/// 本机实测单个全内存 dump 可到数百 MB（2026-09-17：`reports` 1381MB 里最新一份就占大头；
+/// 2026-11-18 宿主实测单份 663MB），2 份 × 数百 MB 已接近 1GiB 的一半，再加时间维度
+/// 就能同时挡住"份数少但单份巨大"的策略漏洞。
 pub(crate) const HANG_DUMP_TOTAL_CAP_BYTES: u64 = 1024 * 1024 * 1024;
 
 /// 挂起 dump 的保留策略（单一定义点：调用方只引用这一个常量，避免两处策略漂移）。
@@ -389,8 +390,8 @@ mod tests {
 
     #[test]
     fn hang_dump_policy_matches_the_documented_numbers() {
-        // README / 看板 / 方案文档三处都写「3 份 + 14 天 + 总量 ≤1GB」—— 数字变了必须同步文档。
-        assert_eq!(HANG_DUMP_POLICY.keep_newest, 3);
+        // README / 技能 / 方案文档都写「2 份 + 14 天 + 总量 ≤1GB」—— 数字变了必须同步文档。
+        assert_eq!(HANG_DUMP_POLICY.keep_newest, 2);
         assert_eq!(
             HANG_DUMP_POLICY.max_age,
             Duration::from_secs(14 * 24 * 60 * 60)

@@ -513,18 +513,18 @@ systemd-coredump 的默认值：
 >
 > [已验证: <https://www.freedesktop.org/software/systemd/man/latest/coredump.conf.html>，“MaxUse=, KeepFree=”]
 
-时间维度由 tmpfiles 管：本机 `/usr/lib/tmpfiles.d/systemd.conf:36` 是 `d /var/lib/systemd/coredump 0755 root root 2w`，即 **2 周** [已验证: 本机文件]。本仓自己的 hang dump 已经按“**保留最新 3 份**”实现：
+时间维度由 tmpfiles 管：本机 `/usr/lib/tmpfiles.d/systemd.conf:36` 是 `d /var/lib/systemd/coredump 0755 root root 2w`，即 **2 周** [已验证: 本机文件]。本仓自己的 hang dump 已经按“**保留最新 2 份**”实现（2026-11-18 由 3 降为 2，用户决定）：
 
 ```rust
-// src-tauri/src/lib.rs:3828
-const HANG_DUMP_KEEP: usize = 3;
+// src-tauri/src/retention.rs:32
+pub(crate) const HANG_DUMP_KEEP: usize = 2;
 // src-tauri/src/web_dump.rs:152
-pub(crate) fn prune_dumps(dir: &Path, prefix: &str, keep: usize) -> usize
+pub(crate) fn prune_dumps(dir: &Path, prefix: &str) -> retention::RetentionOutcome
 ```
 
-[已验证: `src-tauri/src/lib.rs:3828`、`src-tauri/src/web_dump.rs:150-175`；`test-shell-chrome.mjs` 也断言 full-memory dump]
+[已验证: `src-tauri/src/retention.rs:32`、`src-tauri/src/web_dump.rs:152-160`；`test-shell-chrome.mjs` 也断言 full-memory dump]
 
-全内存 dump 单个可达数百 MB，3 份是合理上限；再加一条时间上限（例如 14 天）可以覆盖“长期没有新 dump、旧 dump 一直占着”的情况。
+全内存 dump 单个可达数百 MB（2026-11-18 宿主实测单份 663MB），2 份是当前上限；再加一条时间上限（例如 14 天）可以覆盖“长期没有新 dump、旧 dump 一直占着”的情况。
 
 ### 5.5 建议值（本仓）
 
@@ -532,7 +532,7 @@ pub(crate) fn prune_dumps(dir: &Path, prefix: &str, keep: usize) -> usize
 |---|---|---|
 | `~/.dsh/logs/*.log` | daily + maxsize 50M + rotate 7 + compress + copytruncate | logrotate 语义 + 当前 788KB/4 天 |
 | journald | `SystemMaxUse=200M`、`MaxRetentionSec=14day`（按磁盘余量调） | 官方默认 10%/4G + 本机 100M 现状 |
-| hang dump | 最新 3 份 + 14 天 + 总量 2G | 本仓 `HANG_DUMP_KEEP=3` + coredump 2 周默认 |
+| hang dump | 最新 2 份 + 14 天 + 总量 1G | 本仓 `HANG_DUMP_KEEP=2` + coredump 2 周默认 |
 | 自动化日志（autopilot） | 同上，单独文件 | 当前 220KB |
 
 > 表中 50M/200M/14day/2G 是**本仓建议值**，不是官方推荐值；官方只给了 journald 10%/4G 与 coredump 10%/4G、tmpfiles 2 周这些默认基线。
@@ -672,7 +672,7 @@ App 级别取“最差子资源”：
 | A6 | **退避 + 三态状态机**：按 target 记 `state/failures/next_attempt_at`；5→10→20→40→80→160→320 分钟封顶 6h；成功 reset；403/404 直接 broken；只在跃迁时通知。service 层同时设 `RestartSteps=4` + `RestartMaxDelaySec=3600`（本机 systemd 255 支持 254+ 的指数重启） | M | 中：状态文件损坏/陈旧；需 schema + 原子写 + 清理 | 桩失败：next_attempt 翻倍并在 6h 封顶；成功：清零；broken 只通知一次 | §6.1–6.4；client-go 源码；systemd `RestartSteps`；Argo health |
 | A7 | **Actions schedule 降级为备份**：文档/工作流注释写明“不保证准时、可能丢弃”；SLA 计时只看本机 timer 的首次运行时间；CI 只做“心跳过期接管” | S | 低：主机长时间关机时无人接管（由 A5 的第二检查者补） | 对比 `gh run list --json createdAt,startedAt` 与本地 timer 时间；停本机 2h：CI 接管一次 | §3.1–3.2 |
 | A8 | **日志轮转**：新增 `/etc/logrotate.d/dsh`（或用户级 `logrotate` 配置）：`daily`、`maxsize 50M`、`rotate 7`、`compress`、`copytruncate`、`missingok`、`notifempty`；journald 设 `SystemMaxUse=200M`、`MaxRetentionSec=14day` | S | 低：copytruncate 有极小丢数据窗口 | `logrotate -d` 语法通过；`logrotate -f` 后文件数/大小符合；重启服务后仍能写 | §5.1–5.3；logrotate man；journald 文档 |
-| A9 | **dump 保留**：保留最新 3 份 + 14 天 + 总量 2G；在现有 `prune_dumps` 上增加时间/总量维度 | S | 低：删太早会丢取证；保留 3 份已够 | 造 5 个假 dump：只留 3；造 15 天前的：被删；总量超 2G：最旧被删 | §5.4；`lib.rs:3828`、`web_dump.rs:152` |
+| A9 | **dump 保留**：保留最新 2 份 + 14 天 + 总量 1G（2026-11-18 由 3 份/2G 收紧，见 §5.4）；在现有 `prune_dumps` 上增加时间/总量维度 | S | 低：删太早会丢取证；保留 3 份已够 | 造 5 个假 dump：只留 3；造 15 天前的：被删；总量超 2G：最旧被删 | §5.4；`lib.rs:3828`、`web_dump.rs:152` |
 | A10 | **一次性收敛 17 条重复 issue**：dry-run 列出 #201–#216，保留 #217（唯一带 label/assignee），其余评论“canonical #217”后关闭；不删除 | S | 中：误关有人回复的 issue；本批均无评论，仍要 dry-run | 先 `--dry-run` 出清单；人工核对后执行；执行后 `count == 1` | §0.1；`gh issue list` |
 | A11 | **文档/门禁同步**：把 A1/A3/A5/A6 写进 `CONTRIBUTING.md` 的发布流程与 `dsh-upstream-adaptation` 技能；`test-automation-gates` 增一条“canary 失败必须阻断”的变异对照 | S | 低：文档漂移；门禁本身要可失败 | 注入 canary 失败：门禁红；恢复：绿 | 本仓 `CONTRIBUTING.md:152-157` 门禁纪律 |
 
@@ -737,7 +737,7 @@ App 级别取“最差子资源”：
 | H5 | 标题/正文 marker 去重能覆盖“两个写者同时创建”的竞态 | `[假设]` | A1 单写者落地后仍要跑并发注入测试；单靠 A2 不能证明 |
 | H6 | `gh issue list --state all --limit 100` 对这个仓库足够；超过 100 条会漏 | `[假设]` | A2 落地时加分页；用 >100 条 fixture 测 |
 | H7 | `logrotate` 的 `copytruncate` 不会导致 systemd append 文件丢关键行 | `[假设]` | 演练：高频写日志 + 强制 rotate，对比 rotate 前后行数/关键标记 |
-| H8 | “保留 3 份 dump + 14 天”足够取证 | `[假设]` | 按真实 hang 复盘频率评估；当前只发生 1 次，样本不足 |
+| H8 | “保留 2 份 dump + 14 天”足够取证（2026-11-18 由 3 份收紧） | `[假设]` | 按真实 hang 复盘频率评估；当前只发生 1 次，样本不足 |
 
 > 采用清单 A1–A11 **没有**依赖 H1–H8 中的任何一条来成立：A1 依赖“双写者存在”（已验证），A2 依赖“label 缺失导致查不到”（已验证），A3 依赖“update/label 403”（已验证），A5 依赖“heartbeat 定义”（已验证），A6 依赖“指数退避语义”（已验证），A8/A9 依赖“没有轮转/已有 keep 3”（已验证）。
 
