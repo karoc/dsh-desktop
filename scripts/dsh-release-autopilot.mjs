@@ -190,6 +190,7 @@ import {
 } from './lib/backoff-state.mjs'
 // 运行时守卫：ROOT 工作树是否偏离 origin/main（与 dsh-watch / dsh-doctor 共用唯一实现，纯逻辑不 exit）。
 import { checkTreeDrift, formatTreeDrift } from './lib/tree-guard.mjs'
+import { releaseShippedFloor } from './lib/release-floor.mjs'
 
 const SELF = fileURLToPath(import.meta.url)
 const ROOT = join(dirname(SELF), '..')
@@ -788,9 +789,9 @@ function findPublished(target) {
     try { view = JSON.parse(r.stdout) } catch { continue }
     const assets = Array.isArray(view.assets) ? view.assets : []
     const body = String(view.body ?? '')
-    const latest = /发版时 npm\s*`latest`\s*=\s*\*\*([^*\n]+)\*\*/.exec(body)?.[1]?.trim() ?? null
-    const next = /`next`\s*预发布\s*=\s*([^）)\n]+)/.exec(body)?.[1]?.trim() ?? null
-    if (assets.length >= 3 && (latest === target || next === target)) {
+    // 只认 `发版时 npm latest = X`：那才是随包分发的 dsh 版本。正文里的「next 预发布 = Y」只是
+    // 发版当时的 npm tag 记录（2026-11-18 事故：把 next 当证据 ⇒ 预发布目标刚被识别就判「已发布」）。
+    if (releaseShippedFloor(body, target, assets.length)) {
       return { tag: view.tagName ?? tag, assets: assets.map((a) => a?.name).filter(Boolean) }
     }
   }
