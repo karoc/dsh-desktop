@@ -5,11 +5,11 @@
 // ⑥–⑧ 就不会自动续走。一次无关 fix 合并留下的 release-please 版本 PR 会一直挂到下一次上游发版
 // （#234 从 2026-10-24 停到 10-30，v0.21.0 之后 5 天没有任何新壳）。
 //
-// 本套件证明「无新版 / 预发布跳过」这两条早退路径上的兜底：
+// 本套件证明「无新版」早退路径上的兜底，以及「预发布目标不再早退」（2026-11-18 决策变更）的源码契约：
 //   正向前置（用 GH_BIN 桩 + DSH_AUTOPILOT_WATCH_JSON 回放探测结果，全程不碰真仓库、不调真 gh）：
 //     1. 无新版 + 停摆版本 PR（bot PR 无 check、写域合规）⇒ 合并 → 无构建运行才派发 build.yml → 资产 ≥3，exit 0
 //     2. 无新版 + 没有版本 PR ⇒ 什么都不做，exit 0
-//     3. 无新版 + 预发布通道目标（alpha 不能自动适配）+ 停摆版本 PR ⇒ 仍然收尾发布（预发布挡住的是适配，不是发布）
+//     3. 预发布通道目标（alpha）⇒ 通道解析为 alpha、不再出现「不自动适配」早退；源码契约断言跳过分支已移除
 //     4. 无新版 + 已有构建运行 ⇒ 不重复派发（避免 cancel-in-progress 取消在跑的构建）
 //     5. `--no-release-resume` ⇒ 不合并、不派发
 //   负向对照（必须变红/不写）：
@@ -106,10 +106,12 @@ const NO_TARGET = {
   threshold: null,
   deadline: null,
 }
-const BEST_EFFORT = {
+const ALPHA = {
   ...NO_TARGET,
   target: '0.2.2-alpha.2',
-  kind: 'best-effort 24h（预发布通道）',
+  channel: 'alpha',
+  kind: 'SLA 6h（alpha 通道）',
+  threshold: 6,
   breached: true,
 }
 const OK_FILES = ['package.json', 'CHANGELOG.md', '.release-please-manifest.json', 'src-tauri/Cargo.toml']
@@ -202,18 +204,16 @@ console.log(`test-autopilot-release-resume：仓库 ${ROOT}\n临时目录 ${TMP}
   check('输出里写明没有版本 PR', /没有 open 的 release-please 版本 PR/.test(c.output), c.output.slice(-300))
 }
 
-// 3. 预发布通道目标 + 停摆版本 PR ⇒ 仍收尾发布（挡住的是适配，不是发布）
+// 3. 预发布通道目标（alpha）⇒ 不再早退（2026-11-18：所有通道都适配）
 {
-  console.log('\n[3] 预发布通道目标 + 停摆版本 PR ⇒ 仍收尾发布')
-  const c = runCase('case3', { watch: BEST_EFFORT, scenario: releasePr({
-    tag: 'v0.21.3',
-    pr: { number: 901, title: 'chore(main): release 0.21.3', headRefName: 'release-please--branches--main', url: 'https://example.invalid/pr/901' },
-  }) })
+  console.log('\n[3] 预发布通道目标（alpha）⇒ 不再早退')
+  const c = runCase('case3', { watch: ALPHA, scenario: releasePr({ pr: null }), extraArgs: ['--dry-run'] })
   eq('exit 0', 0, c.status)
-  eq('stage = release-resumed', 'release-resumed', c.result?.stage)
-  eq('resumed.version', '0.21.3', c.result?.resumed?.version)
-  check('预发布适配确实被跳过', /预发布通道目标 0\.2\.2-alpha\.2：不自动适配/.test(c.output))
-  check('版本 PR 仍被合并', c.has('pr', 'merge'))
+  check('dry-run 计划里通道解析为 alpha', /通道 alpha/.test(c.output), c.output.slice(-400))
+  check('输出不再包含「不自动适配」早退', !/不自动适配|pre-release-skip/.test(c.output), c.output.slice(-300))
+  const src = readFileSync(SCRIPT, 'utf8')
+  check('源码契约：预发布跳过分支已移除', !/pre-release-skip/.test(src) && !/不自动适配/.test(src))
+  check('源码契约：通道优先读 watch 的 channel 字段', /raw\.channel/.test(src))
 }
 
 // 4. 已有构建运行 ⇒ 不重复派发

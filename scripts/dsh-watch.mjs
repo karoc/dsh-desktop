@@ -163,8 +163,10 @@ const OWNER_SOURCE = OWNER_RESOLVED ? '--assignee/DSH_ISSUE_ASSIGNEE' : `${REPO_
 // 真正叫醒人的是 assignee 与正文 @提及（见 README 维护者小节）。
 const PRIORITY_LABEL = 'priority:high'
 const GH = process.env.GH_BIN ?? (existsSync(join(ROOT, 'scripts', 'gh')) ? join(ROOT, 'scripts', 'gh') : 'gh')
+// 所有通道（latest / next / alpha）统一 6h 硬指标：2026-11-18 用户决策变更，取代原「next/alpha 走
+// best-effort 24h 且只开 issue 不适配」的 ③C。旧参数 --sla-hours 保留（演练/覆盖用）；
+// --best-effort-hours 与 --force-pre 已废弃（传入也无效果，文档已同步）。
 const SLA_HOURS = Number(arg('--sla-hours', '6'))
-const BEST_EFFORT_HOURS = Number(arg('--best-effort-hours', '24'))
 // 本机 npm CLI 不可用、直连 npmjs 会超时 ⇒ 演练必须能指向本地 stub registry（python http.server + 手写 packument）。
 const REGISTRY = (arg('--registry', process.env.DSH_WATCH_REGISTRY ?? 'https://registry.npmjs.org')).replace(/\/+$/, '')
 // --now 只用于演练（把"现在"钉在某个时刻）。坏输入必须当场报错：旧实现里
@@ -517,6 +519,7 @@ const tags = pkg['dist-tags'] ?? {}
 const time = pkg.time ?? {}
 
 let target = null
+let channel = null
 let kind = null
 let deadline = null
 let threshold = null
@@ -524,16 +527,24 @@ let elapsed = null
 let breached = false
 if (FORCE) {
   target = FORCE
-  kind = '演练（--force-target）'
-  threshold = argv.includes('--force-pre') ? BEST_EFFORT_HOURS : SLA_HOURS
-} else if (cmp(tags.latest, floor) > 0) {
-  target = tags.latest
-  kind = `SLA ${SLA_HOURS}h（latest 通道，硬指标）`
+  channel = 'forced'
+  kind = `演练（--force-target）`
   threshold = SLA_HOURS
-} else if (cmp(tags.next, floor) > 0 || cmp(tags.alpha, floor) > 0) {
-  target = cmp(tags.next, floor) > 0 ? tags.next : tags.alpha
-  kind = `best-effort ${BEST_EFFORT_HOURS}h（预发布通道）`
-  threshold = BEST_EFFORT_HOURS
+} else {
+  // 2026-11-18：**所有通道都适配**（latest / next / alpha 同一 6h 硬指标）。取三者中高于地板
+  // 的最高版本作为 target —— 不再让 latest 的存在掩盖更高的 next/alpha。
+  let best = null
+  for (const [name, version] of [['latest', tags.latest], ['next', tags.next], ['alpha', tags.alpha]]) {
+    if (!version) continue
+    if (cmp(version, floor) <= 0) continue
+    if (best === null || cmp(version, best.version) > 0) best = { name, version }
+  }
+  if (best) {
+    target = best.version
+    channel = best.name
+    kind = `SLA ${SLA_HOURS}h（${best.name} 通道）`
+    threshold = SLA_HOURS
+  }
 }
 // 拿到 target 后再赋值（A6 的跃迁评论优先挂到这一版的跟踪单上）。
 CURRENT_TARGET = target
@@ -573,7 +584,7 @@ if (process.env.GITHUB_STEP_SUMMARY) writeFileSync(process.env.GITHUB_STEP_SUMMA
 const report = {
   // floorSource = 这份地板是从哪儿读的（"arg" = --floor 演练覆盖 / "origin/main" = 发布真源 /
   // "worktree" = 回退，此时 stderr 有一行告警说明原因）。机器消费方（autopilot 等）据此判断读数可信度。
-  floor, floorSource, tags, target, kind, threshold, deadline, elapsed, breached, pubUnknown,
+  floor, floorSource, tags, target, channel, kind, threshold, deadline, elapsed, breached, pubUnknown,
   registry: REGISTRY, generatedAt: new Date().toISOString(),
   dryRun: DRY, paused: PAUSED, pauseFile: PAUSED ? PAUSE_FILE : null,
   lock: UNDER_LOCK ? LOCK_FILE : null,
