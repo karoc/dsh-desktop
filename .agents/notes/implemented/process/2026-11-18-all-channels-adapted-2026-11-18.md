@@ -21,3 +21,9 @@ Status: implemented
 门禁：`test-automation-gates` 的 watch 断言改为「统一 6h + channel=next」；`test-autopilot-release-resume` 用源码契约断言跳过分支不再出现（旧 case 3 的「预发布适配确实被跳过」已删除）。
 已知缺口：`test-autopilot-release-resume` 只在 dry-run 下验证通道解析，真实适配路径仍由线上 timer 首轮验证。
 
+**跟进（同日，策略上线第一轮就撞到）**：autopilot 的 `findPublished` 同时匹配 Release 正文里的
+「发版时 npm latest = X」与「`next` 预发布 = Y」两处；新策略让 `next` 也自动适配后，rc.4 刚被识别就被判
+「已发布」（正文只是记录当时 npm 的 next tag，不代表壳里装了它）⇒ 适配被跳过。修法：解析抽到
+`scripts/lib/release-floor.mjs`，**只有 `latest` 算「随包分发过该地板」**；gates 新增 4 条断言
+（next 不算证据 / latest 算 / 资产 <3 不算 / 两处解析口径）。
+

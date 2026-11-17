@@ -49,6 +49,8 @@ import { fileURLToPath } from 'node:url'
 import { classifyPendingVersions } from './lib/sla-pending.mjs'
 // 地板真源的共享实现（2026-11-16）：sla 组要断言 fetch 是有界的（20s），且 watch/sla 用的是同一份。
 import { GIT_TIMEOUT_MS } from './lib/floor-source.mjs'
+// Release 正文 → 「已发布地板」判定（2026-11-18 事故：next 预发布被误当成已发布）。
+import { parseReleaseFloor, releaseShippedFloor } from './lib/release-floor.mjs'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const SELF = fileURLToPath(import.meta.url)
@@ -118,6 +120,21 @@ function skip(group, name, why) {
   nSkipped += 1
   skipped.push(`[${group}] ${name}（${why}）`)
   console.log(`  SKIP [${group}] ${name} —— ${why}`)
+}
+
+
+// ── 单元：Release 正文里的「已发布地板」判定（2026-11-18 事故）───────────────
+// autopilot 的 findPublished 曾同时匹配「发版时 npm latest = X」与「next 预发布 = Y」；新策略让
+// next/alpha 也自动适配后，rc.4 刚被识别就因为正文里的 next 记录被判「已发布」⇒ 适配被跳过。
+{
+  const body = '发版时 npm `latest` = **0.2.2-rc.1**（`next` 预发布 = 0.2.2-rc.4）'
+  check('sla', 'release 正文里的 next 预发布不算「已发布该地板」的证据', 'false',
+    releaseShippedFloor(body, '0.2.2-rc.4', 3))
+  check('sla', 'release 正文里的 latest 才算「已发布该地板」的证据', 'true',
+    releaseShippedFloor(body, '0.2.2-rc.1', 3))
+  check('sla', '资产不足 3 个时不算已发布（半成品 Release）', 'false', releaseShippedFloor(body, '0.2.2-rc.1', 2))
+  check('sla', 'parseReleaseFloor 同时解析 latest 与 next（文案口径单一实现）', '0.2.2-rc.1|0.2.2-rc.4',
+    `${parseReleaseFloor(body).latest}|${parseReleaseFloor(body).next}`)
 }
 
 // ── 子进程工具 ──────────────────────────────────────────────────────────────
