@@ -21,6 +21,13 @@
 >
 > 详情见 `.agents/notes/implemented/bug-fix/2026-09-08-legacy-uninstaller-name-kill.md`。
 
+## [0.26.1](https://github.com/karoc/dsh-desktop/compare/v0.26.0...v0.26.1) (2026-11-17)
+
+
+### Bug Fixes
+
+* **manager:** 把 --patch 注入的插件纳入 dsh 地板守卫（白屏防线补洞） ([#286](https://github.com/karoc/dsh-desktop/issues/286)) ([5ad7b4e](https://github.com/karoc/dsh-desktop/commit/5ad7b4ea17656fbdc12b67b02bbc73fcb5dbc575))
+
 ## [0.26.0](https://github.com/karoc/dsh-desktop/compare/v0.25.2...v0.26.0) (2026-11-17)
 
 
