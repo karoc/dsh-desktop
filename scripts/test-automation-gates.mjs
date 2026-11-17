@@ -685,9 +685,9 @@ function groupWatch() {
   check('watch', 'target 在 npm packument 里没有发布时间戳 ⇒ deadline=\'?\' 且 breached=true（fail-closed）', '?|true',
     `${r.report?.deadline}|${r.report?.breached}`)
 
-  r = watch({ pack: P('0.2.1', '2026-10-18T12:00:00Z'), args: [...TARGET, '--force-pre', '--force-published', '2026-10-18T12:00:00Z', '--now', '2026-10-19T00:00:00Z'] })
-  check('watch', '24h best-effort 通道的正文门槛文案跟着实际门槛走（不再写死 6h）', 'true|true',
-    `${r.stdout.includes('24h 截止')}|${!r.stdout.includes('6h 截止')}`)
+  r = watch({ pack: P('0.2.1', '2026-10-18T12:00:00Z'), args: [...TARGET, '--force-published', '2026-10-18T12:00:00Z', '--now', '2026-10-19T00:00:00Z'] })
+  check('watch', '所有通道统一 6h：正文门槛文案与 threshold 一致（2026-11-18 取消 best-effort 24h）', 'true|true',
+    `${r.stdout.includes('6h 截止')}|${!r.stdout.includes('24h 截止')}`)
 
   // rc → 正式版转正：0.2.1 在同号 rc 之后，必须被探到（P0，2026-10-19 修）
   // **地板必须显式注入（2026-11-16 修）**：适配克隆里 dsh-adapt 第 2 步已把 MIN_DSH_VERSION 抬到**目标版本**，
@@ -698,8 +698,8 @@ function groupWatch() {
   check('watch', 'latest 由同号 rc 转正（0.2.1 vs 地板 0.2.1-rc.2）⇒ target 落到 latest、走 6h 硬指标', '0.2.1|6',
     `${r.report?.target}|${r.report?.threshold}`)
   r = watch({ pack: packument({ latest: '0.1.9', next: '0.2.2-rc.1' }, { '0.2.2-rc.1': '2026-10-18T12:00:00Z' }), args: ['--floor', '0.2.1-rc.2', '--now', '2026-10-19T00:00:00Z'] })
-  check('watch', 'latest 落后、next 超前 ⇒ target=next、门槛 24h（best-effort 通道）', '0.2.2-rc.1|24',
-    `${r.report?.target}|${r.report?.threshold}`)
+  check('watch', 'latest 落后、next 超前 ⇒ target=next、统一 6h、channel=next（next 也自动适配）', '0.2.2-rc.1|6|next',
+    `${r.report?.target}|${r.report?.threshold}|${r.report?.channel}`)
 
   r = watch({ pack: P('0.2.1', '2026-10-18T12:00:00Z'), args: [...TARGET, '--force-published', '2026-10-18T12:00:00Z', '--now', '2026-10-19T00:00:00Z'] })
   check('watch', '违约时 --dry-run 的退出码仍是 0（KNOWN_GAP：设计如此，工作流上没有红色兜底信号）', '0|true', `${r.status}|${r.report?.breached}`, { gap: true })
@@ -841,7 +841,7 @@ function groupWatch() {
     String(ri.stdout.includes('[paused]') && ri.stdout.includes('更新 #42')))
 
   // ⑥ 对账（A10）：同版本 3 条 ⇒ 保留带 label/assignee 的规范单、其余评论后关闭
-  const dupTitle = '[dsh-watch][best-effort 24h（预发布通道）] dsh 0.2.1-rc.3 比地板 0.2.1-rc.2 新'
+  const dupTitle = '[dsh-watch][SLA 6h（next 通道）] dsh 0.2.1-rc.3 比地板 0.2.1-rc.2 新'
   const dupBody = '@karoc（负责人）\n\n<!-- dsh-watch-state: target=0.2.1-rc.3 breached=false -->'
   st = mkState('dup-ok', [
     seedIssue(201, { title: dupTitle, body: dupBody }),

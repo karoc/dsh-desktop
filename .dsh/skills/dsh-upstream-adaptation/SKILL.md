@@ -773,7 +773,7 @@ git push -u origin <branch>
 | **rehearse 只到探针** | 在 `launching dsh web` 处按进程组终止 ⇒ 「装完 dsh web 能否真起来」仍靠真机验收 |
 | **`release` 的 `needs` 不含 smoke** | `needs: [windows, linux]` ⇒ `linux-smoke` 红**不会**阻止出包。刚恢复的 canary 要先连续绿几轮才升格 |
 | **检测段只有 1 个真实样本** | 2026-10-30 首次拿到实测：rc.5 检测 **1.82h**（#236 创建）；历史 7 条仍是 unknown（早期 issue 没有可识别 label/版本号） |
-| **`--version` 不可注入** | manager 启动期目标恒 `max(地板, latest)` ⇒ 结构上装不到更高的预发布；`next`/alpha 不自动适配，只开 issue |
+| **`--version` 不可注入** | manager 启动期目标恒 `max(地板, latest)`；`next`/alpha 也在自动适配范围（2026-11-18 起），适配抬地板后即装得上 |
 | **版本 PR 合并 = 零人工审阅** | 替代审查只有「mergeable + 写域白名单 + 非失败 check」，不读 diff 语义。CONTRIBUTING 里那份人工清单（四处版本一致 / CHANGELOG 段 / `npm test` / `audit-preinstalled`）在自动路径上**不执行** |
 | **进度看板/归档文件的边界** | `KANBAN.json`、`.agents/notes/archive.json` 被 git 跟踪 ⇒ autopilot 提交时跳过、rebase 时 autostash；改动它们不算适配写域 |
 | **心跳 timer 执行工作树脚本** | 见 §6.14：工作树漂移 ⇒ 线上跑旧代码（2026-10-24→30 实际发生 5 天）。2026-10-31 起有运行时守卫（默认告警、`--strict-tree` 停跑；判据是路径差异，不是 HEAD==main）。**剩余边界**：① `dsh-tagdispatch` 在仓库侧没有脚本，不受守卫覆盖；② 用户 unit 若不加 `--strict-tree`，守卫只告警不停跑（日志在，但不会自动止血）；③ `unknown`（非 git / 无 origin/main）按"无法判断"处理而非失败 |
@@ -791,7 +791,7 @@ git push -u origin <branch>
   `--runtime <已装好的 /tmp/dsh-rehearse-*>` 绕过；systemd `Restart` 退避把服务卡在 activating（最长 1h），
   期间 timer 触发被吞 ⇒ 心跳退化成 ~1h/轮。
 - 历史坐标（2026-10-31）：`origin/main` = **5637e1e**（`chore(main): release 0.23.0`）；壳地板 `MIN_DSH_VERSION = 0.2.1-rc.5`；
-  npm `latest`/`next` = `0.2.1-rc.5`，`alpha` = `0.2.2-alpha.2`（alpha 领先 ⇒ 按决策 ③C 只跟踪、不适配，issue #239）。
+  npm `latest`/`next` = `0.2.1-rc.5`，`alpha` = `0.2.2-alpha.2`（当时按 ③C 只跟踪、不适配，#239；**2026-11-18 起 alpha/next 也自动适配**）。
 - **发布半程已真机验证两次（无人值守，autopilot 自己合并版本 PR）**：
   - **v0.22.0**：版本 PR #242 → autopilot 于 2026-10-30T21:24:00Z 合并 → 派发 build → **10m59s** 后 3 个资产齐
     （AppImage 124,451,320 / deb 54,562,640 / x64-setup.exe 28,212,920，均带 sha256 digest）；日志

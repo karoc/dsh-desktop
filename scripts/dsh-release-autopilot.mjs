@@ -70,8 +70,8 @@
 // ── ⑥–⑧ 的「停摆版本 PR」兜底（2026-10-30）──────────────────────────────────
 // 入口恒为「本轮检测到新版」⇒ 适配 PR 合并后地板==target，dsh-watch 不再报它，⑥–⑧ 不会自动续走；
 // 一次无关 fix 合并留下的 release-please 版本 PR 会一直挂到下一次上游发版（实录：#234 从 10-24 停到
-// 10-30，整整 5 天，v0.21.0 之后没有任何新壳）。因此在两条「本轮不干活」的早退路径（无新版 /
-// 预发布通道跳过）上补一次收尾：若存在 open 的 `chore(main): release X.Y.Z`，走与 ⑥⑦⑧ **完全相同**的
+// 10-30，整整 5 天，v0.21.0 之后没有任何新壳）。因此在「本轮不干活」的早退路径（无新版）
+// 上补一次收尾：若存在 open 的 `chore(main): release X.Y.Z`，走与 ⑥⑦⑧ **完全相同**的
 // 合并 → 派发构建 → 等资产逻辑（写域白名单 / 冲突 / check 失败同口径 fail，不静默跳过）。
 //   * `--no-release-resume` 关闭该兜底（人工接管/演练时用）；
 //   * 该路径**不回帖 issue**：没有 target 可归因，避免把版本 PR 的收尾挂到预发布跟踪单上；
@@ -80,8 +80,8 @@
 // ── 刻意不做 ───────────────────────────────────────────────────────────────
 //   * 不改仓库设置 / 分支保护 / 密钥；不 kill 任何进程；不动用户真实 runtime（只读软链 .pnpm-store）。
 //   * 不在 CI 里合并（依赖本机 `scripts/gh` 的项目 PAT 才能 --admin）；`GH_BIN` 缺省自动指向它。
-//   * 不自动适配 `next`/`alpha` 通道：manager 的安装目标 = max(地板, npm latest)，结构上装不到更高的预发布
-//     （方案决策 ③C：预发布只开 issue、不开自动 PR）。--force-target 之类入口也不在本脚本里。
+//   * 不区分通道：2026-11-18 起 latest / next / alpha **全部自动适配**（同一 6h 硬指标），
+//     不再有「预发布只开 issue」的 ③C 路径。--force-target 之类入口也不在本脚本里。
 //   * 不写看板、不改工作区的任何文件；所有写操作都在 /tmp 克隆、临时 runtime 与远端 `auto/` 分支。
 //
 // ── 演练/测试注入点（正常跑不要设）──────────────────────────────────────────
@@ -711,8 +711,11 @@ function probeUpstream() {
     fail(3, `探测结果里的 target 不是合法版本号：${JSON.stringify(target)}`)
   }
   const kind = String(raw.kind ?? '')
-  // 通道口径：dsh-watch 的 pre-release 分支会写 "best-effort"；其余（含 latest 恰好是 rc）都按 latest 处理。
-  const channel = /best-effort|预发布通道/.test(kind) ? 'best-effort' : 'latest'
+  // 通道口径（2026-11-18 起所有通道都适配）：优先读 dsh-watch 的机器可读字段 `channel`，
+  // 旧版 watch 没有该字段时回退解析 kind 里的「（latest|next|alpha）通道」；都认不出按 latest。
+  const channel = typeof raw.channel === 'string' && raw.channel
+    ? raw.channel
+    : (/（(latest|next|alpha) 通道）/.exec(kind)?.[1] ?? 'latest')
   return {
     floor: raw.floor ?? null,
     target,
@@ -1550,15 +1553,9 @@ async function flow() {
     return 0
   }
 
-  if (probe.channel === 'best-effort') {
-    step('② 适配', 'skip', 0, `预发布目标 ${probe.target}：按方案决策 ③C 只开 issue、不自动适配（安装路径只装 max(地板, latest)）`)
-    log(`预发布通道目标 ${probe.target}：不自动适配（决策 ③C）。issue 由 dsh-watch 维护，本脚本不推分支、不开 PR。`)
-    STATE.stage = 'pre-release-skip'
-    STATE.currentStage = null
-    // 预发布通道挡住的是「适配」，不是「发布」：已合并提交留下的版本 PR 仍应发出。
-    await resumeStrandedRelease('预发布通道目标不自动适配')
-    return 0
-  }
+  // 2026-11-18：所有通道（latest / next / alpha）都走完整适配链，不再有「预发布只开 issue」的早退。
+  // 决策变更见 docs/2026-10-17-dsh-upgrade-automation-plan.md §0（旧 ③C 已作废）。
+  log(`[通道] 目标 dsh ${probe.target} 来自 ${probe.channel} 通道 —— 按同一 6h 硬指标执行适配。`)
 
   // 仓库 / 已发布 / issue
   beginStage('仓库解析')

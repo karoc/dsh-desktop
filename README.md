@@ -596,7 +596,7 @@ MIT
   （或用了 `--stage1`）不会自动续走——地板已等于 target，watch 不再报它，版本 PR 留在 open，需人工合并/派发；
   版本 PR 自动合并 =
   **零人工审阅**（只靠变更范围白名单 + mergeable 兜底）；资产 <3（如 windows job flake）就停在 ⑦、不自动重试；
-  `next`/alpha 通道按决策 ③C **不自动适配**（安装路径只装 max(地板, latest)）；合并/建 issue 依赖本机项目
+  **所有通道（latest/next/alpha）都自动适配**（2026-11-18 起，取高于地板的最高版本；原 ③C「预发布只开 issue」已作废）；合并/建 issue 依赖本机项目
   PAT（`GH_BIN` 缺省自动指向 `scripts/gh`；CI 的 `GITHUB_TOKEN` 不能 `--admin`）。**凭据纪律：脚本若走
   `GH_BIN`，必须默认指向 `scripts/gh`，禁止默认裸 `gh`（裸 gh 落到全局 `hosts.yml` 里的另一个 PAT，
   权限不同；CI 里显式 `GH_BIN=gh` 是唯一例外），门禁 `scripts/test-gh-bin-discipline.mjs` 守这条。
@@ -625,8 +625,7 @@ MIT
 - **两个定时工作流**（零 secret，只用 `GITHUB_TOKEN`）：`dsh-watch.yml` 每 15 分钟探测 npm dist-tags
   （它是 `dsh-watch` 的**第二个写者**，与下方本机 timer 并行 —— 见「幂等 / 单写者 / 刹车 / 对账」），
   比地板新就开/更新 `dsh-upgrade` issue（含门槛倒计时与适配清单）——门槛文案按**实际门槛**打印
-  `${threshold}h 截止`：`latest` 通道默认 6h（硬指标）、预发布通道默认 24h（best-effort），
-  可用 `--sla-hours` / `--best-effort-hours` 覆盖（2026-10-19 前这里写死 "6h"，预发布单上照印 6h）；
+  `${threshold}h 截止`：**所有通道统一 6h**（2026-11-18 起取消预发布 24h best-effort），可用 `--sla-hours` 覆盖；
   `tag-dispatch.yml` 每 10 分钟扫最近 20 个 Release，对「有 tag 但资产 <3 且尚无构建运行」的版本补派发
   `workflow_dispatch`（release-please 用 API 打 tag ⇒ 不触发 push 事件，故必须补派发）。"尚无构建运行"的判据是
   **服务端过滤**：`runs?branch=<tag>&per_page=1` 的 `total_count`（不是"拉最近 100 条运行再在客户端筛"——
@@ -691,7 +690,7 @@ MIT
   报表里三个时间戳列**统一是 UTC ISO 截到分钟**（`toISOString().slice(0,16)+'Z'`，列头写明 UTC）——2026-10-19 已修掉
   "npm 给 `Z`、`git log --format=%cI` 给本地偏移、截断后两者都看不出时区后缀"的混排；要看绝对时间以 `--json` 原值为准。
 - **探测逻辑脚本**：`node scripts/dsh-watch.mjs [--dry-run] [--json <out>] [--force-target <v>]
-  [--force-published <iso>] [--force-pre] [--now <iso>] [--sla-hours <n>] [--best-effort-hours <n>]
+  [--force-published <iso>] [--now <iso>] [--sla-hours <n>]
   [--registry <url>] [--floor <ver>] [--state-dir <dir>] [--lock-file <path>] [--pause-file <path>]`
   （`dsh-watch.yml` 只是薄壳）。**退出码**：0 = 正常（含"今天没有新版本"与"对账失败但已输出待人工清单"）；
   1 = 真故障（取不到 npm packument / 读不到 open issue 列表 / 跟踪单没开成或没更新成）；2 = 用法或属主解析失败。
@@ -699,9 +698,9 @@ MIT
   都是**演练注入点**（本机 npm CLI 不可用、直连 npmjs 会超时 ⇒ 演练指向本地 stub registry 的 packument）。
   **演练路径（零副作用）**：`--force-target X --force-published <ISO> --dry-run` 会走完"门槛已过而地板没动"
   的违约分支，并打印会开的 label / 标题 / 正文长度，但**不执行任何写操作**（实测：8h 前发布 ⇒
-  `breached=true`、label `sla-breach`、exit 0；换成 `--force-pre` 则按 24h best-effort 判 ⇒ `breached=false`）。
+  `breached=true`、label `sla-breach`、exit 0；门槛对所有通道一致（6h））。
 - **SLA 未达标自动开 blocker issue**：`dsh-watch.mjs` 在「门槛已过而地板没动」时自动开/更新 `sla-breach`
-  issue（门槛随通道：`latest` 6h / 预发布 24h，可用 `--sla-hours` / `--best-effort-hours` 覆盖；issue 标题与
+  issue（门槛统一 6h，可用 `--sla-hours` 覆盖；issue 标题与
   正文都印**实际门槛**，退出码不变）。**取不到该版本的上游发布时间时 fail-closed 记为未达标**（JSON 里的
   `pubUnknown`；"量不出来"不等于"达标"）。幂等与去重的完整口径见下一条（**确定性键 + 单写者 + 对账**）：
   只按标题里版本号的**词边界**匹配（`contains("0.2.1")` 会把评论挂到 `0.2.1-rc.5` 的单子上），

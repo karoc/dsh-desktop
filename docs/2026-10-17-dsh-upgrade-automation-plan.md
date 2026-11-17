@@ -26,7 +26,7 @@ Date: 2026-10-17（实施状态最后更新 2026-10-24）
 | 终点 | 我们**首个携带该地板的稳定版**（壳版本）的 GitHub Release `publishedAt`（含 `*_x64-setup.exe` / `AppImage` / `deb`） |
 | 达标 | 终点 − 起点 ≤ 6h（`latest` 通道硬指标），且预装插件与地板**同一批**落地（见 §5 的硬规则） |
 | 合法失败出口 | 6h 内**要么**出支持新版的稳定版，**要么**：① 开一份公开 issue（含 probe 报告的精确 blocker + ETA）；② 发一个**保持旧地板**的稳定版（hold 策略，用户不受影响）。二者都算"这条 SLA 有交代"，但**月度达标率按前者计**。**已自动化（2026-10-19）**：`dsh-watch.mjs` 到点而地板未动时自动开/更新 `sla-breach` issue（见文末「失败语义：已自动化」一节） |
-| 通道 | **已定（2026-10-19，决策 ③C）**：`latest` 走 6h 硬指标；`next`/alpha 走 best-effort ≤24h 且**只开 issue、不开自动 PR**（门槛可用 `--sla-hours` / `--best-effort-hours` 覆盖）。原稿写"待用户确认"，已定 |
+| 通道 | **已改（2026-11-18，用户决定，取代 ③C）**：`latest` / `next` / `alpha` **全部同一 6h 硬指标并自动适配** —— 取三通道中高于地板的最高版本为 target（门槛可 `--sla-hours` 覆盖）。原 ③C（预发布 best-effort 24h、只开 issue 不适配）**作废** |
 
 **月度判据**：自动生成的 SLA 报表（§3.7）里，stable 版本的 `≤6h` 占比 ≥ 90%，且没有任何 stable 版本"静默错过"（既不发布也不开 blocker issue）。
 
@@ -84,9 +84,9 @@ Release（v0.14.0 / v0.16.0 / v0.18.1–v0.18.4）**与抬版无关**（地板�
 |---|---|---|
 | A. `dist-tags.latest`（稳定通道） | 只对"毕业到 latest"的版本计时 | 6 个样本里只有 `0.2.0-rc.2` 算 ⇒ 唯一真实稳定滞后 = **144.6h** |
 | B. 任何 `next`/`alpha` 预发布 | 对每个预发布都计时 | 当时已积压 3 个（alpha.4/alpha.5/rc.1） |
-| C. 混合（**已采纳**） | `latest` 走 6h 硬 SLA；`next`/`alpha` 走 best-effort ≤24h 且**只开 issue 不开自动 PR** | 与 §0 的现有定义一致 |
+| C. 混合（~~已采纳~~ **2026-11-18 作废**） | `latest` 走 6h 硬 SLA；`next`/`alpha` 走 best-effort ≤24h 且**只开 issue 不开自动 PR** | 与当时的 §0 定义一致；现已改为全通道 6h + 自动适配 |
 
-**决策（2026-10-19，用户确认 ③C）**：采纳 C。实现上不再"先定通道再计时"，而是**按实现口径直接算**：
+**决策（2026-10-19，用户确认 ③C；2026-11-18 用户决定作废，改为全通道 6h + 自动适配）**：原采纳 C，现按 D（全通道同策）实现。实现上不再"先定通道再计时"，而是**按实现口径直接算**：
 T0 = `time[该壳版本随包地板]`（可能是预发布），终点 = 首个携带该地板的稳定 Release；`dsh-watch.mjs` 按
 `latest` / 预发布分别用 6h / 24h 门槛判"是否已违约"。**这样做的代价说清楚**：地板高于 `latest` 时，
 我们实际上是在"跟着预发布走"，所以 §1.1a 那张表里的滞后**不等于**"stable 通道滞后"；月度判据（§0）里
@@ -160,7 +160,7 @@ T0 = `time[该壳版本随包地板]`（可能是预发布），终点 = 首个�
 
 - 取 registry 的 `dist-tags` 与 `time`（经 `curl`；`--registry` 可指向 stub，`--floor` 可钉住地板）；
 - 与**壳地板**（`scripts/server-manager.mjs` 的 `MIN_DSH_VERSION`）比较，不看任何状态文件：
-  `latest` 比地板新 ⇒ 6h 硬指标；否则 `next`/`alpha` 比地板新 ⇒ 24h best-effort；
+  **所有通道同策（2026-11-18 起）**：`latest`/`next`/`alpha` 中高于地板的**最高版本**就是 target，门槛恒 6h；
 - 需要适配 ⇒ 开/更新 **`dsh-upgrade`** issue（正文含门槛倒计时 `${threshold}h 截止` 与八步适配清单 +
   `dsh-adapt` 一键命令）；**门槛已过而地板没动** ⇒ 开/更新 **`sla-breach`** issue（正文 = §0 合法失败出口的
   两件事：写清 blocker + ETA、同时发一个保持旧地板的稳定版）；
@@ -493,11 +493,11 @@ push 前 `git ls-remote` 取期望值 + `git fetch` 建远端跟踪引用 + 显�
 
 ## 失败语义：已自动化（2026-10-19）—— 即 §0 的「合法失败出口」
 
-决策 ③C：保留失败语义的措辞，并把它从「承诺」变成「必然发生」—— `scripts/dsh-watch.mjs`（cron `*/15`）
+失败语义自动化（2026-10-19 起；门槛口径 2026-11-18 改为全通道 6h）：保留失败语义的措辞，并把它从「承诺」变成「必然发生」—— `scripts/dsh-watch.mjs`（cron `*/15`）
 在**门槛已过而地板没动**时自动开/更新 blocker issue（label `sla-breach`，标题形如
 `[SLA 未达标] dsh X 已发布 Nh（门槛 Mh），地板仍停在 Y`），正文直接给出 **§0 合法失败出口**要求的两件事
-（写清具体 blocker + ETA；同时发一个保持旧地板的稳定版）。门槛：`latest` 6h 硬指标，预发布通道 24h
-best-effort（可 `--sla-hours` / `--best-effort-hours` 覆盖，标题与正文都印实际门槛）。取不到该版本的上游
+（写清具体 blocker + ETA；同时发一个保持旧地板的稳定版）。门槛：**所有通道统一 6h**（可 `--sla-hours` 覆盖，
+标题与正文都印实际门槛；2026-11-18 起取消预发布 24h best-effort）。取不到该版本的上游
 发布时间时 **fail-closed 记未达标**（`pubUnknown`）。**该行为不改变退出码**（红色仍然只代表 job 坏了 ——
 与 SLA 流拆开信号的决策一致）。
 
@@ -593,8 +593,8 @@ best-effort（可 `--sla-hours` / `--best-effort-hours` 覆盖，标题与正文
   这是默认全自动的代价；要保留人工闸门用 `--stage1`。
 - **资产 <3 就停在 ⑦**：Windows 打包/Chocolatey 外部源 flake 会让构建失败；autopilot 不做无限重试，
   人工去 Actions 重跑后再重跑脚本（已发布检查会短路）。
-- **`next`/alpha 不自动适配**：manager 的启动期安装目标 = `max(地板, registry latest)`，结构上装不到更高的预发布；
-  按 §0 决策 ③C，预发布只开 issue。若 `latest` 本身是 rc（当前就是），仍按 latest 通道自动适配。
+- **`next`/alpha 也自动适配（2026-11-18 起）**：适配会把地板抬到 target ⇒ manager 的 `max(地板, latest)` 随之装上该预发布；
+  不再有「预发布只开 issue」的 ③C 路径。代价：预发布若自身有 bug，会被自动发成壳版本（原有的门禁链 + canary 仍是唯一防线）。
 - **依赖本机项目 PAT**：`--admin` 合并只能由本机 `./scripts/gh` 做；CI 的 `GITHUB_TOKEN` 不行。PAT 不进 CI，
   零 secret 决策不变。systemd 运行环境还需要 SSH key（`git push`）与网络。
 - **release-please 版本 PR 没有 check**：bot PR 在 GitHub 上恒为 `action_required`，autopilot 用上述白名单兜底；

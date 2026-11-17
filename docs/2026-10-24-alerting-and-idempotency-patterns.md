@@ -22,7 +22,7 @@
 | 指标 | 值 | 取证 |
 |---|---|---|
 | 同标题重复 issue | **17 条**（#201–#217） | `./scripts/gh issue list --state all --limit 100 --json number,title,labels,createdAt` |
-| 标题 | `[dsh-watch][best-effort 24h（预发布通道）] dsh 0.2.1-rc.3 比地板 0.2.1-rc.2 新` | 同上 |
+| 标题 | `[dsh-watch][SLA 6h（next 通道）] dsh 0.2.1-rc.3 比地板 0.2.1-rc.2 新` | 同上 |
 | 创建节奏 | 2026-10-23T08:00:22Z → 10:30:22Z，每 10 分钟一条 | 同上，`createdAt` |
 | 带 label / assignee | **只有 #217**（作者 `github-actions[bot]`） | `gh api repos/karoc/dsh-desktop/issues/217` |
 | 无 label / assignee | **16 条**（作者 `karoc`） | #201/#205/#210/#216 抽样 `gh api` |
