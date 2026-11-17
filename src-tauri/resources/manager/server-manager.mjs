@@ -21,17 +21,21 @@
 //        {"cmd":"check-update"} / {"cmd":"update-dsh"} / {"cmd":"restart-dsh"}
 //   7. on signal, kill the whole dsh tree (taskkill /T /F on Windows).
 
-import { spawn } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { appendFileSync, chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, delimiter as pathDelimiter, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { promisify } from 'node:util'
 import { createForwardProxy, providerHostsFromProfileDocument, providerHostsFromSettings } from './proxy.mjs'
 import { allowsVersionSwitch, nextUpgradeMarker, upgradeMarkerPath } from './upgrade-marker.mjs'
 import { parsePatchOverlay, planPatchPluginGuard, planPluginGuard, stripPatchPlugins } from './plugin-floor.mjs'
 import { planShellPluginCleanup } from './shell-plugins.mjs'
 import { bakeBridgePortSource, checkScriptSyntax } from './bake-port.mjs'
-import { decideWatchdogRestart, PRE_DUMP_PATIENCE_MS, STARTUP_MUTE_MS, WATCHDOG_TICK_MS } from './lib/watchdog-policy.mjs'
+import {
+  decidePatienceExtension, decideWatchdogRestart, PRE_DUMP_PATIENCE_MS, STARTUP_MUTE_MS,
+  STALL_BUSY_CEILING_MS, STALL_PROBE_TIMEOUT_MS, STALL_SAMPLE_MS, WATCHDOG_TICK_MS,
+} from './lib/watchdog-policy.mjs'
 
 const PACKAGE = '@deepseek-ai/dsh'
 
@@ -1511,6 +1515,8 @@ let watchdogRecovering = false
 // 全部集中在 scripts/lib/watchdog-policy.mjs：本文件只把事实喂进去、按结论执行，
 // 避免阈值散落在 supervisor 循环里再次漂移。
 const WATCHDOG_MS = WATCHDOG_TICK_MS
+// 长期有界耐心（CPU-aware）的采样器；单测/自测通过 hooks.sampleCpu 注入。
+const execFileAsync = promisify(execFile)
 // 触发后先请壳抓现场，最多等这么久再重启（壳不在时按上限继续）。
 const WATCHDOG_DUMP_WAIT_MS = 30000
 
@@ -1547,6 +1553,33 @@ async function probeLiveness(url, timeoutMs = 1500) {
   }
 }
 
+/**
+ * 子进程累计 CPU 时间（毫秒），供扩展耐心循环做两次采样求增量；平台不支持/读取失败
+ * 返回 null ⇒ 策略退回「不扩展、按原边界 dump+重启」。
+ * win32: PowerShell 读 (Get-Process -Id N).CPU（累计处理器秒）；linux: /proc/<pid>/stat
+ * 的 utime+stime（用户态按 100Hz 换算）；其余平台 null。
+ */
+async function childCpuMs(pid) {
+  if (!pid) return null
+  try {
+    if (process.platform === 'win32') {
+      const { stdout } = await execFileAsync('powershell.exe', [
+        '-NoProfile', '-NonInteractive', '-Command', `(Get-Process -Id ${pid} -ErrorAction Stop).CPU`,
+      ], { timeout: 4000, windowsHide: true })
+      const seconds = Number.parseFloat(String(stdout).trim())
+      return Number.isFinite(seconds) ? Math.round(seconds * 1000) : null
+    }
+    if (process.platform === 'linux') {
+      const stat = readFileSync(`/proc/${pid}/stat`, 'utf8')
+      // comm 可能含空格/括号：从最后一个 ')' 之后切字段；utime/stime 是第 14/15 个字段。
+      const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ')
+      const ticks = Number(fields[11]) + Number(fields[12])
+      return Number.isFinite(ticks) ? Math.round(ticks * 10) : null
+    }
+  } catch { /* 进程已退出/无权限/无该平台采样器 ⇒ 交给策略走 unknown */ }
+  return null
+}
+
 /** 日志只保留 scheme://host:port：dsh web URL 带 ?token=…（启动凭据），不得落日志。 */
 function logSafeUrl(url) {
   try { const u = new URL(url); return `${u.protocol}//${u.host}` } catch { return '(unparseable-url)' }
@@ -1566,24 +1599,28 @@ async function watchdogTick(hooks = {}) {
   const waitDump = hooks.waitDumpDone ?? (() => waitDumpDone(WATCHDOG_DUMP_WAIT_MS))
   const dispatchDump = hooks.dispatchDump ?? emit
   const killChild = hooks.kill ?? ((pid) => { restartRequested = true; killTree(pid) })
+  // 供自测注入的时钟/睡眠/CPU 采样器；生产路径全部用真实实现。
+  const now = hooks.now ?? Date.now
+  const sleep = hooks.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)))
+  const sampleCpu = hooks.sampleCpu ?? childCpuMs
   const first = await probe(watchdogUrl)
   if (first.ok) { watchdogMisses = 0; watchdogFirstMissAt = 0; return }
-  if (Date.now() - watchdogArmedAt < STARTUP_MUTE_MS) return
-  if (watchdogMisses === 0) watchdogFirstMissAt = Date.now()
+  if (now() - watchdogArmedAt < STARTUP_MUTE_MS) return
+  if (watchdogMisses === 0) watchdogFirstMissAt = now()
   watchdogMisses += 1
   // 判据走纯逻辑模块：启动宽限内要 5 miss（≈15s），宽限外维持 3 miss（≈9s）。
   // 窗口按「miss 次数 × 探针间隔」计（名义下限）；真实经过时间只进日志给人看。
   const decision = decideWatchdogRestart({
-    elapsedSinceStartMs: Date.now() - watchdogArmedAt,
+    elapsedSinceStartMs: now() - watchdogArmedAt,
     consecutiveMisses: watchdogMisses,
     missIntervalMs: WATCHDOG_MS,
   })
-  const windowSec = ((Date.now() - watchdogFirstMissAt) / 1000).toFixed(1)
+  const windowSec = ((now() - watchdogFirstMissAt) / 1000).toFixed(1)
   writeLog(`watchdog: dsh web miss ${watchdogMisses}/${decision.missLimit} (${decision.phase}, ${windowSec}s without an answer) (${logSafeUrl(watchdogUrl)})`)
   if (decision.restart) {
     const stuckUrl = watchdogUrl
     const missCount = watchdogMisses
-    const firstMissAt = watchdogFirstMissAt || Date.now()
+    const firstMissAt = watchdogFirstMissAt || now()
     watchdogRecovering = true
     watchdogArmed = false
     watchdogUrl = null
@@ -1601,10 +1638,55 @@ async function watchdogTick(hooks = {}) {
       watchdogUrl = stuckUrl
       watchdogArmed = true
       // 恢复后重新给启动静默期，避免下一拍又按宽限内/外的新阈值判挂起。
-      watchdogArmedAt = Date.now()
+      watchdogArmedAt = now()
       watchdogRecovering = false
-      writeLog(`watchdog: dsh web slow but alive after ${missCount} miss(es) (probe ${patient.status}, ${Date.now() - firstMissAt}ms) — no dump, no restart`)
+      writeLog(`watchdog: dsh web slow but alive after ${missCount} miss(es) (probe ${patient.status}, ${now() - firstMissAt}ms) — no dump, no restart`)
       return
+    }
+    // 扩展耐心（CPU-aware）：首次 15s 耐心盖不住的是**忙**卡顿（上游插件元数据同步扫盘，
+    // 2026-11-17 正式版实测 22.5s+，进程仍在烧 CPU）；死锁/真挂起则 CPU 空闲。
+    // 每 5s 采样子进程 CPU + 再探一次：忙且未到 ceiling ⇒ 继续等；空闲/采样不可用/
+    // 到顶 ⇒ 立即走原 dump+restart（真挂起检测不退化）。
+    while (true) {
+      const waited = now() - firstMissAt
+      if (waited >= STALL_BUSY_CEILING_MS) {
+        writeLog(`watchdog: dsh web stalled ${Math.round(waited / 1000)}s — reached the ${Math.round(STALL_BUSY_CEILING_MS / 1000)}s ceiling — asking the shell for a dump`)
+        break
+      }
+      const windowMs = Math.min(STALL_SAMPLE_MS, STALL_BUSY_CEILING_MS - waited)
+      const beforeCpu = await sampleCpu(currentChildPid)
+      const [probeResult] = await Promise.all([
+        probe(stuckUrl, Math.min(STALL_PROBE_TIMEOUT_MS, windowMs)),
+        sleep(windowMs),
+      ])
+      const afterCpu = await sampleCpu(currentChildPid)
+      if (probeResult.ok) {
+        watchdogMisses = 0
+        watchdogFirstMissAt = 0
+        watchdogUrl = stuckUrl
+        watchdogArmed = true
+        watchdogArmedAt = now()
+        watchdogRecovering = false
+        writeLog(`watchdog: dsh web slow but alive after ${missCount} miss(es) + ${Math.round((now() - firstMissAt) / 1000)}s busy stall (probe ${probeResult.status}) — no dump, no restart`)
+        return
+      }
+      const verdict = decidePatienceExtension({
+        waitedMs: now() - firstMissAt,
+        cpuDeltaMs: beforeCpu === null || afterCpu === null ? null : Math.max(0, afterCpu - beforeCpu),
+        sampleWindowMs: windowMs,
+      })
+      if (verdict.action === 'extend') {
+        writeLog(`watchdog: stalled but busy — extending patience (cpu ${Math.round((verdict.cpuRatio ?? 0) * 100)}%, ${Math.round(verdict.waitedMs / 1000)}s/${Math.round(STALL_BUSY_CEILING_MS / 1000)}s since first miss) (${logSafeUrl(stuckUrl)})`)
+        continue
+      }
+      if (verdict.action === 'idle') {
+        writeLog(`watchdog: dsh web stalled but IDLE (cpu ${Math.round((verdict.cpuRatio ?? 0) * 100)}% of one core) — treating it as dead`)
+      } else if (verdict.action === 'ceiling') {
+        writeLog(`watchdog: dsh web stalled ${Math.round(verdict.waitedMs / 1000)}s — reached the ${Math.round(STALL_BUSY_CEILING_MS / 1000)}s ceiling — asking the shell for a dump`)
+      } else if (verdict.action === 'unknown') {
+        writeLog('watchdog: dsh web child CPU unavailable on this platform — falling back to the dump+restart boundary')
+      }
+      break
     }
     // 现场由壳负责：壳用 MiniDumpWriteDump 直接抓（旧的 rundll32 comsvcs 路径
     // 在本机 20s 超时且零产出，既没证据又把一次挂起拖成重启风暴，已移除）。
@@ -1614,14 +1696,14 @@ async function watchdogTick(hooks = {}) {
     const dumped = await waitDump()
     // 最终判定：再探一次。2xx–4xx ⇒ 已恢复，清零并重新 arm，不杀不重启。
     const recheck = await probe(stuckUrl)
-    const elapsedMs = Date.now() - firstMissAt
+    const elapsedMs = now() - firstMissAt
     if (recheck.ok) {
       watchdogMisses = 0
       watchdogFirstMissAt = 0
       watchdogUrl = stuckUrl
       watchdogArmed = true
       // 重新给启动宽限：刚恢复的服务可能还在建索引，不能下一拍又判挂起。
-      watchdogArmedAt = Date.now()
+      watchdogArmedAt = now()
       writeLog(`watchdog: dsh web recovered after ${missCount} miss(es) (probe ${recheck.status}, ${elapsedMs}ms, dump ${dumped ? 'ready' : 'unconfirmed'}) — no restart`)
     } else {
       writeLog(`watchdog: dsh web still UNRESPONSIVE after dump (probe ${recheck.status ?? recheck.error}, ${elapsedMs}ms, dump ${dumped ? 'ready' : 'unconfirmed'}) — restarting dsh`)
@@ -1645,12 +1727,15 @@ function killTree(pid) {
 }
 
 // ── watchdog self-test (--self-test-watchdog) ──────────────────────────────
-// 用桩把探活结果**按顺序**喂给同一个 watchdogTick（不是另写一份判定），覆盖五条
+// 用桩把探活结果**按顺序**喂给同一个 watchdogTick（不是另写一份判定），覆盖八条
 // 负向对照：① 3 次 miss → dump 窗口内恢复 ⇒ 记 recovered、不得 kill/restart；
 // ② dump 后仍无响应 ⇒ 必须 kill + restart（安全边界没被堵死）；
 // ③ 长窗口耐心探针恢复 ⇒ 不得 dump、不得 kill（插件页首开型同步卡顿）；
 // ④ 启动宽限内 4 次 miss 不达阈值 ⇒ 不得 dump/kill；
-// ⑤ 启动宽限内 5 次 miss 达阈值 ⇒ 仍然 dump + restart。
+// ⑤ 启动宽限内 5 次 miss 达阈值 ⇒ 仍然 dump + restart；
+// ⑥ 忙 25s 后应答（CPU-aware 扩展）⇒ 不得 dump/重启；
+// ⑦ 空闲 25s ⇒ 立即按原边界 dump+restart（真挂起检测不退化）；
+// ⑧ 忙过 60s ceiling ⇒ 仍然 dump + restart。
 // 由 scripts/test-watchdog-recovery.mjs 调用，并对本文件做变异自证（见该脚本）。
 async function runWatchdogSelfTest() {
   const saved = {
@@ -1663,7 +1748,8 @@ async function runWatchdogSelfTest() {
   const scenarios = [
     {
       name: '3 次 miss → dump 窗口内恢复',
-      probes: [miss, miss, miss, miss, { ok: true, status: 200 }],
+      // 3 miss + patient miss + 扩展循环首个探针 miss（CPU 不可用 ⇒ 不扩展）→ dump → recheck ok
+      probes: [miss, miss, miss, miss, miss, { ok: true, status: 200 }],
       ticks: 3,
       armedAtAgoMs: 300000,
       wantKills: 0,
@@ -1688,7 +1774,7 @@ async function runWatchdogSelfTest() {
       armedAtAgoMs: 300000,
       wantKills: 0,
       wantDumps: 0,
-      wantLog: /watchdog: dsh web slow but alive after 3 miss\(es\) .* — no dump, no restart/,
+      wantLog: /watchdog: dsh web slow but alive after 3 miss\(es\) \(probe 303, \d+ms\) — no dump, no restart/,
       wantRearmed: true,
     },
     {
@@ -1711,6 +1797,44 @@ async function runWatchdogSelfTest() {
       wantLog: /watchdog: dsh web still UNRESPONSIVE after dump/,
       wantRearmed: false,
     },
+    {
+      // ⑥ CPU-aware 扩展：第一次 5s 窗口 70% busy ⇒ extend；第二次窗口内应答 ⇒ 不 dump 不重启。
+      name: 'busy stall keeps extending, then answers',
+      probes: [miss, miss, miss, miss, miss, { ok: true, status: 303 }],
+      cpu: [1000, 4500, 9500, 14000],
+      ticks: 3,
+      armedAtAgoMs: 300000,
+      wantKills: 0,
+      wantDumps: 0,
+      wantLog: /watchdog: dsh web slow but alive after 3 miss\(es\) \+ \d+s busy stall/,
+      wantAlso: /watchdog: stalled but busy — extending patience/,
+      wantRearmed: true,
+    },
+    {
+      // ⑦ 空闲（4% 单核）⇒ 不走扩展，立即回到 dump+restart。
+      name: 'idle stall goes straight to dump and restart',
+      probes: [miss, miss, miss, miss, miss, miss],
+      cpu: [1000, 1200],
+      ticks: 3,
+      armedAtAgoMs: 300000,
+      wantKills: 1,
+      wantDumps: 1,
+      wantLog: /watchdog: dsh web stalled but IDLE/,
+      wantNoLog: /watchdog: stalled but busy/,
+      wantRearmed: false,
+    },
+    {
+      // ⑧ 一直 busy ⇒ 每 5s 扩展，到 60s ceiling 后仍然 dump+restart。
+      name: 'busy stall hits the ceiling and restarts',
+      probes: new Array(20).fill(miss),
+      cpu: new Array(40).fill(0).map((_, index) => 1000 + index * 4000),
+      ticks: 3,
+      armedAtAgoMs: 300000,
+      wantKills: 1,
+      wantDumps: 1,
+      wantLog: /reached the 60s ceiling/,
+      wantRearmed: false,
+    },
   ]
   let failed = 0
   try {
@@ -1719,16 +1843,29 @@ async function runWatchdogSelfTest() {
       const kills = []
       const dumps = []
       let turn = 0
-      const probe = async () => {
+      // 假时钟：patient 探针按真实耗时（15s）推进，扩展循环的 sleep 也推进，
+      // 这样 ceiling 算术与真实时间线一致，而测试本身零等待。
+      let clock = 1000000
+      const now = () => clock
+      const probe = async (_url, timeoutMs) => {
+        if (timeoutMs === PRE_DUMP_PATIENCE_MS) clock += PRE_DUMP_PATIENCE_MS
         // 顺序返回；越界后重复最后一个结果，避免"没桩可喂"被静默当成恢复/失败。
         const result = scenario.probes[Math.min(turn, scenario.probes.length - 1)]
         turn += 1
         return result
       }
+      const sleep = async (ms) => { clock += ms }
+      const cpuValues = scenario.cpu ?? [null]
+      let cpuTurn = 0
+      const sampleCpu = async () => {
+        const value = cpuValues[Math.min(cpuTurn, cpuValues.length - 1)]
+        cpuTurn += 1
+        return value
+      }
       // 起点 = "第 1 次 miss 之前"：已 arm、已过启动宽限、无历史 miss。
       watchdogUrl = 'http://127.0.0.1:12345/?token=SELF-TEST-SECRET'
       watchdogArmed = true
-      watchdogArmedAt = Date.now() - (scenario.armedAtAgoMs ?? 0)
+      watchdogArmedAt = clock - (scenario.armedAtAgoMs ?? 0)
       watchdogMisses = 0
       watchdogFirstMissAt = 0
       watchdogRecovering = false
@@ -1736,17 +1873,22 @@ async function runWatchdogSelfTest() {
       restartRequested = false
       const hooks = {
         probe,
+        now,
+        sleep,
+        sampleCpu,
         log: (line) => logs.push(line),
         waitDumpDone: async () => true,
         dispatchDump: (event) => dumps.push(event),
         kill: (pid) => { kills.push(pid); restartRequested = true },
       }
       console.log(`watchdog self-test: ${scenario.name}`)
-      for (let tick = 0; tick < scenario.ticks; tick++) await watchdogTick(hooks)
+      for (let tick = 0; tick < scenario.ticks; tick++) { await watchdogTick(hooks); clock += WATCHDOG_MS }
       for (const line of logs) console.log(`  log: ${line}`)
       const problems = []
       if (kills.length !== scenario.wantKills) problems.push(`kill 次数 ${kills.length}，期望 ${scenario.wantKills}`)
       if (!logs.some((line) => scenario.wantLog.test(line))) problems.push(`缺少期望日志 ${scenario.wantLog}`)
+      if (scenario.wantAlso !== undefined && !logs.some((line) => scenario.wantAlso.test(line))) problems.push(`缺少期望日志 ${scenario.wantAlso}`)
+      if (scenario.wantNoLog !== undefined && logs.some((line) => scenario.wantNoLog.test(line))) problems.push(`出现了禁止的日志 ${scenario.wantNoLog}`)
       const wantDumps = scenario.wantDumps ?? 1
       if (dumps.length !== wantDumps) problems.push(`dump-web 应发 ${wantDumps} 次，实际 ${dumps.length}`)
       if (watchdogArmed !== scenario.wantRearmed) problems.push(`watchdogArmed=${watchdogArmed}，期望 ${scenario.wantRearmed}`)

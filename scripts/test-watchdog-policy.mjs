@@ -15,6 +15,7 @@ import {
   decideWatchdogRestart, watchdogThresholds,
   WATCHDOG_TICK_MS, STARTUP_GRACE_MS, STARTUP_MISS_LIMIT, STARTUP_MIN_WINDOW_MS,
   STEADY_MISS_LIMIT, STEADY_MIN_WINDOW_MS, PRE_DUMP_PATIENCE_MS, STARTUP_MUTE_MS,
+  decidePatienceExtension, STALL_BUSY_CEILING_MS, STALL_SAMPLE_MS, STALL_PROBE_TIMEOUT_MS, STALL_MIN_BUSY_RATIO,
 } from './lib/watchdog-policy.mjs'
 
 let failures = 0
@@ -91,6 +92,53 @@ check('reason 带相位与计数，可直接进日志判读', () => {
   assert.match(d.reason, /^steady: 3 miss\(es\) over 9000ms/)
   const s = decideWatchdogRestart({ elapsedSinceStartMs: 60000, consecutiveMisses: 4 })
   assert.match(s.reason, /^startup: 4\/5 miss\(es\)/)
+})
+
+
+check('扩展耐心：busy ≥10% 单核 ⇒ extend；<10% ⇒ idle', () => {
+  const busy = decidePatienceExtension({ waitedMs: 26000, cpuDeltaMs: 3500, sampleWindowMs: 5000 })
+  assert.equal(busy.action, 'extend')
+  assert.equal(Math.round(busy.cpuRatio * 100), 70)
+  const boundary = decidePatienceExtension({ waitedMs: 26000, cpuDeltaMs: 500, sampleWindowMs: 5000 })
+  assert.equal(boundary.action, 'extend', '恰好 10% 必须算 busy（>= 边界）')
+  const idle = decidePatienceExtension({ waitedMs: 26000, cpuDeltaMs: 499, sampleWindowMs: 5000 })
+  assert.equal(idle.action, 'idle')
+})
+
+check('扩展耐心：CPU 不可用（null/NaN/零窗口）⇒ unknown（退回原边界）', () => {
+  for (const cpuDeltaMs of [null, undefined, Number.NaN, 'x']) {
+    const v = decidePatienceExtension({ waitedMs: 26000, cpuDeltaMs, sampleWindowMs: 5000 })
+    assert.equal(v.action, 'unknown', String(cpuDeltaMs))
+    assert.equal(v.cpuRatio, null)
+  }
+  const zero = decidePatienceExtension({ waitedMs: 26000, cpuDeltaMs: 3500, sampleWindowMs: 0 })
+  assert.equal(zero.action, 'unknown')
+})
+
+check('扩展耐心：ceiling 边界（60s 起算、含非法的 waited）', () => {
+  const atCeiling = decidePatienceExtension({ waitedMs: STALL_BUSY_CEILING_MS, cpuDeltaMs: 3500 })
+  assert.equal(atCeiling.action, 'ceiling')
+  const over = decidePatienceExtension({ waitedMs: STALL_BUSY_CEILING_MS + 1, cpuDeltaMs: 3500 })
+  assert.equal(over.action, 'ceiling')
+  const justBefore = decidePatienceExtension({ waitedMs: STALL_BUSY_CEILING_MS - 1, cpuDeltaMs: 3500 })
+  assert.equal(justBefore.action, 'extend')
+  const negative = decidePatienceExtension({ waitedMs: -5, cpuDeltaMs: 3500 })
+  assert.equal(negative.action, 'extend')
+})
+
+check('扩展耐心：负 CPU 夹到 0 ⇒ idle；多核 >100% ⇒ extend', () => {
+  assert.equal(decidePatienceExtension({ waitedMs: 26000, cpuDeltaMs: -100 }).action, 'idle')
+  const multi = decidePatienceExtension({ waitedMs: 26000, cpuDeltaMs: 9000, sampleWindowMs: 5000 })
+  assert.equal(multi.action, 'extend')
+  assert.equal(Math.round(multi.cpuRatio * 100), 180)
+})
+
+check('扩展耐心：阈值常数自洽（60s ceiling / 5s 采样 / 5s 探针 / 10% busy）', () => {
+  assert.equal(STALL_BUSY_CEILING_MS, 60000)
+  assert.equal(STALL_SAMPLE_MS, 5000)
+  assert.equal(STALL_PROBE_TIMEOUT_MS, 5000)
+  assert.equal(STALL_MIN_BUSY_RATIO, 0.1)
+  assert.ok(STALL_BUSY_CEILING_MS > PRE_DUMP_PATIENCE_MS, 'ceiling 必须大于首次耐心窗口，否则扩展没有空间')
 })
 
 if (failures) {
