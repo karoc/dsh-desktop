@@ -223,7 +223,16 @@ if (tauri && tauri.event) {
     const headline = upgradeMarker
       ? `上次升级 v${upgradeMarker.from} → v${upgradeMarker.to} 后启动失败（退出码 ${exit.hex || '?'}）`
       : `dsh 服务异常退出（退出码 ${exit.hex || '?'}）。`;
-    showActionable(headline, `${where}；点「重试」手动重启服务。`);
+    // 有界自动恢复（D1 复议 2026-11-17）：只陈述"做了什么"，绝不承诺"已修复"。
+    // 证据目录入口由上面的 openDataBtn（「打开证据目录」）提供。
+    const auto = exit.autoRestart || null;
+    let hint = `${where}；点「重试」手动重启服务。`;
+    if (auto === 'restarted') {
+      hint = `${where}；服务已自动重启一次（仅恢复服务，不代表问题已修复）；若再次异常退出会停止自动重启并等你处理。`;
+    } else if (auto === 'stopped') {
+      hint = `${where}；10 分钟内第 2 次异常退出——已停止自动重启，点「重试」人工重启。`;
+    }
+    showActionable(headline, hint);
     return true;
   }
 
