@@ -1,10 +1,11 @@
-import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join } from "node:path";
 import { URL, fileURLToPath } from "node:url";
 import { defineTool } from "@deepseek-ai/dsh-tools";
-import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { createHash, randomUUID } from "node:crypto";
+import { closeSync, openSync, readFileSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { homedir, hostname } from "node:os";
+import { setTimeout as setTimeout$1 } from "node:timers/promises";
 //#region src/board-core.ts
 /**
 * Core kanban domain: a workspace-scoped KANBAN.json file with card CRUD.
@@ -57,6 +58,19 @@ function isBoardCard(value) {
 	if (card.rationale !== void 0 && typeof card.rationale !== "string") return false;
 	if (card.rejected !== void 0 && typeof card.rejected !== "string") return false;
 	return card.sourceSessionId === void 0 || typeof card.sourceSessionId === "string";
+}
+/**
+* One card as a single model-visible render line. The id must lead the line:
+* `output.render` is the only content a tool result exposes to the model, so an
+* id present only in the canonical value is unreachable (board_update would be
+* uncallable without shelling out to read KANBAN.json).
+* @param card - the card to render.
+* @returns the line, with tags and missing-field flags.
+*/
+function renderCardLine(card) {
+	const missing = missingCardFields(card);
+	const mark = missing.length > 0 ? ` ⚠️缺:${missing.map((field) => CARD_FIELD_LABELS[field]).join(",")}` : "";
+	return `- [${card.status}] ${card.id} ${card.title}${card.tags.length > 0 ? ` ${card.tags.map((tag) => `#${tag}`).join(" ")}` : ""}${mark}`;
 }
 /**
 * Short labels for the what/why/rejected fields, used by model-visible render
@@ -144,7 +158,7 @@ function readBoardSync(cwd) {
 async function writeBoard(cwd, board) {
 	const path = boardPath(cwd);
 	await mkdir(dirname(path), { recursive: true });
-	const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
+	const tmp = `${path}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
 	await writeFile(tmp, JSON.stringify(board, null, 2) + "\n", "utf8");
 	await renameWithRetry(tmp, path);
 }
@@ -187,22 +201,34 @@ async function archiveExcessDone(cwd, board) {
 	const path = archivePath(cwd);
 	await mkdir(dirname(path), { recursive: true });
 	let existing = [];
+	let raw;
 	try {
-		const raw = await readFile(path, "utf8");
-		const parsed = JSON.parse(raw);
-		if (Array.isArray(parsed.archived)) existing = parsed.archived;
+		raw = await readFile(path, "utf8");
 	} catch (error) {
 		if (error.code !== "ENOENT") throw error;
 	}
-	existing.push(...toArchive);
-	const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
+	if (raw !== void 0) {
+		let parsed;
+		try {
+			parsed = JSON.parse(raw);
+		} catch (error) {
+			throw new Error(`kanban: archive ${path} is not valid JSON (${error.message}); refusing to overwrite it`);
+		}
+		const archive = parsed;
+		if (archive.version !== 1 || !Array.isArray(archive.archived) || !archive.archived.every(isBoardCard)) throw new Error(`kanban: archive ${path} is not a recognized {version:1, archived:[…]} document; refusing to overwrite it`);
+		existing = archive.archived;
+	}
+	const known = new Set(existing.map((card) => card.id));
+	const appended = toArchive.filter((card) => !known.has(card.id));
+	existing.push(...appended);
+	const tmp = `${path}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
 	await writeFile(tmp, JSON.stringify({
 		version: 1,
 		archived: existing
 	}, null, 2) + "\n", "utf8");
 	await renameWithRetry(tmp, path);
 	return {
-		count: toArchive.length,
+		count: appended.length,
 		path
 	};
 }
@@ -222,6 +248,170 @@ function viewOf$1(cwd, board, archived) {
 		counts,
 		...archived !== void 0 && archived.count > 0 ? { archived } : {}
 	};
+}
+/** Path of the advisory lock guarding one board's read-modify-write. */
+function boardLockPath(cwd) {
+	return `${boardPath(cwd)}.lock`;
+}
+/** How long a writer waits for a live holder before failing loudly. */
+const BOARD_LOCK_WAIT_MS = 1e4;
+/** Retry interval while another live writer holds the lock. */
+const BOARD_LOCK_RETRY_MS = 25;
+/** Age after which a lock written on another host (unverifiable pid) is stale. */
+const BOARD_LOCK_REMOTE_STALE_MS = 12e4;
+/** Age after which an unreadable/legacy lock file is treated as stale. */
+const BOARD_LOCK_UNREADABLE_STALE_MS = 15e3;
+/** Heartbeat interval: keeps mtime fresh for the cross-host age fallback. */
+const BOARD_LOCK_HEARTBEAT_MS = 2e3;
+/** Lock paths currently held BY THIS PROCESS → their token. */
+const heldBoardLocks = /* @__PURE__ */ new Map();
+/** Read and validate a lock file; undefined when unreadable/legacy/corrupt. */
+function readBoardLockInfo(lock) {
+	try {
+		const parsed = JSON.parse(readFileSync(lock, "utf8"));
+		if (typeof parsed.token !== "string" || parsed.token === "") return void 0;
+		if (typeof parsed.pid !== "number" || !Number.isInteger(parsed.pid)) return void 0;
+		if (typeof parsed.host !== "string") return void 0;
+		return {
+			token: parsed.token,
+			pid: parsed.pid,
+			host: parsed.host,
+			acquiredAt: typeof parsed.acquiredAt === "number" ? parsed.acquiredAt : 0
+		};
+	} catch {
+		return;
+	}
+}
+/** Whether a same-host pid still exists (EPERM counts as alive). */
+function pidAlive(pid) {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		return error.code === "EPERM";
+	}
+}
+/** Age of the lock file in ms, or undefined when it cannot be stat-ed. */
+function boardLockAgeMs(lock) {
+	try {
+		return Date.now() - statSync(lock).mtimeMs;
+	} catch {
+		return;
+	}
+}
+/**
+* Decide whether a lock may be taken over:
+*  - same host: the recorded pid must be gone (a suspended/GC-paused live
+*    holder keeps its pid, so its lock is never stolen);
+*  - other/unreadable host: age-based fallback (no cross-host liveness probe).
+*/
+function isBoardLockStale(lock, info, age) {
+	if (info === void 0 || info.host !== hostname()) return age !== void 0 && age > (info === void 0 ? BOARD_LOCK_UNREADABLE_STALE_MS : BOARD_LOCK_REMOTE_STALE_MS);
+	if (info.pid === process.pid) {
+		if (heldBoardLocks.get(lock) === info.token) return false;
+		return true;
+	}
+	return !pidAlive(info.pid);
+}
+/**
+* Break a stale lock without ever unlinking a live holder's lock: move the
+* candidate aside, verify the moved inode still carries the token we judged
+* stale, then delete it. A racing takeover restores the file if the token
+* changed between the decision and the rename.
+*/
+async function takeOverBoardLock(lock, expected) {
+	const moved = `${lock}.stale-${randomUUID()}`;
+	try {
+		await rename(lock, moved);
+	} catch (error) {
+		if (error.code === "ENOENT") return;
+		throw error;
+	}
+	const observed = readBoardLockInfo(moved);
+	if (!(expected === void 0 ? observed === void 0 : observed?.token === expected.token)) {
+		try {
+			await rename(moved, lock);
+		} catch {}
+		return;
+	}
+	try {
+		await unlink(moved);
+	} catch {}
+}
+/**
+* Acquire the advisory board lock (`KANBAN.json.lock`, created with O_EXCL).
+* Multiple sessions/agents share one KANBAN.json; without this a read-modify-write
+* pair can lose an update (each writer reads the same snapshot, last rename wins).
+* Ownership is token-checked: release only removes the file this acquisition
+* created, and a live holder is never treated as stale (a dead same-host pid is
+* the takeover signal; cross-host locks fall back to age).
+* @param cwd - absolute workspace root.
+* @returns the release function (idempotent, ownership-checked).
+*/
+async function acquireBoardLock(cwd) {
+	const lock = boardLockPath(cwd);
+	const token = randomUUID();
+	const deadline = Date.now() + BOARD_LOCK_WAIT_MS;
+	for (;;) try {
+		const fd = openSync(lock, "wx");
+		try {
+			const info = {
+				token,
+				pid: process.pid,
+				host: hostname(),
+				acquiredAt: Date.now()
+			};
+			writeFileSync(fd, JSON.stringify(info), "utf8");
+		} finally {
+			closeSync(fd);
+		}
+		heldBoardLocks.set(lock, token);
+		const heartbeat = setInterval(() => {
+			try {
+				const now = /* @__PURE__ */ new Date();
+				utimesSync(lock, now, now);
+			} catch {}
+		}, BOARD_LOCK_HEARTBEAT_MS);
+		heartbeat.unref?.();
+		return () => {
+			clearInterval(heartbeat);
+			releaseBoardLock(lock, token);
+			if (heldBoardLocks.get(lock) === token) heldBoardLocks.delete(lock);
+		};
+	} catch (error) {
+		if (error.code !== "EEXIST") throw error;
+		const info = readBoardLockInfo(lock);
+		if (isBoardLockStale(lock, info, boardLockAgeMs(lock))) {
+			await takeOverBoardLock(lock, info);
+			continue;
+		}
+		if (Date.now() > deadline) {
+			const holder = info === void 0 ? "an unreadable lock file" : `pid ${info.pid} on ${info.host}`;
+			throw new Error(`kanban: board is locked by ${holder} (${lock}); retry the operation`);
+		}
+		await setTimeout$1(BOARD_LOCK_RETRY_MS);
+	}
+}
+/** Remove the lock only when this acquisition still owns it. */
+function releaseBoardLock(lock, token) {
+	if (readBoardLockInfo(lock)?.token !== token) return;
+	try {
+		unlinkSync(lock);
+	} catch {}
+}
+/**
+* Run one board mutation under the advisory lock.
+* @param cwd - absolute workspace root.
+* @param fn - read → mutate → write body; must not call another locked mutation.
+* @returns the body's result.
+*/
+async function withBoardLock(cwd, fn) {
+	const release = await acquireBoardLock(cwd);
+	try {
+		return await fn();
+	} finally {
+		release();
+	}
 }
 /** Normalize an optional tag list: trim, drop empties, dedupe. */
 function normalizeTags(tags) {
@@ -245,27 +435,32 @@ async function addCard(cwd, input) {
 	const title = input.title.trim();
 	if (title === "") throw new TypeError("kanban: card title must be a non-empty string");
 	if (input.status !== void 0 && !BOARD_STATUSES.includes(input.status)) throw new TypeError(`kanban: invalid status ${JSON.stringify(input.status)}`);
-	const board = await readBoard(cwd);
-	const now = Date.now();
-	const fields = {};
-	optionalText(fields, "description", input.description);
-	optionalText(fields, "summary", input.summary);
-	optionalText(fields, "rationale", input.rationale);
-	optionalText(fields, "rejected", input.rejected);
-	const card = {
-		id: `card-${randomUUID()}`,
-		title,
-		...fields,
-		...input.sourceSessionId !== void 0 && input.sourceSessionId !== "" ? { sourceSessionId: input.sourceSessionId } : {},
-		status: input.status ?? "todo",
-		tags: normalizeTags(input.tags),
-		createdAt: now,
-		updatedAt: now
-	};
-	board.cards.push(card);
-	const archived = await archiveExcessDone(cwd, board);
-	await writeBoard(cwd, board);
-	return viewOf$1(cwd, board, archived);
+	return await withBoardLock(cwd, async () => {
+		const board = await readBoard(cwd);
+		const now = Date.now();
+		const fields = {};
+		optionalText(fields, "description", input.description);
+		optionalText(fields, "summary", input.summary);
+		optionalText(fields, "rationale", input.rationale);
+		optionalText(fields, "rejected", input.rejected);
+		const card = {
+			id: `card-${randomUUID()}`,
+			title,
+			...fields,
+			...input.sourceSessionId !== void 0 && input.sourceSessionId !== "" ? { sourceSessionId: input.sourceSessionId } : {},
+			status: input.status ?? "todo",
+			tags: normalizeTags(input.tags),
+			createdAt: now,
+			updatedAt: now
+		};
+		board.cards.push(card);
+		const archived = await archiveExcessDone(cwd, board);
+		await writeBoard(cwd, board);
+		return {
+			view: viewOf$1(cwd, board, archived),
+			card
+		};
+	});
 }
 /** Update one card in place and return the fresh board view. */
 async function updateCard(cwd, id, input) {
@@ -273,47 +468,57 @@ async function updateCard(cwd, id, input) {
 	if (input.title !== void 0 && input.title.trim() === "") throw new TypeError("kanban: card title must be a non-empty string");
 	if (input.status !== void 0 && !BOARD_STATUSES.includes(input.status)) throw new TypeError(`kanban: invalid status ${JSON.stringify(input.status)}`);
 	if (input.title === void 0 && input.description === void 0 && input.summary === void 0 && input.rationale === void 0 && input.rejected === void 0 && input.status === void 0 && input.tags === void 0) throw new TypeError("kanban: card update requires at least one field");
-	const board = await readBoard(cwd);
-	const card = board.cards.find((candidate) => candidate.id === id);
-	if (card === void 0) throw new Error(`kanban: no card with id ${JSON.stringify(id)}`);
-	if (input.title !== void 0) card.title = input.title.trim();
-	if (input.description !== void 0) {
-		const v = input.description.trim();
-		if (v === "") delete card.description;
-		else card.description = v;
-	}
-	if (input.summary !== void 0) {
-		const v = input.summary.trim();
-		if (v === "") delete card.summary;
-		else card.summary = v;
-	}
-	if (input.rationale !== void 0) {
-		const v = input.rationale.trim();
-		if (v === "") delete card.rationale;
-		else card.rationale = v;
-	}
-	if (input.rejected !== void 0) {
-		const v = input.rejected.trim();
-		if (v === "") delete card.rejected;
-		else card.rejected = v;
-	}
-	if (input.status !== void 0) card.status = input.status;
-	if (input.tags !== void 0) card.tags = normalizeTags(input.tags);
-	card.updatedAt = Date.now();
-	const archived = await archiveExcessDone(cwd, board);
-	await writeBoard(cwd, board);
-	return viewOf$1(cwd, board, archived);
+	return await withBoardLock(cwd, async () => {
+		const board = await readBoard(cwd);
+		const card = board.cards.find((candidate) => candidate.id === id);
+		if (card === void 0) throw new Error(`kanban: no card with id ${JSON.stringify(id)}`);
+		if (input.title !== void 0) card.title = input.title.trim();
+		if (input.description !== void 0) {
+			const v = input.description.trim();
+			if (v === "") delete card.description;
+			else card.description = v;
+		}
+		if (input.summary !== void 0) {
+			const v = input.summary.trim();
+			if (v === "") delete card.summary;
+			else card.summary = v;
+		}
+		if (input.rationale !== void 0) {
+			const v = input.rationale.trim();
+			if (v === "") delete card.rationale;
+			else card.rationale = v;
+		}
+		if (input.rejected !== void 0) {
+			const v = input.rejected.trim();
+			if (v === "") delete card.rejected;
+			else card.rejected = v;
+		}
+		if (input.status !== void 0) card.status = input.status;
+		if (input.tags !== void 0) card.tags = normalizeTags(input.tags);
+		card.updatedAt = Date.now();
+		const archived = await archiveExcessDone(cwd, board);
+		await writeBoard(cwd, board);
+		return {
+			view: viewOf$1(cwd, board, archived),
+			card
+		};
+	});
 }
 /** Remove one card and return the fresh board view. */
 async function removeCard(cwd, id) {
 	if (id === "" || id.trim() !== id) throw new TypeError("kanban: card id must be a non-empty, untrimmed string");
-	const board = await readBoard(cwd);
-	const index = board.cards.findIndex((card) => card.id === id);
-	if (index < 0) throw new Error(`kanban: no card with id ${JSON.stringify(id)}`);
-	board.cards.splice(index, 1);
-	const archived = await archiveExcessDone(cwd, board);
-	await writeBoard(cwd, board);
-	return viewOf$1(cwd, board, archived);
+	return await withBoardLock(cwd, async () => {
+		const board = await readBoard(cwd);
+		const index = board.cards.findIndex((card) => card.id === id);
+		if (index < 0) throw new Error(`kanban: no card with id ${JSON.stringify(id)}`);
+		board.cards.splice(index, 1);
+		const archived = await archiveExcessDone(cwd, board);
+		await writeBoard(cwd, board);
+		return {
+			view: viewOf$1(cwd, board, archived),
+			removedId: id
+		};
+	});
 }
 //#endregion
 //#region src/skill-sync.ts
@@ -400,6 +605,40 @@ async function ensureSkillInstalled(home = homedir()) {
 	} catch (error) {
 		console.warn(`[dsh-kanban] could not auto-install the kanban-use skill (${error.message}) — run install-skill.mjs manually`);
 	}
+}
+//#endregion
+//#region src/note-files.ts
+/**
+* Agent Note file naming (dependency-free so the unit gates can run in CI).
+*
+* A topic with no ASCII letters/digits (Chinese, emoji, punctuation only) used
+* to collapse onto `note.md`, so two different decisions silently shared one
+* file. Non-ASCII topics now keep their readable letters and a short hash
+* suffix (two topics differing only in punctuation must not collide), and the
+* date is the local calendar day the note was written.
+*/
+/** Local calendar day as `YYYY-MM-DD` (note dates follow the author's day). */
+function localDate(date) {
+	const pad = (value) => String(value).padStart(2, "0");
+	return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+/**
+* Canonical note file name: `<yyyy-mm-dd>-<kebab-topic>[-<hash>].md`.
+* ASCII topics keep their historical kebab name (no hash); a topic with any
+* non-ASCII letter/number keeps those characters for readability and appends
+* an 8-char hash of the raw topic so different topics cannot share a file.
+* @param topic - the note topic from `note_add`.
+* @param date - the day the note is written (defaults to now).
+* @returns the file name, including the `.md` extension.
+*/
+function noteFileName(topic, date = /* @__PURE__ */ new Date()) {
+	const trimmed = topic.trim();
+	const slug = trimmed.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-+|-+$/g, "");
+	const hadSlug = slug !== "";
+	const base = hadSlug ? slug : "note";
+	const asciiOnly = hadSlug && /^[a-z0-9-]+$/.test(base);
+	const hash = createHash("sha256").update(trimmed).digest("hex").slice(0, 8);
+	return `${localDate(date)}-${base}${asciiOnly ? "" : `-${hash}`}.md`;
 }
 //#endregion
 //#region src/skill-register.ts
@@ -620,28 +859,117 @@ const STATUSES = [
 	"in_progress",
 	"done"
 ];
-/** Build a {@link BoardToolValue} from a {@link BoardView}. */
-function toBoardValue(view) {
+/** Project one persisted card onto the tool-facing card shape. */
+function toToolCard(card) {
 	return {
-		path: view.path,
-		cards: view.cards.map((card) => ({
-			id: card.id,
-			title: card.title,
-			...card.description === void 0 ? {} : { description: card.description },
-			...card.summary === void 0 ? {} : { summary: card.summary },
-			...card.rationale === void 0 ? {} : { rationale: card.rationale },
-			...card.rejected === void 0 ? {} : { rejected: card.rejected },
-			...card.sourceSessionId === void 0 ? {} : { sourceSessionId: card.sourceSessionId },
-			status: card.status,
-			tags: card.tags,
-			createdAt: card.createdAt,
-			updatedAt: card.updatedAt
-		})),
-		counts: view.counts,
-		...view.archived !== void 0 ? { archived: view.archived } : {}
+		id: card.id,
+		title: card.title,
+		...card.description === void 0 ? {} : { description: card.description },
+		...card.summary === void 0 ? {} : { summary: card.summary },
+		...card.rationale === void 0 ? {} : { rationale: card.rationale },
+		...card.rejected === void 0 ? {} : { rejected: card.rejected },
+		...card.sourceSessionId === void 0 ? {} : { sourceSessionId: card.sourceSessionId },
+		status: card.status,
+		tags: card.tags,
+		createdAt: card.createdAt,
+		updatedAt: card.updatedAt
 	};
 }
-/** Canonical board output shared by every tool: the full fresh board view. */
+/**
+* Build a {@link BoardToolWriteValue} from one mutation. Write ops return only
+* the touched card: echoing the whole board on every write burned ~2k tokens
+* per operation on a mature board (108 cards) while the caller needs one line.
+* `board_list` remains the full read path.
+* @param mutation - the mutation outcome from board-core.
+* @returns the card-scoped tool value.
+*/
+function toWriteValue(mutation) {
+	return {
+		path: mutation.view.path,
+		...mutation.card !== void 0 ? { card: toToolCard(mutation.card) } : {},
+		...mutation.removedId !== void 0 ? { removedId: mutation.removedId } : {},
+		counts: mutation.view.counts,
+		...mutation.view.archived !== void 0 ? { archived: mutation.view.archived } : {}
+	};
+}
+/** Card shape shared by the read and write tool outputs. */
+const BOARD_CARD_SCHEMA = {
+	type: "object",
+	additionalProperties: false,
+	properties: {
+		id: {
+			type: "string",
+			required: true
+		},
+		title: {
+			type: "string",
+			required: true
+		},
+		description: { type: "string" },
+		summary: { type: "string" },
+		rationale: { type: "string" },
+		rejected: { type: "string" },
+		sourceSessionId: { type: "string" },
+		status: {
+			type: "string",
+			required: true,
+			enum: [
+				"todo",
+				"in_progress",
+				"done"
+			]
+		},
+		tags: {
+			type: "array",
+			required: true,
+			items: { type: "string" }
+		},
+		createdAt: {
+			type: "integer",
+			required: true
+		},
+		updatedAt: {
+			type: "integer",
+			required: true
+		}
+	}
+};
+/** Board counters shared by both tool outputs. */
+const BOARD_COUNTS_SCHEMA = {
+	type: "object",
+	additionalProperties: false,
+	required: true,
+	properties: {
+		todo: {
+			type: "integer",
+			required: true
+		},
+		inProgress: {
+			type: "integer",
+			required: true
+		},
+		done: {
+			type: "integer",
+			required: true
+		}
+	}
+};
+/** Archive notice shared by both tool outputs. */
+const BOARD_ARCHIVED_SCHEMA = {
+	type: "object",
+	additionalProperties: false,
+	properties: {
+		count: {
+			type: "integer",
+			required: true
+		},
+		path: {
+			type: "string",
+			required: true
+		}
+	}
+};
+/** Full-board output: only board_list reads every card. */
 const BOARD_OUTPUT = {
 	schema: {
 		type: "object",
@@ -654,98 +982,67 @@ const BOARD_OUTPUT = {
 			cards: {
 				type: "array",
 				required: true,
-				items: {
-					type: "object",
-					additionalProperties: false,
-					properties: {
-						id: {
-							type: "string",
-							required: true
-						},
-						title: {
-							type: "string",
-							required: true
-						},
-						description: { type: "string" },
-						summary: { type: "string" },
-						rationale: { type: "string" },
-						rejected: { type: "string" },
-						sourceSessionId: { type: "string" },
-						status: {
-							type: "string",
-							required: true,
-							enum: [
-								"todo",
-								"in_progress",
-								"done"
-							]
-						},
-						tags: {
-							type: "array",
-							required: true,
-							items: { type: "string" }
-						},
-						createdAt: {
-							type: "integer",
-							required: true
-						},
-						updatedAt: {
-							type: "integer",
-							required: true
-						}
-					}
-				}
+				items: BOARD_CARD_SCHEMA
 			},
-			counts: {
-				type: "object",
-				additionalProperties: false,
-				required: true,
-				properties: {
-					todo: {
-						type: "integer",
-						required: true
-					},
-					inProgress: {
-						type: "integer",
-						required: true
-					},
-					done: {
-						type: "integer",
-						required: true
-					}
-				}
-			},
-			archived: {
-				type: "object",
-				additionalProperties: false,
-				properties: {
-					count: {
-						type: "integer",
-						required: true
-					},
-					path: {
-						type: "string",
-						required: true
-					}
-				}
-			}
+			counts: BOARD_COUNTS_SCHEMA,
+			archived: BOARD_ARCHIVED_SCHEMA
 		}
 	},
-	render: (_args, value) => {
+	render: (args, value) => {
 		const incomplete = value.cards.filter((card) => missingCardFields(card).length > 0).length;
+		const detail = args?.detail === true;
+		const bodyLines = (card) => {
+			if (!detail) return [];
+			const truncate = (text) => text.length > 1200 ? text.slice(0, 1200) + "…" : text;
+			return [
+				card.description === void 0 ? "" : `  description: ${truncate(card.description)}`,
+				card.summary === void 0 ? "" : `  summary: ${truncate(card.summary)}`,
+				card.rationale === void 0 ? "" : `  rationale: ${truncate(card.rationale)}`,
+				card.rejected === void 0 ? "" : `  rejected: ${truncate(card.rejected)}`
+			].filter((line) => line !== "");
+		};
 		return [{
 			type: "text",
 			text: [
 				`Board at ${value.path}`,
-				...value.cards.map((card) => {
-					const missing = missingCardFields(card);
-					const mark = missing.length > 0 ? ` ⚠️缺:${missing.map((field) => CARD_FIELD_LABELS[field]).join(",")}` : "";
-					return `- [${card.status}] ${card.title}${card.tags.length > 0 ? ` ${card.tags.map((t) => `#${t}`).join(" ")}` : ""}${mark}`;
-				}),
-				...value.cards.length === 0 ? ["(no cards yet)"] : [],
+				...value.cards.flatMap((card) => [renderCardLine(card), ...bodyLines(card)]),
+				...value.cards.length === 0 ? ["(no cards in this view)"] : [],
 				...incomplete > 0 ? [`⚠️ ${incomplete} card(s) missing fields — fill the flagged 为什么 (why), and for done cards 做了什么 (what) + 放弃了什么 (rejected), when you can.`] : [],
+				`counts: todo=${value.counts.todo} in_progress=${value.counts.inProgress} done=${value.counts.done}`,
 				...value.archived !== void 0 ? [`Archived ${value.archived.count} done card(s) to ${value.archived.path}`] : []
 			].join("\n")
+		}];
+	}
+};
+/** Write-op output: the touched card plus counters (never the whole board). */
+const BOARD_WRITE_OUTPUT = {
+	schema: {
+		type: "object",
+		additionalProperties: false,
+		properties: {
+			path: {
+				type: "string",
+				required: true
+			},
+			card: BOARD_CARD_SCHEMA,
+			removedId: { type: "string" },
+			counts: BOARD_COUNTS_SCHEMA,
+			archived: BOARD_ARCHIVED_SCHEMA
+		}
+	},
+	render: (_args, value) => {
+		const lines = [`Board at ${value.path}`];
+		if (value.card !== void 0) {
+			lines.push(renderCardLine(value.card));
+			const missing = missingCardFields(value.card);
+			if (missing.length > 0) lines.push(`⚠️ 此卡缺 ${missing.map((field) => CARD_FIELD_LABELS[field]).join(",")} — 补齐后才能被别人接手。`);
+		}
+		if (value.removedId !== void 0) lines.push(`Removed card ${value.removedId}.`);
+		lines.push(`counts: todo=${value.counts.todo} in_progress=${value.counts.inProgress} done=${value.counts.done}`);
+		if (value.archived !== void 0) lines.push(`Archived ${value.archived.count} done card(s) to ${value.archived.path}`);
+		return [{
+			type: "text",
+			text: lines.join("\n")
 		}];
 	}
 };
@@ -782,11 +1079,13 @@ const BOARD_GUIDANCE = `You have a persistent kanban board (the board_* tools) b
 
 As work progresses, move cards with board_update (status in_progress → done), adding rationale/rejected information as decisions are made; when a card is finished or superseded, mark it done or remove it. Prefer the board over todo_write for anything the user should still see after switching branches or opening a new session: todo_write is the transient in-turn task list, while the board is the durable cross-session record. Check board_list when resuming work in a workspace to pick up what was planned before.
 
-Close the loop at the end of every work session: when the user's request is done or reaches a clear stopping point, update the board to reflect reality — move completed cards to done, add any new follow-up as a todo card, and make every done card self-explanatory with all three fields: summary (做了什么 — what was actually done), rationale (为什么 — why it was done), and rejected (放弃了什么 — what was tried or considered and given up, with why). Do not leave cards in stale states (e.g. in_progress with no work left) and do not close a card without its three fields — the board must be an honest hand-off for the next session, not a backlog that drifts. This wrap-up is what makes the board a durable memory across sessions.
+The board is shared by every session and agent working in this workspace: move a card to in_progress before you start it (claim it), and do not overwrite a card another session is already working on (board_list renders the card id and status; in_progress means someone owns it). When two sessions need the same work, split the card rather than racing on it.
+
+Close the loop at the end of every work session: when the user's request is done or reaches a clear stopping point, update the board to reflect reality — move completed cards to done, add any new follow-up as a todo card, and make every done card self-explanatory with all three fields: summary (做了什么 — what was actually done), rationale (为什么 — why it was done), and rejected (放弃了什么 — what was tried or considered and given up, with why). Do not leave cards in stale states (e.g. in_progress with no work left) and do not close a card without its three fields — the board must be an honest hand-off for the next session, not a backlog that drifts. This wrap-up is what makes the board a durable memory across sessions. When a card ships, cite verifiable coordinates in its summary where they exist (commit/PR id, command output, artifact path) — "done" without a coordinate is not a hand-off the next session can check.
 
 The full card-writing discipline (field semantics, examples, good/bad cards, templates) lives in the kanban-use skill — load it when it is available.
 
-You also maintain Agent Notes (the note_add / note_list tools) at .agents/notes/implemented/<class>/<date>-<topic>.md, mirroring the DeepSeek Harness repository discipline. ${DEFAULT_NON_TRIVIAL_DEFINITION} After completing a non-trivial change, call note_add with: a class from {${DEFAULT_NOTE_CLASSES.join(", ")}}; a short kebab-case topic; the problem being solved; the decision made; what alternatives were rejected and why; and consequences. Write at DSH engineering depth: Decision states shipped reality in present tense with concrete names and negative guarantees (what is NOT done, boundaries, safety rules); Alternatives are real options that lost, each with why; Consequences records what the trade-off cost and bought. Keep it a few paragraphs, not a full essay.`;
+You also maintain Agent Notes (the note_add / note_list tools) at .agents/notes/implemented/<class>/<date>-<topic>.md, mirroring the DeepSeek Harness repository discipline. ${DEFAULT_NON_TRIVIAL_DEFINITION} After completing a non-trivial change, call note_add with: a class from {${DEFAULT_NOTE_CLASSES.join(", ")}}; a short kebab-case topic; the problem being solved; the decision made; what alternatives were rejected and why; and consequences. Write at DSH engineering depth: Decision states shipped reality in present tense with concrete names and negative guarantees (what is NOT done, boundaries, safety rules); Alternatives are real options that lost, each with why; Consequences records what the trade-off cost and bought. Keep it a few paragraphs, not a full essay. Never edit an existing note into a different decision: write a new note and cross-link it; note_add refuses to overwrite unless you pass supersede:true for the same decision.`;
 /**
 * Session-start board snapshot injected into every assembly (systemPrompt
 * context, sync — prompt assembly is synchronous). Reads the current agent's
@@ -807,18 +1106,24 @@ function boardSnapshotText(context) {
 	} catch {
 		return "";
 	}
-	const open = board.cards.filter((card) => card.status === "todo" || card.status === "in_progress");
-	if (open.length === 0) return "";
+	const allOpen = board.cards.filter((card) => card.status === "todo" || card.status === "in_progress");
+	if (allOpen.length === 0) return "";
+	const open = allOpen.slice(0, 25);
 	const lines = open.map((card) => {
 		const tags = card.tags.length > 0 ? ` [${card.tags.join(", ")}]` : "";
 		const status = card.status === "in_progress" ? " (in progress)" : "";
 		const missing = missingCardFields(card);
 		const missingNote = missing.length > 0 ? ` (缺:${missing.map((field) => CARD_FIELD_LABELS[field]).join(",")})` : "";
-		return `- [${card.status}] ${card.title}${status}${tags}${missingNote}`;
+		return `- [${card.status}] ${card.id} ${card.title}${status}${tags}${missingNote}`;
 	});
 	const incomplete = open.filter((card) => missingCardFields(card).length > 0).length;
 	const tail = incomplete > 0 ? ["", `${incomplete} open card(s) are missing fields (缺) — fill the flagged 为什么 (and other fields) when you pick the work up.`] : [];
-	return literalPromptText("Current workspace board (KANBAN.json) — open items:\n" + [...lines, ...tail].join("\n"));
+	const overflow = allOpen.length > open.length ? ["", `… +${allOpen.length - open.length} more open card(s) not shown — use board_list.`] : [];
+	return literalPromptText("Current workspace board (KANBAN.json) — open items:\n" + [
+		...lines,
+		...tail,
+		...overflow
+	].join("\n"));
 }
 /**
 * Neutralize `{{` in literal text contributed to a DYNAMIC prompt context.
@@ -849,7 +1154,9 @@ async function executeBoardCommand(ctx, invocation) {
 	const input = invocation.rawInput.trim();
 	const done = async (id) => {
 		try {
-			return renderBoardResult("Marked done.", await updateCard(cwd, id, { status: "done" }));
+			const { view, card } = await updateCard(cwd, id, { status: "done" });
+			const missing = card === void 0 ? [] : missingCardFields(card);
+			return renderBoardResult("Marked done." + (missing.length === 0 ? "" : `\n⚠️ 这张卡还缺 ${missing.map((field) => CARD_FIELD_LABELS[field]).join(",")} —— 用 board_update 补齐后才能算可交接的 done。`), view);
 		} catch (error) {
 			return {
 				kind: "error",
@@ -897,11 +1204,7 @@ function renderBoardResult(heading, view) {
 		text: [
 			...heading !== void 0 ? [heading] : [],
 			`Board at ${view.path}`,
-			...view.cards.map((card) => {
-				const missing = missingCardFields(card);
-				const mark = missing.length > 0 ? ` ⚠️缺:${missing.map((field) => CARD_FIELD_LABELS[field]).join(",")}` : "";
-				return `- [${card.status}] ${card.title}${card.tags.length > 0 ? ` ${card.tags.map((t) => `#${t}`).join(" ")}` : ""}${mark}`;
-			}),
+			...view.cards.map((card) => renderCardLine(card)),
 			...view.cards.length === 0 ? ["(no cards yet)"] : []
 		].join("\n")
 	};
@@ -921,11 +1224,6 @@ function registerBoardCommand(ctx) {
 * workspace's effective spec (defaults + user overrides) is authoritative.
 */
 const NOTE_CLASSES = DEFAULT_NOTE_CLASSES;
-/** Canonical note file name: <yyyy-mm-dd>-<kebab-topic>.md */
-function noteFileName(topic) {
-	const kebab = topic.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-	return `${(/* @__PURE__ */ new Date()).toISOString().slice(0, 10)}-${kebab === "" ? "note" : kebab}.md`;
-}
 /** Resolve a note path under the workspace. */
 function notePath(cwd, noteClass, topic) {
 	if (!isAbsolute(cwd)) throw new TypeError(`kanban: workspace must be an absolute path, got ${JSON.stringify(cwd)}`);
@@ -940,13 +1238,21 @@ function renderNoteBody(spec, title, body) {
 	return spec.noteFormat.replaceAll("{{title}}", title).replaceAll("{{problem}}", body.problem.trim()).replaceAll("{{decision}}", body.decision.trim()).replaceAll("{{alternatives}}", alternatives).replaceAll("{{consequences}}", consequences).replaceAll("{{alternatives_section}}", alternativesSection).replaceAll("{{consequences_section}}", consequencesSection);
 }
 /** Write one Agent Note file using the workspace's effective spec. */
-async function writeAgentNote(cwd, noteClass, topic, body) {
+async function writeAgentNote(cwd, noteClass, topic, body, supersede = false) {
 	const spec = await effectiveNoteSpec(cwd);
 	if (noteClass !== void 0 && !spec.noteClasses.includes(noteClass)) throw new TypeError(`kanban: note class ${JSON.stringify(noteClass)} is not in the effective note classes (${spec.noteClasses.join(", ")})`);
 	const path = notePath(cwd, noteClass, topic);
 	const title = topic.trim();
 	if (title === "") throw new TypeError("kanban: note topic must be a non-empty string");
 	if (body.problem.trim() === "" || body.decision.trim() === "") throw new TypeError("kanban: note requires a problem and a decision");
+	let exists = false;
+	try {
+		await stat(path);
+		exists = true;
+	} catch (error) {
+		if (error.code !== "ENOENT") throw error;
+	}
+	if (exists && !supersede) throw new Error(`kanban: note already exists at ${path}; pass supersede:true only when superseding that decision (never edit an existing note into a different one)`);
 	const content = renderNoteBody(spec, title, body) + "\n";
 	await mkdir(join(path, ".."), { recursive: true });
 	await writeFile(path, content, "utf8");
@@ -963,8 +1269,7 @@ const NOTE_OUTPUT = {
 			},
 			noteClass: {
 				type: "string",
-				required: true,
-				enum: NOTE_CLASSES
+				required: true
 			},
 			topic: {
 				type: "string",
@@ -978,11 +1283,13 @@ const NOTE_OUTPUT = {
 	}]
 };
 /** List existing Agent Notes under the workspace, grouped by class. */
-async function listAgentNotes(cwd) {
+async function listAgentNotes(cwd, onlyClass) {
 	if (!isAbsolute(cwd)) throw new TypeError(`kanban: workspace must be an absolute path, got ${JSON.stringify(cwd)}`);
 	const root = join(cwd, ".agents", "notes", "implemented");
+	const spec = await effectiveNoteSpec(cwd);
+	const classes = onlyClass === void 0 ? spec.noteClasses : spec.noteClasses.filter((name) => name === onlyClass);
 	const found = [];
-	for (const noteClass of NOTE_CLASSES) try {
+	for (const noteClass of classes) try {
 		const entries = await readdir(join(root, noteClass));
 		for (const entry of entries) if (entry.endsWith(".md")) found.push(join(root, noteClass, entry));
 	} catch (error) {
@@ -1007,32 +1314,71 @@ function apply(ctx) {
 	registerBoardCommand(ctx);
 	ctx.tools.register(defineTool({
 		name: "board_list",
-		description: "Read the current workspace kanban board (all cards with their status, tags, and timestamps). Call this before board_add / board_update / board_remove so you operate on real ids and current state. The board is persisted to KANBAN.json at the workspace root and survives across sessions and branches.",
-		parameters: {},
+		description: "Read the current workspace kanban board. Call this before board_update / board_remove (board_add needs no prior state) so you operate on real ids and current state. By default returns only open cards (todo + in_progress) and renders each card with its exact id; pass status to filter or includeDone:true for the full board, detail:true to include the card bodies (description/summary/rationale/rejected). Counts always describe the whole board. The board is persisted to KANBAN.json at the workspace root and survives across sessions and branches.",
+		parameters: {
+			status: {
+				type: "string",
+				enum: STATUSES,
+				description: "Only return cards in this status (explicitly passing done returns done cards)."
+			},
+			tag: {
+				type: "string",
+				description: "Only return cards carrying this tag (without the leading \"#\")."
+			},
+			includeDone: {
+				type: "boolean",
+				description: "Include done cards (default false: only open items are returned)."
+			},
+			detail: {
+				type: "boolean",
+				description: "Also render the card bodies (description, summary, rationale, rejected), truncated per field."
+			},
+			order: {
+				type: "string",
+				enum: ["created", "updated"],
+				description: "Sort order over the filtered cards (default created = insertion order)."
+			},
+			limit: {
+				type: "integer",
+				description: "Return at most this many cards after filtering (positive integer)."
+			}
+		},
 		output: BOARD_OUTPUT,
-		execute(_args, exec) {
+		execute(args, exec) {
 			const cwd = workspaceOf(exec.agent?.session.header.cwd);
-			return readBoard(cwd).then((board) => ({
-				path: `${cwd}/KANBAN.json`,
-				cards: board.cards.map((card) => ({
-					id: card.id,
-					title: card.title,
-					...card.description === void 0 ? {} : { description: card.description },
-					...card.summary === void 0 ? {} : { summary: card.summary },
-					...card.rationale === void 0 ? {} : { rationale: card.rationale },
-					...card.rejected === void 0 ? {} : { rejected: card.rejected },
-					...card.sourceSessionId === void 0 ? {} : { sourceSessionId: card.sourceSessionId },
-					status: card.status,
-					tags: card.tags,
-					createdAt: card.createdAt,
-					updatedAt: card.updatedAt
-				})),
-				counts: {
+			return readBoard(cwd).then(async (board) => {
+				const counts = {
 					todo: board.cards.filter((c) => c.status === "todo").length,
 					inProgress: board.cards.filter((c) => c.status === "in_progress").length,
 					done: board.cards.filter((c) => c.status === "done").length
+				};
+				let cards = board.cards;
+				const statusFilter = args.status;
+				if (statusFilter !== void 0) cards = cards.filter((card) => card.status === statusFilter);
+				else if (args.includeDone !== true) cards = cards.filter((card) => card.status !== "done");
+				if (args.tag !== void 0) cards = cards.filter((card) => card.tags.includes(args.tag));
+				if (args.order === "updated") cards = [...cards].sort((a, b) => b.updatedAt - a.updatedAt);
+				if (args.limit !== void 0) {
+					if (!Number.isInteger(args.limit) || args.limit < 1) throw new TypeError("kanban: limit must be a positive integer");
+					cards = cards.slice(0, args.limit);
 				}
-			}));
+				let archived;
+				try {
+					const parsed = JSON.parse(await readFile(archivePath(cwd), "utf8"));
+					if (Array.isArray(parsed.archived)) archived = {
+						count: parsed.archived.length,
+						path: archivePath(cwd)
+					};
+				} catch (error) {
+					if (error.code !== "ENOENT") {}
+				}
+				return {
+					path: `${cwd}/KANBAN.json`,
+					cards: cards.map(toToolCard),
+					counts,
+					...archived === void 0 ? {} : { archived }
+				};
+			});
 		},
 		presentCall: () => present("Read kanban board", "read")
 	}));
@@ -1072,7 +1418,7 @@ function apply(ctx) {
 				description: "Optional labels (e.g. [\"dsh\", \"urgent\"])."
 			}
 		},
-		output: BOARD_OUTPUT,
+		output: BOARD_WRITE_OUTPUT,
 		execute(args, exec) {
 			return addCard(workspaceOf(exec.agent?.session.header.cwd), {
 				title: args.title,
@@ -1083,7 +1429,7 @@ function apply(ctx) {
 				...exec.agent !== void 0 ? { sourceSessionId: exec.agent.id } : {},
 				...args.status === void 0 ? {} : { status: args.status },
 				...args.tags === void 0 ? {} : { tags: args.tags }
-			}).then(toBoardValue);
+			}).then(toWriteValue);
 		},
 		presentCall: (args) => present("Add kanban card", "other", args.title)
 	}));
@@ -1127,7 +1473,7 @@ function apply(ctx) {
 				description: "Replacement tags."
 			}
 		},
-		output: BOARD_OUTPUT,
+		output: BOARD_WRITE_OUTPUT,
 		execute(args, exec) {
 			const cwd = workspaceOf(exec.agent?.session.header.cwd);
 			const patch = {};
@@ -1138,21 +1484,21 @@ function apply(ctx) {
 			if (args.rationale !== void 0) patch.rationale = args.rationale;
 			if (args.rejected !== void 0) patch.rejected = args.rejected;
 			if (args.tags !== void 0) patch.tags = args.tags;
-			return updateCard(cwd, args.id, patch).then(toBoardValue);
+			return updateCard(cwd, args.id, patch).then(toWriteValue);
 		},
 		presentCall: (args) => present("Update kanban card", "other", args.status ? `${args.id} → ${args.status}` : args.id)
 	}));
 	ctx.tools.register(defineTool({
 		name: "board_remove",
-		description: "Remove one card from the current workspace kanban board by its exact id. Call board_list first to get the id.",
+		description: "Remove one card permanently from the current workspace kanban board by its exact id. Prefer moving finished work to done: removal is NOT archived and cannot be undone. Use it only for mistaken/duplicate cards. Call board_list first to get the exact id.",
 		parameters: { id: {
 			type: "string",
 			required: true,
 			description: "Exact card id returned by board_list."
 		} },
-		output: BOARD_OUTPUT,
+		output: BOARD_WRITE_OUTPUT,
 		execute(args, exec) {
-			return removeCard(workspaceOf(exec.agent?.session.header.cwd), args.id).then(toBoardValue);
+			return removeCard(workspaceOf(exec.agent?.session.header.cwd), args.id).then(toWriteValue);
 		},
 		presentCall: (args) => present("Remove kanban card", "other", args.id)
 	}));
@@ -1163,8 +1509,7 @@ function apply(ctx) {
 			class: {
 				type: "string",
 				required: true,
-				enum: NOTE_CLASSES,
-				description: "Note class: feature | bug-fix | simplification | architecture | process | testing."
+				description: "Note class (must be one of the workspace effective classes; defaults: feature | bug-fix | simplification | architecture | process | testing)."
 			},
 			topic: {
 				type: "string",
@@ -1188,6 +1533,10 @@ function apply(ctx) {
 			consequences: {
 				type: "string",
 				description: "What the trade-off cost AND bought: side effects, follow-up obligations, named coverage gaps."
+			},
+			supersede: {
+				type: "boolean",
+				description: "Overwrite an existing note at the same path. Only pass true when superseding that decision; never use it to edit an existing note into a different decision (write a new note and cross-link instead)."
 			}
 		},
 		output: NOTE_OUTPUT,
@@ -1197,7 +1546,7 @@ function apply(ctx) {
 				decision: args.decision,
 				...args.alternatives === void 0 ? {} : { alternatives: args.alternatives },
 				...args.consequences === void 0 ? {} : { consequences: args.consequences }
-			}).then((path) => ({
+			}, args.supersede === true).then((path) => ({
 				path,
 				noteClass: args.class,
 				topic: args.topic
@@ -1208,7 +1557,10 @@ function apply(ctx) {
 	ctx.tools.register(defineTool({
 		name: "note_list",
 		description: "List existing Agent Notes under the current workspace (.agents/notes/implemented/**). Use it before note_add to avoid duplicating a note that already covers the decision.",
-		parameters: {},
+		parameters: { class: {
+			type: "string",
+			description: "Only list notes of this class (must be one of the workspace effective note classes)."
+		} },
 		output: {
 			schema: {
 				type: "object",
@@ -1224,12 +1576,12 @@ function apply(ctx) {
 				text: value.notes.length === 0 ? "No Agent Notes yet." : ["Agent Notes:", ...value.notes].join("\n")
 			}]
 		},
-		execute(_args, exec) {
-			return listAgentNotes(workspaceOf(exec.agent?.session.header.cwd)).then((notes) => ({ notes }));
+		execute(args, exec) {
+			return listAgentNotes(workspaceOf(exec.agent?.session.header.cwd), args.class).then((notes) => ({ notes }));
 		},
 		presentCall: () => present("List Agent Notes", "read")
 	}));
-	registerWebApi(ctx);
+	ctx.inject(["webServer", "connection"], (scope) => registerWebApi(scope));
 }
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8" };
 /** Write a JSON body with a status code. */
@@ -1257,8 +1609,10 @@ function readBody(req) {
 }
 /** Shared POST mutation dispatch; every op returns the fresh board view. */
 async function applyMutation(cwd, body) {
+	if (body.tags !== void 0 && (!Array.isArray(body.tags) || body.tags.some((tag) => typeof tag !== "string"))) throw new TypeError("kanban: tags must be an array of strings");
+	if (body.status !== void 0 && !STATUSES.includes(body.status)) throw new TypeError(`kanban: invalid status ${JSON.stringify(body.status)}`);
 	switch (body.op) {
-		case "add": return await addCard(cwd, {
+		case "add": return (await addCard(cwd, {
 			title: body.title ?? "",
 			...body.description === void 0 ? {} : { description: body.description },
 			...body.summary === void 0 ? {} : { summary: body.summary },
@@ -1266,7 +1620,7 @@ async function applyMutation(cwd, body) {
 			...body.rejected === void 0 ? {} : { rejected: body.rejected },
 			...body.status === void 0 ? {} : { status: body.status },
 			...body.tags === void 0 ? {} : { tags: body.tags }
-		});
+		})).view;
 		case "update": {
 			if (body.id === void 0) throw new TypeError("kanban: update requires id");
 			const patch = {};
@@ -1277,11 +1631,11 @@ async function applyMutation(cwd, body) {
 			if (body.rejected !== void 0) patch.rejected = body.rejected;
 			if (body.status !== void 0) patch.status = body.status;
 			if (body.tags !== void 0) patch.tags = body.tags;
-			return await updateCard(cwd, body.id, patch);
+			return (await updateCard(cwd, body.id, patch)).view;
 		}
 		case "remove":
 			if (body.id === void 0) throw new TypeError("kanban: remove requires id");
-			return await removeCard(cwd, body.id);
+			return (await removeCard(cwd, body.id)).view;
 		default: throw new TypeError(`kanban: unknown op ${JSON.stringify(body.op)}`);
 	}
 }
@@ -1298,55 +1652,134 @@ async function viewOf(cwd) {
 		}
 	};
 }
+/** Resolve the host connection service; undefined in compositions without it. */
+function connectionTrustOf(ctx) {
+	return Reflect.get(ctx, "connection");
+}
+/**
+* Reject a request the deployment's Host/Origin/browser-auth checks do not
+* trust. Two host generations exist and this must work on both:
+*
+* - **DSH ≤ 0.1.x**: routes registered on `webServer` bypass the page
+*   authentication unless they ask Connection, so the fence calls
+*   `connection.requestRejection`.
+* - **DSH 0.2.x**: that method is gone. `webServer` now owns the decision
+*   (routes default to `auth: 'required'`: an unauthenticated request is
+*   answered 401 before any handler runs) and hands the admitted Peer to the
+*   handler. Calling the removed method here threw, and the server's
+*   last-resort guard answered **400 with an empty body** — which is what turned
+*   the whole Web board page (and the sidebar badge) into "Unexpected end of
+*   JSON input" on dsh 0.2.2-rc.3.
+*
+* Fail closed: no fence AND no admitted Peer means the route must not answer.
+* @param ctx - plugin context.
+* @param req - incoming request.
+* @param res - response to end when rejected.
+* @param peer - the Peer the host admitted for this request, when it passes one.
+* @returns true when the request was rejected and the handler must stop.
+*/
+function rejectUntrusted(ctx, req, res, peer) {
+	const connection = connectionTrustOf(ctx);
+	if (connection !== void 0 && typeof connection.requestRejection === "function") {
+		const rejection = connection.requestRejection(req);
+		if (rejection === void 0) return false;
+		res.statusCode = rejection;
+		res.end();
+		return true;
+	}
+	if (peer !== void 0) return false;
+	sendJson(res, 401, {
+		ok: false,
+		error: "kanban: this route requires an authenticated session"
+	});
+	return true;
+}
+/** Require `application/json` on mutating routes (blocks cross-site form posts). */
+function requireJsonContentType(req, res) {
+	const contentType = req.headers["content-type"] ?? "";
+	if (/^application\/json\b/i.test(contentType)) return false;
+	sendJson(res, 415, {
+		ok: false,
+		error: "kanban: content-type must be application/json"
+	});
+	return true;
+}
+/** Parse and validate a route workspace path; responds 400 and returns undefined. */
+function routeWorkspace(value, res, field) {
+	if (value === null || value === void 0 || value === "") {
+		sendJson(res, 400, {
+			ok: false,
+			error: `kanban: ${field} requires a cwd`
+		});
+		return;
+	}
+	if (!isAbsolute(value) || value.includes("\0")) {
+		sendJson(res, 400, {
+			ok: false,
+			error: "kanban: cwd must be an absolute path"
+		});
+		return;
+	}
+	return value;
+}
+/** Require the workspace to exist already; a route never creates directories. */
+async function requireExistingWorkspace(cwd, res) {
+	try {
+		if ((await stat(cwd)).isDirectory()) return true;
+	} catch {}
+	sendJson(res, 400, {
+		ok: false,
+		error: `kanban: workspace does not exist (${cwd})`
+	});
+	return false;
+}
+/** Map a handler error to its response (payload limits get 413, not 500). */
+function sendRouteError(res, error) {
+	if (res.writableEnded) return;
+	const message = error instanceof Error ? error.message : String(error);
+	sendJson(res, /too large/i.test(message) ? 413 : 500, {
+		ok: false,
+		error: message
+	});
+}
 /** Register GET/POST /kanban/api — the Web board page's data channel. */
 function registerWebApi(ctx) {
 	const server = ctx.get("webServer");
 	if (server === void 0) return;
-	server.register({
+	ctx.effect(() => server.register({
 		kind: "prefix",
 		path: "/kanban/api",
-		handler: (req, res) => {
-			handle(req, res).catch((error) => {
-				if (!res.writableEnded) sendJson(res, 500, {
-					ok: false,
-					error: error instanceof Error ? error.message : String(error)
-				});
-			});
+		handler: (req, res, peer) => {
+			if (rejectUntrusted(ctx, req, res, peer)) return;
+			handle(req, res).catch((error) => sendRouteError(res, error));
 		}
-	});
-	server.register({
+	}), "kanban: /kanban/api");
+	ctx.effect(() => server.register({
 		kind: "prefix",
 		path: "/kanban/spec",
-		handler: (req, res) => {
-			handleSpec(req, res).catch((error) => {
-				if (!res.writableEnded) sendJson(res, 500, {
-					ok: false,
-					error: error instanceof Error ? error.message : String(error)
-				});
-			});
+		handler: (req, res, peer) => {
+			if (rejectUntrusted(ctx, req, res, peer)) return;
+			handleSpec(req, res).catch((error) => sendRouteError(res, error));
 		}
-	});
-	server.register({
+	}), "kanban: /kanban/spec");
+	ctx.effect(() => server.register({
 		kind: "prefix",
 		path: "/kanban/counts",
-		handler: (req, res) => {
-			handleCounts(req, res).catch((error) => {
-				if (!res.writableEnded) sendJson(res, 500, {
-					ok: false,
-					error: error instanceof Error ? error.message : String(error)
-				});
-			});
+		handler: (req, res, peer) => {
+			if (rejectUntrusted(ctx, req, res, peer)) return;
+			handleCounts(req, res).catch((error) => sendRouteError(res, error));
 		}
-	});
+	}), "kanban: /kanban/counts");
 	async function handleCounts(req, res) {
-		const cwd = new URL(req.url ?? "/", "http://localhost").searchParams.get("cwd");
-		if (cwd === null || cwd === "") {
-			sendJson(res, 400, {
+		if ((req.method ?? "GET") !== "GET") {
+			sendJson(res, 405, {
 				ok: false,
-				error: "kanban: GET /kanban/counts requires a cwd query parameter"
+				error: `kanban: method ${req.method ?? ""} not allowed`
 			});
 			return;
 		}
+		const cwd = routeWorkspace(new URL(req.url ?? "/", "http://localhost").searchParams.get("cwd"), res, "GET /kanban/counts");
+		if (cwd === void 0 || !await requireExistingWorkspace(cwd, res)) return;
 		const open = (await readBoard(cwd)).cards.filter((card) => card.status === "todo" || card.status === "in_progress").length;
 		sendJson(res, 200, {
 			ok: true,
@@ -1357,14 +1790,8 @@ function registerWebApi(ctx) {
 	async function handleSpec(req, res) {
 		const method = req.method ?? "GET";
 		if (method === "GET") {
-			const cwd = new URL(req.url ?? "/", "http://localhost").searchParams.get("cwd");
-			if (cwd === null || cwd === "") {
-				sendJson(res, 400, {
-					ok: false,
-					error: "kanban: GET /kanban/spec requires a cwd query parameter"
-				});
-				return;
-			}
+			const cwd = routeWorkspace(new URL(req.url ?? "/", "http://localhost").searchParams.get("cwd"), res, "GET /kanban/spec");
+			if (cwd === void 0 || !await requireExistingWorkspace(cwd, res)) return;
 			const spec = await effectiveNoteSpec(cwd);
 			sendJson(res, 200, {
 				ok: true,
@@ -1379,6 +1806,7 @@ function registerWebApi(ctx) {
 			return;
 		}
 		if (method === "POST") {
+			if (requireJsonContentType(req, res)) return;
 			const raw = await readBody(req);
 			let body;
 			try {
@@ -1390,21 +1818,15 @@ function registerWebApi(ctx) {
 				});
 				return;
 			}
-			if (typeof body.cwd !== "string" || body.cwd === "") {
-				sendJson(res, 400, {
-					ok: false,
-					error: "kanban: POST /kanban/spec requires body.cwd"
-				});
-				return;
-			}
-			const overrides = {
+			const cwd = routeWorkspace(body.cwd, res, "POST /kanban/spec");
+			if (cwd === void 0 || !await requireExistingWorkspace(cwd, res)) return;
+			await writeNoteOverrides(cwd, {
 				...body.noteClasses !== void 0 ? { noteClasses: body.noteClasses } : {},
 				...body.noteFormat !== void 0 ? { noteFormat: body.noteFormat } : {},
 				...body.nonTrivialDefinition !== void 0 ? { nonTrivialDefinition: body.nonTrivialDefinition } : {},
 				...body.acknowledgeSpecVersion !== void 0 ? { specVersion: body.acknowledgeSpecVersion } : {}
-			};
-			await writeNoteOverrides(body.cwd, overrides);
-			const spec = await effectiveNoteSpec(body.cwd);
+			});
+			const spec = await effectiveNoteSpec(cwd);
 			sendJson(res, 200, {
 				ok: true,
 				specVersion: spec.specVersion,
@@ -1413,7 +1835,7 @@ function registerWebApi(ctx) {
 				noteFormat: spec.noteFormat,
 				nonTrivialDefinition: spec.nonTrivialDefinition,
 				hasOverrides: spec.hasOverrides,
-				overridesPath: noteOverridesPath(body.cwd)
+				overridesPath: noteOverridesPath(cwd)
 			});
 			return;
 		}
@@ -1425,14 +1847,8 @@ function registerWebApi(ctx) {
 	async function handle(req, res) {
 		const method = req.method ?? "GET";
 		if (method === "GET") {
-			const cwd = new URL(req.url ?? "/", "http://localhost").searchParams.get("cwd");
-			if (cwd === null || cwd === "") {
-				sendJson(res, 400, {
-					ok: false,
-					error: "kanban: GET /kanban/api requires a cwd query parameter"
-				});
-				return;
-			}
+			const cwd = routeWorkspace(new URL(req.url ?? "/", "http://localhost").searchParams.get("cwd"), res, "GET /kanban/api");
+			if (cwd === void 0 || !await requireExistingWorkspace(cwd, res)) return;
 			sendJson(res, 200, {
 				ok: true,
 				...await viewOf(cwd)
@@ -1440,6 +1856,7 @@ function registerWebApi(ctx) {
 			return;
 		}
 		if (method === "POST") {
+			if (requireJsonContentType(req, res)) return;
 			const raw = await readBody(req);
 			let body;
 			try {
@@ -1451,17 +1868,12 @@ function registerWebApi(ctx) {
 				});
 				return;
 			}
-			if (typeof body.cwd !== "string" || body.cwd === "") {
-				sendJson(res, 400, {
-					ok: false,
-					error: "kanban: POST /kanban/api requires body.cwd"
-				});
-				return;
-			}
+			const cwd = routeWorkspace(body.cwd, res, "POST /kanban/api");
+			if (cwd === void 0 || !await requireExistingWorkspace(cwd, res)) return;
 			try {
 				sendJson(res, 200, {
 					ok: true,
-					...await applyMutation(body.cwd, body)
+					...await applyMutation(cwd, body)
 				});
 			} catch (error) {
 				sendJson(res, 400, {

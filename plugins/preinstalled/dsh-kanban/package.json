@@ -1,6 +1,6 @@
 {
   "name": "dsh-kanban",
-  "version": "0.2.10",
+  "version": "0.2.14",
   "description": "Smoothly Kanban (思磨力看板): external DeepSeek Harness plugin — a cross-session, workspace-scoped kanban board for plans and todos, persisted to a git-trackable KANBAN.json. Model-facing tools (board_list/board_add/board_update/board_remove) plus a sidebar '思磨力看板' entry with a global-panel three-column board page (sidebar glyph + the keyed main panel, no overlay).",
   "type": "module",
   "main": "lib/index.js",
@@ -16,6 +16,7 @@
   "files": [
     "lib/index.js",
     "lib/client.js",
+    "lib/client.js.map",
     "cordis.patch.yml",
     "README.md",
     "README.zh.md",
@@ -30,15 +31,6 @@
       "patch": "./cordis.patch.yml"
     },
     "client": {
-      "inject": [
-        "@deepseek-ai/dsh-client-connection",
-        "@deepseek-ai/dsh-client-locale",
-        "@deepseek-ai/dsh-client-ui-layout",
-        "@deepseek-ai/dsh-client-ui-renderer",
-        "@deepseek-ai/dsh-client-ui-sidebar",
-        "@deepseek-ai/dsh-client-ui-slots",
-        "@deepseek-ai/dsh-api-remotes"
-      ],
       "platform": "web"
     }
   },
@@ -46,7 +38,7 @@
     "bundle": "tsdown --config ./tsdown.config.ts",
     "prepare": "tsdown --config ./tsdown.config.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsc --noEmit && node --test scripts/board-core.spec.mjs scripts/workspace-pick.spec.mjs && node scripts/check-card-discipline.mjs && node scripts/check-tokens.mjs --self-test && node scripts/check-client-wiring.mjs && node scripts/verify-tools.mjs && node scripts/verify-spec.mjs && node scripts/verify-context.mjs && node scripts/verify-skill-sync.mjs && node scripts/verify-skill-runtime.mjs && node scripts/check-guarantees.mjs && node scripts/test-negative-controls.mjs",
+    "test": "tsc --noEmit && node --test scripts/board-core.spec.mjs scripts/workspace-pick.spec.mjs scripts/note-files.spec.mjs scripts/board-view.spec.mjs && node scripts/check-card-discipline.mjs && node scripts/check-tokens.mjs --self-test && node scripts/check-client-wiring.mjs && node scripts/verify-tools.mjs && node --test scripts/routes.spec.mjs && node scripts/verify-spec.mjs && node scripts/verify-spec.mjs --self-test && node scripts/verify-context.mjs && node scripts/verify-skill-sync.mjs && node scripts/verify-skill-runtime.mjs && node scripts/check-guarantees.mjs && node scripts/test-post-publish.mjs && node scripts/test-negative-controls.mjs",
     "check:spec": "node scripts/check-note-spec.mjs",
     "check:cards": "node scripts/check-card-discipline.mjs",
     "check:tokens": "node scripts/check-tokens.mjs --self-test",
@@ -58,12 +50,14 @@
     "accept": "node scripts/accept-gui.mjs",
     "release:check": "node scripts/release-check.mjs",
     "prepack": "node scripts/release-check.mjs",
-    "prepublishOnly": "node scripts/release-check.mjs && tsdown --config ./tsdown.config.ts",
-    "postpublish": "node scripts/post-publish-check.mjs",
+    "prepublishOnly": "npm test && node scripts/release-check.mjs && tsdown --config ./tsdown.config.ts",
+    "postpublish": "node scripts/post-publish-check.mjs --advisory",
     "verify:guarantees": "node scripts/check-guarantees.mjs",
     "test:controls": "node scripts/test-negative-controls.mjs",
     "verify:all": "node scripts/verify-all.mjs",
-    "verify:fresh": "node scripts/verify-all.mjs --check-fresh"
+    "verify:fresh": "node scripts/verify-all.mjs --check-fresh",
+    "verify:publish": "node scripts/post-publish-check.mjs --strict",
+    "publish:release": "node scripts/publish.mjs"
   },
   "engines": {
     "node": ">=18"
