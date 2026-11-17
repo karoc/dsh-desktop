@@ -526,6 +526,15 @@ pub(crate) fn prune_dumps(dir: &Path, prefix: &str) -> retention::RetentionOutco
 
 全内存 dump 单个可达数百 MB（2026-11-18 宿主实测单份 663MB），2 份是当前上限；再加一条时间上限（例如 14 天）可以覆盖“长期没有新 dump、旧 dump 一直占着”的情况。
 
+**触发口径（2026-11-18）**：不是每次“无响应”都该抓 dump。壳内 watchdog 的 3 次 miss 只证明连续 ~9s 没应答，
+上游 dsh 的插件页首开会让事件循环同步扫盘 2–22s（CPU ~60%），这类**忙卡顿会自行恢复**，抓 dump 既无用、
+又会用 MiniDumpWriteDump 挂起目标进程（manager 的 CPU 采样窗口若落在挂起里会读成 idle，反过来触发误重启）。
+因此 dump 前先取两次 `GetProcessTimes`（2.5s 窗口）：忙（≥10% 单核）⇒ 记
+`dsh web hang: busy stall (cpu N%) — skip dump, keep watching` 并清零 miss；空闲 ⇒ 照现有路径抓；
+采样失败 ⇒ 照抓（fail-open，真挂起现场不能因为采样失败而丢）。判定是纯函数
+`web_dump::decide_hang_action`（`src-tauri/src/web_dump.rs:213`），同一 URL 只抓一次的 HangDump 安全边界与
+manager 的 `dump-web` 请求路径都不变；负向对照用 `DSH_HANG_BUSY_GATE=off`（`verify-hang-dump.ps1 -Action busy-control`）。
+
 ### 5.5 建议值（本仓）
 
 | 对象 | 保留策略 | 依据 |
@@ -786,7 +795,8 @@ grep -n SystemMaxUse /etc/systemd/journald.conf
 | CI watch cron / 权限 / 并发 | `.github/workflows/dsh-watch.yml:16-17`、`:29-31`、`:33-35` |
 | 项目 PAT 权限说明 | `CONTRIBUTING.md:134-140` |
 | 门禁必须可失败 | `CONTRIBUTING.md:152-157` |
-| hang dump 保留份数 | `src-tauri/src/lib.rs:3828`、`src-tauri/src/web_dump.rs:152` |
+| hang dump 保留份数 | `src-tauri/src/retention.rs:26`（`HANG_DUMP_KEEP=2`）、`src-tauri/src/web_dump.rs:154`（`prune_dumps`） |
+| hang dump 只抓 idle（CPU 忙则跳过） | `src-tauri/src/web_dump.rs:213`（`decide_hang_action`）、`:248`（`sample_cpu_window`）、`src-tauri/src/lib.rs:4482`（2.5s 采样窗） |
 | 本机 timer | `~/.config/systemd/user/dsh-watch.timer:5-8`、`dsh-autopilot.timer:4`、`dsh-tagdispatch.timer:4` |
 | 本机 append 日志 | `~/.config/systemd/user/dsh-watch.service:16-17` |
 | 本机日志/事故 | `~/.dsh/logs/dsh-watch-timer.log:2190`、`:2350` |

@@ -155,6 +155,138 @@ pub(crate) fn prune_dumps(dir: &Path, prefix: &str) -> retention::RetentionOutco
     retention::prune(dir, prefix, &retention::HANG_DUMP_POLICY, SystemTime::now())
 }
 
+
+/// 忙卡顿判定阈值：单核 CPU 占用 ≥ 10% 视为「进程仍在推进，只是忙不过来」。
+/// 与 manager 的 `STALL_MIN_BUSY_RATIO`（#290）保持同一口径：忙卡顿不该被当成死锁，
+/// 壳侧因此不在此时抓 dump（几百 MB，且 CPU 采样会被 dump 的挂起污染）。
+pub(crate) const BUSY_STALL_MIN_RATIO: f64 = 0.1;
+
+/// 一次 CPU 采样窗口：进程在 `wall_ms` 内消耗了 `cpu_ms` 的处理器时间（多核可 > wall）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CpuWindow {
+    pub(crate) cpu_ms: u64,
+    pub(crate) wall_ms: u64,
+}
+
+impl CpuWindow {
+    /// 单核占用比；窗口为 0（或非法）时返回 None，调用方按「采样失败」处理。
+    pub(crate) fn ratio(&self) -> Option<f64> {
+        if self.wall_ms == 0 {
+            return None;
+        }
+        Some(self.cpu_ms as f64 / self.wall_ms as f64)
+    }
+}
+
+/// 壳内挂起看护在 dump 前的决策输入（纯数据，可跨平台单测）。
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct HangFacts {
+    /// 当前连续 miss 数。
+    pub(crate) misses: u32,
+    /// 触发阈值（HANG_MISS_LIMIT）。
+    pub(crate) miss_limit: u32,
+    /// 当前 URL 是否已经抓过（HangDump 状态机）。
+    pub(crate) already_dumped: bool,
+    /// 两次 GetProcessTimes 的差值；None = 采样失败/平台不支持。
+    pub(crate) cpu: Option<CpuWindow>,
+    /// 忙卡顿闸门是否启用（验证/取证可用 DSH_HANG_BUSY_GATE=off 关闭）。
+    pub(crate) busy_gate: bool,
+}
+
+/// 决策结果。`SkipBusy` 的调用方必须**清零 miss**（视为慢而非死），且不得标记
+/// 「已 dump 过」——之后真死锁仍要能抓 dump。
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum HangAction {
+    /// 还没到阈值：继续观察。
+    Wait,
+    /// 该 URL 已经抓过：不重复抓（现有 HangDump 安全边界）。
+    SkipAlreadyDumped,
+    /// 抓 dump（idle 挂起 / 采样失败时保持原行为）。
+    Dump,
+    /// CPU 忙：不抓 dump，清零 miss 继续等。
+    SkipBusy { ratio: f64 },
+}
+
+/// 「是否抓 dump」的唯一判定（纯函数，无 IO）。顺序即安全边界：
+/// ① 已抓过 ⇒ 不重复；② 未到阈值 ⇒ 等；③ 闸门关闭 ⇒ 抓（负向对照）；
+/// ④ 采样不可用 ⇒ 抓（fail-open，保持现状）；⑤ 忙 ⇒ 跳过；⑥ 空闲 ⇒ 抓。
+pub(crate) fn decide_hang_action(facts: &HangFacts) -> HangAction {
+    if facts.already_dumped {
+        return HangAction::SkipAlreadyDumped;
+    }
+    if facts.misses < facts.miss_limit {
+        return HangAction::Wait;
+    }
+    if !facts.busy_gate {
+        return HangAction::Dump;
+    }
+    let Some(ratio) = facts.cpu.and_then(|window| window.ratio()) else {
+        return HangAction::Dump;
+    };
+    if ratio >= BUSY_STALL_MIN_RATIO {
+        HangAction::SkipBusy { ratio }
+    } else {
+        HangAction::Dump
+    }
+}
+
+/// 忙卡顿闸门是否启用：`DSH_HANG_BUSY_GATE=off|0|false` 时关闭（仅用于
+/// verify-hang-dump.ps1 的负向对照与事后取证；生产不设置）。
+pub(crate) fn busy_gate_enabled() -> bool {
+    match std::env::var("DSH_HANG_BUSY_GATE") {
+        Ok(value) => {
+            let normalized = value.trim().to_ascii_lowercase();
+            !(normalized == "off" || normalized == "0" || normalized == "false")
+        }
+        Err(_) => true,
+    }
+}
+
+/// 对目标进程采样两次 CPU 时间（kernel+user），返回窗口；打开失败/权限不足/
+/// 平台不支持 ⇒ None（调用方 fail-open 照抓 dump）。
+#[cfg(windows)]
+pub(crate) fn sample_cpu_window(pid: u32, window: Duration) -> Option<CpuWindow> {
+    let first = process_cpu_ms(pid)?;
+    std::thread::sleep(window);
+    let second = process_cpu_ms(pid)?;
+    Some(CpuWindow {
+        cpu_ms: second.saturating_sub(first),
+        wall_ms: u64::try_from(window.as_millis()).unwrap_or(u64::MAX),
+    })
+}
+
+#[cfg(windows)]
+fn process_cpu_ms(pid: u32) -> Option<u64> {
+    use windows::Win32::Foundation::{CloseHandle, FILETIME};
+    use windows::Win32::System::Threading::{GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+
+    unsafe {
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let mut creation = FILETIME::default();
+        let mut exit = FILETIME::default();
+        let mut kernel = FILETIME::default();
+        let mut user = FILETIME::default();
+        let ok = GetProcessTimes(process, &mut creation, &mut exit, &mut kernel, &mut user).is_ok();
+        let _ = CloseHandle(process);
+        if !ok {
+            return None;
+        }
+        // FILETIME 单位 100ns；kernel+user 即累计处理器时间。
+        let ticks = filetime_ticks(&kernel)?.saturating_add(filetime_ticks(&user)?);
+        Some(ticks / 10_000)
+    }
+}
+
+#[cfg(windows)]
+fn filetime_ticks(value: &windows::Win32::Foundation::FILETIME) -> Option<u64> {
+    Some(((u64::from(value.dwHighDateTime)) << 32) | u64::from(value.dwLowDateTime))
+}
+
+#[cfg(not(windows))]
+pub(crate) fn sample_cpu_window(_pid: u32, _window: Duration) -> Option<CpuWindow> {
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -171,6 +303,111 @@ mod tests {
     fn probe_rejects_unparseable_and_dead_urls() {
         assert!(!probe_url("not a url", Duration::from_millis(200)));
         assert!(!probe_url("http://127.0.0.1:1/", Duration::from_millis(300)));
+    }
+
+    fn hang_facts(misses: u32, cpu: Option<CpuWindow>) -> HangFacts {
+        HangFacts {
+            misses,
+            miss_limit: 3,
+            already_dumped: false,
+            cpu,
+            busy_gate: true,
+        }
+    }
+
+    #[test]
+    fn hang_decision_waits_before_the_miss_threshold() {
+        // 即使明显忙，没到阈值也不该做任何决定。
+        let facts = hang_facts(2, Some(CpuWindow { cpu_ms: 6200, wall_ms: 10000 }));
+        assert_eq!(decide_hang_action(&facts), HangAction::Wait);
+    }
+
+    #[test]
+    fn hang_decision_skips_a_busy_stall_without_dumping() {
+        // 62% 单核：忙卡顿（插件页同步扫盘形态）⇒ 不 dump，调用方清零 miss。
+        let facts = hang_facts(3, Some(CpuWindow { cpu_ms: 6200, wall_ms: 10000 }));
+        match decide_hang_action(&facts) {
+            HangAction::SkipBusy { ratio } => assert!((ratio - 0.62).abs() < 1e-9, "ratio={ratio}"),
+            other => panic!("expected SkipBusy, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn hang_decision_dumps_an_idle_stall() {
+        // 死锁/被挂起：CPU≈0 ⇒ 仍按原路径抓 dump（真挂起现场不能丢）。
+        assert_eq!(
+            decide_hang_action(&hang_facts(3, Some(CpuWindow { cpu_ms: 0, wall_ms: 10000 }))),
+            HangAction::Dump
+        );
+        assert_eq!(
+            decide_hang_action(&hang_facts(3, Some(CpuWindow { cpu_ms: 990, wall_ms: 10000 }))),
+            HangAction::Dump
+        );
+    }
+
+    #[test]
+    fn hang_decision_boundary_is_ten_percent_of_one_core() {
+        // 恰好 10% 算忙（与 manager 的 STALL_MIN_BUSY_RATIO 一致）；999/10000 ⇒ 空闲。
+        assert!(matches!(
+            decide_hang_action(&hang_facts(3, Some(CpuWindow { cpu_ms: 1000, wall_ms: 10000 }))),
+            HangAction::SkipBusy { .. }
+        ));
+        assert_eq!(
+            decide_hang_action(&hang_facts(3, Some(CpuWindow { cpu_ms: 999, wall_ms: 10000 }))),
+            HangAction::Dump
+        );
+    }
+
+    #[test]
+    fn hang_decision_fails_open_when_cpu_is_unavailable() {
+        // 进程已退出/无权限/平台不支持 ⇒ 保持现状（抓），不能因为采样失败就永不抓。
+        assert_eq!(decide_hang_action(&hang_facts(3, None)), HangAction::Dump);
+        assert_eq!(
+            decide_hang_action(&hang_facts(3, Some(CpuWindow { cpu_ms: 5000, wall_ms: 0 }))),
+            HangAction::Dump
+        );
+    }
+
+    #[test]
+    fn hang_decision_never_redumps_the_same_url() {
+        let facts = HangFacts {
+            misses: 3,
+            miss_limit: 3,
+            already_dumped: true,
+            cpu: Some(CpuWindow { cpu_ms: 0, wall_ms: 10000 }),
+            busy_gate: true,
+        };
+        assert_eq!(decide_hang_action(&facts), HangAction::SkipAlreadyDumped);
+    }
+
+    #[test]
+    fn hang_decision_gate_off_restores_the_old_behaviour() {
+        // 负向对照：闸门关闭（DSH_HANG_BUSY_GATE=off）时，忙也必须抓 —— 证明忙路径
+        // 的 -skip 不是恒真断言。
+        let facts = HangFacts {
+            misses: 3,
+            miss_limit: 3,
+            already_dumped: false,
+            cpu: Some(CpuWindow { cpu_ms: 6200, wall_ms: 10000 }),
+            busy_gate: false,
+        };
+        assert_eq!(decide_hang_action(&facts), HangAction::Dump);
+    }
+
+    #[test]
+    fn hang_decision_treats_multicore_busy_as_busy() {
+        let facts = hang_facts(3, Some(CpuWindow { cpu_ms: 9000, wall_ms: 5000 }));
+        assert!(matches!(decide_hang_action(&facts), HangAction::SkipBusy { .. }));
+    }
+
+    #[test]
+    fn hang_decision_is_not_constant() {
+        // 纯函数层面的负向对照：忙与空闲必须给出不同结论，否则后面的真实门禁
+        // （busy 不 dump / idle 仍 dump）就失去意义。
+        let busy = decide_hang_action(&hang_facts(3, Some(CpuWindow { cpu_ms: 6200, wall_ms: 10000 })));
+        let idle = decide_hang_action(&hang_facts(3, Some(CpuWindow { cpu_ms: 0, wall_ms: 10000 })));
+        assert_ne!(busy, idle);
+        assert!(BUSY_STALL_MIN_RATIO > 0.0 && BUSY_STALL_MIN_RATIO < 1.0);
     }
 
     #[test]

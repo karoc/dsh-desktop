@@ -10,14 +10,29 @@
 #
 # ASCII only: PowerShell 5.1 decodes BOM-less UTF-8 as ANSI.
 #
+# CPU-busy path (2026-11-18, card 5585208f): the shell must NOT dump a child that is
+# still burning CPU (a bounded synchronous stall), because a 300-660 MB dump also
+# suspends the target and pollutes the manager's own CPU sampling. It must still
+# dump a genuinely idle/deadlocked child.
+#   1. -Action busy          drive a 20 s busy loop inside the live dsh web process
+#                            (inspector Runtime.evaluate), then assert: no new dump,
+#                            session.log shows misses 3/3 + "busy stall ... skip dump",
+#                            and dsh web was NOT restarted.
+#   2. -Action busy-control  the negative control: start the shell with
+#                            DSH_HANG_BUSY_GATE=off, then the SAME busy loop MUST
+#                            produce a dump (proves the busy assertions can fail).
+#
 # Usage:
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass -File D:\...\verify-hang-dump.ps1 -Action hang
 #   ... -Action check -WaitSec 60
 #   ... -Action resume           (fallback if the manager did not restart it)
+#   ... -Action busy             (new build; no dump on a CPU-busy stall)
+#   ... -Action busy-control     (shell started with DSH_HANG_BUSY_GATE=off)
 param(
-  [Parameter(Mandatory = $true)][ValidateSet("hang", "check", "resume", "state")][string]$Action,
+  [Parameter(Mandatory = $true)][ValidateSet("hang", "check", "resume", "state", "busy", "busy-control")][string]$Action,
   [string]$Ident = "dsh.smoothly.desktop.dev",
-  [int]$WaitSec = 60
+  [int]$WaitSec = 60,
+  [int]$BusySeconds = 20
 )
 
 $ErrorActionPreference = "Stop"
@@ -52,7 +67,138 @@ function Get-DshWebPid([string]$url) {
   return 0
 }
 
+
+# Shell process name for this identity (dev and prod shells coexist on one machine).
+function Get-ShellProcessName {
+  # dev identities: dsh.smoothly.desktop.dev, ...devw7 (verification instances).
+  if ($Ident -like "*.dev*") { return "dsh-desktop-dev" }
+  return "dsh-desktop"
+}
+
+# The shell ships its own node.exe; the inspector attach uses it (no system Node needed).
+function Get-ShellNode {
+  $proc = Get-Process -Name (Get-ShellProcessName) -ErrorAction SilentlyContinue | Select-Object -First 1
+  if (-not $proc) { return $null }
+  $node = Join-Path (Split-Path $proc.Path) "resources\node\win32-x64\node.exe"
+  if (-not (Test-Path $node)) { return $null }
+  return $node
+}
+
+# Attach the Node inspector to the live dsh web process and return its WS URL.
+function Get-InspectorWs([int]$webPid) {
+  $node = Get-ShellNode
+  if (-not $node) { Write-Output "NO-SHELL-NODE"; return $null }
+  $busy = Get-NetTCPConnection -LocalPort 9229 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($busy) { Write-Output ("INSPECTOR-PORT-BUSY pid=" + $busy.OwningProcess); return $null }
+  & $node -e ("process._debugProcess(" + $webPid + ")") | Out-Null
+  for ($i = 0; $i -lt 24; $i++) {
+    Start-Sleep -Milliseconds 500
+    try {
+      $list = Invoke-RestMethod -Uri "http://127.0.0.1:9229/json/list" -TimeoutSec 2
+      if ($list -and $list.Count -ge 1) { return $list[0].webSocketDebuggerUrl }
+    } catch { }
+  }
+  return $null
+}
+
+# Run a busy loop inside the target process through the inspector (blocks its event loop).
+function Invoke-BusyLoop([string]$wsUrl, [int]$seconds) {
+  $node = Get-ShellNode
+  $driver = Join-Path $env:TEMP ("dsh-hang-busy-" + $PID + ".mjs")
+  $source = @'
+const [, , wsUrl, seconds] = process.argv
+const budget = Number(seconds) * 1000
+const ws = new WebSocket(wsUrl)
+ws.addEventListener('open', () => {
+  ws.send(JSON.stringify({ id: 1, method: 'Runtime.evaluate', params: {
+    expression: 'const __dshEnd = Date.now() + ' + budget + '; while (Date.now() < __dshEnd) {} "busy-done"',
+    awaitPromise: false,
+    returnByValue: true,
+  } }))
+})
+ws.addEventListener('message', (event) => {
+  const msg = JSON.parse(String(event.data))
+  if (msg.id === 1) { console.log('BUSY-DONE'); ws.close(); process.exit(0) }
+})
+ws.addEventListener('error', () => { console.log('BUSY-WS-ERROR'); process.exit(2) })
+setTimeout(() => { console.log('BUSY-TIMEOUT'); process.exit(3) }, budget + 8000)
+'@
+  Set-Content -Path $driver -Value $source -Encoding ASCII
+  try { & $node $driver $wsUrl $seconds } finally { Remove-Item $driver -Force -ErrorAction SilentlyContinue }
+}
+
+# Session-log bytes written since the given offset (UTF-8, BOM-less).
+function Get-SessionTextSince([long]$offset) {
+  if (-not (Test-Path $sessionLog)) { return "" }
+  $fs = [IO.File]::Open($sessionLog, 'Open', 'Read', 'ReadWrite')
+  try {
+    $fs.Seek($offset, 'Begin') | Out-Null
+    $sr = New-Object IO.StreamReader($fs, [Text.Encoding]::UTF8)
+    return $sr.ReadToEnd()
+  } finally { $fs.Dispose() }
+}
+
+function Get-DumpNames {
+  return @(Get-ChildItem $reports -Filter "dshweb-hang-*.dmp" -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
+}
+
+# The shell ignores misses during HANG_STARTUP_GRACE_SECS (30 s) after a new URL:
+# a busy loop started earlier would be a vacuous test.
+function Wait-HangStartupGrace([int]$graceSec = 35) {
+  if (-not (Test-Path $managerLog)) { return }
+  $m = Select-String -Path $managerLog -Pattern "dsh web: (http://127\.0\.0\.1:\d+)" | Select-Object -Last 1
+  if (-not $m) { return }
+  $ts = ([datetime]::Parse($m.Line.Substring(0, 24))).ToUniversalTime()
+  $age = ((Get-Date).ToUniversalTime() - $ts).TotalSeconds
+  if ($age -lt $graceSec) { Start-Sleep -Seconds ([int][math]::Ceiling($graceSec - $age)) }
+}
+
+# Shared busy scenario: drive the loop, then prove the shell's verdict.
+function Invoke-BusyScenario([bool]$expectDump) {
+  $url = Get-LiveUrl
+  if (-not $url) { Write-Output "NO-LIVE-URL"; exit 1 }
+  $webPid = Get-DshWebPid $url
+  if ($webPid -le 0) { Write-Output "NO-PID-FOR-PORT"; exit 1 }
+  Wait-HangStartupGrace
+  $ws = Get-InspectorWs $webPid
+  if (-not $ws) { Write-Output "NO-INSPECTOR"; if ($script:fail -gt 0) { Write-Output ("RESULT FAIL (" + $script:fail + ")"); exit 1 }; exit 1 }
+  $before = Get-DumpNames
+  $offset = 0
+  if (Test-Path $sessionLog) { $offset = (Get-Item $sessionLog).Length }
+  Write-Output ("BUSY-LOOP pid=" + $webPid + " url=" + $url + " seconds=" + $BusySeconds)
+  Invoke-BusyLoop $ws $BusySeconds
+  # Give the watchdog its sample window + verdict, and the dump writer time to start.
+  Start-Sleep -Seconds 8
+  $sess = Get-SessionTextSince $offset
+  $after = Get-DumpNames
+  $newDumps = @($after | Where-Object { $before -notcontains $_ })
+  if ($expectDump) {
+    Say (@($newDumps).Count -ge 1) ("busy-control must produce a dump (new=" + @($newDumps).Count + ")")
+    Say ($sess -match "dsh web hang: dumping pid") "busy-control shell started a dump"
+  } else {
+    Say (@($newDumps).Count -eq 0) ("no dump while the child is CPU-busy (new=" + @($newDumps).Count + ")")
+    Say ($sess -match "dsh web probe miss 3/3") "shell reached 3/3 misses during the busy loop"
+    Say ($sess -match "dsh web hang: busy stall .*skip dump") "shell logged busy-stall skip instead of dumping"
+    Say ($sess -notmatch "dsh web hang: dumping pid") "shell did not start a dump for the busy stall"
+  }
+  $liveUrl = Get-LiveUrl
+  $livePid = Get-DshWebPid $liveUrl
+  if ($expectDump) {
+    Say ($true) "control run does not require a stable url/pid"
+  } else {
+    Say (($liveUrl -eq $url) -and ($livePid -eq $webPid)) "dsh web was not restarted (same url/pid)"
+  }
+  if ($script:fail -gt 0) { Write-Output ("RESULT FAIL (" + $script:fail + ")"); exit 1 }
+  Write-Output "RESULT PASS"
+}
+
 switch ($Action) {
+  "busy" {
+    Invoke-BusyScenario $false
+  }
+  "busy-control" {
+    Invoke-BusyScenario $true
+  }
   "hang" {
     $url = Get-LiveUrl
     if (-not $url) { Write-Output "NO-LIVE-URL"; exit 1 }
@@ -102,7 +248,7 @@ switch ($Action) {
     # this file stays pure ASCII (PowerShell 5.1 ANSI decoding).
     $dash = [regex]::Unescape("\u2014")
     Say ($mgr -match ("dump ready " + $dash + " restarting dsh")) "manager waited for the dump ack, then restarted dsh"
-    $app = @(Get-Process -Name dsh-desktop-dev -ErrorAction SilentlyContinue)
+    $app = @(Get-Process -Name (Get-ShellProcessName) -ErrorAction SilentlyContinue)
     Say ($app.Count -ge 1) "shell process is still alive after the hang"
     if ($script:fail -gt 0) { Write-Output ("RESULT FAIL (" + $script:fail + ")"); exit 1 }
     Write-Output "RESULT PASS"

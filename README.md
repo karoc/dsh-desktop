@@ -909,6 +909,12 @@ MIT
     都可以安全删除：**删状态文件 = 忘掉退避历史**（下一轮从 healthy 重新数，不丢功能）；正规做法是
     `--reset-state`。`.detail.log` 自带 128KB 触发 / 只留尾部 400 行的自截断，不参与 logrotate。
   - **dump / 备份**：hang dump 落在 `<应用数据目录>/runtime/reports/dshweb-hang-<pid>-<ts>.dmp`
+    **触发口径（2026-11-18 起）：只有 idle 挂起才抓** —— dump 前对目标进程取两次 `GetProcessTimes`
+    （2.5s 窗口），忙（≥10% 单核）视为「同步卡顿、进程仍在推进」，记
+    `dsh web hang: busy stall (cpu N%) — skip dump, keep watching` 并清零 miss；空闲才抓；采样失败
+    （进程已退出/无权限/非 Windows）按原逻辑抓（fail-open）。同一 URL 仍只抓一次，manager 的
+    `dump-web` 请求路径不变（请求方要求时照抓）。判定是纯函数 `web_dump::decide_hang_action`；
+    负向对照可用 `DSH_HANG_BUSY_GATE=off` 关闭闸门（`scripts/verify-hang-dump.ps1 -Action busy-control`）。
     （全内存 dump 单个可达数百 MB）。**真实保留策略在壳里且是三维的**（采用清单 A9，2026-10-24）：
     `src-tauri/src/retention.rs` 的 `HANG_DUMP_POLICY` = **最新 2 份 + 14 天 + 总量 ≤1GiB**（2026-11-18 由 3 降为 2），
     由 `web_dump::prune_dumps` 在每次 dump 与「清理缓存」时执行（`cargo test --lib` 覆盖，

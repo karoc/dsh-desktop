@@ -4478,6 +4478,8 @@ const HANG_PROBE_SECS: u64 = 3;
 const HANG_MISS_LIMIT: u32 = 3;
 /// 新 URL 到达后的启动宽限（秒）：启动/重载期慢响应不算挂起（与 L3 风暴同类误判）。
 const HANG_STARTUP_GRACE_SECS: u64 = 30;
+/// dump 前的 CPU 采样窗口（毫秒）：两次 GetProcessTimes 求差值，区分忙卡顿与死锁。
+const HANG_BUSY_SAMPLE_MS: u64 = 2500;
 // 挂起 dump 的保留策略（份数 / 时间 / 总量）只有一处定义：`retention::HANG_DUMP_POLICY`
 // —— 数字改了要同步 README「dump / 备份」与 docs 的方案文档，`retention.rs` 的单测会钉住这三个数。
 
@@ -4491,6 +4493,9 @@ fn start_hang_watchdog(app: &AppHandle) {
             .path()
             .app_data_dir()
             .unwrap_or_else(|_| std::path::PathBuf::from("."));
+        if !web_dump::busy_gate_enabled() {
+            log_line(&data, "dsh web hang: busy gate=off (verification mode) — dump on every idle miss streak");
+        }
         let mut misses = 0u32;
         let mut current: Option<String> = None;
         let mut armed_at = std::time::Instant::now();
@@ -4529,13 +4534,60 @@ fn start_hang_watchdog(app: &AppHandle) {
             if misses != before {
                 log_line(&data, &format!("dsh web probe miss {misses}/{HANG_MISS_LIMIT}"));
             }
-            if misses >= HANG_MISS_LIMIT && dumped_for.as_deref() != Some(url.as_str()) {
-                dumped_for = Some(url.clone());
-                let app2 = app.clone();
-                std::thread::spawn(move || dump_dsh_web(&app2, &url));
+            if misses >= HANG_MISS_LIMIT {
+                let already_dumped = dumped_for.as_deref() == Some(url.as_str());
+                let facts = if already_dumped {
+                    web_dump::HangFacts {
+                        misses,
+                        miss_limit: HANG_MISS_LIMIT,
+                        already_dumped,
+                        cpu: None,
+                        busy_gate: web_dump::busy_gate_enabled(),
+                    }
+                } else {
+                    hang_facts(&app, &url, misses, false)
+                };
+                match web_dump::decide_hang_action(&facts) {
+                    web_dump::HangAction::SkipBusy { ratio } => {
+                        // 忙卡顿：进程仍在推进（CPU 忙），只是没空应答。抓几百 MB dump 既无用，
+                        // 又会挂起目标进程 —— manager 的 CPU 采样窗口落在挂起里会读成 idle。
+                        log_line(
+                            &data,
+                            &format!(
+                                "dsh web hang: busy stall (cpu {:.0}%) — skip dump, keep watching",
+                                ratio * 100.0
+                            ),
+                        );
+                        misses = 0;
+                    }
+                    web_dump::HangAction::SkipAlreadyDumped => {}
+                    web_dump::HangAction::Wait => {}
+                    web_dump::HangAction::Dump => {
+                        dumped_for = Some(url.clone());
+                        let app2 = app.clone();
+                        std::thread::spawn(move || dump_dsh_web(&app2, &url));
+                    }
+                }
             }
         }
     });
+}
+
+/// 组装 dump 前的纯判定输入：解析 dsh web pid，采样 2.5s 的 CPU 窗口
+/// （解析/采样失败 ⇒ None，判定 fail-open 照抓 dump）。只在「已到 miss 阈值且尚未抓过」
+/// 时调用 —— 采样本身要睡 HANG_BUSY_SAMPLE_MS，不能每拍都做。
+fn hang_facts(app: &AppHandle, url: &str, misses: u32, already_dumped: bool) -> web_dump::HangFacts {
+    let runtime = runtime_dir(app);
+    let cpu = web_dump::dsh_web_pid_for_url(url, &runtime).and_then(|pid| {
+        web_dump::sample_cpu_window(pid, std::time::Duration::from_millis(HANG_BUSY_SAMPLE_MS))
+    });
+    web_dump::HangFacts {
+        misses,
+        miss_limit: HANG_MISS_LIMIT,
+        already_dumped,
+        cpu,
+        busy_gate: web_dump::busy_gate_enabled(),
+    }
 }
 
 /// 抓一份 dsh web 的挂起 dump 并披露。**同一 URL 只抓一次**，且认领与回执分离：
