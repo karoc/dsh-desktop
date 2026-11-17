@@ -99,7 +99,7 @@ const controls = [
     name: 'patch overlay 摘除改成整份丢弃 ⇒ 其它 overlay 条目丢失，地板守卫门禁必须红',
     target: 'scripts/plugin-floor.mjs',
     mutate: (s) => s.replace(
-      "  const next = lines.filter((_, i) => !dropLines.has(i)).join('\n')",
+      "  const next = lines.filter((_, i) => !dropLines.has(i)).join(",
       "  const next = '' // mutation-control: 整份丢弃",
     ),
     suite: 'scripts/test-plugin-floor.mjs',
