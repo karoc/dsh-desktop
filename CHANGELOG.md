@@ -21,6 +21,18 @@
 >
 > 详情见 `.agents/notes/implemented/bug-fix/2026-09-08-legacy-uninstaller-name-kill.md`。
 
+## [0.26.0](https://github.com/karoc/dsh-desktop/compare/v0.25.2...v0.26.0) (2026-11-17)
+
+
+### Features
+
+* **shell:** manager 崩溃后有界自动恢复（取证先于重启，10 分钟内第二次停手） ([#284](https://github.com/karoc/dsh-desktop/issues/284)) ([ee37210](https://github.com/karoc/dsh-desktop/commit/ee37210ba49e2c99eeefd7a1ef67342bd906ed17))
+
+
+### Bug Fixes
+
+* **manager:** watchdog 容忍有界同步卡顿，插件页首开不再 dump+重启 ([#282](https://github.com/karoc/dsh-desktop/issues/282)) ([1c2d8a6](https://github.com/karoc/dsh-desktop/commit/1c2d8a67931475ee4fb61c0c5da8a903c3eea06f))
+
 ## [0.25.2](https://github.com/karoc/dsh-desktop/compare/v0.25.1...v0.25.2) (2026-11-17)
 
 
