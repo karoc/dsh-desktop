@@ -21,6 +21,18 @@
 >
 > 详情见 `.agents/notes/implemented/bug-fix/2026-09-08-legacy-uninstaller-name-kill.md`。
 
+## [0.27.0](https://github.com/karoc/dsh-desktop/compare/v0.26.6...v0.27.0) (2026-11-18)
+
+
+### Features
+
+* **release:** 安装包名与 Release 正文都标出「随包 dsh 地板 + 代际」 ([#304](https://github.com/karoc/dsh-desktop/issues/304)) ([c04869b](https://github.com/karoc/dsh-desktop/commit/c04869bfbc38f6aea9316690e0055a85475214e1))
+
+
+### Bug Fixes
+
+* **automation:** 「已发布」只认 Release 正文里的 npm latest（next 记录不算证据） ([#301](https://github.com/karoc/dsh-desktop/issues/301)) ([822f9ae](https://github.com/karoc/dsh-desktop/commit/822f9aec523a3f341d2b2e36019fcaa03b788d07))
+
 ## [0.26.6](https://github.com/karoc/dsh-desktop/compare/v0.26.5...v0.26.6) (2026-11-17)
 
 
