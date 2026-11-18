@@ -326,6 +326,29 @@ jobs:
       # by scripts/release-body.mjs (dsh npm latest + preinstalled plugin
       # versions + the full changelog section for this tag) — NOT the terse
       # PR-title list that `gh release create --generate-notes` produces.
+      # 2026-11-18：安装包名带上「随包 dsh 地板 + 代际」，一眼看出这个壳版本适配哪个 dsh。
+      # 只改文件名、不改包内容；下游判据（autopilot 的资产核验、tag-dispatch）都按后缀匹配，仍然成立。
+      - name: Tag installers with the shipped dsh floor
+        shell: bash
+        run: |
+          set -euo pipefail
+          FLOOR=$(node -e "const s=require('fs').readFileSync('scripts/server-manager.mjs','utf8');const m=/MIN_DSH_VERSION\\s*=\\s*'([^']+)'/.exec(s);if(!m)process.exit(1);process.stdout.write(m[1])")
+          KIND=$(node -e "const v=process.argv[1];process.stdout.write(v.includes('-alpha.')?'alpha':v.includes('-beta.')?'beta':v.includes('-rc.')?'rc':'latest')" "$FLOOR")
+          echo "shipped dsh floor=$FLOOR kind=$KIND"
+          shopt -s nullglob globstar
+          for f in dist-win/**/*.exe dist-linux/**/*.AppImage dist-linux/**/*.deb; do
+            [ -f "$f" ] || continue
+            dir=$(dirname "$f"); base=$(basename "$f")
+            case "$base" in
+              *_x64-setup.exe) new="${base%_x64-setup.exe}_DSH_${KIND}_${FLOOR}_x64-setup.exe" ;;
+              *_amd64.AppImage) new="${base%_amd64.AppImage}_DSH_${KIND}_${FLOOR}_amd64.AppImage" ;;
+              *_amd64.deb) new="${base%_amd64.deb}_DSH_${KIND}_${FLOOR}_amd64.deb" ;;
+              *) echo "skip (unrecognized artifact): $base"; continue ;;
+            esac
+            mv "$f" "$dir/$new"
+            echo "renamed: $base -> $new"
+          done
+
       # Create-first: `gh release create` only fails when a release is already
       # ATTACHED to the tag; an untagged orphan left behind by a tag
       # delete/recreate (移 tag) never blocks it, so we always end up with a
