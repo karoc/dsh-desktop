@@ -924,8 +924,11 @@ function prepareRuntime(target) {
   }
   const jsonPath = workFile(`rehearse-${target}.json`)
   log(`[info] 用 dsh-rehearse install 准备临时 runtime（目标 ${target}；这不会碰真实 runtime）`)
+  // --floor target：manager 的启动期目标恒为 max(地板, registry latest)，装不到高于 latest 的
+  // next/alpha 版本。rehearse 用临时 manager 副本把地板注入成 target（真实 scripts/ 不动），
+  // 这样 ② 适配前就能把目标版本装进临时 runtime（2026-11-18 首轮 rc.4 适配的失败根因）。
   const r = run(NODE, [join(ROOT, 'scripts', 'dsh-rehearse.mjs'), '--scenario', 'install',
-    '--version', target, '--keep', '--json', jsonPath, '--timeout', '300'], { timeout: 15 * 60 * 1000 })
+    '--version', target, '--floor', target, '--keep', '--json', jsonPath, '--timeout', '300'], { timeout: 15 * 60 * 1000 })
   if (!existsSync(jsonPath)) {
     const detail = persistDetail('dsh-rehearse', r)
     fail(3, `dsh-rehearse install 没有产出 JSON（exit=${r.status}）：${tail(r.stderr || r.stdout)}${detail ? `（完整输出：${detail}）` : ''}`)
