@@ -135,6 +135,13 @@ function skip(group, name, why) {
   check('sla', '资产不足 3 个时不算已发布（半成品 Release）', 'false', releaseShippedFloor(body, '0.2.2-rc.1', 2))
   check('sla', 'parseReleaseFloor 同时解析 latest 与 next（文案口径单一实现）', '0.2.2-rc.1|0.2.2-rc.4',
     `${parseReleaseFloor(body).latest}|${parseReleaseFloor(body).next}`)
+  // 2026-11-18 起正文带机器标记：用户要求「每个壳版本明确适配的 dsh 版本」。
+  const marked = '**随包 dsh 地板**：**0.2.2-rc.4**（适配通道 **next**）—— 运行时由 manager 安装 max(地板, npm latest)，本版本要求 dsh ≥ 0.2.2-rc.4。 <!-- dsh-floor: 0.2.2-rc.4 channel=next -->'
+  const mp = parseReleaseFloor(marked)
+  check('sla', '机器标记：floor/channel/source 都从 dsh-floor 注释读取', '0.2.2-rc.4|next|marker',
+    `${mp.floor}|${mp.channel}|${mp.source}`)
+  check('sla', '机器标记：只有 floor == target 才算「已发布该地板」', 'true', releaseShippedFloor(marked, '0.2.2-rc.4', 3))
+  check('sla', '机器标记：别的版本不算（rc.1 不在本版正文里）', 'false', releaseShippedFloor(marked, '0.2.2-rc.1', 3))
 }
 
 // ── 子进程工具 ──────────────────────────────────────────────────────────────

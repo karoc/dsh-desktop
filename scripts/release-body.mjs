@@ -3,8 +3,9 @@
 //
 // Why: the previous release job used `gh release create --generate-notes`, which
 // collapses a whole release into 2-3 PR-title lines ("What's Changed" 潦草).
-// This script composes a body that always states the dsh runtime version (npm
-// latest at release time) and the shipped preinstalled plugin versions, then
+// This script composes a body that always states the **shipped dsh floor**
+// (MIN_DSH_VERSION of the tagged source) plus npm latest/next at release time,
+// and the shipped preinstalled plugin versions, then
 // appends the FULL changelog section for the tag (every commit, grouped).
 //
 // Usage: node scripts/release-body.mjs <version>            # prints markdown
@@ -61,10 +62,22 @@ const plugins = readdirSync(join(ROOT, 'plugins', 'preinstalled'), { withFileTyp
   })
   .sort((a, b) => a[0].localeCompare(b[0]))
 
-// ── 3. dsh runtime version (npm latest / next at release time) ─────────────
+// ── 3. 随包 dsh 地板（本版本实际适配/要求的 dsh 版本）─────────────────────────
+// 用户要求（2026-11-18）：每个壳版本的日志都要明确「适配的是哪个 dsh 版本」。
+// 地板取自**本次 tag 的源码**（scripts/server-manager.mjs 的 MIN_DSH_VERSION），
+// 不是 npm latest —— 两者在适配 next/alpha 时会不同（地板可以高于 latest）。
+let floor = 'unknown'
+try {
+  const managerSrc = readFileSync(join(ROOT, 'scripts', 'server-manager.mjs'), 'utf8')
+  floor = /MIN_DSH_VERSION\s*=\s*'([^']+)'/.exec(managerSrc)?.[1] ?? 'unknown'
+} catch (error) {
+  console.error(`[release-body] WARNING: 读不到 MIN_DSH_VERSION（${error.message}）`)
+}
+
+// ── 4. dsh runtime version (npm latest / next at release time) ─────────────
 // `npm view` uses the same registry, proxy and auth as an install would.
 const REGISTRY = (process.env.DSH_RELEASE_BODY_REGISTRY ?? 'https://registry.npmjs.org').replace(/\/+$/, '')
-let dsh = { latest: 'unknown', next: 'unknown', error: null }
+let dsh = { latest: 'unknown', next: null, alpha: null, error: null }
 try {
   const tags = JSON.parse(execFileSync(
     'npm',
@@ -73,6 +86,7 @@ try {
   ))
   dsh.latest = typeof tags?.latest === 'string' ? tags.latest : 'unknown'
   dsh.next = typeof tags?.next === 'string' ? tags.next : null
+  dsh.alpha = typeof tags?.alpha === 'string' ? tags.alpha : null
 } catch (error) {
   const text = [error?.stdout, error?.stderr, error?.message].filter(Boolean).join('\n')
   dsh.error = text.split('\n').map((line) => line.trim()).find((line) => line !== '') ?? String(error)
@@ -81,12 +95,22 @@ try {
 
 // ── compose ───────────────────────────────────────────────────────────────
 const pluginLine = plugins.map(([n, v]) => `\`${n}\` **${v}**`).join('、')
-const nextLine = dsh.next && dsh.next !== dsh.latest ? `（\`next\` 预发布 = ${dsh.next}）` : ''
-// A degraded lookup must be visible in the body: a bare "unknown" reads like a
-// version, and this text ends up in a permanent GitHub Release.
-const dshLine = dsh.latest === 'unknown'
-  ? '**内置 dsh**：不随包固定版本——运行时由 manager 从 npm 自动安装/更新（用户门控，见 README「dsh 更新由你决定」）。⚠️ **发版时未能查询 npm registry**，此处的版本号缺失（不影响安装包内容）。'
-  : `**内置 dsh**：不随包固定版本——运行时由 manager 从 npm 自动安装/更新（用户门控，见 README「dsh 更新由你决定」）。发版时 npm \`latest\` = **${dsh.latest}**${nextLine}。`
+const nextLine = dsh.next && dsh.next !== dsh.latest ? `、\`next\` = ${dsh.next}` : ''
+// 适配通道：地板与哪个 npm tag 相同（适配 next/alpha 时地板会高于 latest）。
+const channel = floor === 'unknown'
+  ? null
+  : floor === dsh.latest ? 'latest'
+    : dsh.next && floor === dsh.next ? 'next'
+      : dsh.alpha && floor === dsh.alpha ? 'alpha'
+        : 'pinned'
+// 机器可读标记：autopilot 的「已发布」判定只认它（用户要求：日志明确适配的 dsh 版本）。
+const floorMarker = floor === 'unknown' ? '' : ` <!-- dsh-floor: ${floor} channel=${channel ?? 'unknown'} -->`
+const tagsLine = dsh.latest === 'unknown'
+  ? '⚠️ **发版时未能查询 npm registry**（不影响安装包内容）。'
+  : `发版时 npm \`latest\` = ${dsh.latest}${nextLine}。`
+const dshLine = floor === 'unknown'
+  ? `**随包 dsh 地板**：⚠️ 读不到 MIN_DSH_VERSION（不影响安装包内容）。${tagsLine}`
+  : `**随包 dsh 地板**：**${floor}**（适配通道 **${channel}**）—— 运行时由 manager 安装 \`max(地板, npm latest)\`，本版本要求 dsh ≥ ${floor}。${tagsLine}${floorMarker}`
 
 const body = `## 版本概要
 
@@ -94,7 +118,7 @@ ${dshLine}
 
 **预装插件**（随包分发、与版本锁定，均为 npm 最新发布版）：${pluginLine}。安装本版本后即随包生效。
 
-**安装包**：Windows NSIS（\`*-x64-setup.exe\`）+ Linux AppImage / deb，见下方 Assets。
+**安装包**：Windows NSIS（\`*_DSH_<latest|rc|alpha|beta>_<dsh 地板>_x64-setup.exe\`）+ Linux AppImage / deb（同样带段），见下方 Assets —— 文件名即可看出该壳版本适配的 dsh 版本。
 
 ## What's Changed
 

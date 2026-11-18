@@ -9,12 +9,21 @@
  * 不代表壳里装了它。所以本模块只把 `latest` 当作「已发布该地板」的证据。
  */
 
-/** 从 Release 正文解析出当时记录的 npm latest 与 next（取不到为 null）。 */
+/**
+ * 从 Release 正文解析「随包 dsh 地板」。优先级：
+ * 1. 机器标记 `<!-- dsh-floor: <ver> channel=<ch> -->`（2026-11-18 起 release-body.mjs 写入）；
+ * 2. 旧版正文的 `发版时 npm \`latest\` = **<ver>**`（历史版本没有标记，仍要能判）。
+ * @returns {{floor: string|null, channel: string|null, latest: string|null, next: string|null, source: string|null}}
+ */
 export function parseReleaseFloor(body) {
   const text = String(body ?? '')
+  const marker = /<!--\s*dsh-floor:\s*([^\s]+)\s+channel=([a-z]+)\s*-->/.exec(text)
+  if (marker) {
+    return { floor: marker[1].trim(), channel: marker[2], latest: null, next: null, source: 'marker' }
+  }
   const latest = /发版时 npm\s*`latest`\s*=\s*\*\*([^*\n]+)\*\*/.exec(text)?.[1]?.trim() ?? null
   const next = /`next`\s*预发布\s*=\s*([^）)\n]+)/.exec(text)?.[1]?.trim() ?? null
-  return { latest, next }
+  return { floor: latest, channel: null, latest, next, source: latest ? 'legacy' : null }
 }
 
 /**
@@ -26,6 +35,6 @@ export function parseReleaseFloor(body) {
  */
 export function releaseShippedFloor(body, target, assetCount) {
   if (!(Number(assetCount) >= 3)) return false
-  const { latest } = parseReleaseFloor(body)
-  return typeof target === 'string' && target.length > 0 && latest === target
+  const { floor } = parseReleaseFloor(body)
+  return typeof target === 'string' && target.length > 0 && floor === target
 }
