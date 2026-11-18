@@ -102,7 +102,7 @@
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import {
-  appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync,
+  appendFileSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync,
   rmSync, statSync, symlinkSync, writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -178,12 +178,15 @@ const USAGE = `usage: node scripts/dsh-rehearse.mjs [--scenario install|bump|upg
   --fault <name>     仅 upgrade：故障注入，当前只有 nested-copy（升级后往树里塞一份同版本嵌套
                      @deepseek-ai/dsh 副本）——专门用来证明「无残留嵌套副本」这条断言会红。
   --runtime-dir <d>  内部参数（install 场景）：在调用方给的已有 runtime 上跑，不新建也不清理。
+  --floor <v>        仅 install：**演练注入**——用一份临时 manager 副本把 MIN_DSH_VERSION 换成 <v>，
+                     让启动期目标 max(地板, latest) 等于 <v>（真实 scripts/ 一个字节都不改）。
+                     用途：适配 npm next/alpha 上高于 latest 的版本（manager 生产路径装不到它）。
   --help             本帮助
 `
 
 // ── 参数 ───────────────────────────────────────────────────────────────────
 function parseArgs(argv) {
-  const out = { scenario: 'install', version: null, fromFloor: null, upgradeFrom: null, keep: false, json: null, timeoutSec: 300, warmStore: null, registry: null, tempBase: null, fault: null, runtimeDir: null, help: false }
+  const out = { scenario: 'install', version: null, fromFloor: null, upgradeFrom: null, keep: false, json: null, timeoutSec: 300, warmStore: null, registry: null, tempBase: null, fault: null, runtimeDir: null, floor: null, help: false }
   const val = (i, name) => {
     const v = argv[i + 1]
     if (v === undefined || v.startsWith('--')) throw new Error(`${name} 需要值`)
@@ -207,6 +210,7 @@ function parseArgs(argv) {
     else if (a === '--temp-base' || eq === '--temp-base') out.tempBase = take()
     else if (a === '--fault' || eq === '--fault') out.fault = take()
     else if (a === '--runtime-dir' || eq === '--runtime-dir') out.runtimeDir = take()
+    else if (a === '--floor' || eq === '--floor') out.floor = take()
     else throw new Error(`未知参数 ${a}`)
   }
   if (!Number.isFinite(out.timeoutSec) || out.timeoutSec <= 0) throw new Error('--timeout 必须是正数（秒）')
@@ -217,6 +221,7 @@ function parseArgs(argv) {
   if (out.fault && out.scenario !== 'upgrade') throw new Error('--fault 只对 --scenario upgrade 有意义（当前只有 nested-copy）')
   if (out.fault && out.fault !== 'nested-copy') throw new Error(`--fault 只支持 nested-copy（收到 ${out.fault}）`)
   if (out.runtimeDir && out.scenario !== 'install') throw new Error('--runtime-dir 是 install 场景的内部参数（供 upgrade 复用）')
+  if (out.floor && out.scenario !== 'install') throw new Error('--floor 只对 install 场景有意义（bump/upgrade 的地板由各自场景控制）')
   return out
 }
 
@@ -240,7 +245,8 @@ const gaps = [
   'isolated→hoisted 布局迁移分支、兼容闸门（已装版本 < 地板）分支都没走到。',
   '只演练到 install-status done + 探针（结构/兼容性判据）：**没有验证装完之后 dsh web 能否真起来**' +
   '（本脚本刻意在 launching dsh web 处终止）。这一步仍靠真机验收。',
-  '安装目标版本不可注入：启动期路径的目标 = max(壳地板, registry latest)，--version 只能表达期望值。',
+  '安装目标版本默认不可注入（启动期目标 = max(壳地板, registry latest)，--version 只是期望值）；' +
+  '--floor 是演练注入：用临时 manager 副本抬高地板，真实 scripts/ 不改。',
 ]
 const t0 = Date.now()
 const now = () => Date.now()
@@ -401,9 +407,35 @@ if (providedRuntime) {
 }
 console.log(`      临时 runtime ${tmp}`)
 
+// ── 可选：--floor 演练注入（临时 manager 副本，真实文件一个字节不动）────────
+// 为什么需要它：manager 的启动期安装目标恒为 max(MIN_DSH_VERSION, registry latest)，
+// 生产路径装不到 npm `next`/`alpha` 上高于 latest 的版本。适配预发布时必须先让「地板」
+// 在演练环境里等于目标版本，否则 rehearse 只会装到 latest 并如实报 MISMATCH。
+let managerPath = MANAGER
+if (opts.floor) {
+  const mgrDir = mkdtempSync(join(tmpdir(), 'dsh-rehearse-mgr-'))
+  for (const f of ['proxy.mjs', 'upgrade-marker.mjs', 'plugin-floor.mjs', 'shell-plugins.mjs', 'bake-port.mjs']) {
+    copyFileSync(join(ROOT, 'scripts', f), join(mgrDir, f))
+  }
+  cpSync(join(ROOT, 'scripts', 'lib'), join(mgrDir, 'lib'), { recursive: true })
+  const originalManager = readFileSync(MANAGER, 'utf8')
+  const floorNow = /MIN_DSH_VERSION\s*=\s*'([^']+)'/.exec(originalManager)?.[1]
+  if (!floorNow) preflightFail('读不到 scripts/server-manager.mjs 的 MIN_DSH_VERSION')
+  const patchedManager = originalManager.replace(
+    `const MIN_DSH_VERSION = '${floorNow}'`,
+    `const MIN_DSH_VERSION = '${opts.floor}'`,
+  )
+  if (patchedManager === originalManager) preflightFail('MIN_DSH_VERSION 替换未生效（源码形状变了？）')
+  writeFileSync(join(mgrDir, 'server-manager.mjs'), patchedManager)
+  const syntax = spawnSync(process.execPath, ['--check', join(mgrDir, 'server-manager.mjs')], { encoding: 'utf8' })
+  if (syntax.status !== 0) preflightFail(`临时 manager 副本语法检查失败：${syntax.stderr}`)
+  managerPath = join(mgrDir, 'server-manager.mjs')
+  console.log(`      演练注入：临时 manager 副本地板 = ${opts.floor}（真实 scripts/ 未改）`)
+}
+
 // ── 启动 manager，走它自己的启动期自动安装路径 ─────────────────────────────
 const managerArgv = [
-  MANAGER,
+  managerPath,
   '--runtime-dir', tmp,
   '--resource-dir', RESOURCE_DIR,
   '--patch', PATCH_FILE,
@@ -672,8 +704,9 @@ const totalMs = now() - t0
 const caveats = [
   `热 store 是**软链共享**的：pnpm 可能往真实 runtime 的 .pnpm-store 追加内容寻址条目（只增不删）；` +
   `已装树（node_modules/${DSH_PKG}/*）与 manager.log 的指纹已逐一自证未变。`,
-  `启动期自动安装路径的目标版本 = max(壳地板 ${floor}, registry latest)——结构上不可注入任意版本，` +
-  `--version 只是"期望值"（不一致即报 MISMATCH）。`,
+  opts.floor
+    ? `本次用 --floor ${opts.floor} 注入临时 manager 副本（真实 scripts/ 未改）：启动期目标 = 注入后的地板。`
+    : `启动期自动安装路径的目标版本 = max(壳地板 ${floor}, registry latest)——结构上不可注入任意版本，--version 只是"期望值"（不一致即报 MISMATCH）。`,
 ]
 if (killInfo.dshWebStarted) caveats.push('本次演练意外让 manager 走到了 supervise 并起了 dsh web（已立即杀掉；临时 runtime 内，未影响真实实例）。')
 
